@@ -11,7 +11,8 @@ import {
   canonicalizeDisplayText,
   ChainClaim,
   CoinGeckoClaim,
-  CoinGeckoLookupNotFound,
+  RegistryLookupNotFound,
+  RegistryLookupSkipped,
   CoinGeckoPlatformMapping,
   decideAssetResolution,
   decodeChainClaim,
@@ -183,7 +184,7 @@ const decodeFailureTag = (effect: Effect.Effect<unknown, { readonly _tag: string
 
 const decide = ({
   chain,
-  registry = new CoinGeckoLookupNotFound(),
+  registry = new RegistryLookupNotFound(),
   identity = emptyIdentity(),
   legitimacy = [],
   display = providerDisplay,
@@ -338,7 +339,7 @@ describe("AssetResolutionPolicy", () => {
           ...ethereumUsdcChainFact,
           contractAddress: ETHEREUM_USDC_CONTRACT,
         }),
-        registry: new CoinGeckoLookupNotFound(),
+        registry: new RegistryLookupNotFound(),
         identity: usdcIdentity(),
       })
 
@@ -483,7 +484,7 @@ describe("AssetResolutionPolicy", () => {
     it("creates a standalone asset for an exact unknown representation with no candidates", () => {
       const decision = decide({
         chain: longTailChainClaim(),
-        registry: new CoinGeckoLookupNotFound(),
+        registry: new RegistryLookupNotFound(),
       })
 
       expect(decision).toMatchObject({
@@ -494,6 +495,20 @@ describe("AssetResolutionPolicy", () => {
         contractAddress: null,
         mintAddress: LONG_TAIL_MINT,
         decimals: 9,
+        coingeckoCoinId: null,
+        name: "Orb Token",
+        symbol: "ORB",
+      })
+    })
+
+    it("creates without a coin id when the registry lookup was skipped", () => {
+      const decision = decide({
+        chain: longTailChainClaim(),
+        registry: new RegistryLookupSkipped(),
+      })
+
+      expect(decision).toMatchObject({
+        _tag: "create_standalone",
         coingeckoCoinId: null,
         name: "Orb Token",
         symbol: "ORB",
@@ -674,7 +689,7 @@ describe("AssetResolutionPolicy", () => {
       const decision = Effect.runSync(
         evaluateAssetResolution({
           chain: { _tag: "payload", payload: longTailChainFact },
-          registry: new CoinGeckoLookupNotFound(),
+          registry: new RegistryLookupNotFound(),
           identity: emptyIdentity(),
           legitimacy: [],
           providerDisplay: providerDisplay,

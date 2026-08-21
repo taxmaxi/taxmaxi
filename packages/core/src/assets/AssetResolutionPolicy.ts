@@ -171,13 +171,26 @@ export const isCoinGeckoClaim = Schema.is(CoinGeckoClaim)
  * representation. Unlike an upstream failure, this is evidence: the registry
  * was reached and does not know the asset.
  */
-export class CoinGeckoLookupNotFound extends Schema.TaggedClass<CoinGeckoLookupNotFound>()(
+export class RegistryLookupNotFound extends Schema.TaggedClass<RegistryLookupNotFound>()(
   "registry_not_found",
   {}
 ) {}
 
-/** Type guard for CoinGeckoLookupNotFound. */
-export const isCoinGeckoLookupNotFound = Schema.is(CoinGeckoLookupNotFound)
+/** Type guard for RegistryLookupNotFound. */
+export const isRegistryLookupNotFound = Schema.is(RegistryLookupNotFound)
+
+/**
+ * No registry lookup was performed because the observation carries nothing
+ * to look up, such as a native representation with no address. Unlike
+ * RegistryLookupNotFound this says nothing about what the registry knows.
+ */
+export class RegistryLookupSkipped extends Schema.TaggedClass<RegistryLookupSkipped>()(
+  "registry_not_queried",
+  {}
+) {}
+
+/** Type guard for RegistryLookupSkipped. */
+export const isRegistryLookupSkipped = Schema.is(RegistryLookupSkipped)
 
 /**
  * Typed legitimacy or spam claim from an allowlisted authority such as
@@ -416,7 +429,8 @@ export type RegistryResolutionInput =
   | AssetResolutionMalformedPayload
   | AssetResolutionUpstreamFailure
   | CoinGeckoClaim
-  | CoinGeckoLookupNotFound
+  | RegistryLookupNotFound
+  | RegistryLookupSkipped
 
 /** Provider evidence before decoding. */
 export type AssetResolutionProviderEvidence =
@@ -425,10 +439,11 @@ export type AssetResolutionProviderEvidence =
   | AssetResolutionMalformedPayload
   | AssetResolutionUpstreamFailure
 
-/** Registry lookup evidence before decoding: a payload, a definitive miss, or a failure. */
+/** Registry lookup evidence before decoding: a payload, a definitive miss, a skipped lookup, or a failure. */
 export type AssetResolutionRegistryEvidence =
   | AssetResolutionProviderEvidence
-  | CoinGeckoLookupNotFound
+  | RegistryLookupNotFound
+  | RegistryLookupSkipped
 
 const isEvmAddress = (address: string): boolean => /^0x[a-fA-F0-9]{40}$/.test(address)
 
@@ -742,7 +757,11 @@ export const decideAssetResolution = ({
     return decideForOwnedRepresentation({ owned, chain, registry, identity })
   }
 
-  if (registry._tag !== "coingecko_claim" && registry._tag !== "registry_not_found") {
+  if (
+    registry._tag !== "coingecko_claim" &&
+    registry._tag !== "registry_not_found" &&
+    registry._tag !== "registry_not_queried"
+  ) {
     return failClosed(evidenceFailureReason(registry))
   }
 

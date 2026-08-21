@@ -23,8 +23,8 @@ import {
   AssetResolutionMalformedPayload,
   AttachRepresentationDecision,
   canonicalizeAddress,
-  CoinGeckoLookupNotFound,
   decodeCoinGeckoClaim,
+  RegistryLookupSkipped,
   evaluateAssetResolution,
   type AssetResolutionDecision,
   type AssetResolutionEconomicAsset,
@@ -137,8 +137,8 @@ const decisionToRecord = ({
         actor: RESOLUTION_POLICY_ACTOR,
       }
     case "create_standalone":
-      // The asset and representation ids are filled in by the caller once
-      // the standalone rows exist.
+      // The asset and representation ids are filled in by the repository
+      // inside the creation transaction, once the standalone rows exist.
       return {
         providerAssetRowId,
         evidenceRevision,
@@ -280,11 +280,12 @@ const make = Effect.gen(function* () {
           ? null
           : (chainResult.fact.contractAddress ?? chainResult.fact.mintAddress)
       if (chainResult.fact === null || factAddress === null) {
-        // Without one exact addressed fact there is nothing to look up; the
+        // Without one exact addressed fact there is nothing to look up: the
+        // registry evidence honestly says the lookup was skipped, and the
         // policy decides from the chain evidence failure or unsupported shape.
         const decision = yield* evaluateAssetResolution({
           chain: chainResult.evidence,
-          registry: new CoinGeckoLookupNotFound(),
+          registry: new RegistryLookupSkipped(),
           identity: {
             registryOwner: null,
             displayCandidates: [],
@@ -295,11 +296,6 @@ const make = Effect.gen(function* () {
         })
         return { decision, evidence: [chainEvidenceRecord] }
       }
-
-      const displayCandidateRows = yield* assetRepository.findAssetResolutionCandidatesByDisplay({
-        symbol: currencyCode,
-        name: displayName,
-      })
 
       const platformId = chainResult.fact.blockchain.trim().toLowerCase()
       const registryEvidence: AssetResolutionRegistryEvidence =
@@ -340,13 +336,35 @@ const make = Effect.gen(function* () {
                 )
               )
 
+      // Both the provider's display metadata and the registry's name and
+      // symbol can raise a possible duplicate: the created asset would carry
+      // the registry's display values when they exist, so they must collide
+      // with existing assets the same way the provider's do.
+      const providerCandidateRows = yield* assetRepository.findAssetResolutionCandidatesByDisplay({
+        symbol: currencyCode,
+        name: displayName,
+      })
+      const registryCandidateRows =
+        registryDecodedClaim === null
+          ? []
+          : yield* assetRepository.findAssetResolutionCandidatesByDisplay({
+              symbol: registryDecodedClaim.symbol,
+              name: registryDecodedClaim.name,
+            })
+      const displayCandidatesByAsset = new Map(
+        [...providerCandidateRows, ...registryCandidateRows].map((candidate) => [
+          candidate.id,
+          {
+            assetKey: candidate.id,
+            coingeckoCoinId: candidate.coingeckoCoinId,
+            type: candidate.type,
+          },
+        ])
+      )
+
       const identity: AssetResolutionIdentitySnapshot = {
         registryOwner,
-        displayCandidates: displayCandidateRows.map((candidate) => ({
-          assetKey: candidate.id,
-          coingeckoCoinId: candidate.coingeckoCoinId,
-          type: candidate.type,
-        })),
+        displayCandidates: [...displayCandidatesByAsset.values()],
         representations: ownedForReuse,
       }
 
@@ -394,7 +412,6 @@ const make = Effect.gen(function* () {
     assetId,
     assetRepresentationId,
     policyRevision,
-    decisionRecord,
     observations,
     providerAssetRetrievedAt,
     sourceNotes,
@@ -404,17 +421,11 @@ const make = Effect.gen(function* () {
     readonly assetId: string
     readonly assetRepresentationId: string
     readonly policyRevision: string
-    readonly decisionRecord: AssetResolutionDecisionRecord
     readonly observations: ReadonlyArray<ProviderAssetObservedRepresentationRecord>
     readonly providerAssetRetrievedAt: Date
     readonly sourceNotes: string
   }): Effect.Effect<void, SyncEngineStorageError> =>
     Effect.gen(function* () {
-      yield* recordDecision({
-        jobId,
-        record: { ...decisionRecord, assetId, assetRepresentationId },
-      })
-
       // The ownership conclusion is keyed on the representation itself so a
       // later provider observing the same identity can reuse it. Recording is
       // a no-op when the representation's owner is already settled.
@@ -503,13 +514,21 @@ const make = Effect.gen(function* () {
           },
         })
 
+        yield* recordDecision({
+          jobId,
+          record: {
+            ...decisionRecord,
+            assetId: decision.assetKey,
+            assetRepresentationId: representation.id,
+          },
+        })
+
         yield* settleApprovedResolution({
           jobId,
           providerAssetRowId,
           assetId: decision.assetKey,
           assetRepresentationId: representation.id,
           policyRevision: decision.policyRevision,
-          decisionRecord,
           observations,
           providerAssetRetrievedAt: providerAsset.retrievedAt,
           sourceNotes: `Resolution policy ${decision.policyRevision} attached the exact representation and requested a replay of affected sources.`,
@@ -523,6 +542,9 @@ const make = Effect.gen(function* () {
       }
 
       if (decision._tag === "create_standalone") {
+        // The repository records the create_standalone decision inside the
+        // creation transaction, so the audit can never show a created asset
+        // without the decision that created it.
         const created = yield* assetRepository.createStandaloneAssetRepresentation({
           blockchainName: decision.blockchain,
           asset: {
@@ -541,6 +563,7 @@ const make = Effect.gen(function* () {
             isSpam: false,
             metadata: null,
           },
+          decision: decisionRecord,
         })
 
         yield* settleApprovedResolution({
@@ -549,7 +572,6 @@ const make = Effect.gen(function* () {
           assetId: created.id,
           assetRepresentationId: created.representationId,
           policyRevision: decision.policyRevision,
-          decisionRecord,
           observations,
           providerAssetRetrievedAt: providerAsset.retrievedAt,
           sourceNotes: `Resolution policy ${decision.policyRevision} created a standalone economic asset for the exact representation and requested a replay of affected sources.`,

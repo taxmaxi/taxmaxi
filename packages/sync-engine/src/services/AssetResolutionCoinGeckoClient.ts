@@ -34,7 +34,7 @@ export interface AssetResolutionCoinGeckoClientShape {
    * Look up the CoinGecko coin for one exact platform address.
    *
    * A 404 is a definitive answer that CoinGecko does not know the
-   * representation and surfaces as a CoinGeckoLookupNotFound evidence value,
+   * representation and surfaces as a RegistryLookupNotFound evidence value,
    * so the policy may consider standalone creation. Other terminal outcomes
    * (an unreadable body, an unexpected status) surface as an
    * AssetResolutionUpstreamFailure evidence value so the policy can fail

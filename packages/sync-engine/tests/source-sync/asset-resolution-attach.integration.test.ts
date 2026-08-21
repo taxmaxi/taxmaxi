@@ -4,7 +4,7 @@ import * as Layer from "effect/Layer"
 import { beforeEach, describe, expect, it } from "vitest"
 import {
   AssetResolutionUpstreamFailure,
-  CoinGeckoLookupNotFound,
+  RegistryLookupNotFound,
   type AssetResolutionRegistryEvidence,
 } from "@my/core/assets"
 import { SourceSyncServiceLive, TransferReconciliationServiceLive } from "@my/sync-engine/layers"
@@ -185,7 +185,7 @@ const FakeAssetResolutionCoinGeckoClientLive = Layer.succeed(AssetResolutionCoin
     }
 
     if (coinGeckoMode === "not_found") {
-      return Effect.succeed(new CoinGeckoLookupNotFound())
+      return Effect.succeed(new RegistryLookupNotFound())
     }
 
     return platformId === "solana" && address === ORB_MINT
@@ -200,7 +200,7 @@ const FakeAssetResolutionCoinGeckoClientLive = Layer.succeed(AssetResolutionCoin
             detail_platforms: { solana: { decimal_place: 8, contract_address: ORB_MINT } },
           },
         })
-      : Effect.succeed(new CoinGeckoLookupNotFound())
+      : Effect.succeed(new RegistryLookupNotFound())
   },
 })
 

@@ -19,7 +19,7 @@ import * as Layer from "effect/Layer"
 import * as Schedule from "effect/Schedule"
 import {
   AssetResolutionUpstreamFailure,
-  CoinGeckoLookupNotFound,
+  RegistryLookupNotFound,
   type AssetResolutionRegistryEvidence,
 } from "@my/core/assets"
 import {
@@ -56,7 +56,7 @@ const make = Effect.gen(function* () {
   })
 
   const upstreamFailure = new AssetResolutionUpstreamFailure({ source: "coingecko" })
-  const notFound = new CoinGeckoLookupNotFound()
+  const notFound = new RegistryLookupNotFound()
 
   const fetchCoinByContract: AssetResolutionCoinGeckoClientShape["fetchCoinByContract"] = ({
     platformId,
