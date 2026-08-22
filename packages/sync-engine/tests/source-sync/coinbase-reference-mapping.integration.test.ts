@@ -736,10 +736,64 @@ describe("coinbase reference mappings", () => {
     )
 
     expect(btcMapping).toMatchObject({
+      kind: "canonical",
       canonicalAssetId: BTC_ASSET_ID,
       assetRepresentationId: null,
       mappingStatus: "approved",
     })
+  })
+
+  it("returns a settled exclusion without scheduling more resolution work", async () => {
+    await runReferenceMapping(
+      Effect.flatMap(CoinbaseReferenceMappingService, (service) => service.ensureDefaultMappings())
+    )
+
+    const adaMapping = (await Effect.runPromise(fetchProviderAssetMappingRows())).find(
+      (mapping) => mapping.currencyCode === "ADA"
+    )
+    if (adaMapping === undefined) {
+      expect.fail("Expected ADA provider asset mapping to exist")
+    }
+
+    const jobsBefore = await context.runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        yield* db
+          .update(schema.providerAssetMappings)
+          .set({
+            mappingStatus: "excluded",
+            canonicalAssetId: null,
+            assetRepresentationId: null,
+          })
+          .where(eq(schema.providerAssetMappings.providerAssetRowId, adaMapping.providerAssetRowId))
+        return yield* db
+          .select({ id: schema.assetResolutionJobs.id })
+          .from(schema.assetResolutionJobs)
+      })
+    )
+
+    const resolution = await runReferenceMapping(
+      Effect.flatMap(CoinbaseReferenceMappingService, (service) =>
+        service.resolveCurrency({ currencyCode: "ADA" })
+      )
+    )
+    const jobsAfter = await context.runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        return yield* db
+          .select({ id: schema.assetResolutionJobs.id })
+          .from(schema.assetResolutionJobs)
+      })
+    )
+
+    expect(resolution).toMatchObject({
+      kind: "excluded",
+      currencyCode: "ADA",
+      mappingStatus: "excluded",
+      canonicalAssetId: null,
+      assetRepresentationId: null,
+    })
+    expect(jobsAfter).toHaveLength(jobsBefore.length)
   })
 
   it("resolves EUR as fiat without requiring a canonical asset row", async () => {
@@ -756,6 +810,7 @@ describe("coinbase reference mappings", () => {
     )
 
     expect(eurMapping).toMatchObject({
+      kind: "canonical",
       currencyCode: "EUR",
       mappingKind: "fiat",
       canonicalAssetId: null,

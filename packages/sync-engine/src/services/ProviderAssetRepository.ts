@@ -7,6 +7,7 @@
 import * as Context from "effect/Context"
 import type * as Effect from "effect/Effect"
 import type * as Option from "effect/Option"
+import type { ProviderAssetMappingStatus } from "@my/core/assets"
 import { SyncEngineStorageError } from "./SyncEngineStorageError.ts"
 
 /**
@@ -14,10 +15,7 @@ import { SyncEngineStorageError } from "./SyncEngineStorageError.ts"
  */
 export type ProviderAssetMappingKind = "asset" | "fiat"
 
-/**
- * ProviderAssetMappingStatus - Review lifecycle for provider asset mappings.
- */
-export type ProviderAssetMappingStatus = "approved" | "pending_review" | "rejected"
+export type { ProviderAssetMappingStatus }
 
 /**
  * ProviderAssetCatalogEntry - Durable provider asset catalog row.
@@ -68,8 +66,19 @@ export interface ProviderAssetApprovalResult {
   readonly mappingChanged: boolean
 }
 
+/** Result of atomically recording and applying an automatic exclusion. */
+export interface ProviderAssetExclusionResult extends ProviderAssetApprovalResult {
+  readonly decisionRecorded: boolean
+}
+
 /** Outcome of an automatic policy decision, recorded as immutable audit history. */
-export type AssetResolutionAuditOutcome = "attach" | "create_standalone" | "pending" | "fail_closed"
+export type AssetResolutionAuditOutcome =
+  | "attach"
+  | "create_standalone"
+  | "identity"
+  | "excluded"
+  | "pending"
+  | "fail_closed"
 
 /**
  * One evidence snapshot to store behind a decision, scoped to the authority
@@ -226,7 +235,26 @@ export interface ProviderAssetRepositoryShape {
     readonly mapping: ProviderAssetMappingDraft
     readonly expectedObservedRepresentations: ReadonlyArray<ProviderAssetObservedRepresentationRecord>
     readonly expectedProviderAssetRetrievedAt: Date
+    /** Human authority used only when this approval supersedes an exclusion. */
+    readonly exclusionReversal?: {
+      readonly actor: string
+      readonly policyRevision: string
+    }
   }) => Effect.Effect<ProviderAssetApprovalResult, SyncEngineStorageError>
+
+  /**
+   * Exclude an observation from derived accounting as a final answer and
+   * atomically request replay for every source that uses it, so affected
+   * pending counts re-evaluate. The mapping keeps no canonical target.
+   * Retrying an already-excluded observation is a successful no-op.
+   */
+  readonly excludeProviderAssetMappingAndRequestReplay: (params: {
+    readonly providerAssetRowId: string
+    readonly decision: AssetResolutionDecisionRecord
+    readonly sourceNotes: string | null
+    readonly expectedObservedRepresentations: ReadonlyArray<ProviderAssetObservedRepresentationRecord>
+    readonly expectedProviderAssetRetrievedAt: Date
+  }) => Effect.Effect<ProviderAssetExclusionResult, SyncEngineStorageError>
 
   /**
    * Lock and reload the provider-asset decision snapshot before a caller writes

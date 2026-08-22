@@ -12,6 +12,7 @@ import {
 import {
   HeliusSolanaAssetResolutionService,
   type HeliusSolanaResolvedAsset,
+  type HeliusSolanaAssetResolutionServiceShape,
 } from "../../src/providers/helius-solana/services/HeliusSolanaAssetResolutionService.ts"
 import {
   HeliusSolanaAuthError,
@@ -38,6 +39,7 @@ const WRAPPED_SOL_MINT = "So11111111111111111111111111111111111111112"
 const USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
 const NFT_MINT = "NftMint111111111111111111111111111111111111"
 const UNKNOWN_MINT = "UnknownMint11111111111111111111111111111111"
+const EXCLUDED_MINT = "ExcludedMint1111111111111111111111111111111"
 const STALE_DECIMALS_MINT = "StaleDecimals1111111111111111111111111111111"
 const EIGHTEEN_DECIMALS_MINT = "EighteenDecimals11111111111111111111111111111"
 const MAX_DECIMALS_MINT = "MaxDecimals111111111111111111111111111111111"
@@ -141,10 +143,12 @@ const makeProviderLayer = ({
       },
     }),
   recordProviderAssetSourceUses = () => Effect.succeed(0),
+  resolveNativeAsset,
 }: {
   readonly fetchTransactionsForAddress: HeliusSolanaSyncClientShape["fetchTransactionsForAddress"]
   readonly fetchTransfersForAddress?: HeliusSolanaSyncClientShape["fetchTransfersForAddress"]
   readonly recordProviderAssetSourceUses?: ProviderAssetRepositoryShape["recordProviderAssetSourceUses"]
+  readonly resolveNativeAsset?: HeliusSolanaAssetResolutionServiceShape["resolveAsset"]
 }) =>
   HeliusSolanaSourceSyncProviderFromClientLive.pipe(
     Layer.provide(
@@ -155,6 +159,8 @@ const makeProviderLayer = ({
           upsertProviderAssetMappings: () => Effect.succeed(0),
           approveProviderAssetMappingAndRequestReplay: () =>
             Effect.die("approveProviderAssetMappingAndRequestReplay should not be called"),
+          excludeProviderAssetMappingAndRequestReplay: () =>
+            Effect.die("excludeProviderAssetMappingAndRequestReplay should not be called"),
           lockProviderAssetApprovalSnapshot: () =>
             Effect.die("lockProviderAssetApprovalSnapshot should not be called"),
           recordProviderAssetSourceUses,
@@ -232,26 +238,28 @@ const makeProviderLayer = ({
               providerAssetCatalogCount: 0,
               defaultProviderAssetMappingCount: 0,
             }),
-          resolveAsset: () =>
-            Effect.succeed({
-              kind: "canonical",
-              assetKind: "native",
-              representationTypeObserved: true,
-              mintAddress: null,
-              providerAssetRowId: "provider-asset-sol",
-              providerAssetId: null,
-              naturalKey: "native:SOL",
-              currencyCode: "SOL",
-              name: "Solana",
-              decimals: 9,
-              tokenProgram: null,
-              nftHint: false,
-              mappingStatus: "approved",
-              mappingKind: "asset",
-              canonicalAssetId: "asset-sol",
-              assetRepresentationId: "representation-sol",
-              canonicalFiatCurrency: null,
-            } satisfies HeliusSolanaResolvedAsset),
+          resolveAsset:
+            resolveNativeAsset ??
+            (() =>
+              Effect.succeed({
+                kind: "canonical",
+                assetKind: "native",
+                representationTypeObserved: true,
+                mintAddress: null,
+                providerAssetRowId: "provider-asset-sol",
+                providerAssetId: null,
+                naturalKey: "native:SOL",
+                currencyCode: "SOL",
+                name: "Solana",
+                decimals: 9,
+                tokenProgram: null,
+                nftHint: false,
+                mappingStatus: "approved",
+                mappingKind: "asset",
+                canonicalAssetId: "asset-sol",
+                assetRepresentationId: "representation-sol",
+                canonicalFiatCurrency: null,
+              } satisfies HeliusSolanaResolvedAsset)),
           resolveAssets: ({ assets }) =>
             Effect.succeed(
               assets.flatMap(
@@ -302,60 +310,82 @@ const makeProviderLayer = ({
                               canonicalFiatCurrency: null,
                             } satisfies HeliusSolanaResolvedAsset,
                           ]
-                        : asset.mintAddress === UNKNOWN_MINT
+                        : asset.mintAddress === EXCLUDED_MINT
                           ? [
                               {
-                                kind: "review_required",
+                                kind: "excluded",
                                 assetKind: "token",
-                                representationTypeObserved: false,
+                                representationTypeObserved: true,
                                 mintAddress: asset.mintAddress,
                                 providerAssetRowId: `provider-asset-${asset.mintAddress}`,
                                 providerAssetId: asset.mintAddress,
                                 naturalKey: `spl:${asset.mintAddress}`,
-                                currencyCode: asset.mintAddress,
-                                name: null,
-                                decimals: null,
-                                tokenProgram: null,
+                                currencyCode: "EXCLUDED",
+                                name: "Excluded token",
+                                decimals: 5,
+                                tokenProgram: "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA",
                                 nftHint: false,
-                                mappingStatus: "pending_review",
+                                mappingStatus: "excluded",
                                 mappingKind: "asset",
                                 canonicalAssetId: null,
                                 assetRepresentationId: null,
                                 canonicalFiatCurrency: null,
                               } satisfies HeliusSolanaResolvedAsset,
                             ]
-                          : [
-                              {
-                                kind: "canonical",
-                                assetKind: "token",
-                                ...(asset.mintAddress === OMITTED_TYPE_EVIDENCE_MINT
-                                  ? {}
-                                  : { representationTypeObserved: true }),
-                                mintAddress: asset.mintAddress,
-                                providerAssetRowId: `provider-asset-${asset.mintAddress}`,
-                                providerAssetId: asset.mintAddress,
-                                naturalKey: `spl:${asset.mintAddress}`,
-                                currencyCode: "USDC",
-                                name: "USD Coin",
-                                decimals:
-                                  asset.mintAddress === STALE_DECIMALS_MINT
-                                    ? asset.observedDecimals === 5
-                                      ? 2
-                                      : 5
-                                    : asset.mintAddress === EIGHTEEN_DECIMALS_MINT
-                                      ? 18
-                                      : asset.mintAddress === MAX_DECIMALS_MINT
-                                        ? 255
-                                        : 6,
-                                tokenProgram: "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA",
-                                nftHint: false,
-                                mappingStatus: "approved",
-                                mappingKind: "asset",
-                                canonicalAssetId: "asset-usdc",
-                                assetRepresentationId: "representation-usdc-solana",
-                                canonicalFiatCurrency: null,
-                              } satisfies HeliusSolanaResolvedAsset,
-                            ]
+                          : asset.mintAddress === UNKNOWN_MINT
+                            ? [
+                                {
+                                  kind: "review_required",
+                                  assetKind: "token",
+                                  representationTypeObserved: false,
+                                  mintAddress: asset.mintAddress,
+                                  providerAssetRowId: `provider-asset-${asset.mintAddress}`,
+                                  providerAssetId: asset.mintAddress,
+                                  naturalKey: `spl:${asset.mintAddress}`,
+                                  currencyCode: asset.mintAddress,
+                                  name: null,
+                                  decimals: null,
+                                  tokenProgram: null,
+                                  nftHint: false,
+                                  mappingStatus: "pending_review",
+                                  mappingKind: "asset",
+                                  canonicalAssetId: null,
+                                  assetRepresentationId: null,
+                                  canonicalFiatCurrency: null,
+                                } satisfies HeliusSolanaResolvedAsset,
+                              ]
+                            : [
+                                {
+                                  kind: "canonical",
+                                  assetKind: "token",
+                                  ...(asset.mintAddress === OMITTED_TYPE_EVIDENCE_MINT
+                                    ? {}
+                                    : { representationTypeObserved: true }),
+                                  mintAddress: asset.mintAddress,
+                                  providerAssetRowId: `provider-asset-${asset.mintAddress}`,
+                                  providerAssetId: asset.mintAddress,
+                                  naturalKey: `spl:${asset.mintAddress}`,
+                                  currencyCode: "USDC",
+                                  name: "USD Coin",
+                                  decimals:
+                                    asset.mintAddress === STALE_DECIMALS_MINT
+                                      ? asset.observedDecimals === 5
+                                        ? 2
+                                        : 5
+                                      : asset.mintAddress === EIGHTEEN_DECIMALS_MINT
+                                        ? 18
+                                        : asset.mintAddress === MAX_DECIMALS_MINT
+                                          ? 255
+                                          : 6,
+                                  tokenProgram: "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA",
+                                  nftHint: false,
+                                  mappingStatus: "approved",
+                                  mappingKind: "asset",
+                                  canonicalAssetId: "asset-usdc",
+                                  assetRepresentationId: "representation-usdc-solana",
+                                  canonicalFiatCurrency: null,
+                                } satisfies HeliusSolanaResolvedAsset,
+                              ]
               )
             ),
         })
@@ -3866,6 +3896,275 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
     })
     expect(result.legDerivationStrategy).toBe("skip")
     expect(result.legPlans).toEqual([])
+  })
+
+  it("keeps excluded SPL movements as evidence without creating accounting or review work", async () => {
+    const payload = {
+      slot: 129,
+      transactionIndex: 4,
+      transaction: {
+        signatures: ["signature-excluded-token-balance"],
+        message: {
+          accountKeys: [
+            { pubkey: WALLET_ADDRESS, signer: true },
+            { pubkey: "counterparty-address", signer: false },
+            { pubkey: "wallet-excluded-token-account", signer: false },
+          ],
+          instructions: [],
+        },
+      },
+      meta: {
+        err: null,
+        fee: 0,
+        preBalances: [2_000_000_000, 0, 0],
+        postBalances: [2_000_000_000, 0, 0],
+        preTokenBalances: [
+          {
+            accountIndex: 2,
+            mint: EXCLUDED_MINT,
+            owner: WALLET_ADDRESS,
+            uiTokenAmount: { amount: "0", decimals: 5 },
+          },
+        ],
+        postTokenBalances: [
+          {
+            accountIndex: 2,
+            mint: EXCLUDED_MINT,
+            owner: WALLET_ADDRESS,
+            uiTokenAmount: { amount: "123456", decimals: 5 },
+          },
+        ],
+      },
+      blockTime: 1_735_689_600,
+    }
+
+    const result = await runProvider(
+      Effect.gen(function* () {
+        const provider = yield* HeliusSolanaSourceSyncProvider
+        const lookups = yield* provider.loadNormalizationLookups()
+        return yield* provider.prepareNormalization({
+          source: makeSource(),
+          sourceRecord: makeRawRecord({ fullTransaction: payload }),
+          lookups,
+        })
+      }),
+      () => Effect.die("Helius client should not be called during normalization")
+    )
+
+    expect(result.canonicalTransfers).toEqual([])
+    expect(result.transactionReview).toBeNull()
+    expect(result.providerTransfers).toEqual([
+      expect.objectContaining({
+        providerAssetId: `provider-asset-${EXCLUDED_MINT}`,
+        processingMode: "evidence_only",
+        observedMintAddress: EXCLUDED_MINT,
+        observedDecimals: 5,
+        amount: "1.23456",
+      }),
+    ])
+    expect(result.legDerivationStrategy).toBe("skip")
+    expect(result.legPlans).toEqual([])
+  })
+
+  it("keeps approved SPL accounting when native SOL is excluded", async () => {
+    const payload = {
+      slot: 129,
+      transactionIndex: 5,
+      transaction: {
+        signatures: ["signature-excluded-native-sol"],
+        message: {
+          accountKeys: [
+            { pubkey: WALLET_ADDRESS, signer: true },
+            { pubkey: "counterparty-address", signer: false },
+            { pubkey: "wallet-usdc-account", signer: false },
+          ],
+          instructions: [],
+        },
+      },
+      meta: {
+        err: null,
+        fee: 0,
+        preBalances: [1_000_000_000, 1_000_000_000, 0],
+        postBalances: [2_000_000_000, 0, 0],
+        preTokenBalances: [
+          {
+            accountIndex: 2,
+            mint: USDC_MINT,
+            owner: WALLET_ADDRESS,
+            uiTokenAmount: { amount: "0", decimals: 6 },
+          },
+        ],
+        postTokenBalances: [
+          {
+            accountIndex: 2,
+            mint: USDC_MINT,
+            owner: WALLET_ADDRESS,
+            uiTokenAmount: { amount: "12500000", decimals: 6 },
+          },
+        ],
+      },
+      blockTime: 1_735_689_600,
+    }
+
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const provider = yield* HeliusSolanaSourceSyncProvider
+        const lookups = yield* provider.loadNormalizationLookups()
+        return yield* provider.prepareNormalization({
+          source: makeSource(),
+          sourceRecord: makeRawRecord({ fullTransaction: payload }),
+          lookups,
+        })
+      }).pipe(
+        Effect.provide(
+          makeProviderLayer({
+            fetchTransactionsForAddress: () =>
+              Effect.die("Helius client should not be called during normalization"),
+            resolveNativeAsset: () =>
+              Effect.succeed({
+                kind: "excluded",
+                assetKind: "native",
+                representationTypeObserved: true,
+                mintAddress: null,
+                providerAssetRowId: "provider-asset-sol",
+                providerAssetId: null,
+                naturalKey: "native:SOL",
+                currencyCode: "SOL",
+                name: "Solana",
+                decimals: 9,
+                tokenProgram: null,
+                nftHint: false,
+                mappingStatus: "excluded",
+                mappingKind: "asset",
+                canonicalAssetId: null,
+                assetRepresentationId: null,
+                canonicalFiatCurrency: null,
+              }),
+          })
+        )
+      )
+    )
+
+    expect(result.canonicalTransfers).toEqual([
+      expect.objectContaining({ assetId: "asset-usdc", amount: "12.5", type: "spl" }),
+    ])
+    expect(result.providerTransfers).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          providerAssetId: "provider-asset-sol",
+          processingMode: "evidence_only",
+        }),
+      ])
+    )
+    expect(result.legDerivationStrategy).not.toBe("skip")
+    expect(result.legPlans).not.toEqual([])
+  })
+
+  it("ignores excluded SPL contradictions while deriving valid accounting legs", async () => {
+    const signature = "signature-excluded-contradiction"
+    const walletTransferEvidence = [
+      {
+        signature,
+        timestamp: 1_735_689_600,
+        direction: "in",
+        counterparty: "counterparty-address",
+        mint: USDC_MINT,
+        symbol: "USDC",
+        amount: 12.5,
+        amountRaw: "12500000",
+        decimals: 6,
+      },
+      {
+        signature,
+        timestamp: 1_735_689_600,
+        direction: "in",
+        counterparty: "counterparty-address",
+        mint: EXCLUDED_MINT,
+        symbol: "EXCLUDED",
+        amount: 6.54321,
+        amountRaw: "654321",
+        decimals: 5,
+      },
+    ]
+    const payload = {
+      slot: 129,
+      transactionIndex: 5,
+      transaction: {
+        signatures: [signature],
+        message: {
+          accountKeys: [
+            { pubkey: WALLET_ADDRESS, signer: true },
+            { pubkey: "counterparty-address", signer: false },
+            { pubkey: "wallet-usdc-token-account", signer: false },
+            { pubkey: "wallet-excluded-token-account", signer: false },
+          ],
+          instructions: [],
+        },
+      },
+      meta: {
+        err: null,
+        fee: 5_000,
+        preBalances: [2_000_000_000, 0, 0, 0],
+        postBalances: [1_999_995_000, 0, 0, 0],
+        preTokenBalances: [
+          {
+            accountIndex: 2,
+            mint: USDC_MINT,
+            owner: WALLET_ADDRESS,
+            uiTokenAmount: { amount: "0", decimals: 6 },
+          },
+          {
+            accountIndex: 3,
+            mint: EXCLUDED_MINT,
+            owner: WALLET_ADDRESS,
+            uiTokenAmount: { amount: "0", decimals: 5 },
+          },
+        ],
+        postTokenBalances: [
+          {
+            accountIndex: 2,
+            mint: USDC_MINT,
+            owner: WALLET_ADDRESS,
+            uiTokenAmount: { amount: "12500000", decimals: 6 },
+          },
+          {
+            accountIndex: 3,
+            mint: EXCLUDED_MINT,
+            owner: WALLET_ADDRESS,
+            uiTokenAmount: { amount: "123456", decimals: 5 },
+          },
+        ],
+      },
+      blockTime: 1_735_689_600,
+    }
+
+    const prepared = await runProvider(
+      Effect.gen(function* () {
+        const provider = yield* HeliusSolanaSourceSyncProvider
+        const lookups = yield* provider.loadNormalizationLookups()
+        return yield* provider.prepareNormalization({
+          source: makeSource(),
+          sourceRecord: makeRawRecord({ fullTransaction: payload, walletTransferEvidence }),
+          lookups,
+        })
+      }),
+      () => Effect.die("Helius client should not be called during normalization")
+    )
+
+    expect(prepared.transactionReview).toBeNull()
+    expect(prepared.legDerivationStrategy).toBe("derive")
+    expect(prepared.legPlans).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ kind: "acquisition", derivationRule: "helius_solana_inbound" }),
+      ])
+    )
+    expect(
+      prepared.providerTransfers.filter(
+        (transfer) => transfer.providerAssetId === `provider-asset-${EXCLUDED_MINT}`
+      )
+    ).toEqual(
+      expect.arrayContaining([expect.objectContaining({ processingMode: "evidence_only" })])
+    )
   })
 
   it("records separate SPL token and NFT facts in a multi-transfer transaction", async () => {

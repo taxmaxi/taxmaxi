@@ -16,6 +16,7 @@ export function useAssetCatalogSelection({
 }) {
   const [mobileDetailOpen, setMobileDetailOpen] = useState(false)
   const mobileBackButtonRef = useRef<HTMLButtonElement>(null)
+  const mobileDetailOpenerRef = useRef<HTMLButtonElement>(null)
   const [selectedKey, setSelectedKey] = useState(() => getCatalogItemKey(visibleItems[0]))
   const selectedItem =
     visibleItems.find((item) => getCatalogItemKey(item) === selectedKey) ??
@@ -62,10 +63,19 @@ export function useAssetCatalogSelection({
     }
   }, [])
 
+  const showMobileDetail = useCallback(() => {
+    if (!window.matchMedia(ASSET_CATALOG_DESKTOP_MEDIA_QUERY).matches) {
+      setMobileDetailOpen(true)
+    }
+  }, [])
+
   const showMobileList = useCallback(() => {
     setMobileDetailOpen(false)
 
     if (selectedItem === undefined) {
+      window.requestAnimationFrame(() => {
+        mobileDetailOpenerRef.current?.focus()
+      })
       return
     }
 
@@ -77,13 +87,15 @@ export function useAssetCatalogSelection({
   useEffect(() => {
     const desktopQuery = window.matchMedia(ASSET_CATALOG_DESKTOP_MEDIA_QUERY)
     const moveFocusToDesktopList = (matches: boolean) => {
-      if (!matches || !mobileDetailOpen || selectedItem === undefined) {
+      if (!matches || !mobileDetailOpen) {
         return
       }
 
       setMobileDetailOpen(false)
       window.requestAnimationFrame(() => {
-        document.getElementById(getCatalogItemDomId(selectedItem))?.focus()
+        const focusTargetId =
+          selectedItem === undefined ? ASSET_CATALOG_SEARCH_ID : getCatalogItemDomId(selectedItem)
+        document.getElementById(focusTargetId)?.focus()
       })
     }
     const onDesktopChange = (event: MediaQueryListEvent) => {
@@ -166,10 +178,12 @@ export function useAssetCatalogSelection({
 
   return {
     mobileBackButtonRef,
+    mobileDetailOpenerRef,
     mobileDetailOpen,
     selectedItem,
     selectedItemKey,
     selectItem,
+    showMobileDetail,
     showMobileList,
   }
 }

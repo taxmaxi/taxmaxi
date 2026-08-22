@@ -109,6 +109,7 @@ const makeCoinbaseProviderModule = (
                             venueContext,
                             primaryAsset: prepared.primaryAsset,
                             canonicalTransfers,
+                            deriveMainLeg: prepared.deriveMainLeg,
                           })
                           .pipe(Effect.mapError(toCoinbaseRecoverableNormalizationError))
                     : () => Effect.succeed([]),

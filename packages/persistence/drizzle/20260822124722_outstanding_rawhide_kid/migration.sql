@@ -1,0 +1,1 @@
+ALTER TABLE "asset_resolution_decisions" DROP CONSTRAINT "asset_resolution_decisions_approval_requires_target", ADD CONSTRAINT "asset_resolution_decisions_approval_requires_target" CHECK ("outcome"::text not in ('attach', 'create_standalone') or ("asset_id" is not null and ("blockchain" is null or "asset_representation_id" is not null)));

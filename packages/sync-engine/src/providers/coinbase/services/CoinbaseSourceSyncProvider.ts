@@ -66,6 +66,8 @@ export interface PreparedCoinbaseNormalization {
   readonly resolvedTransactionType: CoinbaseResolvedTransactionTypeMapping
   readonly primaryAsset: SyncEngineAsset | null
   readonly legDerivationStrategy: "derive" | "skip"
+  /** False for a settled primary exclusion; approved secondary fees still derive. */
+  readonly deriveMainLeg: boolean
 }
 
 /**
@@ -76,6 +78,7 @@ export interface DeriveCoinbaseProviderLegsParams {
   readonly venueContext: PersistedSourceVenueContext | null
   readonly primaryAsset: SyncEngineAsset | null
   readonly canonicalTransfers: ReadonlyArray<PersistedSourceTransfer>
+  readonly deriveMainLeg: boolean
 }
 
 /**

@@ -324,6 +324,72 @@ const insertUnresolvedProviderAssetSourceUse = ({
     }
   }).pipe(Effect.provide(context.TestPgClientLive))
 
+const insertExcludedProviderAssetSourceUseWithRematerialization = () =>
+  Effect.gen(function* () {
+    const db = yield* drizzle
+
+    const [providerAsset] = yield* db
+      .insert(schema.providerAssets)
+      .values({
+        provider: "coinbase",
+        naturalKey: "coinbase-excluded-asset",
+        currencyCode: "EXCLUDED",
+        retrievedAt: new Date("2025-01-01T00:00:00.000Z"),
+      })
+      .returning({ id: schema.providerAssets.id })
+
+    if (providerAsset === undefined) {
+      return yield* Effect.die("Failed to create excluded provider asset fixture")
+    }
+
+    yield* db.insert(schema.providerAssetSourceUses).values({
+      providerAssetRowId: providerAsset.id,
+      sourceId,
+    })
+    yield* db.insert(schema.providerAssetMappings).values({
+      providerAssetRowId: providerAsset.id,
+      mappingKind: "asset",
+      canonicalAssetId: null,
+      mappingStatus: "excluded",
+      sourceNotes: "Human exclusion awaiting replay",
+    })
+
+    const [decision] = yield* db
+      .insert(schema.assetResolutionDecisions)
+      .values({
+        providerAssetRowId: providerAsset.id,
+        evidenceRevision: 1,
+        policyRevision: "human:test",
+        outcome: "excluded",
+        status: "active",
+        reason: "not_economic_activity",
+        actor: userId,
+      })
+      .returning({ id: schema.assetResolutionDecisions.id })
+    const [job] = yield* db
+      .insert(schema.processingJobs)
+      .values({
+        sourceId,
+        principalId,
+        mode: "replay",
+        status: "pending",
+      })
+      .returning({ id: schema.processingJobs.id })
+
+    if (decision === undefined || job === undefined) {
+      return yield* Effect.die("Failed to create exclusion replay fixture")
+    }
+
+    yield* db.insert(schema.assetDecisionRematerializations).values({
+      decisionId: decision.id,
+      sourceId,
+      processingJobId: job.id,
+      status: "pending",
+    })
+
+    return { decisionId: decision.id, jobId: job.id, providerAssetRowId: providerAsset.id }
+  }).pipe(Effect.provide(context.TestPgClientLive))
+
 await Effect.runPromise(context.recreateTestDatabase())
 
 describe("TaxCalculationServiceLive", () => {
@@ -442,6 +508,139 @@ describe("TaxCalculationServiceLive", () => {
           ])
         }
       })
+    )
+  })
+
+  it("blocks an excluded observation until its rematerialization replay completes", async () => {
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const fixture = yield* insertExcludedProviderAssetSourceUseWithRematerialization()
+        const db = yield* drizzle
+
+        for (const status of ["pending", "processing", "failed"] as const) {
+          yield* db
+            .update(schema.processingJobs)
+            .set({ status })
+            .where(eq(schema.processingJobs.id, fixture.jobId))
+
+          const error = yield* calculateTax().pipe(Effect.flip)
+          expect(error._tag).toBe("TaxCalculationPendingObservationsError")
+        }
+
+        const [completedFollowUp] = yield* db
+          .insert(schema.processingJobs)
+          .values({
+            sourceId,
+            principalId,
+            mode: "replay",
+            status: "completed",
+          })
+          .returning({ id: schema.processingJobs.id })
+        if (completedFollowUp === undefined) {
+          return yield* Effect.die("Failed to create completed replay follow-up fixture")
+        }
+        yield* db
+          .update(schema.processingJobs)
+          .set({
+            status: "failed",
+            followUpMode: "replay",
+            followUpJobId: completedFollowUp.id,
+          })
+          .where(eq(schema.processingJobs.id, fixture.jobId))
+
+        const taxAfterCompletedFollowUp = yield* calculateTax()
+        expect(taxAfterCompletedFollowUp.taxableGains).toBe(2000)
+
+        yield* db
+          .update(schema.processingJobs)
+          .set({ status: "completed", followUpMode: null, followUpJobId: null })
+          .where(eq(schema.processingJobs.id, fixture.jobId))
+
+        yield* db
+          .update(schema.assetDecisionRematerializations)
+          .set({ status: "operator_attention" })
+          .where(eq(schema.assetDecisionRematerializations.decisionId, fixture.decisionId))
+        const operatorAttentionError = yield* calculateTax().pipe(Effect.flip)
+        expect(operatorAttentionError._tag).toBe("TaxCalculationPendingObservationsError")
+
+        yield* db
+          .update(schema.assetDecisionRematerializations)
+          .set({ status: "pending" })
+          .where(eq(schema.assetDecisionRematerializations.decisionId, fixture.decisionId))
+
+        const tax = yield* calculateTax()
+        expect(tax.taxableGains).toBe(2000)
+        expect(tax.incomeTotal).toBe(700)
+
+        yield* db
+          .update(schema.assetDecisionRematerializations)
+          .set({ status: "operator_attention" })
+          .where(eq(schema.assetDecisionRematerializations.decisionId, fixture.decisionId))
+        yield* db
+          .update(schema.assetResolutionDecisions)
+          .set({ status: "superseded" })
+          .where(eq(schema.assetResolutionDecisions.id, fixture.decisionId))
+        const [activeDecision] = yield* db
+          .insert(schema.assetResolutionDecisions)
+          .values({
+            providerAssetRowId: fixture.providerAssetRowId,
+            evidenceRevision: 1,
+            policyRevision: "human:test:latest",
+            outcome: "excluded",
+            status: "active",
+            supersedesDecisionId: fixture.decisionId,
+            reason: "not_economic_activity",
+            actor: userId,
+          })
+          .returning({ id: schema.assetResolutionDecisions.id })
+        const [completedJob] = yield* db
+          .insert(schema.processingJobs)
+          .values({
+            sourceId,
+            principalId,
+            mode: "replay",
+            status: "completed",
+          })
+          .returning({ id: schema.processingJobs.id })
+        if (activeDecision === undefined || completedJob === undefined) {
+          return yield* Effect.die("Failed to create active exclusion replay fixture")
+        }
+        yield* db.insert(schema.assetDecisionRematerializations).values({
+          decisionId: activeDecision.id,
+          sourceId,
+          processingJobId: completedJob.id,
+          status: "pending",
+        })
+
+        const taxAfterSupersession = yield* calculateTax()
+        expect(taxAfterSupersession.taxableGains).toBe(2000)
+
+        const [approvedAsset] = yield* db
+          .insert(schema.assets)
+          .values({ name: "Approved replay asset", symbol: "APR", type: "fungible" })
+          .returning({ id: schema.assets.id })
+        if (approvedAsset === undefined) {
+          return yield* Effect.die("Failed to create approved replay asset")
+        }
+        yield* db
+          .update(schema.providerAssetMappings)
+          .set({
+            mappingStatus: "approved",
+            canonicalAssetId: approvedAsset.id,
+          })
+          .where(eq(schema.providerAssetMappings.providerAssetRowId, fixture.providerAssetRowId))
+        yield* db
+          .update(schema.assetResolutionDecisions)
+          .set({ outcome: "identity", assetId: approvedAsset.id })
+          .where(eq(schema.assetResolutionDecisions.id, activeDecision.id))
+        yield* db
+          .update(schema.processingJobs)
+          .set({ status: "pending", completedAt: null })
+          .where(eq(schema.processingJobs.id, completedJob.id))
+
+        const approvedReplayError = yield* calculateTax().pipe(Effect.flip)
+        expect(approvedReplayError._tag).toBe("TaxCalculationPendingObservationsError")
+      }).pipe(Effect.provide(context.TestPgClientLive))
     )
   })
 

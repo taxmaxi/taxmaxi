@@ -2475,7 +2475,7 @@ const make = ({
       readonly resolvedTransactionType: ResolvedProviderTransactionTypeMapping
     }): SourceTransactionReviewDraft | null => {
       const hasUnresolvedAssets = movements.some(
-        (movement) => movement.asset.canonicalAssetId === null
+        (movement) => movement.asset.kind === "review_required"
       )
       const hasFailedTransaction = payload.meta?.err !== null
       const hasUnclassifiedSuccessfulTransaction =
@@ -2791,18 +2791,27 @@ const make = ({
             tokenBalanceSplMovements,
             transferRowSplMovements,
           })
-          const joinedCanonicalSplMovements =
+          const joinedCanonicalSplMovements = (
             canonicalSplMovements === transferRowSplMovements
               ? canonicalSplMovements
               : joinTransferRowEvidence({
                   authoritativeMovements: canonicalSplMovements,
                   transferRowMovements: transferRowSplMovements,
                 })
+          ).filter((movement) => movement.asset.kind !== "excluded")
+
+          const contradictionSplMovements = splMovements.filter(
+            (movement) => movement.asset.kind !== "excluded"
+          )
+          const contradictionTransferRowSplMovements =
+            splMovements === transferRowSplMovements
+              ? contradictionSplMovements
+              : transferRowSplMovements.filter((movement) => movement.asset.kind !== "excluded")
 
           const contradictions = [
             ...findContradictionsForEvidence({
-              authoritativeSplMovements: splMovements,
-              transferRowSplMovements,
+              authoritativeSplMovements: contradictionSplMovements,
+              transferRowSplMovements: contradictionTransferRowSplMovements,
             }),
             ...ambiguousNativeSolTransfers.map(
               (transfer): MovementContradiction => ({
@@ -2820,7 +2829,10 @@ const make = ({
               position: solMovements.length + index,
             })),
           ]
-          const canonicalMovements = [...rawSolMovements, ...joinedCanonicalSplMovements]
+          const canonicalMovements = [
+            ...rawSolMovements.filter((movement) => movement.asset.kind !== "excluded"),
+            ...joinedCanonicalSplMovements,
+          ]
           const conflictingApprovedMovement = canonicalMovements.find(
             (movement) =>
               movement.asset.mappingStatus === "approved" &&

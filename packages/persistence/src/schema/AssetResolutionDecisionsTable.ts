@@ -4,6 +4,7 @@ import {
   foreignKey,
   index,
   integer,
+  jsonb,
   pgEnum,
   pgTable,
   text,
@@ -18,6 +19,8 @@ import { providerAssets } from "./ProviderAssetsTable.ts"
 export const assetResolutionOutcomeEnum = pgEnum("asset_resolution_outcome", [
   "attach",
   "create_standalone",
+  "identity",
+  "excluded",
   "pending",
   "fail_closed",
 ])
@@ -65,6 +68,8 @@ export const assetResolutionDecisions = pgTable(
     mintAddress: text("mint_address"),
     decimals: integer("decimals"),
     reason: text("reason"),
+    humanClaim: jsonb("human_claim"),
+    rationale: text("rationale"),
     actor: text("actor").notNull(),
     createdAt: timestamp("created_at").notNull().defaultNow(),
   },
@@ -87,7 +92,7 @@ export const assetResolutionDecisions = pgTable(
     ),
     check(
       "asset_resolution_decisions_approval_requires_target",
-      sql`${table.outcome}::text not in ('attach', 'create_standalone') or (${table.assetId} is not null and ${table.assetRepresentationId} is not null)`
+      sql`${table.outcome}::text not in ('attach', 'create_standalone') or (${table.assetId} is not null and (${table.blockchain} is null or ${table.assetRepresentationId} is not null))`
     ),
   ]
 )

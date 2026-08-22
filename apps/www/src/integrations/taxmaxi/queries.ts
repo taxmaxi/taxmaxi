@@ -2,6 +2,7 @@ import { infiniteQueryOptions, keepPreviousData, queryOptions } from "@tanstack/
 import {
   TaxMaxiError,
   type AssetCatalogListInput,
+  type AssetExceptionListInput,
   type PendingAssetListInput,
   type TransactionListInput,
   type TaxMaxi,
@@ -12,6 +13,7 @@ export const DEFAULT_TAXMAXI_PENDING_ASSET_LIMIT = 40
 
 type AssetCatalogPageInput = Omit<AssetCatalogListInput, "cursor">
 type PendingAssetPageInput = Omit<PendingAssetListInput, "cursor">
+type AssetExceptionPageInput = Omit<AssetExceptionListInput, "cursor">
 
 const getInitialPageCursor = (): string | null => null
 
@@ -38,6 +40,8 @@ export const queryKeys = {
   assetDetail: (assetId: string) => [...queryKeys.assets(), "detail", assetId] as const,
   pendingAssetList: (input: PendingAssetPageInput = {}) =>
     [...queryKeys.assets(), "pending", normalizePendingAssetListInput(input)] as const,
+  assetExceptionList: (input: AssetExceptionPageInput = {}) =>
+    [...queryKeys.assets(), "exceptions", input] as const,
   sources: () => [...queryKeys.all, "sources"] as const,
   sourceList: () => [...queryKeys.sources(), "list"] as const,
   sourceOverview: (sourceId: string) => [...queryKeys.sources(), sourceId, "overview"] as const,
@@ -81,6 +85,15 @@ export const queries = {
       staleTime: 60 * 1000,
     })
   },
+  assetExceptionList: (taxmaxi: TaxMaxi, input: AssetExceptionPageInput = {}) =>
+    infiniteQueryOptions({
+      queryKey: queryKeys.assetExceptionList(input),
+      queryFn: ({ pageParam, signal }) =>
+        taxmaxi.assets.listExceptions({ ...input, cursor: pageParam }, { signal }),
+      initialPageParam: getInitialPageCursor(),
+      getNextPageParam: (lastPage) => lastPage.page.nextCursor ?? undefined,
+      staleTime: 30 * 1000,
+    }),
   sourceList: (taxmaxi: TaxMaxi) =>
     queryOptions({
       queryKey: queryKeys.sourceList(),

@@ -392,8 +392,13 @@ const assetKindFromProviderAsset = (
 
 const resolvedKindFromMapping = (
   mapping: ResolvedProviderAssetMapping
-): HeliusSolanaResolvedAsset["kind"] =>
-  mapping.mappingStatus === "approved" ? "canonical" : "review_required"
+): HeliusSolanaResolvedAsset["kind"] => {
+  if (mapping.mappingStatus === "approved") {
+    return "canonical"
+  }
+
+  return mapping.mappingStatus === "excluded" ? "excluded" : "review_required"
+}
 
 const makeMissingProviderAssetAfterUpsertError = ({
   providerAssetId,
@@ -636,72 +641,6 @@ const make = Effect.gen(function* () {
       ],
     })
 
-  const exactRepresentationMappingDraft = ({
-    reference,
-    providerAsset,
-  }: {
-    readonly reference: NormalizedAssetReference
-    readonly providerAsset: ProviderAssetRecord
-  }): Effect.Effect<Option.Option<ProviderAssetMappingDraft>, SyncEngineStorageError> => {
-    const mintAddress = reference.mintAddress
-    const observedType = representationTypeFromProviderAsset(providerAsset)
-
-    if (reference.kind === "native" || mintAddress === null) {
-      return Effect.succeed(Option.none())
-    }
-
-    return Effect.all({
-      representation: assetRepository.findRepresentationByBlockchainAndAddress({
-        blockchainName: SOLANA_BLOCKCHAIN_NAME,
-        address: mintAddress,
-      }),
-      observations: providerAssetRepository.listProviderAssetObservedRepresentations({
-        providerAssetRowId: providerAsset.id,
-      }),
-    }).pipe(
-      Effect.map(({ representation, observations }) =>
-        Option.filter(
-          representation,
-          (candidate) =>
-            observedType !== null &&
-            candidate.representationType === observedType &&
-            providerAsset.exponent !== null &&
-            candidate.decimals === providerAsset.exponent &&
-            reference.observedDecimals !== null &&
-            (reference.observedDecimals === undefined ||
-              candidate.decimals === reference.observedDecimals) &&
-            observations.every(
-              (observation) =>
-                observation.blockchainName.toLowerCase() ===
-                  candidate.blockchainName.toLowerCase() &&
-                observation.representationType !== null &&
-                observation.representationType === candidate.representationType &&
-                observation.contractAddress === candidate.contractAddress &&
-                observation.mintAddress === candidate.mintAddress &&
-                observation.decimals !== null &&
-                observation.decimals === candidate.decimals
-            )
-        )
-      ),
-      Effect.map(
-        Option.map(
-          (representation) =>
-            ({
-              providerAssetRowId: providerAsset.id,
-              mappingKind: "asset",
-              canonicalAssetId: representation.assetId,
-              assetRepresentationId: representation.id,
-              canonicalFiatCurrency: null,
-              mappingStatus: "approved",
-              reviewerNotes: null,
-              sourceNotes:
-                "Matched an existing TaxMaxi Solana representation by exact mint, type, and compatible decimals.",
-            }) satisfies ProviderAssetMappingDraft
-        )
-      )
-    )
-  }
-
   const loadProviderAssetMapping = ({
     providerAssetRowId,
   }: {
@@ -720,9 +659,6 @@ const make = Effect.gen(function* () {
   }) =>
     Effect.gen(function* () {
       const defaultMapping = defaultMappingForReference(reference)
-      const existingMapping = yield* loadProviderAssetMapping({
-        providerAssetRowId: providerAsset.id,
-      })
 
       if (defaultMapping !== null) {
         yield* ensureDefaultMappingForProviderAsset({
@@ -730,30 +666,7 @@ const make = Effect.gen(function* () {
           providerAsset,
         })
       } else {
-        const exactMapping = yield* exactRepresentationMappingDraft({
-          reference,
-          providerAsset,
-        })
-
-        if (Option.isSome(exactMapping)) {
-          if (existingMapping === null) {
-            yield* providerAssetRepository.seedProviderAssetMappingsIfMissing({
-              mappings: [exactMapping.value],
-            })
-          } else if (existingMapping.mappingStatus === "pending_review") {
-            const observations =
-              yield* providerAssetRepository.listProviderAssetObservedRepresentations({
-                providerAssetRowId: providerAsset.id,
-              })
-            yield* providerAssetRepository.approveProviderAssetMappingAndRequestReplay({
-              mapping: exactMapping.value,
-              expectedObservedRepresentations: observations,
-              expectedProviderAssetRetrievedAt: providerAsset.retrievedAt,
-            })
-          }
-        } else {
-          yield* ensurePendingProviderAssetMapping(providerAsset)
-        }
+        yield* ensurePendingProviderAssetMapping(providerAsset)
       }
 
       const mapping = yield* loadProviderAssetMapping({
@@ -958,7 +871,7 @@ const make = Effect.gen(function* () {
         providerAssetRowId: providerAsset.id,
       })
 
-      return mapping?.mappingStatus !== "approved"
+      return mapping?.mappingStatus !== "approved" && mapping?.mappingStatus !== "excluded"
     })
 
   const ensureProviderAssetForReference = ({
