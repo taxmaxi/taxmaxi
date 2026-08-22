@@ -9,6 +9,7 @@ import {
   SourceProviderRegistryLive,
   TransferReconciliationServiceLive,
 } from "@my/sync-engine/layers"
+import { AssetResolutionJupiterClientLive } from "@my/sync-engine/providers/jupiter/layers"
 import {
   CoinbaseLegDerivationServiceLive,
   CoinbaseRecordNormalizerLive,
@@ -66,6 +67,7 @@ const SourceSyncWorkerRuntimeLive = WorkerBullMqSourceSyncConsumerLive.pipe(
 
 const AssetResolutionJobExecutorRuntimeLive = AssetResolutionJobExecutorLive.pipe(
   Layer.provide(AssetResolutionCoinGeckoClientLive),
+  Layer.provide(AssetResolutionJupiterClientLive),
   Layer.provide(RepositoriesLive)
 )
 

@@ -3580,6 +3580,117 @@ describe("TransferReconciliationServiceLive", () => {
     })
   })
 
+  it("excludes observed candidates with excluded asset mappings", async () => {
+    const walletAddress = "bc1qownedwalletexcludedasset000000000000000000"
+    const makeObservedAsset = (suffix: string) => ({
+      provider: "bitcoin",
+      providerAssetId: `bitcoin:${suffix}`,
+      naturalKey: `bitcoin:${suffix}`,
+      currencyCode: "BTC",
+      name: `Bitcoin ${suffix}`,
+      exponent: 8,
+      providerType: "native",
+      networkName: "bitcoin",
+      fromAddress: "bc1qexternalorigin0000000000000000000000000",
+      representationType: "native" as const,
+      contractAddress: null,
+      mintAddress: null,
+      decimals: 8,
+    })
+
+    await runPg(seedOwnedOnchainSource({ walletAddress }))
+    const excluded = await runPg(
+      seedObservedOnchainReceipt({
+        externalId: "observed-excluded-asset",
+        txHash: "btc-excluded-asset-hash",
+        timestamp: new Date("2025-04-10T10:01:00.000Z"),
+        amount: "0.10",
+        walletAddress,
+        blockchainId: fixture.bitcoinBlockchainId,
+        observedAsset: makeObservedAsset("excluded"),
+      })
+    )
+    const unmapped = await runPg(
+      seedObservedOnchainReceipt({
+        externalId: "observed-unmapped-asset",
+        txHash: "btc-unmapped-asset-hash",
+        timestamp: new Date("2025-04-10T10:02:00.000Z"),
+        amount: "0.20",
+        walletAddress,
+        blockchainId: fixture.bitcoinBlockchainId,
+        observedAsset: makeObservedAsset("unmapped"),
+      })
+    )
+    const pending = await runPg(
+      seedObservedOnchainReceipt({
+        externalId: "observed-pending-asset",
+        txHash: "btc-pending-asset-hash",
+        timestamp: new Date("2025-04-10T10:03:00.000Z"),
+        amount: "0.30",
+        walletAddress,
+        blockchainId: fixture.bitcoinBlockchainId,
+        observedAsset: makeObservedAsset("pending"),
+      })
+    )
+    await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        yield* db.insert(schema.providerAssetMappings).values([
+          {
+            providerAssetRowId: excluded.providerAssetRowId,
+            mappingKind: "asset",
+            canonicalAssetId: null,
+            assetRepresentationId: null,
+            canonicalFiatCurrency: null,
+            mappingStatus: "excluded",
+            reviewerNotes: null,
+            sourceNotes: "Excluded by policy",
+          },
+          {
+            providerAssetRowId: pending.providerAssetRowId,
+            mappingKind: "asset",
+            canonicalAssetId: null,
+            assetRepresentationId: null,
+            canonicalFiatCurrency: null,
+            mappingStatus: "pending_review",
+            reviewerNotes: null,
+            sourceNotes: "Awaiting review",
+          },
+        ])
+      })
+    )
+
+    const candidates = await runTransferReconciliationRepository(
+      Effect.flatMap(TransferReconciliationRepository, (repository) =>
+        repository.findOnchainTransferCandidates({
+          principalId: TEST_PRINCIPAL_ID,
+          direction: "outbound",
+          walletAddress,
+          timestampStart: new Date("2025-04-10T10:00:00.000Z"),
+          timestampEnd: new Date("2025-04-10T10:05:00.000Z"),
+          networkName: "bitcoin",
+          networkHash: null,
+        })
+      )
+    )
+
+    expect(
+      candidates.map(({ observedProviderTransferId, providerAssetMappingStatus }) => ({
+        observedProviderTransferId,
+        providerAssetMappingStatus,
+      }))
+    ).toEqual([
+      {
+        observedProviderTransferId: unmapped.providerTransferId,
+        providerAssetMappingStatus: null,
+      },
+      {
+        observedProviderTransferId: pending.providerTransferId,
+        providerAssetMappingStatus: "pending_review",
+      },
+    ])
+  })
+
   it("defers an approved observed representation until its canonical transfer exists", async () => {
     const walletAddress = "bc1qownedwalletapprovedobservation000000000000"
     const timestamp = new Date("2025-04-10T10:00:00.000Z")

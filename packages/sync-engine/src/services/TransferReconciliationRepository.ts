@@ -7,6 +7,7 @@
 
 import * as Context from "effect/Context"
 import type * as Effect from "effect/Effect"
+import type { ProviderAssetMappingStatus } from "./ProviderAssetRepository.ts"
 import { SyncEngineStorageError } from "./SyncEngineStorageError.ts"
 
 /**
@@ -56,7 +57,7 @@ export interface OnchainTransferReconciliationCandidate {
   readonly fromAddress: string | null
   readonly toAddress: string | null
   readonly providerAssetRowId: string | null
-  readonly providerAssetMappingStatus: "approved" | "pending_review" | "rejected" | null
+  readonly providerAssetMappingStatus: ProviderAssetMappingStatus | null
   readonly assetId: string | null
   readonly assetRepresentationId: string | null
   readonly representationType: "native" | "token" | "nft" | null
