@@ -2585,6 +2585,304 @@ describe("SourceNormalizationRepositoryLive", () => {
     expect(result.legs).toEqual([])
   })
 
+  it("resolves an included representation asset when its provider mapping has no canonical asset", async () => {
+    const occurredAt = new Date("2025-01-01T11:15:00.000Z")
+    const providerAssetRowId = await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const [providerAsset] = yield* db
+          .insert(schema.providerAssets)
+          .values({
+            provider: "helius",
+            providerAssetId: "representation-only-asset",
+            currencyCode: "REPR",
+            exponent: 2,
+            providerType: "crypto",
+            retrievedAt: occurredAt,
+          })
+          .returning({ id: schema.providerAssets.id })
+        if (providerAsset === undefined) return yield* Effect.die("Failed to seed provider asset")
+        yield* db.insert(schema.providerAssetMappings).values({
+          providerAssetRowId: providerAsset.id,
+          mappingKind: "asset",
+          mappingStatus: "rejected",
+          canonicalAssetId: null,
+          assetRepresentationId: null,
+          canonicalFiatCurrency: null,
+        })
+        return providerAsset.id
+      })
+    )
+    const artifacts = buildBuyArtifacts({
+      externalId: "tx-representation-only",
+      occurredAt,
+      sourceRawRecordId: TEST_RAW_RECORD_ID,
+    })
+
+    const persist = () =>
+      runRepository(
+        Effect.flatMap(SourceNormalizationRepository, (repository) =>
+          repository.persistNormalizedArtifacts({
+            ...artifacts,
+            transactionReview: {
+              principalId: TEST_PRINCIPAL_ID,
+              reviewStatus: "needs_review",
+              originalTypeKey: null,
+              originalConfidence: null,
+              currentTypeKey: null,
+              legalRuleSetVersion: null,
+              categorizationReason: "Asset mapping is unresolved.",
+              matchedLayer: "solana_asset_mapping",
+              needsReview: true,
+              userNotes: null,
+              reviewedAt: null,
+            },
+            overrideMaterializationAllowed: true,
+            providerTransfers: [
+              {
+                sourceId: TEST_SOURCE_ID,
+                sourceRawRecordId: TEST_RAW_RECORD_ID,
+                externalId: "representation-only:provider:principal:0",
+                externalGroupId: "representation-only-group",
+                providerAssetId: providerAssetRowId,
+                timestamp: occurredAt,
+                direction: "inbound",
+                processingMode: "accounting_and_evidence",
+                fromAccountRef: null,
+                toAccountRef: null,
+                fromAddress: "external-wallet",
+                toAddress: "principal-wallet",
+                networkName: "base",
+                networkHash: "representation-only-hash",
+                observedBlockchainId: fixture.baseBlockchainId,
+                observedRepresentationType: "token",
+                observedContractAddress: "sync-engine-eur-fixture",
+                observedMintAddress: null,
+                observedDecimals: 2,
+                amount: "1",
+                metadata: {
+                  provider: "helius-solana",
+                  role: "principal",
+                  canonicalTransferExternalId: "representation-only:principal:0",
+                  overrideAccountingPlan: {
+                    kind: "income",
+                    derivationRule: "helius_test_income",
+                  },
+                },
+              },
+            ],
+            legs: [],
+          })
+        )
+      )
+
+    expect((await persist()).legs).toEqual([])
+    await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        yield* db.insert(schema.principalAssetOverrides).values({
+          principalId: TEST_PRINCIPAL_ID,
+          kind: "inclusion",
+          targetKind: "representation",
+          blockchainId: fixture.baseBlockchainId,
+          representationType: "token",
+          contractAddress: "sync-engine-eur-fixture",
+          mintAddress: null,
+          action: "set",
+          inspectedSystemRevision: "representation-only-revision",
+          inspectedIdentityState: null,
+          inspectedInclusionState: "excluded",
+          inspectedInclusionReason: "taxmaxi_policy",
+          inspectedAssetId: null,
+          replacementAssetId: null,
+          replacementInclusionState: "included",
+          actorId: TEST_USER_ID,
+          reason: "Include the known representation.",
+        })
+      })
+    )
+    const result = await persist()
+
+    expect(result.legs).toEqual([
+      expect.objectContaining({
+        assetId: TEST_EUR_ASSET_ID,
+        kind: "income",
+        derivationRule: "helius_test_income",
+      }),
+    ])
+  })
+
+  it("pairs conflicting Helius representation decisions through canonical transfers", async () => {
+    const occurredAt = new Date("2025-01-01T11:18:00.000Z")
+    const providerAssetRowId = await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        yield* db.insert(schema.assetRepresentations).values([
+          {
+            assetId: TEST_BTC_ASSET_ID,
+            blockchainId: fixture.baseBlockchainId,
+            contractAddress: "helius-representation-a",
+            decimals: 8,
+            type: "token",
+          },
+          {
+            assetId: TEST_BTC_ASSET_ID,
+            blockchainId: fixture.baseBlockchainId,
+            contractAddress: "helius-representation-b",
+            decimals: 8,
+            type: "token",
+          },
+        ])
+        const [providerAsset] = yield* db
+          .insert(schema.providerAssets)
+          .values({
+            provider: "helius",
+            providerAssetId: "helius-shared-asset",
+            currencyCode: "SHARED",
+            exponent: 8,
+            providerType: "crypto",
+            retrievedAt: occurredAt,
+          })
+          .returning({ id: schema.providerAssets.id })
+        if (providerAsset === undefined) return yield* Effect.die("Failed to seed provider asset")
+        yield* db.insert(schema.providerAssetMappings).values({
+          providerAssetRowId: providerAsset.id,
+          mappingKind: "asset",
+          mappingStatus: "approved",
+          canonicalAssetId: TEST_BTC_ASSET_ID,
+          assetRepresentationId: null,
+          canonicalFiatCurrency: null,
+        })
+        yield* db.insert(schema.principalAssetOverrides).values({
+          principalId: TEST_PRINCIPAL_ID,
+          kind: "inclusion",
+          targetKind: "representation",
+          blockchainId: fixture.baseBlockchainId,
+          representationType: "token",
+          contractAddress: "helius-representation-a",
+          mintAddress: null,
+          action: "set",
+          inspectedSystemRevision: "helius-pairing-revision",
+          inspectedIdentityState: null,
+          inspectedInclusionState: "included",
+          inspectedInclusionReason: null,
+          inspectedAssetId: null,
+          replacementAssetId: null,
+          replacementInclusionState: "excluded",
+          actorId: TEST_USER_ID,
+          reason: "Exclude only representation A.",
+        })
+        return providerAsset.id
+      })
+    )
+    const artifacts = buildBuyArtifacts({
+      externalId: "tx-helius-pairing",
+      occurredAt,
+      sourceRawRecordId: TEST_RAW_RECORD_ID,
+    })
+    const canonicalExternalIds = ["signature:principal:0", "signature:principal:1"] as const
+
+    const result = await runRepository(
+      Effect.flatMap(SourceNormalizationRepository, (repository) =>
+        repository.persistNormalizedArtifacts({
+          ...artifacts,
+          providerTransfers: canonicalExternalIds.map((canonicalTransferExternalId, index) => ({
+            sourceId: TEST_SOURCE_ID,
+            sourceRawRecordId: TEST_RAW_RECORD_ID,
+            externalId: `signature:provider:principal:${index}`,
+            externalGroupId: "signature",
+            providerAssetId: providerAssetRowId,
+            timestamp: occurredAt,
+            direction: "inbound" as const,
+            processingMode: "accounting_and_evidence" as const,
+            fromAccountRef: null,
+            toAccountRef: null,
+            fromAddress: "external-wallet",
+            toAddress: "principal-wallet",
+            networkName: "base",
+            networkHash: "signature",
+            observedBlockchainId: fixture.baseBlockchainId,
+            observedRepresentationType: "token" as const,
+            observedContractAddress: `helius-representation-${index === 0 ? "a" : "b"}`,
+            observedMintAddress: null,
+            observedDecimals: 8,
+            amount: "1",
+            metadata: {
+              role: "principal",
+              canonicalTransferExternalId,
+              overrideAccountingPlan: {
+                kind: "acquisition",
+                derivationRule: "helius_solana_inbound",
+              },
+            },
+          })),
+          canonicalTransfers: canonicalExternalIds.map((externalId) => ({
+            sourceId: TEST_SOURCE_ID,
+            principalId: TEST_PRINCIPAL_ID,
+            sourceRawRecordId: TEST_RAW_RECORD_ID,
+            externalId,
+            externalGroupId: "signature",
+            addressId: null,
+            blockchainId: null,
+            txHash: null,
+            timestamp: occurredAt,
+            type: "erc20" as const,
+            fromAddress: "external-wallet",
+            toAddress: "principal-wallet",
+            fromAccountRef: null,
+            toAccountRef: null,
+            fromPartyType: null,
+            fromPartyResourcePath: null,
+            toPartyType: null,
+            toPartyResourcePath: null,
+            assetId: TEST_BTC_ASSET_ID,
+            assetRepresentationId: null,
+            amount: "1",
+            tokenId: null,
+            notes: null,
+            metadata: null,
+          })),
+          deriveLegs: ({ canonicalTransfers, transaction }) =>
+            Effect.succeed(
+              canonicalTransfers.map((transfer) => ({
+                sourceId: TEST_SOURCE_ID,
+                sourceRawRecordId: TEST_RAW_RECORD_ID,
+                externalId: `${transfer.externalId}:leg`,
+                txHash: null,
+                timestamp: occurredAt,
+                principalId: TEST_PRINCIPAL_ID,
+                addressId: null,
+                assetId: TEST_BTC_ASSET_ID,
+                assetRepresentationId: null,
+                amount: "1",
+                kind: "acquisition" as const,
+                provenance: "deterministic" as const,
+                derivationRule: "helius_solana_inbound",
+                metadata: null,
+                transactionId: transaction.id,
+                sourceTransferId: transfer.id,
+                fiatAmount: null,
+                fiatCurrency: null,
+                feeForTransactionId: null,
+              }))
+            ),
+        })
+      )
+    )
+
+    expect(result.legs).toHaveLength(1)
+    const externalIds = await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        return yield* db
+          .select({ externalId: schema.transactionLegs.externalId })
+          .from(schema.transactionLegs)
+          .where(eq(schema.transactionLegs.transactionId, result.transaction.id))
+      })
+    )
+    expect(externalIds).toEqual([{ externalId: "signature:principal:1:leg" }])
+  })
+
   it("keeps technical and policy inclusion blockers active after an identity override", async () => {
     const occurredAt = new Date("2025-01-01T11:20:00.000Z")
     const providerAssetRowId = await runPg(
@@ -2686,6 +2984,30 @@ describe("SourceNormalizationRepositoryLive", () => {
       })
     )
     expect((await persist()).legs).toEqual([])
+    await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        yield* db.insert(schema.principalAssetOverrides).values({
+          principalId: TEST_PRINCIPAL_ID,
+          kind: "inclusion",
+          targetKind: "provider_asset",
+          providerAssetRowId,
+          action: "set",
+          inspectedSystemRevision: "identity-resolved-inclusion-revision",
+          inspectedIdentityState: null,
+          inspectedInclusionState: "blocked",
+          inspectedInclusionReason: "asset_identity_unresolved",
+          inspectedAssetId: null,
+          replacementAssetId: null,
+          replacementInclusionState: "included",
+          actorId: TEST_USER_ID,
+          reason: "Include the asset after resolving its identity.",
+        })
+      })
+    )
+    expect((await persist()).legs).toEqual([
+      expect.objectContaining({ assetId: TEST_BTC_ASSET_ID, kind: "acquisition" }),
+    ])
   })
 
   it("persists normalized artifacts idempotently and feeds FIFO side effects", async () => {

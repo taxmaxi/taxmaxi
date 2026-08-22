@@ -45,6 +45,10 @@ import {
   wrapSyncEngineSqlError,
   wrapSyncEngineStorageError,
 } from "./SyncEngineRepositorySupport.ts"
+import {
+  providerTransferOwnsLeg,
+  resolveEffectiveAssetOverrideDecision,
+} from "./AssetOverrideDecision.ts"
 
 interface PersistedSourceLegRecord {
   readonly id: string
@@ -133,14 +137,31 @@ const stableTransactionId = ({
 
 const ProviderTransferMetadataSchema = Schema.Struct({
   role: Schema.optional(Schema.Literals(["principal", "fee", "rent"])),
+  canonicalTransferExternalId: Schema.optional(Schema.NullOr(Schema.String)),
+  overrideAccountingPlan: Schema.optional(
+    Schema.Struct({
+      kind: Schema.Literals(["acquisition", "disposal", "income", "fee"]),
+      derivationRule: Schema.String,
+    })
+  ),
 })
 
 const decodeProviderTransferMetadata = (metadata: unknown) =>
   Schema.decodeUnknownEffect(ProviderTransferMetadataSchema)(metadata).pipe(
     Effect.map((decoded) => ({
+      role: decoded.role ?? "principal",
       purpose: decoded.role === "fee" ? ("fee" as const) : ("principal" as const),
+      canonicalTransferExternalId: decoded.canonicalTransferExternalId ?? null,
+      overrideAccountingPlan: decoded.overrideAccountingPlan ?? null,
     })),
-    Effect.catch(() => Effect.succeed({ purpose: "principal" as const }))
+    Effect.catch(() =>
+      Effect.succeed({
+        role: "principal" as const,
+        purpose: "principal" as const,
+        canonicalTransferExternalId: null,
+        overrideAccountingPlan: null,
+      })
+    )
   )
 
 const NumericStringSchema = Schema.Union([Schema.String, Schema.Number])
@@ -379,7 +400,8 @@ const make = Effect.gen(function* () {
   }) =>
     Effect.gen(function* () {
       const targetCondition =
-        providerTransfer.observedBlockchainId === null
+        providerTransfer.observedBlockchainId === null ||
+        providerTransfer.observedRepresentationType === null
           ? providerTransfer.providerAssetId === null
             ? null
             : and(
@@ -395,12 +417,10 @@ const make = Effect.gen(function* () {
                 schema.principalAssetOverrides.blockchainId,
                 providerTransfer.observedBlockchainId
               ),
-              providerTransfer.observedRepresentationType === null
-                ? undefined
-                : eq(
-                    schema.principalAssetOverrides.representationType,
-                    providerTransfer.observedRepresentationType
-                  ),
+              eq(
+                schema.principalAssetOverrides.representationType,
+                providerTransfer.observedRepresentationType
+              ),
               providerTransfer.observedContractAddress === null
                 ? sql`${schema.principalAssetOverrides.contractAddress} is null`
                 : sql`lower(${schema.principalAssetOverrides.contractAddress}) = lower(${providerTransfer.observedContractAddress})`,
@@ -429,10 +449,6 @@ const make = Effect.gen(function* () {
         )
       const latestIdentity = overrides.find((override) => override.kind === "identity")
       const latestInclusion = overrides.find((override) => override.kind === "inclusion")
-      const forceIncluded =
-        latestInclusion?.action === "set" &&
-        latestInclusion.replacementInclusionState === "included"
-
       if (providerTransfer.providerAssetId === null) return null
 
       const [mapping] = yield* executor
@@ -459,36 +475,78 @@ const make = Effect.gen(function* () {
         )
         .limit(1)
 
+      const representationTarget =
+        providerTransfer.observedBlockchainId === null ||
+        providerTransfer.observedRepresentationType === null
+          ? null
+          : {
+              blockchainId: providerTransfer.observedBlockchainId,
+              representationType: providerTransfer.observedRepresentationType,
+            }
+      const [representation] =
+        representationTarget === null
+          ? []
+          : yield* executor
+              .select({
+                id: schema.assetRepresentations.id,
+                assetId: schema.assetRepresentations.assetId,
+                decimals: schema.assetRepresentations.decimals,
+                isSpam: schema.assetRepresentations.isSpam,
+              })
+              .from(schema.assetRepresentations)
+              .where(
+                and(
+                  eq(schema.assetRepresentations.blockchainId, representationTarget.blockchainId),
+                  eq(schema.assetRepresentations.type, representationTarget.representationType),
+                  providerTransfer.observedContractAddress === null
+                    ? isNull(schema.assetRepresentations.contractAddress)
+                    : sql`lower(${schema.assetRepresentations.contractAddress}) = lower(${providerTransfer.observedContractAddress})`,
+                  providerTransfer.observedMintAddress === null
+                    ? isNull(schema.assetRepresentations.mintAddress)
+                    : eq(
+                        schema.assetRepresentations.mintAddress,
+                        providerTransfer.observedMintAddress
+                      )
+                )
+              )
+              .limit(1)
       const technicallyBlocked =
-        (providerTransfer.observedBlockchainId !== null &&
-          providerTransfer.observedDecimals === null) ||
-        mapping?.exponent === null ||
-        mapping?.providerType === "unsupported"
+        representationTarget === null
+          ? mapping?.exponent === null || mapping?.providerType === "unsupported"
+          : representation?.decimals === null ||
+            (representation === undefined && providerTransfer.observedDecimals === null)
       const systemInclusion = technicallyBlocked
         ? "blocked"
-        : mapping?.status === "approved"
-          ? "included"
+        : representation?.isSpam === true
+          ? "excluded"
           : mapping?.status === "rejected"
             ? "excluded"
-            : "blocked"
-      const effectiveInclusion =
-        systemInclusion === "blocked"
-          ? "blocked"
-          : latestInclusion?.action === "set"
-            ? (latestInclusion.replacementInclusionState ?? systemInclusion)
-            : systemInclusion
-      const effectiveAssetId =
-        latestIdentity?.action === "set" && latestIdentity.replacementAssetId !== null
-          ? latestIdentity.replacementAssetId
-          : mapping?.assetId
+            : representation !== undefined || mapping?.status === "approved"
+              ? "included"
+              : "blocked"
+      const decision = resolveEffectiveAssetOverrideDecision({
+        systemAssetId: representation?.assetId ?? mapping?.assetId ?? null,
+        systemInclusionState: systemInclusion,
+        technicalBlocker: technicallyBlocked,
+        identityOverrideAssetId:
+          latestIdentity?.action === "set" ? latestIdentity.replacementAssetId : null,
+        inclusionOverrideState:
+          latestInclusion?.action === "set" &&
+          (latestInclusion.replacementInclusionState === "included" ||
+            latestInclusion.replacementInclusionState === "excluded")
+            ? latestInclusion.replacementInclusionState
+            : null,
+      })
 
       return {
-        assetId: effectiveInclusion === "included" ? (effectiveAssetId ?? null) : null,
+        assetId: decision.assetId,
         assetRepresentationId:
-          latestIdentity?.action === "set" ? null : (mapping?.assetRepresentationId ?? null),
-        excluded: effectiveInclusion !== "included",
+          latestIdentity?.action === "set"
+            ? null
+            : (representation?.id ?? mapping?.assetRepresentationId ?? null),
+        excluded: decision.inclusionState !== "included",
         overridden:
-          forceIncluded ||
+          latestInclusion?.action === "set" ||
           (latestIdentity?.action === "set" && latestIdentity.replacementAssetId !== null),
       } as const
     })
@@ -548,18 +606,20 @@ const make = Effect.gen(function* () {
             : system.mappingStatus === "rejected"
               ? "excluded"
               : "blocked"
-      const inclusionState =
-        systemInclusion === "blocked"
-          ? "blocked"
-          : inclusion?.action === "set"
-            ? (inclusion.replacementInclusionState ?? systemInclusion)
-            : systemInclusion
-      const assetId =
-        identity?.action === "set" && identity.replacementAssetId !== null
-          ? identity.replacementAssetId
-          : system.assetId
+      const decision = resolveEffectiveAssetOverrideDecision({
+        systemAssetId: system.assetId,
+        systemInclusionState: systemInclusion,
+        technicalBlocker: system.exponent === null || system.providerType === "unsupported",
+        identityOverrideAssetId: identity?.action === "set" ? identity.replacementAssetId : null,
+        inclusionOverrideState:
+          inclusion?.action === "set" &&
+          (inclusion.replacementInclusionState === "included" ||
+            inclusion.replacementInclusionState === "excluded")
+            ? inclusion.replacementInclusionState
+            : null,
+      })
       const [asset] =
-        inclusionState !== "included" || assetId === null
+        decision.inclusionState !== "included" || decision.assetId === null
           ? []
           : yield* executor
               .select({
@@ -568,23 +628,30 @@ const make = Effect.gen(function* () {
                 type: schema.assets.type,
               })
               .from(schema.assets)
-              .where(eq(schema.assets.id, assetId))
+              .where(eq(schema.assets.id, decision.assetId))
               .limit(1)
 
       return {
         providerAssetRowId,
         asset: asset ?? null,
-        inclusionState,
+        inclusionState: decision.inclusionState,
       } as const
     })
 
   const applyAssetOverridesToLegs = ({
+    allowOverrideMaterialization,
+    canonicalTransfers,
     executor,
     legs,
     principalId,
     providerTransfers,
   }: {
+    readonly allowOverrideMaterialization: boolean
     readonly executor: SourceNormalizationExecutor
+    readonly canonicalTransfers: ReadonlyArray<{
+      readonly id: string
+      readonly externalId: string | null
+    }>
     readonly legs: ReadonlyArray<SourceTransactionLegDraft>
     readonly principalId: string
     readonly providerTransfers: ReadonlyArray<PersistedSourceProviderTransfer>
@@ -610,8 +677,11 @@ const make = Effect.gen(function* () {
             principalId,
             providerTransfer,
           })
+          const metadata = yield* decodeProviderTransferMetadata(providerTransfer.metadata)
           return {
-            globalAssetId: globalMapping?.assetId ?? null,
+            canonicalTransferExternalId: metadata.canonicalTransferExternalId,
+            globalAssetId: globalMapping?.assetId ?? effective?.assetId ?? null,
+            metadata,
             effective,
             providerTransfer,
           }
@@ -630,10 +700,12 @@ const make = Effect.gen(function* () {
 
       const effectiveLegs = legs.flatMap((leg) => {
         const candidates = decisionsByGlobalAsset.get(leg.assetId) ?? []
-        const exactCandidates = candidates.filter(({ providerTransfer }) =>
-          providerTransfer.externalId === null || leg.externalId === null
-            ? false
-            : leg.externalId.startsWith(`${providerTransfer.externalId}:`)
+        const exactCandidates = candidates.filter(({ canonicalTransferExternalId }) =>
+          providerTransferOwnsLeg({
+            canonicalTransferExternalId,
+            legSourceTransferId: leg.sourceTransferId,
+            canonicalTransfers,
+          })
         )
         const applicableCandidates = exactCandidates.length > 0 ? exactCandidates : candidates
         const distinctDecisions = new Map(
@@ -650,7 +722,69 @@ const make = Effect.gen(function* () {
         }
         return [leg]
       })
-      return effectiveLegs
+      const [source] =
+        providerTransfers[0] === undefined
+          ? []
+          : yield* executor
+              .select({ addressId: schema.sources.addressId })
+              .from(schema.sources)
+              .where(eq(schema.sources.id, providerTransfers[0].sourceId))
+              .limit(1)
+      const sourceAddressId = source?.addressId ?? null
+      const materializedOverrideLegs = decisions.flatMap(
+        ({ canonicalTransferExternalId, effective, metadata, providerTransfer }) => {
+          if (
+            !allowOverrideMaterialization ||
+            metadata.overrideAccountingPlan === null ||
+            providerTransfer.processingMode === "evidence_only" ||
+            providerTransfer.processingMode === "stale" ||
+            effective?.overridden !== true ||
+            effective.excluded ||
+            effective.assetId === null
+          ) {
+            return []
+          }
+          const alreadyDerived = legs.some((leg) =>
+            providerTransferOwnsLeg({
+              canonicalTransferExternalId,
+              legSourceTransferId: leg.sourceTransferId,
+              canonicalTransfers,
+            })
+          )
+          if (alreadyDerived) return []
+
+          const canonicalTransfer = canonicalTransfers.find(
+            (transfer) => transfer.externalId === canonicalTransferExternalId
+          )
+          return [
+            {
+              sourceId: providerTransfer.sourceId,
+              sourceRawRecordId: providerTransfer.sourceRawRecordId,
+              externalId: `${canonicalTransferExternalId ?? providerTransfer.externalId ?? providerTransfer.id}:leg`,
+              txHash: sourceAddressId === null ? null : providerTransfer.networkHash,
+              timestamp: providerTransfer.timestamp,
+              principalId,
+              addressId: sourceAddressId,
+              assetId: effective.assetId,
+              assetRepresentationId: effective.assetRepresentationId,
+              amount: providerTransfer.amount,
+              kind: metadata.overrideAccountingPlan.kind,
+              provenance: "deterministic" as const,
+              derivationRule: metadata.overrideAccountingPlan.derivationRule,
+              metadata: providerTransfer.metadata,
+              transactionId: providerTransfer.transactionId,
+              sourceTransferId: canonicalTransfer?.id ?? null,
+              fiatAmount: null,
+              fiatCurrency: null,
+              feeForTransactionId:
+                metadata.overrideAccountingPlan.kind === "fee"
+                  ? providerTransfer.transactionId
+                  : null,
+            },
+          ]
+        }
+      )
+      return [...effectiveLegs, ...materializedOverrideLegs]
     })
 
   const selectPersistedTransactionFields = {
@@ -2838,6 +2972,9 @@ const make = Effect.gen(function* () {
                 })
               : params.legs
           const effectiveLegs = yield* applyAssetOverridesToLegs({
+            allowOverrideMaterialization:
+              params.overrideMaterializationAllowed ?? params.transactionReview === null,
+            canonicalTransfers: persistedCanonicalTransfers,
             executor: tx,
             legs: derivedLegs,
             principalId: persistedTransaction.principalId,

@@ -1,4 +1,4 @@
-import { eq } from "drizzle-orm"
+import { and, eq, sql } from "drizzle-orm"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import { beforeEach, describe, expect, it } from "vitest"
@@ -327,9 +327,11 @@ const insertUnresolvedProviderAssetSourceUse = ({
 const insertRejectedOverrideFixture = ({
   observedContracts = [],
   observedRepresentationType = "token",
+  providerType = "crypto",
 }: {
   readonly observedContracts?: ReadonlyArray<string>
   readonly observedRepresentationType?: "token" | null
+  readonly providerType?: "crypto" | null
 } = {}) =>
   Effect.gen(function* () {
     const db = yield* drizzle
@@ -355,7 +357,7 @@ const insertRejectedOverrideFixture = ({
         naturalKey: `coinbase-rejected-${observedContracts.join("-") || "chainless"}`,
         currencyCode: "XYZ",
         exponent: 8,
-        providerType: "crypto",
+        providerType,
         retrievedAt: new Date("2025-01-01T00:00:00.000Z"),
       })
       .returning({ id: schema.providerAssets.id })
@@ -419,29 +421,54 @@ const insertInclusionOverride = ({
   blockchainId,
   contractAddress,
   providerAssetRowId,
+  replayStatus = "completed",
 }: {
   readonly blockchainId?: string
   readonly contractAddress?: string
   readonly providerAssetRowId?: string
+  readonly replayStatus?: "pending" | "failed" | "credit_required" | "completed" | null
 }) =>
   Effect.gen(function* () {
     const db = yield* drizzle
-    yield* db.insert(schema.principalAssetOverrides).values({
-      principalId,
-      kind: "inclusion",
-      targetKind: providerAssetRowId === undefined ? "representation" : "provider_asset",
-      blockchainId: blockchainId ?? null,
-      representationType: blockchainId === undefined ? null : "token",
-      contractAddress: contractAddress ?? null,
-      providerAssetRowId: providerAssetRowId ?? null,
-      action: "set",
-      inspectedSystemRevision: "tax-calculation-fixture",
-      inspectedInclusionState: "excluded",
-      inspectedInclusionReason: "taxmaxi_policy",
-      replacementInclusionState: "included",
-      actorId: userId,
-      reason: "Include the reviewed asset in tax calculation",
-    })
+    const [override] = yield* db
+      .insert(schema.principalAssetOverrides)
+      .values({
+        principalId,
+        kind: "inclusion",
+        targetKind: providerAssetRowId === undefined ? "representation" : "provider_asset",
+        blockchainId: blockchainId ?? null,
+        representationType: blockchainId === undefined ? null : "token",
+        contractAddress: contractAddress ?? null,
+        providerAssetRowId: providerAssetRowId ?? null,
+        action: "set",
+        inspectedSystemRevision: "tax-calculation-fixture",
+        inspectedInclusionState: "excluded",
+        inspectedInclusionReason: "taxmaxi_policy",
+        replacementInclusionState: "included",
+        actorId: userId,
+        reason: "Include the reviewed asset in tax calculation",
+      })
+      .returning({
+        id: schema.principalAssetOverrides.id,
+        createdAt: schema.principalAssetOverrides.createdAt,
+      })
+    if (override === undefined) return yield* Effect.die("Failed to insert inclusion override")
+    if (replayStatus !== null) {
+      yield* db.insert(schema.processingJobs).values({
+        sourceId,
+        principalId,
+        mode: "replay",
+        status: replayStatus,
+        createdAt: sql`(
+          select ${schema.principalAssetOverrides.createdAt}
+          from ${schema.principalAssetOverrides}
+          where ${schema.principalAssetOverrides.id} = ${override.id}
+        )`,
+        completedAt:
+          replayStatus === "completed" ? new Date(override.createdAt.getTime() + 1) : null,
+      })
+    }
+    return override.createdAt
   }).pipe(Effect.provide(context.TestPgClientLive))
 
 await Effect.runPromise(context.recreateTestDatabase())
@@ -576,6 +603,116 @@ describe("TaxCalculationServiceLive", () => {
     expect(tax.taxableGains).toBe(2000)
   })
 
+  it("allows an included override when the provider type is unknown", async () => {
+    const fixture = await Effect.runPromise(insertRejectedOverrideFixture({ providerType: null }))
+    await Effect.runPromise(
+      insertInclusionOverride({ providerAssetRowId: fixture.providerAssetRowId })
+    )
+
+    const tax = await Effect.runPromise(calculateTax())
+
+    expect(tax.taxableGains).toBe(2000)
+  })
+
+  it.each(["pending", "failed", "credit_required"] as const)(
+    "waits while an override replay is %s",
+    async (replayStatus) => {
+      const fixture = await Effect.runPromise(insertRejectedOverrideFixture())
+      await Effect.runPromise(
+        insertInclusionOverride({
+          providerAssetRowId: fixture.providerAssetRowId,
+          replayStatus,
+        })
+      )
+
+      const error = await Effect.runPromise(calculateTax().pipe(Effect.flip))
+
+      expect(error._tag).toBe("TaxCalculationPendingObservationsError")
+    }
+  )
+
+  it("does not treat a replay started before the override as applying it", async () => {
+    const fixture = await Effect.runPromise(insertRejectedOverrideFixture())
+    const overrideCreatedAt = await Effect.runPromise(
+      insertInclusionOverride({
+        providerAssetRowId: fixture.providerAssetRowId,
+        replayStatus: "pending",
+      })
+    )
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        yield* db.insert(schema.processingJobs).values({
+          sourceId,
+          principalId,
+          mode: "replay",
+          status: "completed",
+          createdAt: new Date(overrideCreatedAt.getTime() - 1),
+          completedAt: new Date(overrideCreatedAt.getTime() + 2),
+        })
+      }).pipe(Effect.provide(context.TestPgClientLive))
+    )
+
+    const error = await Effect.runPromise(calculateTax().pipe(Effect.flip))
+
+    expect(error._tag).toBe("TaxCalculationPendingObservationsError")
+  })
+
+  it("accepts the completed sync that first records source use after the override", async () => {
+    const fixture = await Effect.runPromise(insertRejectedOverrideFixture())
+    const overrideCreatedAt = await Effect.runPromise(
+      insertInclusionOverride({
+        providerAssetRowId: fixture.providerAssetRowId,
+        replayStatus: null,
+      })
+    )
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const evidenceCreatedAt = new Date(overrideCreatedAt.getTime() + 1)
+        yield* db
+          .update(schema.providerAssetSourceUses)
+          .set({ createdAt: evidenceCreatedAt })
+          .where(
+            and(
+              eq(schema.providerAssetSourceUses.sourceId, sourceId),
+              eq(schema.providerAssetSourceUses.providerAssetRowId, fixture.providerAssetRowId)
+            )
+          )
+        yield* db.insert(schema.processingJobs).values({
+          sourceId,
+          principalId,
+          mode: "sync",
+          status: "completed",
+          createdAt: new Date(overrideCreatedAt.getTime() - 1),
+          completedAt: new Date(overrideCreatedAt.getTime() + 2),
+        })
+      }).pipe(Effect.provide(context.TestPgClientLive))
+    )
+
+    const tax = await Effect.runPromise(calculateTax())
+
+    expect(tax.taxableGains).toBe(2000)
+  })
+
+  it("does not wait for an unrelated active replay", async () => {
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        yield* db.insert(schema.processingJobs).values({
+          sourceId,
+          principalId,
+          mode: "replay",
+          status: "pending",
+        })
+      }).pipe(Effect.provide(context.TestPgClientLive))
+    )
+
+    const tax = await Effect.runPromise(calculateTax())
+
+    expect(tax.taxableGains).toBe(2000)
+  })
+
   it("keeps a provider observation pending until every exact representation is included", async () => {
     const firstContract = "0x0000000000000000000000000000000000000001"
     const secondContract = "0x0000000000000000000000000000000000000002"
@@ -604,7 +741,7 @@ describe("TaxCalculationServiceLive", () => {
     expect(tax.taxableGains).toBe(2000)
   })
 
-  it("covers an exact observation with an unknown type by immutable representation identity", async () => {
+  it("covers an unknown-type observation through its provider-asset identity", async () => {
     const contractAddress = "0x0000000000000000000000000000000000000003"
     const fixture = await Effect.runPromise(
       insertRejectedOverrideFixture({
@@ -615,8 +752,7 @@ describe("TaxCalculationServiceLive", () => {
 
     await Effect.runPromise(
       insertInclusionOverride({
-        blockchainId: fixture.blockchainId,
-        contractAddress,
+        providerAssetRowId: fixture.providerAssetRowId,
       })
     )
 

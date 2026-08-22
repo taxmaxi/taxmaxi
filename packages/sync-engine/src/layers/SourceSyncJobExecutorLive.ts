@@ -332,6 +332,9 @@ const make = Effect.gen(function* () {
           providerAssetRowIds: decision.providerAssetRowIds,
           canonicalTransfers: decision.canonicalTransfers,
           transactionReview: decision.transactionReview,
+          ...(decision.overrideMaterializationAllowed === undefined
+            ? {}
+            : { overrideMaterializationAllowed: decision.overrideMaterializationAllowed }),
           resolvedTransactionType: decision.resolvedTransactionType,
           deriveLegs: decision.deriveLegs,
         })

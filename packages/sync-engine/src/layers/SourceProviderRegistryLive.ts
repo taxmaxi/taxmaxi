@@ -33,6 +33,22 @@ import { SyncEngineStorageError } from "../services/SyncEngineStorageError.ts"
 const COINBASE_PROVIDER_KEY = "coinbase"
 const COINBASE_TRANSACTION_RECORD_TYPE = "coinbase_transaction"
 
+/** Decide whether Coinbase has every effective asset needed to derive accounting legs. */
+export const shouldDeriveCoinbaseLegs = ({
+  legDerivationStrategy,
+  canDeriveWithAssetOverrides,
+  allProviderAssetsIncluded,
+  primaryAssetAvailable,
+}: {
+  readonly legDerivationStrategy: "derive" | "skip"
+  readonly canDeriveWithAssetOverrides: boolean
+  readonly allProviderAssetsIncluded: boolean
+  readonly primaryAssetAvailable: boolean
+}): boolean =>
+  allProviderAssetsIncluded &&
+  primaryAssetAvailable &&
+  (legDerivationStrategy === "derive" || canDeriveWithAssetOverrides)
+
 const toReferenceDataError = (
   error: CoinbaseReferenceDataServiceError
 ): SourceProviderModuleError =>
@@ -99,6 +115,7 @@ const makeCoinbaseProviderModule = (
                 providerTransfers: prepared.providerTransfers,
                 canonicalTransfers: prepared.canonicalTransfers,
                 transactionReview: prepared.transactionReview,
+                overrideMaterializationAllowed: false,
                 resolvedTransactionType: prepared.resolvedTransactionType,
                 deriveLegs: ({
                   transaction,
@@ -120,11 +137,12 @@ const makeCoinbaseProviderModule = (
                         (effectiveAsset) => effectiveAsset.providerAssetRowId === providerAssetRowId
                       )?.inclusionState === "included"
                   )
-                  const canDerive =
-                    prepared.legDerivationStrategy === "derive" ||
-                    (prepared.canDeriveWithAssetOverrides &&
-                      allProviderAssetsIncluded &&
-                      primaryAsset !== null)
+                  const canDerive = shouldDeriveCoinbaseLegs({
+                    legDerivationStrategy: prepared.legDerivationStrategy,
+                    canDeriveWithAssetOverrides: prepared.canDeriveWithAssetOverrides,
+                    allProviderAssetsIncluded,
+                    primaryAssetAvailable: primaryAsset !== null,
+                  })
 
                   return canDerive
                     ? coinbaseSourceSyncProvider
@@ -175,6 +193,9 @@ const makeHeliusSolanaProviderModule = (
                 providerTransfers: prepared.providerTransfers,
                 canonicalTransfers: prepared.canonicalTransfers,
                 transactionReview: prepared.transactionReview,
+                overrideMaterializationAllowed:
+                  prepared.transactionReview === null ||
+                  prepared.transactionReview.matchedLayer === "solana_asset_mapping",
                 resolvedTransactionType: prepared.resolvedTransactionType,
                 deriveLegs:
                   prepared.legDerivationStrategy === "derive"

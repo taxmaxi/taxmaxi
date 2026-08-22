@@ -113,6 +113,10 @@ const seedUnknownTypeRepresentation = () =>
         assetRepresentationId: null,
         canonicalFiatCurrency: null,
       })
+      yield* db.insert(schema.providerAssetSourceUses).values({
+        providerAssetRowId: providerAsset.id,
+        sourceId: TEST_SOURCE_ID,
+      })
       const timestamp = new Date("2026-08-21T01:00:00.000Z")
       const [transaction] = yield* db
         .insert(schema.transactions)
@@ -164,7 +168,7 @@ const seedUnknownTypeRepresentation = () =>
         },
       ])
 
-      return fixture.baseBlockchainId
+      return { blockchainId: fixture.baseBlockchainId, providerAssetRowId: providerAsset.id }
     })
   )
 
@@ -377,15 +381,9 @@ describe("AssetOverrideRepository", () => {
     })
   })
 
-  it("owns unknown-type observations by immutable representation identity", async () => {
-    const blockchainId = await seedUnknownTypeRepresentation()
-    const target = {
-      _tag: "representation" as const,
-      blockchainId,
-      representationType: "token" as const,
-      contractAddress: "0xABCDEF1234567890",
-      mintAddress: null,
-    }
+  it("gives unknown-type observations exactly one provider-asset identity", async () => {
+    const { blockchainId, providerAssetRowId } = await seedUnknownTypeRepresentation()
+    const target = { _tag: "provider_asset" as const, providerAssetRowId }
 
     const first = await runRepository(
       Effect.flatMap(AssetOverrideRepository, (repository) =>
@@ -398,8 +396,29 @@ describe("AssetOverrideRepository", () => {
       )
     )
 
-    expect(first.target).toEqual({ ...target, contractAddress: "0xabcdef1234567890" })
+    expect(first.target).toEqual(target)
     expect(second.systemRevision).toBe(first.systemRevision)
+
+    const representationProjections = await Promise.all(
+      (["token", "nft"] as const).map((representationType) =>
+        runRepository(
+          Effect.flatMap(AssetOverrideRepository, (repository) =>
+            repository.findProjection({
+              principalId: TEST_PRINCIPAL_ID,
+              kind: "identity",
+              target: {
+                _tag: "representation",
+                blockchainId,
+                representationType,
+                contractAddress: "0xABCDEF1234567890",
+                mintAddress: null,
+              },
+            })
+          )
+        )
+      )
+    )
+    expect(representationProjections.every(Option.isNone)).toBe(true)
 
     const created = await runRepository(
       Effect.flatMap(AssetOverrideRepository, (repository) =>
@@ -411,17 +430,14 @@ describe("AssetOverrideRepository", () => {
           expectedSystemRevision: first.systemRevision,
           expectedActiveOverrideId: null,
           replacement: { _tag: "identity", assetId: TEST_BTC_ASSET_ID },
-          reason: "The contract identity establishes the intended token.",
+          reason: "The provider asset identifies the unknown-type observation.",
         })
       )
     )
 
     expect(created._tag).toBe("accepted")
     if (created._tag !== "accepted") return
-    expect(created.projection.activeOverride?.target).toEqual({
-      ...target,
-      contractAddress: "0xabcdef1234567890",
-    })
+    expect(created.projection.activeOverride?.target).toEqual(target)
   })
 
   it("keeps validation errors for malformed representation targets", async () => {

@@ -78,6 +78,8 @@ export interface SourceProviderPreparedNormalization {
   readonly providerTransfers: ReadonlyArray<SourceProviderTransferDraft>
   readonly canonicalTransfers: ReadonlyArray<SourceTransferDraft>
   readonly transactionReview: SourceTransactionReviewDraft | null
+  /** Provider confirms that only asset resolution blocks its explicit accounting plans. */
+  readonly overrideMaterializationAllowed?: boolean
   readonly resolvedTransactionType: ResolvedProviderTransactionTypeMapping
   readonly deriveLegs: (
     context: PersistNormalizedSourceArtifactsContext

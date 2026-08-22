@@ -87,7 +87,10 @@ const mapRepositoryError = (error: {
 }) => {
   switch (error._tag) {
     case "AssetOverrideTargetNotFoundError":
-      return new AssetOverrideNotFoundError({ message: "Asset override target not found." })
+      return new AssetOverrideNotFoundError({
+        code: "asset_override_target_not_found",
+        message: "Asset override target not found.",
+      })
     case "AssetOverrideValidationError":
       return new AssetOverrideBadRequestError({
         code: error.code ?? "invalid_override",
@@ -116,6 +119,7 @@ export const AssetOverridesApiLive = HttpApiBuilder.group(
           ? Effect.succeed(toProjectionResponse(result.projection))
           : Effect.fail(
               new AssetOverrideConflictError({
+                code: "asset_override_conflict",
                 message: "The TaxMaxi conclusion or active override changed.",
                 current: toProjectionResponse(result.projection),
               })

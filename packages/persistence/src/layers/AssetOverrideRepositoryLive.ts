@@ -72,10 +72,7 @@ const providerTransferTargetPredicate = (
 ) =>
   and(
     eq(schema.providerTransfers.observedBlockchainId, target.blockchainId),
-    or(
-      eq(schema.providerTransfers.observedRepresentationType, target.representationType),
-      isNull(schema.providerTransfers.observedRepresentationType)
-    ),
+    eq(schema.providerTransfers.observedRepresentationType, target.representationType),
     target.contractAddress === null
       ? sql`${schema.providerTransfers.observedContractAddress} is null`
       : sql`lower(${schema.providerTransfers.observedContractAddress}) = lower(${target.contractAddress})`,
@@ -258,7 +255,10 @@ const make = Effect.gen(function* () {
                   and(
                     eq(schema.providerTransfers.sourceId, schema.sources.id),
                     eq(schema.providerTransfers.providerAssetId, target.providerAssetRowId),
-                    isNull(schema.providerTransfers.observedBlockchainId)
+                    or(
+                      isNull(schema.providerTransfers.observedBlockchainId),
+                      isNull(schema.providerTransfers.observedRepresentationType)
+                    )
                   )
                 )
             )
@@ -413,7 +413,8 @@ const make = Effect.gen(function* () {
       }
 
       const missingDecimals =
-        representation === undefined && mappings.some((mapping) => mapping.decimals === null)
+        representation?.decimals === null ||
+        (representation === undefined && mappings.some((mapping) => mapping.decimals === null))
       const conclusion: AssetOverrideSystemConclusion = missingDecimals
         ? { _tag: "inclusion", state: "blocked", reason: "missing_decimals" }
         : representation?.isSpam === true || rejected

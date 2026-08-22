@@ -256,6 +256,7 @@ const make = Effect.gen(function* () {
           where exact_transfer.source_id = ${sourceId}
             and exact_transfer.provider_asset_id = ${schema.providerAssetSourceUses.providerAssetRowId}
             and exact_transfer.observed_blockchain_id is not null
+            and exact_transfer.observed_representation_type is not null
             and not (
               exists (
                 select 1
@@ -268,10 +269,7 @@ const make = Effect.gen(function* () {
                   and inclusion_override.kind = 'inclusion'
                   and inclusion_override.target_kind = 'representation'
                   and inclusion_override.blockchain_id = exact_transfer.observed_blockchain_id
-                  and (
-                    exact_transfer.observed_representation_type is null
-                    or inclusion_override.representation_type = exact_transfer.observed_representation_type
-                  )
+                  and inclusion_override.representation_type = exact_transfer.observed_representation_type
                   and lower(inclusion_override.contract_address) is not distinct from lower(exact_transfer.observed_contract_address)
                   and inclusion_override.mint_address is not distinct from exact_transfer.observed_mint_address
                   and inclusion_override.action = 'set'
@@ -303,10 +301,7 @@ const make = Effect.gen(function* () {
                       and inclusion_override.kind = 'inclusion'
                       and inclusion_override.target_kind = 'representation'
                       and inclusion_override.blockchain_id = exact_transfer.observed_blockchain_id
-                      and (
-                        exact_transfer.observed_representation_type is null
-                        or inclusion_override.representation_type = exact_transfer.observed_representation_type
-                      )
+                      and inclusion_override.representation_type = exact_transfer.observed_representation_type
                       and lower(inclusion_override.contract_address) is not distinct from lower(exact_transfer.observed_contract_address)
                       and inclusion_override.mint_address is not distinct from exact_transfer.observed_mint_address
                       and inclusion_override.action = 'set'
@@ -330,10 +325,7 @@ const make = Effect.gen(function* () {
                       select 1
                       from ${schema.assetRepresentations} representation
                       where representation.blockchain_id = exact_transfer.observed_blockchain_id
-                        and (
-                          exact_transfer.observed_representation_type is null
-                          or representation.type = exact_transfer.observed_representation_type
-                        )
+                        and representation.type = exact_transfer.observed_representation_type
                         and lower(representation.contract_address) is not distinct from lower(exact_transfer.observed_contract_address)
                         and representation.mint_address is not distinct from exact_transfer.observed_mint_address
                         and representation.decimals is not null
@@ -357,10 +349,7 @@ const make = Effect.gen(function* () {
                     select 1
                     from ${schema.assetRepresentations} representation
                     where representation.blockchain_id = exact_transfer.observed_blockchain_id
-                      and (
-                        exact_transfer.observed_representation_type is null
-                        or representation.type = exact_transfer.observed_representation_type
-                      )
+                      and representation.type = exact_transfer.observed_representation_type
                       and lower(representation.contract_address) is not distinct from lower(exact_transfer.observed_contract_address)
                       and representation.mint_address is not distinct from exact_transfer.observed_mint_address
                   )
@@ -375,10 +364,7 @@ const make = Effect.gen(function* () {
                       and identity_override.kind = 'identity'
                       and identity_override.target_kind = 'representation'
                       and identity_override.blockchain_id = exact_transfer.observed_blockchain_id
-                      and (
-                        exact_transfer.observed_representation_type is null
-                        or identity_override.representation_type = exact_transfer.observed_representation_type
-                      )
+                      and identity_override.representation_type = exact_transfer.observed_representation_type
                       and lower(identity_override.contract_address) is not distinct from lower(exact_transfer.observed_contract_address)
                       and identity_override.mint_address is not distinct from exact_transfer.observed_mint_address
                       and identity_override.action = 'set'
@@ -411,10 +397,13 @@ const make = Effect.gen(function* () {
             )
             and not exists (
               select 1
-              from ${schema.providerTransfers} chainless_transfer
-              where chainless_transfer.source_id = ${sourceId}
-                and chainless_transfer.provider_asset_id = ${schema.providerAssetSourceUses.providerAssetRowId}
-                and chainless_transfer.observed_blockchain_id is null
+              from ${schema.providerTransfers} provider_target_transfer
+              where provider_target_transfer.source_id = ${sourceId}
+                and provider_target_transfer.provider_asset_id = ${schema.providerAssetSourceUses.providerAssetRowId}
+                and (
+                  provider_target_transfer.observed_blockchain_id is null
+                  or provider_target_transfer.observed_representation_type is null
+                )
             )
           )
           or exists (
@@ -436,7 +425,7 @@ const make = Effect.gen(function* () {
                 or (
                   inclusion_override.replacement_inclusion_state = 'included'
                   and provider_asset.exponent is not null
-                  and provider_asset.provider_type <> 'unsupported'
+                  and provider_asset.provider_type is distinct from 'unsupported'
                   and (
                     ${schema.providerAssetMappings.canonicalAssetId} is not null
                     or exists (
@@ -509,6 +498,62 @@ const make = Effect.gen(function* () {
         kind: "client",
       })
     )
+
+  /** Tax inputs stay stale until a later job has applied every source-affecting override. */
+  const hasPendingOverrideReplay = (sourceId: string) =>
+    db
+      .select({
+        pending: sql<boolean>`exists (
+          select 1
+          from principal_asset_overrides affecting_override
+          where affecting_override.principal_id = ${schema.sources.principalId}
+            and exists (
+              select 1
+              from (
+                select source_use.created_at
+                from ${schema.providerAssetSourceUses} source_use
+                where affecting_override.target_kind = 'provider_asset'
+                  and source_use.source_id = ${sourceId}
+                  and source_use.provider_asset_row_id = affecting_override.provider_asset_row_id
+
+                union all
+
+                select target_transfer.created_at
+                from ${schema.providerTransfers} target_transfer
+                where affecting_override.target_kind = 'representation'
+                  and target_transfer.source_id = ${sourceId}
+                  and target_transfer.observed_blockchain_id = affecting_override.blockchain_id
+                  and target_transfer.observed_representation_type = affecting_override.representation_type
+                  and lower(target_transfer.observed_contract_address) is not distinct from lower(affecting_override.contract_address)
+                  and target_transfer.observed_mint_address is not distinct from affecting_override.mint_address
+              ) target_evidence
+              where not exists (
+                select 1
+                from ${schema.processingJobs} completed_job
+                where completed_job.source_id = ${sourceId}
+                  and completed_job.status = 'completed'
+                  and coalesce(completed_job.completed_at, completed_job.updated_at) >= target_evidence.created_at
+                  and (
+                    (
+                      completed_job.mode = 'replay'
+                      and completed_job.created_at >= affecting_override.created_at
+                    )
+                    or (
+                      target_evidence.created_at > affecting_override.created_at
+                      and completed_job.created_at <= target_evidence.created_at
+                    )
+                  )
+              )
+            )
+        )`,
+      })
+      .from(schema.sources)
+      .where(eq(schema.sources.id, sourceId))
+      .limit(1)
+      .pipe(
+        Effect.map((rows) => rows[0]?.pending ?? false),
+        wrapSqlError("taxCalculationService.hasPendingOverrideReplay")
+      )
 
   /**
    * Load a bounded list of provider asset observations that block a source's
@@ -739,14 +784,17 @@ const make = Effect.gen(function* () {
 
       yield* loadSource(sourceId)
 
-      const pendingObservationCount = yield* countPendingObservations(sourceId)
+      const [pendingObservationCount, pendingOverrideReplay] = yield* Effect.all([
+        countPendingObservations(sourceId),
+        hasPendingOverrideReplay(sourceId),
+      ])
 
-      if (pendingObservationCount > 0) {
+      if (pendingObservationCount > 0 || pendingOverrideReplay) {
         const blockingObservations = yield* loadBlockingObservations(sourceId)
 
         return yield* new TaxCalculationPendingObservationsError({
           sourceId,
-          pendingObservationCount,
+          pendingObservationCount: Math.max(pendingObservationCount, 1),
           blockingObservations,
         })
       }

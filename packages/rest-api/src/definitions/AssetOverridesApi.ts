@@ -83,7 +83,10 @@ export class AssetOverrideValidationResponse extends Schema.Class<AssetOverrideV
 
 export class AssetOverrideNotFoundError extends Schema.TaggedError<AssetOverrideNotFoundError>()(
   "AssetOverrideNotFoundError",
-  { message: Schema.String },
+  {
+    code: Schema.Literal("asset_override_target_not_found"),
+    message: Schema.String,
+  },
   { httpApiStatus: 404 }
 ) {}
 
@@ -95,7 +98,11 @@ export class AssetOverrideBadRequestError extends Schema.TaggedError<AssetOverri
 
 export class AssetOverrideConflictError extends Schema.TaggedError<AssetOverrideConflictError>()(
   "AssetOverrideConflictError",
-  { message: Schema.String, current: AssetOverrideProjectionResponse },
+  {
+    code: Schema.Literal("asset_override_conflict"),
+    message: Schema.String,
+    current: AssetOverrideProjectionResponse,
+  },
   { httpApiStatus: 409 }
 ) {}
 
