@@ -172,6 +172,142 @@ const seedUnknownTypeRepresentation = () =>
     })
   )
 
+const seedCrossSourceFifoDependency = (providerAssetRowId: string) =>
+  context.runPg(
+    Effect.gen(function* () {
+      const db = yield* drizzle
+      const dependentSourceId = "00000000-0000-0000-0000-000000000272"
+      const [coinbase] = yield* db
+        .select({ id: schema.cex.id })
+        .from(schema.cex)
+        .where(eq(schema.cex.name, "coinbase"))
+        .limit(1)
+      if (coinbase === undefined) return yield* Effect.die("Missing Coinbase fixture")
+
+      const [account] = yield* db
+        .insert(schema.cexAccount)
+        .values({
+          cexId: coinbase.id,
+          principalId: TEST_PRINCIPAL_ID,
+          providerUserId: "override-dependent-user",
+          providerAccountId: "override-dependent-account",
+        })
+        .returning({ id: schema.cexAccount.id })
+      if (account === undefined) return yield* Effect.die("Failed to seed dependent account")
+
+      yield* db.insert(schema.sources).values({
+        id: dependentSourceId,
+        principalId: TEST_PRINCIPAL_ID,
+        name: "Dependent Coinbase Source",
+        providerKey: "coinbase",
+        sourceableType: "cex",
+        cexAccountId: account.id,
+        addressId: null,
+      })
+      yield* db.insert(schema.providerAssetSourceUses).values({
+        providerAssetRowId,
+        sourceId: dependentSourceId,
+      })
+
+      const timestamp = new Date("2026-08-22T10:00:00.000Z")
+      const [ownerTransaction, dependentTransaction] = yield* db
+        .insert(schema.transactions)
+        .values([
+          {
+            sourceId: TEST_SOURCE_ID,
+            externalId: "override-owner-acquisition",
+            timestamp,
+            principalId: TEST_PRINCIPAL_ID,
+          },
+          {
+            sourceId: dependentSourceId,
+            externalId: "override-dependent-disposal",
+            timestamp,
+            principalId: TEST_PRINCIPAL_ID,
+          },
+        ])
+        .returning({ id: schema.transactions.id, sourceId: schema.transactions.sourceId })
+      if (ownerTransaction === undefined || dependentTransaction === undefined) {
+        return yield* Effect.die("Failed to seed dependency transactions")
+      }
+      const transactionBySource = new Map(
+        [ownerTransaction, dependentTransaction].map((transaction) => [
+          transaction.sourceId,
+          transaction.id,
+        ])
+      )
+      const ownerTransactionId = transactionBySource.get(TEST_SOURCE_ID)
+      const dependentTransactionId = transactionBySource.get(dependentSourceId)
+      if (ownerTransactionId === undefined || dependentTransactionId === undefined) {
+        return yield* Effect.die("Failed to identify dependency transactions")
+      }
+
+      const [ownerLeg, dependentLeg] = yield* db
+        .insert(schema.transactionLegs)
+        .values([
+          {
+            sourceId: TEST_SOURCE_ID,
+            externalId: "override-owner-acquisition-leg",
+            timestamp,
+            principalId: TEST_PRINCIPAL_ID,
+            assetId: TEST_BTC_ASSET_ID,
+            amount: "1",
+            kind: "acquisition",
+            provenance: "deterministic",
+            transactionId: ownerTransactionId,
+          },
+          {
+            sourceId: dependentSourceId,
+            externalId: "override-dependent-disposal-leg",
+            timestamp,
+            principalId: TEST_PRINCIPAL_ID,
+            assetId: TEST_BTC_ASSET_ID,
+            amount: "1",
+            kind: "disposal",
+            provenance: "deterministic",
+            transactionId: dependentTransactionId,
+          },
+        ])
+        .returning({ id: schema.transactionLegs.id, sourceId: schema.transactionLegs.sourceId })
+      if (ownerLeg === undefined || dependentLeg === undefined) {
+        return yield* Effect.die("Failed to seed dependency legs")
+      }
+      const legBySource = new Map([ownerLeg, dependentLeg].map((leg) => [leg.sourceId, leg.id]))
+      const ownerLegId = legBySource.get(TEST_SOURCE_ID)
+      const dependentLegId = legBySource.get(dependentSourceId)
+      if (ownerLegId === undefined || dependentLegId === undefined) {
+        return yield* Effect.die("Failed to identify dependency legs")
+      }
+
+      const [lot] = yield* db
+        .insert(schema.fifoLots)
+        .values({
+          principalId: TEST_PRINCIPAL_ID,
+          sourceId: TEST_SOURCE_ID,
+          assetId: TEST_BTC_ASSET_ID,
+          acquiredAt: timestamp,
+          originalAmount: "1",
+          remainingAmount: "0",
+          costBasisPerToken: "10",
+          costBasisCurrency: "EUR",
+          sourceLegId: ownerLegId,
+        })
+        .returning({ id: schema.fifoLots.id })
+      if (lot === undefined) return yield* Effect.die("Failed to seed FIFO lot")
+
+      yield* db.insert(schema.disposalMatches).values({
+        disposalLegId: dependentLegId,
+        fifoLotId: lot.id,
+        matchedAmount: "1",
+        costBasis: "10",
+        proceeds: "12",
+        gainLoss: "2",
+      })
+
+      return dependentSourceId
+    })
+  )
+
 beforeEach(async () => {
   await Effect.runPromise(context.recreateTestDatabase())
 })
@@ -359,6 +495,48 @@ describe("AssetOverrideRepository", () => {
     expect(projection.history).toHaveLength(1)
   })
 
+  it("reports a completed override replay with failed records as failed", async () => {
+    const providerAssetRowId = await seedChainlessProviderAsset()
+    const target = { _tag: "provider_asset" as const, providerAssetRowId }
+    const initial = await runRepository(
+      Effect.flatMap(AssetOverrideRepository, (repository) =>
+        repository.getProjection({ principalId: TEST_PRINCIPAL_ID, kind: "identity", target })
+      )
+    )
+    const created = await runRepository(
+      Effect.flatMap(AssetOverrideRepository, (repository) =>
+        repository.setOverride({
+          principalId: TEST_PRINCIPAL_ID,
+          actorId: "00000000-0000-0000-0000-000000000181",
+          kind: "identity",
+          target,
+          expectedSystemRevision: initial.systemRevision,
+          expectedActiveOverrideId: null,
+          replacement: { _tag: "identity", assetId: TEST_BTC_ASSET_ID },
+          reason: "Use the reviewed identity after replay completes.",
+        })
+      )
+    )
+    expect(created._tag).toBe("accepted")
+
+    await context.runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        yield* db
+          .update(schema.processingJobs)
+          .set({ status: "completed", progressDetails: { failedRecords: 1 } })
+          .where(eq(schema.processingJobs.sourceId, TEST_SOURCE_ID))
+      })
+    )
+
+    const projection = await runRepository(
+      Effect.flatMap(AssetOverrideRepository, (repository) =>
+        repository.getProjection({ principalId: TEST_PRINCIPAL_ID, kind: "identity", target })
+      )
+    )
+    expect(projection.recomputationState).toBe("failed")
+  })
+
   it("keeps the accepted system revision stable until the override commits", async () => {
     const providerAssetRowId = await seedChainlessProviderAsset()
     const target = { _tag: "provider_asset" as const, providerAssetRowId }
@@ -440,6 +618,145 @@ describe("AssetOverrideRepository", () => {
     )
     expect(afterConcurrentChange.systemRevision).not.toBe(initial.systemRevision)
     expect(afterConcurrentChange.staleSystemRevision).toBe(true)
+    expect(afterConcurrentChange.history).toHaveLength(1)
+  })
+
+  it("acquires revision locks in normalization write order", async () => {
+    const providerAssetRowId = await seedChainlessProviderAsset()
+    const transactionId = await context.runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const [transaction] = yield* db
+          .insert(schema.transactions)
+          .values({
+            sourceId: TEST_SOURCE_ID,
+            externalId: "ordered-revision-lock-transaction",
+            timestamp: new Date("2026-08-22T11:00:00.000Z"),
+            principalId: TEST_PRINCIPAL_ID,
+          })
+          .returning({ id: schema.transactions.id })
+        if (transaction === undefined) return yield* Effect.die("Failed to seed transaction")
+        return transaction.id
+      })
+    )
+    const target = { _tag: "provider_asset" as const, providerAssetRowId }
+    const initial = await runRepository(
+      Effect.flatMap(AssetOverrideRepository, (repository) =>
+        repository.getProjection({ principalId: TEST_PRINCIPAL_ID, kind: "identity", target })
+      )
+    )
+
+    const normalizationWrite = context.runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        yield* db.transaction((tx) =>
+          Effect.gen(function* () {
+            yield* tx
+              .update(schema.providerAssetSourceUses)
+              .set({ updatedAt: new Date("2026-08-22T11:00:00.000Z") })
+              .where(eq(schema.providerAssetSourceUses.providerAssetRowId, providerAssetRowId))
+            yield* tx.execute(sql`select pg_sleep(0.3)`)
+            yield* tx.insert(schema.providerTransfers).values({
+              sourceId: TEST_SOURCE_ID,
+              transactionId,
+              externalId: "ordered-revision-lock-transfer",
+              providerAssetId: providerAssetRowId,
+              timestamp: new Date("2026-08-22T11:00:00.000Z"),
+              direction: "inbound",
+              processingMode: "accounting_and_evidence",
+              fromAccountRef: "external-account",
+              toAccountRef: "owned-account",
+              observedBlockchainId: null,
+              observedRepresentationType: null,
+              observedContractAddress: null,
+              observedMintAddress: null,
+              observedDecimals: null,
+              amount: "1",
+            })
+          })
+        )
+      })
+    )
+
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    const overrideWrite = runRepository(
+      Effect.flatMap(AssetOverrideRepository, (repository) =>
+        repository.setOverride({
+          principalId: TEST_PRINCIPAL_ID,
+          actorId: "00000000-0000-0000-0000-000000000181",
+          kind: "identity",
+          target,
+          expectedSystemRevision: initial.systemRevision,
+          expectedActiveOverrideId: null,
+          replacement: { _tag: "identity", assetId: TEST_BTC_ASSET_ID },
+          reason: "The normalization writer must finish without a lock cycle.",
+        })
+      )
+    )
+
+    const [, result] = await Promise.all([normalizationWrite, overrideWrite])
+    expect(result._tag).toBe("accepted")
+  })
+
+  it("rejects overrides whose replay would break cross-source FIFO dependencies", async () => {
+    const providerAssetRowId = await seedChainlessProviderAsset()
+    await seedCrossSourceFifoDependency(providerAssetRowId)
+    const target = { _tag: "provider_asset" as const, providerAssetRowId }
+    const initial = await runRepository(
+      Effect.flatMap(AssetOverrideRepository, (repository) =>
+        repository.getProjection({ principalId: TEST_PRINCIPAL_ID, kind: "identity", target })
+      )
+    )
+
+    const validationError = await runRepository(
+      Effect.flatMap(AssetOverrideRepository, (repository) =>
+        repository
+          .validateOverride({
+            principalId: TEST_PRINCIPAL_ID,
+            kind: "identity",
+            target,
+            replacement: { _tag: "identity", assetId: TEST_BTC_ASSET_ID },
+          })
+          .pipe(Effect.flip)
+      )
+    )
+    expect(validationError).toMatchObject({
+      _tag: "AssetOverrideValidationError",
+      code: "cross_source_fifo_dependency",
+    })
+
+    const writeError = await runRepository(
+      Effect.flatMap(AssetOverrideRepository, (repository) =>
+        repository
+          .setOverride({
+            principalId: TEST_PRINCIPAL_ID,
+            actorId: "00000000-0000-0000-0000-000000000181",
+            kind: "identity",
+            target,
+            expectedSystemRevision: initial.systemRevision,
+            expectedActiveOverrideId: null,
+            replacement: { _tag: "identity", assetId: TEST_BTC_ASSET_ID },
+            reason: "This write must not schedule an unsafe replay.",
+          })
+          .pipe(Effect.flip)
+      )
+    )
+    expect(writeError).toMatchObject({
+      _tag: "AssetOverrideValidationError",
+      code: "cross_source_fifo_dependency",
+    })
+
+    await context.runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const overrides = yield* db
+          .select({ id: schema.principalAssetOverrides.id })
+          .from(schema.principalAssetOverrides)
+        const jobs = yield* db.select({ id: schema.processingJobs.id }).from(schema.processingJobs)
+        expect(overrides).toHaveLength(0)
+        expect(jobs).toHaveLength(0)
+      })
+    )
   })
 
   it("does not reveal whether an unowned provider asset exists", async () => {

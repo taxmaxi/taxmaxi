@@ -4,7 +4,8 @@
  * @module AssetOverrideRepositoryLive
  */
 
-import { and, asc, desc, eq, exists, inArray, isNull, notExists, or, sql } from "drizzle-orm"
+import { and, asc, desc, eq, exists, inArray, isNull, ne, notExists, or, sql } from "drizzle-orm"
+import * as Data from "effect/Data"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import * as Option from "effect/Option"
@@ -24,6 +25,9 @@ import {
 import { PersistenceError } from "../errors/RepositoryError.ts"
 import { schema, type PrincipalAssetOverrideRow } from "../schema/index.ts"
 import { drizzle } from "./PgClientLive.ts"
+import { decodeSourceSyncJobProgressSnapshot } from "./SyncEngineRepositorySupport.ts"
+
+class AssetOverrideRevisionChanged extends Data.TaggedError("AssetOverrideRevisionChanged")<{}> {}
 
 const currentDate = Effect.map(
   Effect.clockWith((clock) => clock.currentTimeMillis),
@@ -442,6 +446,73 @@ const make = Effect.gen(function* () {
       return { revision, conclusion }
     })
 
+  const loadCrossSourceDependentIds = ({
+    executor,
+    sourceIds,
+  }: {
+    readonly executor: AssetOverrideExecutor
+    readonly sourceIds: ReadonlyArray<string>
+  }) =>
+    Effect.gen(function* () {
+      const allocationDependencies = yield* executor
+        .selectDistinct({ sourceId: schema.inventoryMovements.sourceId })
+        .from(schema.inventoryMovementAllocations)
+        .innerJoin(
+          schema.inventoryMovements,
+          eq(schema.inventoryMovements.id, schema.inventoryMovementAllocations.inventoryMovementId)
+        )
+        .innerJoin(
+          schema.fifoLots,
+          eq(schema.fifoLots.id, schema.inventoryMovementAllocations.fifoLotId)
+        )
+        .where(
+          and(
+            inArray(schema.fifoLots.sourceId, sourceIds),
+            ne(schema.inventoryMovements.sourceId, schema.fifoLots.sourceId)
+          )
+        )
+
+      const disposalDependencies = yield* executor
+        .selectDistinct({ sourceId: schema.transactionLegs.sourceId })
+        .from(schema.disposalMatches)
+        .innerJoin(
+          schema.transactionLegs,
+          eq(schema.transactionLegs.id, schema.disposalMatches.disposalLegId)
+        )
+        .innerJoin(schema.fifoLots, eq(schema.fifoLots.id, schema.disposalMatches.fifoLotId))
+        .where(
+          and(
+            inArray(schema.fifoLots.sourceId, sourceIds),
+            ne(schema.transactionLegs.sourceId, schema.fifoLots.sourceId)
+          )
+        )
+
+      return [
+        ...new Set([...allocationDependencies, ...disposalDependencies].map((row) => row.sourceId)),
+      ].sort()
+    })
+
+  const validateReplayDependencies = ({
+    executor,
+    sourceIds,
+  }: {
+    readonly executor: AssetOverrideExecutor
+    readonly sourceIds: ReadonlyArray<string>
+  }) =>
+    loadCrossSourceDependentIds({ executor, sourceIds }).pipe(
+      Effect.flatMap((dependentSourceIds) =>
+        dependentSourceIds.length === 0
+          ? Effect.void
+          : Effect.fail(
+              new AssetOverrideValidationError({
+                code: "cross_source_fifo_dependency",
+                message:
+                  "This override cannot be applied while other sources consume inventory from an affected source.",
+              })
+            )
+      )
+    )
+
   const loadHistory = ({
     executor,
     kind,
@@ -501,7 +572,11 @@ const make = Effect.gen(function* () {
     Effect.gen(function* () {
       if (sourceIds.length === 0) return "complete" as const
       const rows = yield* executor
-        .select({ sourceId: schema.processingJobs.sourceId, status: schema.processingJobs.status })
+        .select({
+          sourceId: schema.processingJobs.sourceId,
+          status: schema.processingJobs.status,
+          progressDetails: schema.processingJobs.progressDetails,
+        })
         .from(schema.processingJobs)
         .where(inArray(schema.processingJobs.sourceId, sourceIds))
         .orderBy(desc(schema.processingJobs.createdAt), desc(schema.processingJobs.id))
@@ -513,7 +588,17 @@ const make = Effect.gen(function* () {
       if (latest.some((row) => row.status === "pending" || row.status === "processing")) {
         return "updating" as const
       }
-      return latest.some((row) => row.status === "failed" || row.status === "credit_required")
+      const completedProgress = yield* Effect.forEach(latest, (row) =>
+        decodeSourceSyncJobProgressSnapshot(row.progressDetails).pipe(
+          Effect.map((progress) => ({ row, progress }))
+        )
+      )
+      return completedProgress.some(
+        ({ row, progress }) =>
+          row.status === "failed" ||
+          row.status === "credit_required" ||
+          (row.status === "completed" && (progress?.failedRecords ?? 0) > 0)
+      )
         ? ("failed" as const)
         : ("complete" as const)
     })
@@ -731,6 +816,7 @@ const make = Effect.gen(function* () {
         target: canonicalTarget,
       })
       if (sourceIds.length === 0) return yield* new AssetOverrideTargetNotFoundError()
+      yield* validateReplayDependencies({ executor: db, sourceIds })
       yield* validateReplacement({ executor: db, kind, replacement, target: canonicalTarget })
       return yield* buildProjection({
         executor: db,
@@ -762,91 +848,136 @@ const make = Effect.gen(function* () {
     readonly replacement: AssetOverrideReplacement | null
     readonly target: AssetOverrideTarget
   }): Effect.Effect<AssetOverrideWriteResult, unknown> =>
-    db.transaction((tx) =>
-      Effect.gen(function* () {
-        const canonicalTarget = canonicalizeTarget(target)
-        yield* validateTargetShape(canonicalTarget)
-        if (reason.trim() === "") {
-          return yield* new AssetOverrideValidationError({
-            code: "reason_required",
-            message: "A reason is required for every asset override change.",
+    db
+      .transaction((tx) =>
+        Effect.gen(function* () {
+          const canonicalTarget = canonicalizeTarget(target)
+          yield* validateTargetShape(canonicalTarget)
+          if (reason.trim() === "") {
+            return yield* new AssetOverrideValidationError({
+              code: "reason_required",
+              message: "A reason is required for every asset override change.",
+            })
+          }
+          yield* tx.execute(
+            sql`select pg_advisory_xact_lock(hashtextextended(${`${principalId}:${kind}:${JSON.stringify(canonicalTarget)}`}, 0))`
+          )
+          yield* tx.execute(sql`
+            lock table
+              ${schema.providerAssetSourceUses},
+              ${schema.sourceRepresentationUses},
+              ${schema.providerTransfers},
+              ${schema.providerAssets},
+              ${schema.providerAssetMappings},
+              ${schema.assetRepresentations}
+            in share mode
+          `)
+          const sourceIds = yield* loadOwnedSourceIds({
+            executor: tx,
+            principalId,
+            target: canonicalTarget,
           })
-        }
-        yield* tx.execute(sql`
-          lock table
-            ${schema.assetRepresentations},
-            ${schema.providerAssets},
-            ${schema.providerAssetMappings},
-            ${schema.providerTransfers},
-            ${schema.providerAssetSourceUses},
-            ${schema.sourceRepresentationUses}
-          in share mode
-        `)
-        yield* tx.execute(
-          sql`select pg_advisory_xact_lock(hashtextextended(${`${principalId}:${kind}:${JSON.stringify(canonicalTarget)}`}, 0))`
-        )
-        const sourceIds = yield* loadOwnedSourceIds({
-          executor: tx,
-          principalId,
-          target: canonicalTarget,
-        })
-        if (sourceIds.length === 0) return yield* new AssetOverrideTargetNotFoundError()
-        const before = yield* buildProjection({
-          executor: tx,
-          kind,
-          principalId,
-          target: canonicalTarget,
-          sourceIds,
-        })
-        const currentActiveId = before.activeOverride?.id ?? null
-        if (
-          before.systemRevision !== expectedSystemRevision ||
-          currentActiveId !== expectedActiveOverrideId
-        ) {
-          return { _tag: "conflict", projection: before } as const
-        }
-        if (action === "withdraw" && before.activeOverride === null) {
-          return yield* new AssetOverrideValidationError({
-            code: "no_active_override",
-            message: "There is no active override to withdraw.",
+          if (sourceIds.length === 0) return yield* new AssetOverrideTargetNotFoundError()
+          yield* validateReplayDependencies({ executor: tx, sourceIds })
+          const before = yield* buildProjection({
+            executor: tx,
+            kind,
+            principalId,
+            target: canonicalTarget,
+            sourceIds,
           })
-        }
-        if (replacement !== null) {
-          yield* validateReplacement({ executor: tx, kind, replacement, target: canonicalTarget })
-        }
+          const currentActiveId = before.activeOverride?.id ?? null
+          if (
+            before.systemRevision !== expectedSystemRevision ||
+            currentActiveId !== expectedActiveOverrideId
+          ) {
+            return { _tag: "conflict", projection: before } as const
+          }
+          if (action === "withdraw" && before.activeOverride === null) {
+            return yield* new AssetOverrideValidationError({
+              code: "no_active_override",
+              message: "There is no active override to withdraw.",
+            })
+          }
+          if (replacement !== null) {
+            yield* validateReplacement({ executor: tx, kind, replacement, target: canonicalTarget })
+          }
 
-        const latest = before.history.at(-1) ?? null
-        const inspectedIdentity =
-          before.systemConclusion._tag === "identity" ? before.systemConclusion : null
-        const inspectedInclusion =
-          before.systemConclusion._tag === "inclusion" ? before.systemConclusion : null
-        yield* tx.insert(schema.principalAssetOverrides).values({
-          principalId,
-          kind,
-          ...targetValues(canonicalTarget),
-          action,
-          inspectedSystemRevision: before.systemRevision,
-          inspectedIdentityState: inspectedIdentity?.state ?? null,
-          inspectedInclusionState: inspectedInclusion?.state ?? null,
-          inspectedInclusionReason: inspectedInclusion?.reason ?? null,
-          inspectedAssetId: inspectedIdentity?.assetId ?? null,
-          replacementAssetId: replacement?._tag === "identity" ? replacement.assetId : null,
-          replacementInclusionState: replacement?._tag === "inclusion" ? replacement.state : null,
-          actorId,
-          reason: reason.trim(),
-          supersedesOverrideId: latest?.id ?? null,
+          const latest = before.history.at(-1) ?? null
+          const inspectedIdentity =
+            before.systemConclusion._tag === "identity" ? before.systemConclusion : null
+          const inspectedInclusion =
+            before.systemConclusion._tag === "inclusion" ? before.systemConclusion : null
+          yield* tx.insert(schema.principalAssetOverrides).values({
+            principalId,
+            kind,
+            ...targetValues(canonicalTarget),
+            action,
+            inspectedSystemRevision: before.systemRevision,
+            inspectedIdentityState: inspectedIdentity?.state ?? null,
+            inspectedInclusionState: inspectedInclusion?.state ?? null,
+            inspectedInclusionReason: inspectedInclusion?.reason ?? null,
+            inspectedAssetId: inspectedIdentity?.assetId ?? null,
+            replacementAssetId: replacement?._tag === "identity" ? replacement.assetId : null,
+            replacementInclusionState: replacement?._tag === "inclusion" ? replacement.state : null,
+            actorId,
+            reason: reason.trim(),
+            supersedesOverrideId: latest?.id ?? null,
+          })
+          const confirmedSourceIds = yield* loadOwnedSourceIds({
+            executor: tx,
+            principalId,
+            target: canonicalTarget,
+          })
+          const confirmed = yield* buildProjection({
+            executor: tx,
+            kind,
+            principalId,
+            target: canonicalTarget,
+            sourceIds: confirmedSourceIds,
+          })
+          if (
+            confirmed.systemRevision !== before.systemRevision ||
+            confirmedSourceIds.length !== sourceIds.length ||
+            confirmedSourceIds.some((sourceId, index) => sourceId !== sourceIds[index])
+          ) {
+            return yield* new AssetOverrideRevisionChanged()
+          }
+          yield* requestReplays({ executor: tx, principalId, sourceIds })
+          const projection = yield* buildProjection({
+            executor: tx,
+            kind,
+            principalId,
+            target: canonicalTarget,
+            sourceIds,
+          })
+          return { _tag: "accepted", projection } as const
         })
-        yield* requestReplays({ executor: tx, principalId, sourceIds })
-        const projection = yield* buildProjection({
-          executor: tx,
-          kind,
-          principalId,
-          target: canonicalTarget,
-          sourceIds,
-        })
-        return { _tag: "accepted", projection } as const
-      })
-    )
+      )
+      .pipe(
+        Effect.catchIf(
+          (error): error is AssetOverrideRevisionChanged =>
+            error instanceof AssetOverrideRevisionChanged,
+          () =>
+            Effect.gen(function* () {
+              const canonicalTarget = canonicalizeTarget(target)
+              const sourceIds = yield* loadOwnedSourceIds({
+                executor: db,
+                principalId,
+                target: canonicalTarget,
+              })
+              if (sourceIds.length === 0) return yield* new AssetOverrideTargetNotFoundError()
+              const projection = yield* buildProjection({
+                executor: db,
+                kind,
+                principalId,
+                target: canonicalTarget,
+                sourceIds,
+              })
+              return { _tag: "conflict", projection } as const
+            })
+        )
+      )
 
   const setOverride: AssetOverrideRepositoryShape["setOverride"] = (params) =>
     writeOverride({ ...params, action: "set" }).pipe(

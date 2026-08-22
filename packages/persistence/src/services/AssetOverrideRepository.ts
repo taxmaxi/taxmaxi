@@ -10,8 +10,15 @@ import type * as Option from "effect/Option"
 import * as Schema from "effect/Schema"
 import type { PersistenceError } from "../errors/RepositoryError.ts"
 
+/** The independent asset decision selected by an override operation. */
 export type AssetOverrideKind = "identity" | "inclusion"
 
+/**
+ * The durable evidence identity owned by one override history.
+ *
+ * Representation targets apply across providers, while provider-asset targets
+ * apply only to the selected provider asset row.
+ */
 export type AssetOverrideTarget =
   | {
       readonly _tag: "representation"
@@ -22,6 +29,12 @@ export type AssetOverrideTarget =
     }
   | { readonly _tag: "provider_asset"; readonly providerAssetRowId: string }
 
+/**
+ * The system's current answer for one override kind before a principal choice.
+ *
+ * Identity conclusions carry a canonical asset only when resolved. Inclusion
+ * conclusions use `blocked` when accounting cannot safely include the asset.
+ */
 export type AssetOverrideSystemConclusion =
   | {
       readonly _tag: "identity"
@@ -34,10 +47,18 @@ export type AssetOverrideSystemConclusion =
       readonly reason: string | null
     }
 
+/** The principal's requested replacement for the selected override kind. */
 export type AssetOverrideReplacement =
   | { readonly _tag: "identity"; readonly assetId: string }
   | { readonly _tag: "inclusion"; readonly state: "included" | "excluded" }
 
+/**
+ * One append-only override decision or withdrawal.
+ *
+ * The inspected revision and conclusion capture the system state presented to
+ * the actor. `supersedesOverrideId` links the entry to the active decision it
+ * replaced; withdrawals have no replacement value.
+ */
 export interface AssetOverrideHistoryEntry {
   readonly id: string
   readonly kind: AssetOverrideKind
@@ -52,6 +73,15 @@ export interface AssetOverrideHistoryEntry {
   readonly createdAt: Date
 }
 
+/**
+ * The current override view for a principal, kind, and target.
+ *
+ * `systemRevision` is the optimistic-concurrency token for the current system
+ * conclusion. `staleSystemRevision` reports whether the active override was
+ * inspected against an older token. `effectiveConclusion` applies the active
+ * choice, while `recomputationState` reports whether affected source replays
+ * are still running, fully applied, or failed.
+ */
 export interface AssetOverrideProjection {
   readonly kind: AssetOverrideKind
   readonly target: AssetOverrideTarget
@@ -78,6 +108,11 @@ export class AssetOverrideValidationError extends Schema.TaggedError<AssetOverri
   { code: Schema.String, message: Schema.String }
 ) {}
 
+/**
+ * Result of an override write guarded by the expected system revision and
+ * active override ID. `conflict` records nothing and returns the latest view;
+ * `accepted` records the history entry but may still be awaiting replay.
+ */
 export type AssetOverrideWriteResult =
   | { readonly _tag: "accepted"; readonly projection: AssetOverrideProjection }
   | { readonly _tag: "conflict"; readonly projection: AssetOverrideProjection }
