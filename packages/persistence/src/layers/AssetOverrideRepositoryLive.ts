@@ -81,6 +81,20 @@ const providerTransferTargetPredicate = (
       : eq(schema.providerTransfers.observedMintAddress, target.mintAddress)
   )
 
+const sourceRepresentationUseTargetPredicate = (
+  target: Extract<AssetOverrideTarget, { _tag: "representation" }>
+) =>
+  and(
+    eq(schema.sourceRepresentationUses.blockchainId, target.blockchainId),
+    eq(schema.sourceRepresentationUses.representationType, target.representationType),
+    target.contractAddress === null
+      ? sql`${schema.sourceRepresentationUses.contractAddress} is null`
+      : sql`lower(${schema.sourceRepresentationUses.contractAddress}) = lower(${target.contractAddress})`,
+    target.mintAddress === null
+      ? sql`${schema.sourceRepresentationUses.mintAddress} is null`
+      : eq(schema.sourceRepresentationUses.mintAddress, target.mintAddress)
+  )
+
 const representationTargetPredicate = (
   target: Extract<AssetOverrideTarget, { _tag: "representation" }>
 ) =>
@@ -218,10 +232,13 @@ const make = Effect.gen(function* () {
     if (target._tag === "representation") {
       return executor
         .selectDistinct({ sourceId: schema.sources.id })
-        .from(schema.providerTransfers)
-        .innerJoin(schema.sources, eq(schema.sources.id, schema.providerTransfers.sourceId))
+        .from(schema.sourceRepresentationUses)
+        .innerJoin(schema.sources, eq(schema.sources.id, schema.sourceRepresentationUses.sourceId))
         .where(
-          and(eq(schema.sources.principalId, principalId), providerTransferTargetPredicate(target))
+          and(
+            eq(schema.sources.principalId, principalId),
+            sourceRepresentationUseTargetPredicate(target)
+          )
         )
         .orderBy(asc(schema.sources.id))
         .pipe(Effect.map((rows) => rows.map((row) => row.sourceId)))
@@ -496,7 +513,7 @@ const make = Effect.gen(function* () {
       if (latest.some((row) => row.status === "pending" || row.status === "processing")) {
         return "updating" as const
       }
-      return latest.some((row) => row.status === "failed")
+      return latest.some((row) => row.status === "failed" || row.status === "credit_required")
         ? ("failed" as const)
         : ("complete" as const)
     })
@@ -755,6 +772,16 @@ const make = Effect.gen(function* () {
             message: "A reason is required for every asset override change.",
           })
         }
+        yield* tx.execute(sql`
+          lock table
+            ${schema.assetRepresentations},
+            ${schema.providerAssets},
+            ${schema.providerAssetMappings},
+            ${schema.providerTransfers},
+            ${schema.providerAssetSourceUses},
+            ${schema.sourceRepresentationUses}
+          in share mode
+        `)
         yield* tx.execute(
           sql`select pg_advisory_xact_lock(hashtextextended(${`${principalId}:${kind}:${JSON.stringify(canonicalTarget)}`}, 0))`
         )

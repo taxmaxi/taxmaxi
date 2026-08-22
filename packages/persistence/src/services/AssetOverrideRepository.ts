@@ -82,6 +82,17 @@ export type AssetOverrideWriteResult =
   | { readonly _tag: "accepted"; readonly projection: AssetOverrideProjection }
   | { readonly _tag: "conflict"; readonly projection: AssetOverrideProjection }
 
+/**
+ * Reads, validates, and records principal-scoped asset override choices.
+ *
+ * Targets and replacements are validated before a projection or write is returned;
+ * `validateOverride` performs these checks without recording a choice. Writes use
+ * the expected system revision and active override ID as optimistic concurrency
+ * checks. A mismatch records nothing and returns `conflict` with the current
+ * projection. An accepted write appends to the target's history and schedules or
+ * joins a replay for each affected source. The returned projection reports replay
+ * progress through `recomputationState`; acceptance does not mean replay is complete.
+ */
 export interface AssetOverrideRepositoryShape {
   readonly validateOverride: (params: {
     readonly principalId: string

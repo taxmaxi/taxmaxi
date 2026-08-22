@@ -1,4 +1,4 @@
-import { eq } from "drizzle-orm"
+import { eq, sql } from "drizzle-orm"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import * as Option from "effect/Option"
@@ -304,6 +304,144 @@ describe("AssetOverrideRepository", () => {
     )
   })
 
+  it("reports a credit-blocked override replay as failed", async () => {
+    const providerAssetRowId = await seedChainlessProviderAsset()
+    const target = { _tag: "provider_asset" as const, providerAssetRowId }
+    const initial = await runRepository(
+      Effect.flatMap(AssetOverrideRepository, (repository) =>
+        repository.getProjection({
+          principalId: TEST_PRINCIPAL_ID,
+          kind: "identity",
+          target,
+        })
+      )
+    )
+    const created = await runRepository(
+      Effect.flatMap(AssetOverrideRepository, (repository) =>
+        repository.setOverride({
+          principalId: TEST_PRINCIPAL_ID,
+          actorId: "00000000-0000-0000-0000-000000000181",
+          kind: "identity",
+          target,
+          expectedSystemRevision: initial.systemRevision,
+          expectedActiveOverrideId: null,
+          replacement: { _tag: "identity", assetId: TEST_BTC_ASSET_ID },
+          reason: "Use the reviewed identity after replay completes.",
+        })
+      )
+    )
+    expect(created._tag).toBe("accepted")
+
+    await context.runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        yield* db
+          .update(schema.processingJobs)
+          .set({
+            status: "credit_required",
+            creditReasonCode: "no_usable_credits",
+            creditsAvailable: 0,
+          })
+          .where(eq(schema.processingJobs.sourceId, TEST_SOURCE_ID))
+      })
+    )
+
+    const projection = await runRepository(
+      Effect.flatMap(AssetOverrideRepository, (repository) =>
+        repository.getProjection({
+          principalId: TEST_PRINCIPAL_ID,
+          kind: "identity",
+          target,
+        })
+      )
+    )
+    expect(projection.recomputationState).toBe("failed")
+    expect(projection.history).toHaveLength(1)
+  })
+
+  it("keeps the accepted system revision stable until the override commits", async () => {
+    const providerAssetRowId = await seedChainlessProviderAsset()
+    const target = { _tag: "provider_asset" as const, providerAssetRowId }
+    const initial = await runRepository(
+      Effect.flatMap(AssetOverrideRepository, (repository) =>
+        repository.getProjection({
+          principalId: TEST_PRINCIPAL_ID,
+          kind: "identity",
+          target,
+        })
+      )
+    )
+
+    await context.runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        yield* db.execute(
+          sql.raw(`
+            create function pause_principal_asset_override_insert()
+            returns trigger
+            language plpgsql
+            as $$
+            begin
+              perform pg_sleep(0.5);
+              return new;
+            end;
+            $$
+          `)
+        )
+        yield* db.execute(
+          sql.raw(`
+            create trigger pause_principal_asset_override_insert
+            before insert on principal_asset_overrides
+            for each row execute function pause_principal_asset_override_insert()
+          `)
+        )
+      })
+    )
+
+    const overrideWrite = runRepository(
+      Effect.flatMap(AssetOverrideRepository, (repository) =>
+        repository.setOverride({
+          principalId: TEST_PRINCIPAL_ID,
+          actorId: "00000000-0000-0000-0000-000000000181",
+          kind: "identity",
+          target,
+          expectedSystemRevision: initial.systemRevision,
+          expectedActiveOverrideId: null,
+          replacement: { _tag: "identity", assetId: TEST_BTC_ASSET_ID },
+          reason: "Accept only while the inspected provider mapping is current.",
+        })
+      )
+    )
+
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    const concurrentMappingChange = context.runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        yield* db
+          .update(schema.providerAssetMappings)
+          .set({ mappingStatus: "rejected", reviewerNotes: "Concurrent policy decision." })
+          .where(eq(schema.providerAssetMappings.providerAssetRowId, providerAssetRowId))
+      })
+    )
+
+    const [created] = await Promise.all([overrideWrite, concurrentMappingChange])
+    expect(created._tag).toBe("accepted")
+    if (created._tag !== "accepted") return
+    expect(created.projection.staleSystemRevision).toBe(false)
+
+    const afterConcurrentChange = await runRepository(
+      Effect.flatMap(AssetOverrideRepository, (repository) =>
+        repository.getProjection({
+          principalId: TEST_PRINCIPAL_ID,
+          kind: "identity",
+          target,
+        })
+      )
+    )
+    expect(afterConcurrentChange.systemRevision).not.toBe(initial.systemRevision)
+    expect(afterConcurrentChange.staleSystemRevision).toBe(true)
+  })
+
   it("does not reveal whether an unowned provider asset exists", async () => {
     const providerAssetRowId = await seedChainlessProviderAsset()
     const result = await runRepository(
@@ -438,6 +576,126 @@ describe("AssetOverrideRepository", () => {
     expect(created._tag).toBe("accepted")
     if (created._tag !== "accepted") return
     expect(created.projection.activeOverride?.target).toEqual(target)
+  })
+
+  it("keeps representation override history available while transaction evidence is absent", async () => {
+    const target = await context.runPg(
+      Effect.gen(function* () {
+        const fixture = yield* seedSyncEngineRepositoryFixture()
+        const db = yield* drizzle
+        yield* db.insert(schema.assets).values({
+          id: TEST_BTC_ASSET_ID,
+          name: "Durable Representation Fixture",
+          symbol: "DRF",
+          type: "fungible",
+        })
+        const contractAddress = "0x0000000000000000000000000000000000000172"
+        yield* db.insert(schema.assetRepresentations).values({
+          assetId: TEST_BTC_ASSET_ID,
+          blockchainId: fixture.baseBlockchainId,
+          type: "token",
+          contractAddress,
+          mintAddress: null,
+          decimals: 6,
+        })
+        const timestamp = new Date("2026-08-22T12:00:00.000Z")
+        const [transaction] = yield* db
+          .insert(schema.transactions)
+          .values({
+            sourceId: TEST_SOURCE_ID,
+            externalId: "durable-representation-transaction",
+            timestamp,
+            providerTransactionType: "send",
+            providerStatus: "completed",
+            principalId: TEST_PRINCIPAL_ID,
+          })
+          .returning({ id: schema.transactions.id })
+        if (transaction === undefined) return yield* Effect.die("Failed to seed transaction")
+
+        yield* db.insert(schema.providerTransfers).values({
+          sourceId: TEST_SOURCE_ID,
+          transactionId: transaction.id,
+          externalId: "durable-representation-transfer",
+          timestamp,
+          direction: "inbound",
+          processingMode: "accounting_and_evidence",
+          fromAddress: "0xsender",
+          toAccountRef: "owned-account",
+          observedBlockchainId: fixture.baseBlockchainId,
+          observedRepresentationType: "token",
+          observedContractAddress: contractAddress,
+          observedMintAddress: null,
+          observedDecimals: 6,
+          amount: "1",
+        })
+        yield* db.insert(schema.sourceRepresentationUses).values({
+          sourceId: TEST_SOURCE_ID,
+          blockchainId: fixture.baseBlockchainId,
+          representationType: "token",
+          contractAddress,
+          mintAddress: null,
+        })
+
+        return {
+          _tag: "representation" as const,
+          blockchainId: fixture.baseBlockchainId,
+          representationType: "token" as const,
+          contractAddress,
+          mintAddress: null,
+        }
+      })
+    )
+
+    const initial = await runRepository(
+      Effect.flatMap(AssetOverrideRepository, (repository) =>
+        repository.getProjection({
+          principalId: TEST_PRINCIPAL_ID,
+          kind: "inclusion",
+          target,
+        })
+      )
+    )
+    const created = await runRepository(
+      Effect.flatMap(AssetOverrideRepository, (repository) =>
+        repository.setOverride({
+          principalId: TEST_PRINCIPAL_ID,
+          actorId: "00000000-0000-0000-0000-000000000181",
+          kind: "inclusion",
+          target,
+          expectedSystemRevision: initial.systemRevision,
+          expectedActiveOverrideId: null,
+          replacement: { _tag: "inclusion", state: "excluded" },
+          reason: "Exclude this representation after reviewing its source evidence.",
+        })
+      )
+    )
+    expect(created._tag).toBe("accepted")
+
+    await context.runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        yield* db
+          .delete(schema.transactions)
+          .where(eq(schema.transactions.externalId, "durable-representation-transaction"))
+      })
+    )
+
+    const duringReplay = await runRepository(
+      Effect.flatMap(AssetOverrideRepository, (repository) =>
+        repository.findProjection({
+          principalId: TEST_PRINCIPAL_ID,
+          kind: "inclusion",
+          target,
+        })
+      )
+    )
+    expect(Option.isSome(duringReplay)).toBe(true)
+    if (Option.isNone(duringReplay)) return
+    expect(duringReplay.value.activeOverride?.replacement).toEqual({
+      _tag: "inclusion",
+      state: "excluded",
+    })
+    expect(duringReplay.value.recomputationState).toBe("updating")
   })
 
   it("keeps validation errors for malformed representation targets", async () => {

@@ -180,13 +180,41 @@ const RegistryLive = SourceProviderRegistryLive.pipe(
 )
 
 describe("SourceProviderRegistryLive", () => {
-  it("does not derive Coinbase legs when an effective asset is excluded", () => {
+  it("does not derive Coinbase legs when the required primary asset is excluded", () => {
     expect(
       shouldDeriveCoinbaseLegs({
-        legDerivationStrategy: "derive",
+        accountingAssetRequirements: [{ inclusionState: "excluded", requiredForMainLeg: true }],
         canDeriveWithAssetOverrides: false,
-        allProviderAssetsIncluded: false,
+        legDerivationStrategy: "derive",
         primaryAssetAvailable: false,
+      })
+    ).toBe(false)
+  })
+
+  it("derives Coinbase main legs when only an optional fee asset is excluded", () => {
+    expect(
+      shouldDeriveCoinbaseLegs({
+        accountingAssetRequirements: [
+          { inclusionState: "included", requiredForMainLeg: true },
+          { inclusionState: "excluded", requiredForMainLeg: false },
+        ],
+        canDeriveWithAssetOverrides: true,
+        legDerivationStrategy: "skip",
+        primaryAssetAvailable: true,
+      })
+    ).toBe(true)
+  })
+
+  it("does not derive Coinbase legs when the provider strategy skips accounting", () => {
+    expect(
+      shouldDeriveCoinbaseLegs({
+        accountingAssetRequirements: [
+          { inclusionState: "included", requiredForMainLeg: true },
+          { inclusionState: "excluded", requiredForMainLeg: false },
+        ],
+        canDeriveWithAssetOverrides: false,
+        legDerivationStrategy: "skip",
+        primaryAssetAvailable: true,
       })
     ).toBe(false)
   })

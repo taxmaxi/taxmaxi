@@ -1575,6 +1575,70 @@ const make = Effect.gen(function* () {
       })
     )
 
+  const recordSourceRepresentationUses = ({
+    executor,
+    providerTransfers,
+  }: {
+    readonly executor: SourceNormalizationExecutor
+    readonly providerTransfers: ReadonlyArray<SourceProviderTransferDraft>
+  }) => {
+    const observedRepresentations = new Map<
+      string,
+      {
+        readonly sourceId: string
+        readonly blockchainId: string
+        readonly representationType: "native" | "token" | "nft"
+        readonly contractAddress: string | null
+        readonly mintAddress: string | null
+      }
+    >()
+
+    for (const transfer of providerTransfers) {
+      if (
+        transfer.observedBlockchainId === null ||
+        transfer.observedBlockchainId === undefined ||
+        transfer.observedRepresentationType === null ||
+        transfer.observedRepresentationType === undefined
+      ) {
+        continue
+      }
+
+      const contractAddress = transfer.observedContractAddress?.toLowerCase() ?? null
+      const representation = {
+        sourceId: transfer.sourceId,
+        blockchainId: transfer.observedBlockchainId,
+        representationType: transfer.observedRepresentationType,
+        contractAddress,
+        mintAddress: transfer.observedMintAddress ?? null,
+      } as const
+      observedRepresentations.set(
+        JSON.stringify([
+          representation.sourceId,
+          representation.blockchainId,
+          representation.representationType,
+          representation.contractAddress,
+          representation.mintAddress,
+        ]),
+        representation
+      )
+    }
+
+    if (observedRepresentations.size === 0) return Effect.void
+
+    const now = nowDate()
+    return executor
+      .insert(schema.sourceRepresentationUses)
+      .values(
+        Array.from(observedRepresentations.values(), (representation) => ({
+          ...representation,
+          createdAt: now,
+          updatedAt: now,
+        }))
+      )
+      .onConflictDoNothing()
+      .pipe(wrapSyncEngineSqlError("sourceNormalizationRepository.recordSourceRepresentationUses"))
+  }
+
   const upsertTransactionLegs = ({
     executor,
     legs,
@@ -2942,6 +3006,10 @@ const make = Effect.gen(function* () {
             executor: tx,
             transactionId: persistedTransaction.id,
             onchainContext: params.onchainContext,
+          })
+          yield* recordSourceRepresentationUses({
+            executor: tx,
+            providerTransfers: params.providerTransfers,
           })
           const persistedProviderTransfers = yield* upsertProviderTransfers({
             executor: tx,

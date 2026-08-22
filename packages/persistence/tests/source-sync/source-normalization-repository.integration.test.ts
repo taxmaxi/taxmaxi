@@ -1947,6 +1947,45 @@ describe("SourceNormalizationRepositoryLive", () => {
       ])
     )
 
+    const durableRepresentationUses = await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        return yield* db
+          .select({
+            representationType: schema.sourceRepresentationUses.representationType,
+            contractAddress: schema.sourceRepresentationUses.contractAddress,
+            mintAddress: schema.sourceRepresentationUses.mintAddress,
+          })
+          .from(schema.sourceRepresentationUses)
+          .where(eq(schema.sourceRepresentationUses.sourceId, TEST_SOURCE_ID))
+      })
+    )
+    expect(durableRepresentationUses).toEqual(
+      expect.arrayContaining([
+        {
+          representationType: "native",
+          contractAddress: null,
+          mintAddress: null,
+        },
+        {
+          representationType: "token",
+          contractAddress: "0x0000000000000000000000000000000000000096",
+          mintAddress: null,
+        },
+        {
+          representationType: "nft",
+          contractAddress: null,
+          mintAddress: "NftMint111111111111111111111111111111111111",
+        },
+        {
+          representationType: "token",
+          contractAddress: null,
+          mintAddress: "MaxDecimalsMint111111111111111111111111111111",
+        },
+      ])
+    )
+    expect(durableRepresentationUses).toHaveLength(4)
+
     const observedNativeTransfer = result.providerTransfers.find(
       (transfer) => transfer.externalId === "observed-native"
     )

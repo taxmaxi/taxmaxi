@@ -33,21 +33,28 @@ import { SyncEngineStorageError } from "../services/SyncEngineStorageError.ts"
 const COINBASE_PROVIDER_KEY = "coinbase"
 const COINBASE_TRANSACTION_RECORD_TYPE = "coinbase_transaction"
 
-/** Decide whether Coinbase has every effective asset needed to derive accounting legs. */
+interface CoinbaseAccountingAssetRequirement {
+  readonly requiredForMainLeg: boolean
+  readonly inclusionState: "blocked" | "excluded" | "included"
+}
+
+/** Decide whether Coinbase has the effective assets needed to derive its main accounting leg. */
 export const shouldDeriveCoinbaseLegs = ({
-  legDerivationStrategy,
+  accountingAssetRequirements,
   canDeriveWithAssetOverrides,
-  allProviderAssetsIncluded,
+  legDerivationStrategy,
   primaryAssetAvailable,
 }: {
-  readonly legDerivationStrategy: "derive" | "skip"
+  readonly accountingAssetRequirements: ReadonlyArray<CoinbaseAccountingAssetRequirement>
   readonly canDeriveWithAssetOverrides: boolean
-  readonly allProviderAssetsIncluded: boolean
+  readonly legDerivationStrategy: "derive" | "skip"
   readonly primaryAssetAvailable: boolean
 }): boolean =>
-  allProviderAssetsIncluded &&
   primaryAssetAvailable &&
-  (legDerivationStrategy === "derive" || canDeriveWithAssetOverrides)
+  (legDerivationStrategy === "derive" || canDeriveWithAssetOverrides) &&
+  accountingAssetRequirements.every(
+    ({ inclusionState, requiredForMainLeg }) => !requiredForMainLeg || inclusionState === "included"
+  )
 
 const toReferenceDataError = (
   error: CoinbaseReferenceDataServiceError
@@ -131,16 +138,16 @@ const makeCoinbaseProviderModule = (
                     effectivePrimaryAsset === undefined
                       ? prepared.primaryAsset
                       : effectivePrimaryAsset.asset
-                  const allProviderAssetsIncluded = prepared.providerAssetRowIds.every(
-                    (providerAssetRowId) =>
-                      effectiveProviderAssets.find(
-                        (effectiveAsset) => effectiveAsset.providerAssetRowId === providerAssetRowId
-                      )?.inclusionState === "included"
+                  const accountingAssetRequirements = effectiveProviderAssets.map(
+                    ({ inclusionState, providerAssetRowId }) => ({
+                      inclusionState,
+                      requiredForMainLeg: providerAssetRowId === prepared.primaryProviderAssetId,
+                    })
                   )
                   const canDerive = shouldDeriveCoinbaseLegs({
-                    legDerivationStrategy: prepared.legDerivationStrategy,
+                    accountingAssetRequirements,
                     canDeriveWithAssetOverrides: prepared.canDeriveWithAssetOverrides,
-                    allProviderAssetsIncluded,
+                    legDerivationStrategy: prepared.legDerivationStrategy,
                     primaryAssetAvailable: primaryAsset !== null,
                   })
 

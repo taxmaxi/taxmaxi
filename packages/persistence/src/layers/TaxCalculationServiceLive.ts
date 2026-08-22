@@ -7,7 +7,7 @@
  * @module TaxCalculationServiceLive
  */
 
-import { and, count, eq, gte, isNull, lt, ne, or, sql } from "drizzle-orm"
+import { and, count, eq, gte, isNull, lt, ne, notInArray, or, sql } from "drizzle-orm"
 import { EUR } from "@my/core/currency"
 import { withObservedOperation } from "@my/core/shared/observability/ObservedOperation"
 import * as BigDecimal from "effect/BigDecimal"
@@ -499,6 +499,39 @@ const make = Effect.gen(function* () {
       })
     )
 
+  /** Non-asset transaction reviews keep the whole source outside accounting readiness. */
+  const hasPendingTransactionReview = (sourceId: string) =>
+    db
+      .select({ pendingReviews: count() })
+      .from(schema.transactionReviews)
+      .innerJoin(
+        schema.transactions,
+        eq(schema.transactions.id, schema.transactionReviews.transactionId)
+      )
+      .where(
+        and(
+          eq(schema.transactions.sourceId, sourceId),
+          eq(schema.transactionReviews.needsReview, true),
+          notInArray(schema.transactionReviews.reviewStatus, ["approved", "changed"]),
+          or(
+            isNull(schema.transactionReviews.matchedLayer),
+            notInArray(schema.transactionReviews.matchedLayer, [
+              "provider_asset_mapping",
+              "solana_asset_mapping",
+            ])
+          ),
+          sql`not exists (
+            select 1
+            from ${schema.transactionLegs} accounting_leg
+            where accounting_leg.transaction_id = ${schema.transactionReviews.transactionId}
+          )`
+        )
+      )
+      .pipe(
+        Effect.map((rows) => (rows[0]?.pendingReviews ?? 0) > 0),
+        wrapSqlError("taxCalculationService.hasPendingTransactionReview")
+      )
+
   /** Tax inputs stay stale until a later job has applied every source-affecting override. */
   const hasPendingOverrideReplay = (sourceId: string) =>
     db
@@ -518,20 +551,21 @@ const make = Effect.gen(function* () {
 
                 union all
 
-                select target_transfer.created_at
-                from ${schema.providerTransfers} target_transfer
+                select representation_use.created_at
+                from ${schema.sourceRepresentationUses} representation_use
                 where affecting_override.target_kind = 'representation'
-                  and target_transfer.source_id = ${sourceId}
-                  and target_transfer.observed_blockchain_id = affecting_override.blockchain_id
-                  and target_transfer.observed_representation_type = affecting_override.representation_type
-                  and lower(target_transfer.observed_contract_address) is not distinct from lower(affecting_override.contract_address)
-                  and target_transfer.observed_mint_address is not distinct from affecting_override.mint_address
+                  and representation_use.source_id = ${sourceId}
+                  and representation_use.blockchain_id = affecting_override.blockchain_id
+                  and representation_use.representation_type = affecting_override.representation_type
+                  and lower(representation_use.contract_address) is not distinct from lower(affecting_override.contract_address)
+                  and representation_use.mint_address is not distinct from affecting_override.mint_address
               ) target_evidence
               where not exists (
                 select 1
                 from ${schema.processingJobs} completed_job
                 where completed_job.source_id = ${sourceId}
                   and completed_job.status = 'completed'
+                  and completed_job.progress_details ->> 'failedRecords' = '0'
                   and coalesce(completed_job.completed_at, completed_job.updated_at) >= target_evidence.created_at
                   and (
                     (
@@ -784,12 +818,14 @@ const make = Effect.gen(function* () {
 
       yield* loadSource(sourceId)
 
-      const [pendingObservationCount, pendingOverrideReplay] = yield* Effect.all([
-        countPendingObservations(sourceId),
-        hasPendingOverrideReplay(sourceId),
-      ])
+      const [pendingObservationCount, pendingOverrideReplay, pendingTransactionReview] =
+        yield* Effect.all([
+          countPendingObservations(sourceId),
+          hasPendingOverrideReplay(sourceId),
+          hasPendingTransactionReview(sourceId),
+        ])
 
-      if (pendingObservationCount > 0 || pendingOverrideReplay) {
+      if (pendingObservationCount > 0 || pendingOverrideReplay || pendingTransactionReview) {
         const blockingObservations = yield* loadBlockingObservations(sourceId)
 
         return yield* new TaxCalculationPendingObservationsError({
