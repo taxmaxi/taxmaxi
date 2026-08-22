@@ -1032,6 +1032,7 @@ const make = Effect.gen(function* () {
   }) =>
     Effect.gen(function* () {
       const excludedAssetCurrencies = new Set<string>()
+      const resolvedAssetCurrencies = new Set<string>()
       const normalized = yield* coinbaseRecordNormalizer.normalize({
         source,
         sourceRecord,
@@ -1041,8 +1042,10 @@ const make = Effect.gen(function* () {
             rawSourcePayload: sourceRecord.payload,
           }).pipe(
             Effect.map((resolution) => {
+              const normalizedCurrencyCode = currencyCode.toUpperCase()
+              resolvedAssetCurrencies.add(normalizedCurrencyCode)
               if (resolution.excluded) {
-                excludedAssetCurrencies.add(currencyCode.toUpperCase())
+                excludedAssetCurrencies.add(normalizedCurrencyCode)
               }
               return resolution.assetId
             }),
@@ -1062,6 +1065,7 @@ const make = Effect.gen(function* () {
           Array.from(
             new Set([
               normalized.primaryAssetCurrency.toUpperCase(),
+              ...resolvedAssetCurrencies,
               ...normalized.unresolvedAssetCurrencies.map((currencyCode) =>
                 currencyCode.toUpperCase()
               ),
@@ -1155,10 +1159,8 @@ const make = Effect.gen(function* () {
         transactionReview,
         resolvedTransactionType,
         primaryAsset: Option.getOrNull(maybePrimaryAsset),
-        legDerivationStrategy:
-          primaryAssetResolution.excluded || unresolvedAssetCurrencies.length > 0
-            ? "skip"
-            : "derive",
+        legDerivationStrategy: unresolvedAssetCurrencies.length > 0 ? "skip" : "derive",
+        deriveMainLeg: !primaryAssetResolution.excluded,
       }
     })
 
@@ -1167,6 +1169,7 @@ const make = Effect.gen(function* () {
     venueContext,
     primaryAsset,
     canonicalTransfers,
+    deriveMainLeg,
   }) =>
     Effect.gen(function* () {
       const resolvedFeeTransfers = yield* Effect.forEach(canonicalTransfers, (transfer) =>
@@ -1186,6 +1189,7 @@ const make = Effect.gen(function* () {
         venueContext,
         primaryAsset,
         feeTransfers: resolvedFeeTransfers,
+        deriveMainLeg,
       })
 
       return derived.legs

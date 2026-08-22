@@ -268,10 +268,13 @@ const make = Effect.gen(function* () {
               and (
                 rematerialization.status = 'operator_attention'
                 or replay_job.id is null
-                or replay_job.status <> 'completed'
                 or (
                   replay_job.follow_up_mode = 'replay'
                   and (follow_up_job.id is null or follow_up_job.status <> 'completed')
+                )
+                or (
+                  replay_job.follow_up_mode is distinct from 'replay'
+                  and replay_job.status <> 'completed'
                 )
               )
           )`

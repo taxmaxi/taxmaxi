@@ -15,6 +15,7 @@ import {
   ASSET_CATALOG_SEARCH_DEBOUNCE_MS,
   closeAssetCatalog,
   loadAssetCatalogFeeds,
+  loadAssetExceptionFeed,
   retryAssetCatalogFeed,
   useDebouncedCatalogQuery,
 } from "#/lib/asset-catalog-route"
@@ -116,6 +117,17 @@ describe("loadAssetCatalogFeeds", () => {
 
     expect(cancelApproved).toHaveBeenCalledOnce()
     expect(cancelPending).toHaveBeenCalledOnce()
+  })
+})
+
+describe("loadAssetExceptionFeed", () => {
+  it("observes a rejected best-effort admin prefetch", async () => {
+    const load = vi.fn().mockRejectedValue(new Error("admin exceptions unavailable"))
+
+    expect(loadAssetExceptionFeed(load)).toBeUndefined()
+    await Promise.resolve()
+
+    expect(load).toHaveBeenCalledOnce()
   })
 })
 

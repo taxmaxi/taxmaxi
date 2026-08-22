@@ -379,8 +379,11 @@
         "preview": "The decision could not be previewed.",
         "submit": "The decision could not be accepted.",
         "stale": "Evidence or the active decision changed. Detail was refreshed; preview again.",
+        "staleRefresh": "Evidence or the active decision changed, but the latest detail could not be loaded. Retry before continuing.",
         "ambiguousIdentity": "This claim matches more than one economic identity. Choose an existing asset ID explicitly.",
-        "identityChanged": "The economic identity changed after preview. Review the current identity and preview again."
+        "identityChanged": "The economic identity changed after preview. Review the current identity and preview again.",
+        "invalidEvidence": "The selected evidence is no longer valid. Reload the observation and select current evidence.",
+        "invalidClaim": "The identity claim is not valid for this observation. Check the asset and representation details."
       }
     },
     "logoAlt": "{name} logo",

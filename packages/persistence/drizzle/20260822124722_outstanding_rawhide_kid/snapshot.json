@@ -1,12 +1,18 @@
 {
   "version": "8",
   "dialect": "postgres",
-  "id": "a6c9f688-78bb-4d99-9a35-f7296a35b671",
-  "prevIds": ["950e2213-e196-4aff-84df-6b99507527a3"],
+  "id": "77f3db79-92df-42ec-a3cb-0783256becd9",
+  "prevIds": ["163bc2e6-52f4-429c-bf49-2cc53f4766e5"],
   "ddl": [
     {
       "values": ["evm", "solana", "bitcoin"],
       "name": "address_type",
+      "entityType": "enums",
+      "schema": "public"
+    },
+    {
+      "values": ["pending", "running", "complete", "operator_attention"],
+      "name": "asset_rematerialization_status",
       "entityType": "enums",
       "schema": "public"
     },
@@ -23,7 +29,7 @@
       "schema": "public"
     },
     {
-      "values": ["attach", "create_standalone", "excluded", "pending", "fail_closed"],
+      "values": ["attach", "create_standalone", "identity", "excluded", "pending", "fail_closed"],
       "name": "asset_resolution_outcome",
       "entityType": "enums",
       "schema": "public"
@@ -282,6 +288,12 @@
     },
     {
       "isRlsEnabled": false,
+      "name": "asset_decision_rematerializations",
+      "entityType": "tables",
+      "schema": "public"
+    },
+    {
+      "isRlsEnabled": false,
       "name": "asset_prices",
       "entityType": "tables",
       "schema": "public"
@@ -295,6 +307,12 @@
     {
       "isRlsEnabled": false,
       "name": "asset_representations",
+      "entityType": "tables",
+      "schema": "public"
+    },
+    {
+      "isRlsEnabled": false,
+      "name": "asset_resolution_decision_evidence_links",
       "entityType": "tables",
       "schema": "public"
     },
@@ -743,6 +761,110 @@
       "typeSchema": null,
       "notNull": true,
       "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "decision_id",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "asset_decision_rematerializations"
+    },
+    {
+      "type": "uuid",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "source_id",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "asset_decision_rematerializations"
+    },
+    {
+      "type": "uuid",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "processing_job_id",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "asset_decision_rematerializations"
+    },
+    {
+      "type": "asset_rematerialization_status",
+      "typeSchema": "public",
+      "notNull": true,
+      "dimensions": 0,
+      "default": "'pending'",
+      "generated": null,
+      "identity": null,
+      "name": "status",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "asset_decision_rematerializations"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "failure_code",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "asset_decision_rematerializations"
+    },
+    {
+      "type": "timestamp",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "last_failure_at",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "asset_decision_rematerializations"
+    },
+    {
+      "type": "timestamp",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": "now()",
+      "generated": null,
+      "identity": null,
+      "name": "created_at",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "asset_decision_rematerializations"
+    },
+    {
+      "type": "timestamp",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": "now()",
+      "generated": null,
+      "identity": null,
+      "name": "updated_at",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "asset_decision_rematerializations"
+    },
+    {
+      "type": "uuid",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
       "default": "gen_random_uuid()",
       "generated": null,
       "identity": null,
@@ -1120,6 +1242,45 @@
       "typeSchema": null,
       "notNull": true,
       "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "decision_id",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "asset_resolution_decision_evidence_links"
+    },
+    {
+      "type": "uuid",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "evidence_id",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "asset_resolution_decision_evidence_links"
+    },
+    {
+      "type": "timestamp",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": "now()",
+      "generated": null,
+      "identity": null,
+      "name": "created_at",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "asset_resolution_decision_evidence_links"
+    },
+    {
+      "type": "uuid",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
       "default": "gen_random_uuid()",
       "generated": null,
       "identity": null,
@@ -1306,6 +1467,32 @@
       "generated": null,
       "identity": null,
       "name": "reason",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "asset_resolution_decisions"
+    },
+    {
+      "type": "jsonb",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "human_claim",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "asset_resolution_decisions"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "rationale",
       "entityType": "columns",
       "schema": "public",
       "table": "asset_resolution_decisions"
@@ -9486,6 +9673,48 @@
       "nameExplicit": true,
       "columns": [
         {
+          "value": "source_id",
+          "isExpression": false,
+          "asc": true,
+          "nullsFirst": false,
+          "opclass": null
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "with": "",
+      "method": "btree",
+      "concurrently": false,
+      "name": "idx_asset_decision_rematerializations_source",
+      "entityType": "indexes",
+      "schema": "public",
+      "table": "asset_decision_rematerializations"
+    },
+    {
+      "nameExplicit": true,
+      "columns": [
+        {
+          "value": "status",
+          "isExpression": false,
+          "asc": true,
+          "nullsFirst": false,
+          "opclass": null
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "with": "",
+      "method": "btree",
+      "concurrently": false,
+      "name": "idx_asset_decision_rematerializations_status",
+      "entityType": "indexes",
+      "schema": "public",
+      "table": "asset_decision_rematerializations"
+    },
+    {
+      "nameExplicit": true,
+      "columns": [
+        {
           "value": "asset_id",
           "isExpression": false,
           "asc": true,
@@ -13102,6 +13331,45 @@
     },
     {
       "nameExplicit": false,
+      "columns": ["decision_id"],
+      "schemaTo": "public",
+      "tableTo": "asset_resolution_decisions",
+      "columnsTo": ["id"],
+      "onUpdate": "NO ACTION",
+      "onDelete": "CASCADE",
+      "name": "asset_decision_rematerializations_YSjlTCEOr6u4_fkey",
+      "entityType": "fks",
+      "schema": "public",
+      "table": "asset_decision_rematerializations"
+    },
+    {
+      "nameExplicit": false,
+      "columns": ["source_id"],
+      "schemaTo": "public",
+      "tableTo": "sources",
+      "columnsTo": ["id"],
+      "onUpdate": "NO ACTION",
+      "onDelete": "CASCADE",
+      "name": "asset_decision_rematerializations_source_id_sources_id_fkey",
+      "entityType": "fks",
+      "schema": "public",
+      "table": "asset_decision_rematerializations"
+    },
+    {
+      "nameExplicit": false,
+      "columns": ["processing_job_id"],
+      "schemaTo": "public",
+      "tableTo": "processing_jobs",
+      "columnsTo": ["id"],
+      "onUpdate": "NO ACTION",
+      "onDelete": "SET NULL",
+      "name": "asset_decision_rematerializations_7CJWRfWydXy0_fkey",
+      "entityType": "fks",
+      "schema": "public",
+      "table": "asset_decision_rematerializations"
+    },
+    {
+      "nameExplicit": false,
       "columns": ["asset_id"],
       "schemaTo": "public",
       "tableTo": "assets",
@@ -13177,6 +13445,32 @@
       "entityType": "fks",
       "schema": "public",
       "table": "asset_representations"
+    },
+    {
+      "nameExplicit": false,
+      "columns": ["decision_id"],
+      "schemaTo": "public",
+      "tableTo": "asset_resolution_decisions",
+      "columnsTo": ["id"],
+      "onUpdate": "NO ACTION",
+      "onDelete": "CASCADE",
+      "name": "asset_resolution_decision_evidence_links_BBxNJFzQqlEL_fkey",
+      "entityType": "fks",
+      "schema": "public",
+      "table": "asset_resolution_decision_evidence_links"
+    },
+    {
+      "nameExplicit": false,
+      "columns": ["evidence_id"],
+      "schemaTo": "public",
+      "tableTo": "asset_resolution_evidence",
+      "columnsTo": ["id"],
+      "onUpdate": "NO ACTION",
+      "onDelete": "NO ACTION",
+      "name": "asset_resolution_decision_evidence_links_9d1io6Eys9OC_fkey",
+      "entityType": "fks",
+      "schema": "public",
+      "table": "asset_resolution_decision_evidence_links"
     },
     {
       "nameExplicit": false,
@@ -14583,6 +14877,22 @@
       "table": "transfers"
     },
     {
+      "columns": ["decision_id", "source_id"],
+      "nameExplicit": false,
+      "name": "asset_decision_rematerializations_pkey",
+      "entityType": "pks",
+      "schema": "public",
+      "table": "asset_decision_rematerializations"
+    },
+    {
+      "columns": ["decision_id", "evidence_id"],
+      "nameExplicit": false,
+      "name": "asset_resolution_decision_evidence_links_pkey",
+      "entityType": "pks",
+      "schema": "public",
+      "table": "asset_resolution_decision_evidence_links"
+    },
+    {
       "columns": ["payment_reference", "reversal_group"],
       "nameExplicit": false,
       "name": "billing_payment_reversals_pkey",
@@ -15210,7 +15520,7 @@
       "table": "asset_resolution_decisions"
     },
     {
-      "value": "\"outcome\"::text not in ('attach', 'create_standalone') or (\"asset_id\" is not null and \"asset_representation_id\" is not null)",
+      "value": "\"outcome\"::text not in ('attach', 'create_standalone') or (\"asset_id\" is not null and (\"blockchain\" is null or \"asset_representation_id\" is not null))",
       "name": "asset_resolution_decisions_approval_requires_target",
       "entityType": "checks",
       "schema": "public",

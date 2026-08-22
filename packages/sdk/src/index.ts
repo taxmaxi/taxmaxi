@@ -119,12 +119,14 @@ export type {
 export {
   TaxMaxiError,
   getTaxMaxiAssetDecisionConflict,
+  getTaxMaxiAssetDecisionErrorCode,
   getTaxMaxiCreditRequired,
   isTaxMaxiUnauthorizedError,
   toTaxMaxiError,
 } from "./errors.ts"
 export type {
   TaxMaxiAssetDecisionConflict,
+  TaxMaxiAssetDecisionErrorCode,
   TaxMaxiCreditRequired,
   TaxMaxiFieldError,
 } from "./errors.ts"

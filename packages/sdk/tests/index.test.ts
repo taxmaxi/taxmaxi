@@ -5,6 +5,7 @@ import {
   TaxMaxi,
   TaxMaxiError,
   getTaxMaxiAssetDecisionConflict,
+  getTaxMaxiAssetDecisionErrorCode,
   getTaxMaxiCreditRequired,
   isTaxMaxiUnauthorizedError,
   makeTaxMaxiHttpClientTransform,
@@ -1223,6 +1224,17 @@ describe("TaxMaxi Promise client", () => {
     expect(getTaxMaxiAssetDecisionConflict(new Error("boom"))).toBeNull()
     expect(getTaxMaxiAssetDecisionConflict(null)).toBeNull()
   })
+
+  it.each(["invalid_evidence", "invalid_claim"] as const)(
+    "extracts the %s asset decision validation code without treating it as a conflict",
+    (code) => {
+      const cause = { _tag: "AssetDecisionValidationError", code }
+
+      expect(getTaxMaxiAssetDecisionErrorCode(toTaxMaxiError(cause))).toBe(code)
+      expect(getTaxMaxiAssetDecisionErrorCode(cause)).toBe(code)
+      expect(getTaxMaxiAssetDecisionConflict(cause)).toBeNull()
+    }
+  )
 
   it("builds explicit first-party request clients with cookie headers", async () => {
     const capturedRequests: Array<CapturedRequest> = []

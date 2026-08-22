@@ -285,6 +285,7 @@ const persistCoinbaseNormalization = ({
                 venueContext,
                 primaryAsset: prepared.primaryAsset,
                 canonicalTransfers,
+                deriveMainLeg: prepared.deriveMainLeg,
               }),
           }
         : {

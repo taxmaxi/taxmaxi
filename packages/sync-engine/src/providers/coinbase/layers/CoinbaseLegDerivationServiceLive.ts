@@ -454,9 +454,10 @@ const deriveLegs: CoinbaseLegDerivationServiceShape["deriveLegs"] = (params) =>
   Effect.gen(function* () {
     const metadata = yield* decodeCoinbaseMetadata(params.transaction.metadata)
     const feeLegs = yield* buildFeeLegs(params, metadata)
-    const maybeMainLeg = shouldSkipQuoteSideMainLeg(metadata)
-      ? Option.none()
-      : yield* buildMainLeg(params, metadata)
+    const maybeMainLeg =
+      !params.deriveMainLeg || shouldSkipQuoteSideMainLeg(metadata)
+        ? Option.none()
+        : yield* buildMainLeg(params, metadata)
 
     return {
       legs: [...Option.toArray(maybeMainLeg), ...feeLegs],

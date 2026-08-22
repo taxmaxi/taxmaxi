@@ -379,8 +379,11 @@
         "preview": "Die Entscheidung konnte nicht geprüft werden.",
         "submit": "Die Entscheidung konnte nicht angenommen werden.",
         "stale": "Evidenz oder aktive Entscheidung haben sich geändert. Die Details wurden aktualisiert; prüfe erneut.",
+        "staleRefresh": "Evidenz oder aktive Entscheidung haben sich geändert, aber die aktuellen Details konnten nicht geladen werden. Versuche es erneut, bevor du fortfährst.",
         "ambiguousIdentity": "Diese Aussage passt zu mehreren wirtschaftlichen Identitäten. Wähle ausdrücklich eine bestehende Asset-ID.",
-        "identityChanged": "Die wirtschaftliche Identität hat sich nach der Vorschau geändert. Prüfe die aktuelle Identität und die Vorschau erneut."
+        "identityChanged": "Die wirtschaftliche Identität hat sich nach der Vorschau geändert. Prüfe die aktuelle Identität und die Vorschau erneut.",
+        "invalidEvidence": "Die ausgewählte Evidenz ist nicht mehr gültig. Lade die Beobachtung neu und wähle aktuelle Evidenz aus.",
+        "invalidClaim": "Die Identitätsaussage ist für diese Beobachtung ungültig. Prüfe das Asset und die Abbildungsdaten."
       }
     },
     "logoAlt": "Logo von {name}",

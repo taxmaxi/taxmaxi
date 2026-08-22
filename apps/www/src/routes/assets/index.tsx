@@ -10,6 +10,7 @@ import {
 } from "#/integrations/taxmaxi/queries"
 import {
   closeAssetCatalog,
+  loadAssetExceptionFeed,
   loadAssetCatalogFeeds,
   retryAssetCatalogFeed,
   useDebouncedCatalogQuery,
@@ -30,8 +31,10 @@ export const Route = createFileRoute("/assets/")({
     const account = await taxmaxi.auth.account().catch(() => null)
     const isAdmin = account?.account.role === "admin"
     if (isAdmin) {
-      void context.queryClient.ensureInfiniteQueryData(
-        queries.assetExceptionList(taxmaxi, assetExceptionListInput)
+      loadAssetExceptionFeed(() =>
+        context.queryClient.ensureInfiniteQueryData(
+          queries.assetExceptionList(taxmaxi, assetExceptionListInput)
+        )
       )
     }
 

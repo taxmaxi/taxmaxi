@@ -258,14 +258,67 @@ describe("AssetExceptionRepositoryLive", () => {
       rematerialization: { status: "complete" },
     })
 
+    const completedFollowUpJobId = await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const [followUpJob] = yield* db
+          .insert(schema.processingJobs)
+          .values({
+            sourceId: TEST_SOURCE_ID,
+            principalId: TEST_PRINCIPAL_ID,
+            mode: "replay",
+            status: "completed",
+          })
+          .returning({ id: schema.processingJobs.id })
+        if (followUpJob === undefined) {
+          return yield* Effect.die("Expected completed replay follow-up")
+        }
+        yield* db
+          .update(schema.processingJobs)
+          .set({
+            status: "failed",
+            followUpMode: "replay",
+            followUpJobId: followUpJob.id,
+          })
+          .where(eq(schema.processingJobs.id, processingJobId))
+        return followUpJob.id
+      })
+    )
+    const completedFollowUpDetail = await runRepository(
+      Effect.gen(function* () {
+        const repository = yield* AssetExceptionRepository
+        const found = yield* repository.findDetail({
+          _tag: "row_id",
+          providerAssetRowId: fixture.providerAssetRowId,
+        })
+        if (Option.isNone(found)) {
+          return yield* Effect.die("Expected completed follow-up exception detail")
+        }
+        return found.value
+      })
+    )
+
+    expect(completedFollowUpDetail).toMatchObject({
+      impact: { blockedReports: 0, affectedSources: 1 },
+      rematerialization: { status: "complete" },
+    })
+
     const failedAt = new Date("2026-08-21T18:00:00.000Z")
     await runPg(
       Effect.gen(function* () {
         const db = yield* drizzle
         yield* db
           .update(schema.processingJobs)
-          .set({ status: "failed", completedAt: failedAt })
+          .set({
+            status: "failed",
+            completedAt: failedAt,
+            followUpMode: null,
+            followUpJobId: null,
+          })
           .where(eq(schema.processingJobs.id, processingJobId))
+        yield* db
+          .delete(schema.processingJobs)
+          .where(eq(schema.processingJobs.id, completedFollowUpJobId))
       })
     )
     const failedDetail = await runRepository(

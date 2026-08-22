@@ -35,7 +35,7 @@ import { AnonSessionServiceLive } from "../src/layers/AnonSessionServiceLive.ts"
 import { SimpleTokenValidatorLive } from "../src/layers/AuthMiddlewareLive.ts"
 import { TaxMaxiApiLive } from "../src/layers/TaxMaxiApiLive.ts"
 import { drizzle } from "../../persistence/src/layers/PgClientLive.ts"
-import { eq } from "../../persistence/src/query/index.ts"
+import { eq, sql } from "../../persistence/src/query/index.ts"
 import { RepositoriesLive } from "../../persistence/src/layers/RepositoriesLive.ts"
 import { schema } from "../../persistence/src/schema/index.ts"
 import {
@@ -1287,6 +1287,90 @@ describe("AssetsApiLive", () => {
     )
 
     expect(status).toBe(401)
+  })
+
+  it("paginates exception rows without duplicating sub-millisecond timestamps", async () => {
+    const firstId = "00000000-0000-4000-8000-000000000711"
+    const secondId = "00000000-0000-4000-8000-000000000712"
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        yield* db.insert(schema.providerAssets).values([
+          {
+            id: firstId,
+            provider: "cursor-precision-provider",
+            providerAssetId: "cursor-precision-first",
+            currencyCode: "CURSOR1",
+            evidenceRevision: 1,
+            retrievedAt: new Date("2026-08-21T12:00:00.000Z"),
+          },
+          {
+            id: secondId,
+            provider: "cursor-precision-provider",
+            providerAssetId: "cursor-precision-second",
+            currencyCode: "CURSOR2",
+            evidenceRevision: 1,
+            retrievedAt: new Date("2026-08-21T12:00:00.000Z"),
+          },
+        ])
+        yield* db.insert(schema.assetResolutionJobs).values([
+          { providerAssetRowId: firstId, evidenceRevision: 1, status: "completed" },
+          { providerAssetRowId: secondId, evidenceRevision: 1, status: "completed" },
+        ])
+        yield* db.insert(schema.assetResolutionDecisions).values([
+          {
+            providerAssetRowId: firstId,
+            evidenceRevision: 1,
+            policyRevision: "cursor-precision.1",
+            outcome: "fail_closed",
+            reason: "ownership_conflict",
+            actor: "policy:cursor-precision.1",
+          },
+          {
+            providerAssetRowId: secondId,
+            evidenceRevision: 1,
+            policyRevision: "cursor-precision.1",
+            outcome: "fail_closed",
+            reason: "ownership_conflict",
+            actor: "policy:cursor-precision.1",
+          },
+        ])
+        yield* db.execute(sql`
+          update ${schema.providerAssets}
+          set discovered_at = case
+            when id = ${firstId}::uuid then ${"2026-08-21T12:00:00.000900Z"}::timestamptz
+            else ${"2026-08-21T12:00:00.000100Z"}::timestamptz
+          end
+          where id in (${firstId}::uuid, ${secondId}::uuid)
+        `)
+      }).pipe(Effect.provide(TestPgClientLive))
+    )
+
+    const firstPage = await Effect.runPromise(
+      getAdminJson({
+        path: "/v1/assets/exceptions?limit=1",
+        responseSchema: AssetExceptionListResponse,
+      }).pipe(Effect.provide(HttpLive), Effect.scoped)
+    )
+    const cursor = firstPage.body.page.nextCursor
+    if (cursor === null) {
+      expect.unreachable("Expected a cursor for the second exception")
+    }
+    const secondPage = await Effect.runPromise(
+      getAdminJson({
+        path: `/v1/assets/exceptions?limit=1&cursor=${cursor}`,
+        responseSchema: AssetExceptionListResponse,
+      }).pipe(Effect.provide(HttpLive), Effect.scoped)
+    )
+
+    expect(firstPage.body.exceptions.map(({ providerAssetRowId }) => providerAssetRowId)).toEqual([
+      firstId,
+    ])
+    expect(secondPage.body.exceptions.map(({ providerAssetRowId }) => providerAssetRowId)).toEqual([
+      secondId,
+    ])
+    expect(secondPage.body.page).toEqual({ hasMore: false, nextCursor: null })
   })
 
   it("supports the complete admin asset-exception review flow without exposing it publicly", async () => {

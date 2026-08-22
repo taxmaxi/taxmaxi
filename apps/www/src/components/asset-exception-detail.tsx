@@ -1,11 +1,11 @@
 import { AlertTriangle, CheckCircle2, Search, ShieldAlert } from "lucide-react"
 import { useEffect, useRef, useState } from "react"
 import {
-  getTaxMaxiAssetDecisionConflict,
+  getTaxMaxiAssetDecisionErrorCode,
   type AssetExceptionDecisionInput,
   type AssetExceptionDetail,
   type AssetExceptionPreview,
-  type TaxMaxiAssetDecisionConflict,
+  type TaxMaxiAssetDecisionErrorCode,
 } from "taxmaxi"
 
 import type { AssetExceptionActions } from "#/components/asset-catalog-context"
@@ -18,14 +18,18 @@ import { m } from "#/paraglide/messages"
 type DecisionMode = "existing" | "new" | "exclusion"
 type LookupKind = "provider_asset_id" | "natural_key"
 
-const conflictMessage = (conflict: TaxMaxiAssetDecisionConflict | null): string | null => {
-  switch (conflict) {
+const decisionErrorMessage = (code: TaxMaxiAssetDecisionErrorCode | null): string | null => {
+  switch (code) {
     case "stale_revision":
       return m["assetCatalog.exceptions.errors.stale"]()
     case "ambiguous_identity":
       return m["assetCatalog.exceptions.errors.ambiguousIdentity"]()
     case "identity_changed":
       return m["assetCatalog.exceptions.errors.identityChanged"]()
+    case "invalid_evidence":
+      return m["assetCatalog.exceptions.errors.invalidEvidence"]()
+    case "invalid_claim":
+      return m["assetCatalog.exceptions.errors.invalidClaim"]()
     case null:
       return null
   }
@@ -91,6 +95,7 @@ export function AssetExceptionDetailPane({
     }
     setLoading(true)
     setError(null)
+    setDetail(null)
     const requestId = ++detailRequestId.current
     try {
       const nextDetail = await actions.lookup(
@@ -215,7 +220,7 @@ function AssetExceptionReview({
   const [representationType, setRepresentationType] = useState<"native" | "token" | "nft">("token")
   const [address, setAddress] = useState("")
   const [addressKind, setAddressKind] = useState<"contract" | "mint">("contract")
-  const [decimals, setDecimals] = useState(detail.exponent?.toString() ?? "")
+  const [decimals, setDecimals] = useState("")
   const [exclusionReason, setExclusionReason] = useState<
     "authority_banned" | "confirmed_spam" | "unsupported_asset_type" | "provider_artifact"
   >("confirmed_spam")
@@ -237,6 +242,15 @@ function AssetExceptionReview({
   }, [detail.activeDecisionRevision, detail.evidenceRevision])
 
   const impact = detail.impact
+  const refreshAfterStaleDecision = async (): Promise<string> => {
+    try {
+      onDetailChange(await actions.get(detail.providerAssetRowId))
+      return m["assetCatalog.exceptions.errors.stale"]()
+    } catch {
+      return m["assetCatalog.exceptions.errors.staleRefresh"]()
+    }
+  }
+
   const makeRequest = (): AssetExceptionDecisionInput | null => {
     const trimmedRationale = rationale.trim()
     if (trimmedRationale.length === 0 || selectedEvidence.length === 0) {
@@ -334,13 +348,12 @@ function AssetExceptionReview({
     try {
       setPreview({ request, response: await actions.preview(request) })
     } catch (cause) {
-      const conflict = getTaxMaxiAssetDecisionConflict(cause)
-      const decisionConflict = conflictMessage(conflict)
-      if (conflict === "stale_revision") {
-        onDetailChange(await actions.get(detail.providerAssetRowId))
-        setMessage(decisionConflict)
-      } else if (decisionConflict !== null) {
-        setMessage(decisionConflict)
+      const code = getTaxMaxiAssetDecisionErrorCode(cause)
+      const decisionError = decisionErrorMessage(code)
+      if (code === "stale_revision") {
+        setMessage(await refreshAfterStaleDecision())
+      } else if (decisionError !== null) {
+        setMessage(decisionError)
       } else {
         setMessage(m["assetCatalog.exceptions.errors.preview"]())
       }
@@ -371,13 +384,12 @@ function AssetExceptionReview({
       setPreview(null)
       setMessage(m["assetCatalog.exceptions.success"]())
     } catch (cause) {
-      const conflict = getTaxMaxiAssetDecisionConflict(cause)
-      const decisionConflict = conflictMessage(conflict)
-      if (conflict === "stale_revision") {
-        onDetailChange(await actions.get(detail.providerAssetRowId))
-        setMessage(decisionConflict)
-      } else if (decisionConflict !== null) {
-        setMessage(decisionConflict)
+      const code = getTaxMaxiAssetDecisionErrorCode(cause)
+      const decisionError = decisionErrorMessage(code)
+      if (code === "stale_revision") {
+        setMessage(await refreshAfterStaleDecision())
+      } else if (decisionError !== null) {
+        setMessage(decisionError)
       } else {
         setMessage(m["assetCatalog.exceptions.errors.submit"]())
       }
@@ -476,7 +488,7 @@ function AssetExceptionReview({
             <span className="flex items-center gap-2 text-sm font-medium">
               <input
                 checked={selectedEvidence.includes(evidence.id)}
-                disabled={preview !== null}
+                disabled={busy || preview !== null}
                 onChange={(event) =>
                   setSelectedEvidence((current) =>
                     event.currentTarget.checked
@@ -552,7 +564,7 @@ function AssetExceptionReview({
         <p className="mt-1 text-xs text-muted-foreground">
           {m["assetCatalog.exceptions.decision.description"]()}
         </p>
-        <fieldset className="mt-4 grid gap-4" disabled={preview !== null}>
+        <fieldset className="mt-4 grid gap-4" disabled={busy || preview !== null}>
           <label className="grid gap-1 text-xs text-muted-foreground">
             {m["assetCatalog.exceptions.decision.kind"]()}
             <select

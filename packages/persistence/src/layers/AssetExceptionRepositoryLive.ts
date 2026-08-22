@@ -244,10 +244,13 @@ const make = Effect.gen(function* () {
           and (
             rematerialization.status = 'operator_attention'
             or replay_job.id is null
-            or replay_job.status <> 'completed'
             or (
               replay_job.follow_up_mode = 'replay'
               and (follow_up_job.id is null or follow_up_job.status <> 'completed')
+            )
+            or (
+              replay_job.follow_up_mode is distinct from 'replay'
+              and replay_job.status <> 'completed'
             )
           )
       )
@@ -297,6 +300,14 @@ const make = Effect.gen(function* () {
     when 'unsupported_representation_type' then 3
     else 4 end`
 
+  const oldestAtSql =
+    sql`date_trunc('milliseconds', ${schema.providerAssets.discoveredAt})`.mapWith(
+      schema.providerAssets.discoveredAt
+    )
+  const oldestAtRankSql = sql<number>`floor(
+    extract(epoch from ${schema.providerAssets.discoveredAt}) * 1000
+  )::bigint`
+
   const rankAfterCursor = (cursor: AssetExceptionRankCursor) => sql`row(
     -${blockedReportsSql},
     -${affectedPrincipalsSql},
@@ -304,16 +315,16 @@ const make = Effect.gen(function* () {
     case when ${affectedValueEurSql} is null then 1 else 0 end,
     -coalesce((${affectedValueEurSql})::numeric, 0),
     ${severityRankSql},
-    ${schema.providerAssets.discoveredAt},
+    ${oldestAtRankSql},
     ${schema.providerAssets.id}
   ) > row(
-    -${cursor.blockedReports},
-    -${cursor.affectedPrincipals},
-    -${cursor.affectedTransactions},
-    ${cursor.affectedTransactionValueEur === null ? 1 : 0},
+    -(${cursor.blockedReports}::int),
+    -(${cursor.affectedPrincipals}::int),
+    -(${cursor.affectedTransactions}::int),
+    ${cursor.affectedTransactionValueEur === null ? 1 : 0}::int,
     -${cursor.affectedTransactionValueEur ?? "0"}::numeric,
-    ${severityRank(cursor.severity)},
-    ${cursor.oldestAt},
+    ${severityRank(cursor.severity)}::int,
+    ${cursor.oldestAt.getTime()}::bigint,
     ${cursor.providerAssetRowId}::uuid
   )`
 
@@ -337,7 +348,7 @@ const make = Effect.gen(function* () {
         affectedSources: affectedSourcesSql,
         affectedTransactionValueEur: affectedValueEurSql,
         severityRank: severityRankSql,
-        oldestAt: schema.providerAssets.discoveredAt,
+        oldestAt: oldestAtSql,
       })
       .from(schema.providerAssets)
       .innerJoin(
@@ -369,7 +380,7 @@ const make = Effect.gen(function* () {
         asc(sql`case when ${affectedValueEurSql} is null then 1 else 0 end`),
         desc(sql`(${affectedValueEurSql})::numeric`),
         asc(severityRankSql),
-        asc(schema.providerAssets.discoveredAt),
+        asc(oldestAtRankSql),
         asc(schema.providerAssets.id)
       )
       .limit(limit)

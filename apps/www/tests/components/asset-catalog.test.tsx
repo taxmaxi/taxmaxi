@@ -339,14 +339,28 @@ describe("AssetCatalog", () => {
         "The economic identity changed after preview. Review the current identity and preview again.",
       expectedGetCalls: 1,
     },
-  ] as const)("shows actionable $code decision conflict copy", async (testCase) => {
+    {
+      code: "invalid_evidence",
+      expected:
+        "The selected evidence is no longer valid. Reload the observation and select current evidence.",
+      expectedGetCalls: 1,
+    },
+    {
+      code: "invalid_claim",
+      expected:
+        "The identity claim is not valid for this observation. Check the asset and representation details.",
+      expectedGetCalls: 1,
+    },
+  ] as const)("shows actionable $code decision error copy", async (testCase) => {
     const get = vi.fn(async () => exceptionDetail)
     const preview = vi.fn(async () => {
       throw toTaxMaxiError({
         _tag:
           testCase.code === "stale_revision"
             ? "AssetStaleRevisionError"
-            : "AssetDecisionConflictError",
+            : testCase.code === "invalid_evidence" || testCase.code === "invalid_claim"
+              ? "AssetDecisionValidationError"
+              : "AssetDecisionConflictError",
         code: testCase.code,
         ...(testCase.code === "stale_revision"
           ? {
@@ -372,11 +386,165 @@ describe("AssetCatalog", () => {
     expect(get).toHaveBeenCalledTimes(testCase.expectedGetCalls)
   })
 
-  it("shows an actionable identity conflict when confirmation fails", async () => {
+  it("reports a stale decision when refreshing its detail also fails", async () => {
+    const get = vi
+      .fn<AssetExceptionActions["get"]>()
+      .mockResolvedValueOnce(exceptionDetail)
+      .mockRejectedValueOnce(new Error("refresh unavailable"))
+    const preview = vi.fn(async () => {
+      throw toTaxMaxiError({
+        _tag: "AssetStaleRevisionError",
+        code: "stale_revision",
+        evidenceRevision: 3,
+        activeDecisionRevision: "00000000-0000-4000-8000-000000000704",
+      })
+    })
+
+    render(
+      <AssetExceptionDetailPane
+        actions={{ get, lookup: vi.fn(), preview, submit: vi.fn() }}
+        exception={exceptionListRow}
+      />
+    )
+
+    fireEvent.change(await screen.findByRole("textbox", { name: "Rationale" }), {
+      target: { value: "Reviewed the attached evidence." },
+    })
+    fireEvent.click(screen.getByRole("button", { name: "Preview decision" }))
+
+    expect(
+      await screen.findByText(
+        "Evidence or the active decision changed, but the latest detail could not be loaded. Retry before continuing."
+      )
+    ).toBeTruthy()
+    expect(get).toHaveBeenCalledTimes(2)
+  })
+
+  it("clears the prior decision form while exact lookup changes observations", async () => {
+    let rejectLookup: (cause: unknown) => void = () => undefined
+    const lookup = vi.fn(
+      () =>
+        new Promise<AssetExceptionDetail>((_resolve, reject) => {
+          rejectLookup = reject
+        })
+    )
+
+    render(
+      <AssetExceptionDetailPane
+        actions={{
+          get: vi.fn(async () => exceptionDetail),
+          lookup,
+          preview: vi.fn(),
+          submit: vi.fn(),
+        }}
+        exception={exceptionListRow}
+      />
+    )
+
+    await screen.findByRole("textbox", { name: "Rationale" })
+    fireEvent.change(screen.getByRole("textbox", { name: "Provider" }), {
+      target: { value: "helius" },
+    })
+    fireEvent.change(screen.getByRole("textbox", { name: "Exact value" }), {
+      target: { value: "another-observation" },
+    })
+    fireEvent.click(screen.getByRole("button", { name: "Look up" }))
+
+    expect(screen.queryByRole("textbox", { name: "Rationale" })).toBeNull()
+    expect(screen.getByText("Loading exception detail…")).toBeTruthy()
+
+    rejectLookup(new Error("lookup failed"))
+    expect((await screen.findByRole("alert")).textContent).toBe(
+      "No matching observation could be loaded."
+    )
+    expect(screen.queryByRole("textbox", { name: "Rationale" })).toBeNull()
+  })
+
+  it("keeps chainless representation fields empty when building an identity claim", async () => {
+    const preview = vi.fn(async () => exceptionPreview)
+
+    render(
+      <AssetExceptionDetailPane
+        actions={{
+          get: vi.fn(async () => exceptionDetail),
+          lookup: vi.fn(),
+          preview,
+          submit: vi.fn(),
+        }}
+        exception={exceptionListRow}
+      />
+    )
+
+    fireEvent.change(await screen.findByRole("combobox", { name: "Conclusion" }), {
+      target: { value: "existing" },
+    })
+    fireEvent.change(screen.getByRole("textbox", { name: "Existing asset ID" }), {
+      target: { value: "00000000-0000-4000-8000-000000000710" },
+    })
+    fireEvent.change(screen.getByRole("textbox", { name: "Rationale" }), {
+      target: { value: "Chainless economic identity confirmed." },
+    })
+    fireEvent.click(screen.getByRole("button", { name: "Preview decision" }))
+
+    await waitFor(() => expect(preview).toHaveBeenCalledOnce())
+    expect(preview).toHaveBeenCalledWith(
+      expect.objectContaining({
+        claim: expect.objectContaining({ representation: null }),
+      })
+    )
+  })
+
+  it("freezes evidence and decision inputs while preview is pending", async () => {
+    let resolvePreview: (preview: typeof exceptionPreview) => void = () => undefined
+    const preview = vi.fn(
+      () =>
+        new Promise<typeof exceptionPreview>((resolve) => {
+          resolvePreview = resolve
+        })
+    )
+
+    render(
+      <AssetExceptionDetailPane
+        actions={{
+          get: vi.fn(async () => exceptionDetail),
+          lookup: vi.fn(),
+          preview,
+          submit: vi.fn(),
+        }}
+        exception={exceptionListRow}
+      />
+    )
+
+    const rationale = await screen.findByRole("textbox", { name: "Rationale" })
+    fireEvent.change(rationale, { target: { value: "Reviewed the attached evidence." } })
+    fireEvent.click(screen.getByRole("button", { name: "Preview decision" }))
+
+    expect(rationale.matches(":disabled")).toBe(true)
+    expect(screen.getByRole("combobox", { name: "Conclusion" }).matches(":disabled")).toBe(true)
+    expect(screen.getByRole("checkbox").matches(":disabled")).toBe(true)
+
+    resolvePreview(exceptionPreview)
+    expect(await screen.findByRole("button", { name: "Confirm decision" })).toBeTruthy()
+  })
+
+  it.each([
+    {
+      code: "identity_changed",
+      tag: "AssetDecisionConflictError",
+      expected:
+        "The economic identity changed after preview. Review the current identity and preview again.",
+    },
+    {
+      code: "invalid_evidence",
+      tag: "AssetDecisionValidationError",
+      expected:
+        "The selected evidence is no longer valid. Reload the observation and select current evidence.",
+    },
+  ] as const)("shows actionable $code copy when confirmation fails", async (testCase) => {
     const submit = vi.fn(async () => {
       throw toTaxMaxiError({
-        _tag: "AssetDecisionConflictError",
-        code: "identity_changed",
+        _tag: testCase.tag,
+        code: testCase.code,
       })
     })
 
@@ -397,11 +565,7 @@ describe("AssetCatalog", () => {
     fireEvent.click(screen.getByRole("button", { name: "Preview decision" }))
     fireEvent.click(await screen.findByRole("button", { name: "Confirm decision" }))
 
-    expect(
-      await screen.findByText(
-        "The economic identity changed after preview. Review the current identity and preview again."
-      )
-    ).toBeTruthy()
+    expect(await screen.findByText(testCase.expected)).toBeTruthy()
     expect(submit).toHaveBeenCalledOnce()
   })
 

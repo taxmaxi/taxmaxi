@@ -527,15 +527,39 @@ describe("TaxCalculationServiceLive", () => {
           expect(error._tag).toBe("TaxCalculationPendingObservationsError")
         }
 
+        const [completedFollowUp] = yield* db
+          .insert(schema.processingJobs)
+          .values({
+            sourceId,
+            principalId,
+            mode: "replay",
+            status: "completed",
+          })
+          .returning({ id: schema.processingJobs.id })
+        if (completedFollowUp === undefined) {
+          return yield* Effect.die("Failed to create completed replay follow-up fixture")
+        }
+        yield* db
+          .update(schema.processingJobs)
+          .set({
+            status: "failed",
+            followUpMode: "replay",
+            followUpJobId: completedFollowUp.id,
+          })
+          .where(eq(schema.processingJobs.id, fixture.jobId))
+
+        const taxAfterCompletedFollowUp = yield* calculateTax()
+        expect(taxAfterCompletedFollowUp.taxableGains).toBe(2000)
+
+        yield* db
+          .update(schema.processingJobs)
+          .set({ status: "completed", followUpMode: null, followUpJobId: null })
+          .where(eq(schema.processingJobs.id, fixture.jobId))
+
         yield* db
           .update(schema.assetDecisionRematerializations)
           .set({ status: "operator_attention" })
           .where(eq(schema.assetDecisionRematerializations.decisionId, fixture.decisionId))
-        yield* db
-          .update(schema.processingJobs)
-          .set({ status: "completed" })
-          .where(eq(schema.processingJobs.id, fixture.jobId))
-
         const operatorAttentionError = yield* calculateTax().pipe(Effect.flip)
         expect(operatorAttentionError._tag).toBe("TaxCalculationPendingObservationsError")
 

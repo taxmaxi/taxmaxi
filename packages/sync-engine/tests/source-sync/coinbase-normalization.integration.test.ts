@@ -19,8 +19,9 @@ import {
   type CoinbaseCryptoCurrencyRecord,
   type CoinbaseFiatCurrencyRecord,
 } from "../../src/providers/coinbase/services/CoinbaseSyncClient.ts"
-import { SourceSyncService } from "@my/sync-engine/services"
+import { AssetExceptionRepository, SourceSyncService } from "@my/sync-engine/services"
 import { AssetRepositoryLive } from "../../../persistence/src/layers/AssetRepositoryLive.ts"
+import { AssetExceptionRepositoryLive } from "../../../persistence/src/layers/AssetExceptionRepositoryLive.ts"
 import { ProviderAssetRepositoryLive } from "../../../persistence/src/layers/ProviderAssetRepositoryLive.ts"
 import { ProviderReferenceRepositoryLive } from "../../../persistence/src/layers/ProviderReferenceRepositoryLive.ts"
 import { RepositoriesLive } from "../../../persistence/src/layers/RepositoriesLive.ts"
@@ -285,6 +286,38 @@ const makeHypeReviewableSyncRecords = () =>
         created_at: "2025-05-01T10:00:00.000Z",
         resource_path: "/v2/accounts/coinbase-account-1/transactions/tx-hype-buy-1",
         description: "HYPE buy awaiting provider asset review",
+      },
+    }),
+  ] as const
+
+const makeHypeWithBtcFeeSyncRecords = () =>
+  [
+    makeCoinbaseRecord({
+      recordType: "coinbase_account",
+      externalRecordId: "coinbase-account-1",
+      occurredAt: new Date("2025-01-01T00:00:00.000Z"),
+      payload: {
+        id: "coinbase-account-1",
+        created_at: "2025-01-01T00:00:00.000Z",
+        updated_at: "2025-01-01T00:00:00.000Z",
+      },
+    }),
+    makeCoinbaseRecord({
+      externalRecordId: "tx-hype-buy-with-btc-fee",
+      occurredAt: new Date("2025-05-01T10:00:00.000Z"),
+      payload: {
+        id: "tx-hype-buy-with-btc-fee",
+        type: "buy",
+        status: "completed",
+        amount: { amount: "25.00000000", currency: "HYPE" },
+        native_amount: { amount: "1050.00", currency: "EUR" },
+        network: {
+          status: "confirmed",
+          network_name: "base",
+          transaction_fee: { amount: "0.00010000", currency: "BTC" },
+        },
+        created_at: "2025-05-01T10:00:00.000Z",
+        resource_path: "/v2/accounts/coinbase-account-1/transactions/tx-hype-buy-with-btc-fee",
       },
     }),
   ] as const
@@ -1382,8 +1415,8 @@ describe("coinbase normalization persistence", () => {
     )
   })
 
-  it("omits accounting and review work for an excluded Coinbase asset", async () => {
-    activeSyncRecords = makeHypeReviewableSyncRecords()
+  it("omits an excluded primary leg while preserving approved fee accounting", async () => {
+    activeSyncRecords = makeHypeWithBtcFeeSyncRecords()
     activeCryptoCurrencies = [...defaultCryptoCurrencies, hypeCryptoCurrency]
 
     await Effect.runPromise(
@@ -1412,15 +1445,123 @@ describe("coinbase normalization persistence", () => {
         }).pipe(Effect.provide(TestPgClientLive))
 
         expect(
-          counts.rawRows.find((row) => row.externalRecordId === "tx-hype-buy-1")?.normalizationError
+          counts.rawRows.find((row) => row.externalRecordId === "tx-hype-buy-with-btc-fee")
+            ?.normalizationError
         ).toBeNull()
         expect(counts.transactions).toEqual([
-          expect.objectContaining({ externalId: "tx-hype-buy-1" }),
+          expect.objectContaining({ externalId: "tx-hype-buy-with-btc-fee" }),
         ])
-        expect(counts.legs).toHaveLength(0)
-        expect(counts.transactionReviews).toHaveLength(0)
+        expect(counts.legs).toEqual([
+          expect.objectContaining({
+            kind: "fee",
+            derivationRule: "coinbase_network_fee",
+          }),
+        ])
+        expect(
+          counts.transactionReviews.some(
+            (review) => review.matchedLayer?.includes("provider_asset_mapping") === true
+          )
+        ).toBe(false)
         expect(providerAssetState.mapping).toMatchObject({ mappingStatus: "excluded" })
         expect(resolutionJobsAfter).toHaveLength(jobsBefore.length)
+
+        const btcUsage = yield* Effect.gen(function* () {
+          const db = yield* drizzle
+          const [btcProviderAsset] = yield* db
+            .select({
+              id: schema.providerAssets.id,
+              evidenceRevision: schema.providerAssets.evidenceRevision,
+            })
+            .from(schema.providerAssets)
+            .where(
+              and(
+                eq(schema.providerAssets.provider, "coinbase"),
+                eq(schema.providerAssets.currencyCode, "BTC")
+              )
+            )
+            .limit(1)
+          if (btcProviderAsset === undefined) {
+            return yield* Effect.die("Missing BTC provider asset after fee normalization")
+          }
+
+          const uses = yield* db
+            .select({ sourceId: schema.providerAssetSourceUses.sourceId })
+            .from(schema.providerAssetSourceUses)
+            .where(eq(schema.providerAssetSourceUses.providerAssetRowId, btcProviderAsset.id))
+
+          return { btcProviderAsset, uses }
+        }).pipe(Effect.provide(TestPgClientLive))
+
+        expect(btcUsage.uses).toEqual([{ sourceId }])
+
+        const exclusionFixture = yield* Effect.gen(function* () {
+          const db = yield* drizzle
+          const [decision] = yield* db
+            .insert(schema.assetResolutionDecisions)
+            .values({
+              providerAssetRowId: btcUsage.btcProviderAsset.id,
+              evidenceRevision: btcUsage.btcProviderAsset.evidenceRevision,
+              policyRevision: "test:approved-fee",
+              outcome: "attach",
+              status: "active",
+              assetId: BTC_ASSET_ID,
+              assetRepresentationId: null,
+              actor: "policy:test:approved-fee",
+            })
+            .returning({ id: schema.assetResolutionDecisions.id })
+          if (decision === undefined) {
+            return yield* Effect.die("Failed to seed BTC fee decision")
+          }
+          const [evidence] = yield* db
+            .insert(schema.assetResolutionEvidence)
+            .values({
+              decisionId: decision.id,
+              authority: "provider",
+              claimKind: "metadata",
+              sourceLocator: "coinbase:currency:BTC",
+              retrievedAt: new Date("2025-05-01T10:00:00.000Z"),
+              evidenceRevision: btcUsage.btcProviderAsset.evidenceRevision,
+              decodedClaim: { currencyCode: "BTC" },
+              rawPayload: { currencyCode: "BTC" },
+            })
+            .returning({ id: schema.assetResolutionEvidence.id })
+          if (evidence === undefined) {
+            return yield* Effect.die("Failed to seed BTC fee evidence")
+          }
+          return { decisionId: decision.id, evidenceId: evidence.id }
+        }).pipe(Effect.provide(TestPgClientLive))
+
+        const submitted = yield* Effect.gen(function* () {
+          const assetExceptionRepository = yield* AssetExceptionRepository
+          return yield* assetExceptionRepository.submitDecision({
+            actorId: userId,
+            input: {
+              providerAssetRowId: btcUsage.btcProviderAsset.id,
+              claim: { _tag: "exclusion", reason: "confirmed_spam" },
+              evidenceRevision: btcUsage.btcProviderAsset.evidenceRevision,
+              activeDecisionRevision: exclusionFixture.decisionId,
+              evidenceSnapshotIds: [exclusionFixture.evidenceId],
+              rationale: "The approved fee observation was later confirmed as excluded.",
+              expectedResultingAssetId: null,
+              expectedAssetOutcome: "none",
+              expectedRepresentationOutcome: "none",
+            },
+          })
+        }).pipe(
+          Effect.provide(AssetExceptionRepositoryLive.pipe(Layer.provideMerge(TestPgClientLive)))
+        )
+        expect(submitted._tag).toBe("accepted")
+
+        const rematerializations = yield* Effect.gen(function* () {
+          const db = yield* drizzle
+          return yield* db
+            .select({
+              sourceId: schema.assetDecisionRematerializations.sourceId,
+              processingJobId: schema.assetDecisionRematerializations.processingJobId,
+            })
+            .from(schema.assetDecisionRematerializations)
+        }).pipe(Effect.provide(TestPgClientLive))
+        expect(rematerializations).toEqual([{ sourceId, processingJobId: expect.any(String) }])
       })
     )
   })

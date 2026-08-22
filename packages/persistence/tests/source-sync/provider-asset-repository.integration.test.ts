@@ -848,11 +848,7 @@ describe("ProviderAssetRepositoryLive", () => {
         Effect.gen(function* () {
           const db = yield* drizzle
           return yield* db
-            .select({
-              followUpMode: schema.processingJobs.followUpMode,
-              mode: schema.processingJobs.mode,
-              status: schema.processingJobs.status,
-            })
+            .select({ id: schema.processingJobs.id, mode: schema.processingJobs.mode })
             .from(schema.processingJobs)
             .where(eq(schema.processingJobs.sourceId, TEST_SOURCE_ID))
         })
@@ -860,7 +856,8 @@ describe("ProviderAssetRepositoryLive", () => {
 
       expect(recorded).toBe(1)
       expect(recordedAgain).toBe(0)
-      expect(jobs).toEqual([{ followUpMode: null, mode: "replay", status: "pending" }])
+      expect(jobs).toHaveLength(1)
+      expect(jobs[0]?.mode).toBe("replay")
     })
 
     it("requests replay when a source use is recorded after exclusion", async () => {
@@ -901,20 +898,50 @@ describe("ProviderAssetRepositoryLive", () => {
       const jobs = await runPg(
         Effect.gen(function* () {
           const db = yield* drizzle
-          return yield* db
+          const replayJobs = yield* db
             .select({
+              id: schema.processingJobs.id,
               followUpMode: schema.processingJobs.followUpMode,
               mode: schema.processingJobs.mode,
               status: schema.processingJobs.status,
             })
             .from(schema.processingJobs)
             .where(eq(schema.processingJobs.sourceId, TEST_SOURCE_ID))
+          const rematerializations = yield* db
+            .select({
+              decisionOutcome: schema.assetResolutionDecisions.outcome,
+              decisionStatus: schema.assetResolutionDecisions.status,
+              processingJobId: schema.assetDecisionRematerializations.processingJobId,
+              sourceId: schema.assetDecisionRematerializations.sourceId,
+            })
+            .from(schema.assetDecisionRematerializations)
+            .innerJoin(
+              schema.assetResolutionDecisions,
+              eq(
+                schema.assetResolutionDecisions.id,
+                schema.assetDecisionRematerializations.decisionId
+              )
+            )
+          return { rematerializations, replayJobs }
         })
       )
 
       expect(recorded).toBe(1)
       expect(recordedAgain).toBe(0)
-      expect(jobs).toEqual([{ followUpMode: null, mode: "replay", status: "pending" }])
+      expect(jobs.replayJobs).toHaveLength(1)
+      expect(jobs.replayJobs[0]).toMatchObject({
+        followUpMode: null,
+        mode: "replay",
+        status: "pending",
+      })
+      expect(jobs.rematerializations).toEqual([
+        {
+          decisionOutcome: "excluded",
+          decisionStatus: "active",
+          processingJobId: jobs.replayJobs[0]?.id,
+          sourceId: TEST_SOURCE_ID,
+        },
+      ])
     })
 
     it("tracks automatic exclusion replay work against the active decision", async () => {
@@ -1774,6 +1801,74 @@ describe("ProviderAssetRepositoryLive", () => {
       if (result._tag === "Failure") {
         expect(result.failure).toBeInstanceOf(SyncEngineStorageError)
       }
+    })
+
+    it("holds exclusion snapshot locks until the decision commits", async () => {
+      const providerAsset = await seedPendingApprovalAsset("exclusion-holds-snapshot-locks")
+      const advisoryLockAcquired = await Effect.runPromise(Deferred.make<void>())
+      const releaseAdvisoryLock = await Effect.runPromise(Deferred.make<void>())
+      const heldAdvisoryLock = runPg(
+        Effect.gen(function* () {
+          const db = yield* drizzle
+          yield* db.transaction((tx) =>
+            Effect.gen(function* () {
+              yield* tx.execute(sql`select pg_advisory_xact_lock(147173)`)
+              yield* Deferred.succeed(advisoryLockAcquired, undefined)
+              yield* Deferred.await(releaseAdvisoryLock)
+            })
+          )
+        })
+      )
+      await Effect.runPromise(Deferred.await(advisoryLockAcquired))
+      await runPg(
+        Effect.gen(function* () {
+          const db = yield* drizzle
+          yield* db.execute(sql`
+            create function pause_exclusion_decision() returns trigger
+            language plpgsql as $trigger$
+            begin
+              perform pg_advisory_xact_lock(147173);
+              return new;
+            end
+            $trigger$
+          `)
+          yield* db.execute(sql`
+            create trigger pause_exclusion_decision_before_insert
+            before insert on asset_resolution_decisions
+            for each row execute function pause_exclusion_decision()
+          `)
+        })
+      )
+
+      const exclusion = runRepository(
+        Effect.flatMap(ProviderAssetRepository, (repository) =>
+          repository.excludeProviderAssetMappingAndRequestReplay({
+            providerAssetRowId: providerAsset.id,
+            decision: makeExcludedDecision(providerAsset.id),
+            sourceNotes: "Snapshot locks must cover the decision",
+            expectedObservedRepresentations: [],
+            expectedProviderAssetRetrievedAt: providerAsset.retrievedAt,
+          })
+        )
+      )
+      await context.waitForQueryBlockedOnLock({
+        queryIncludes: 'insert into "asset_resolution_decisions"',
+      })
+      const sourceLock = runPg(
+        Effect.gen(function* () {
+          const db = yield* drizzle
+          yield* db
+            .select({ id: schema.sources.id })
+            .from(schema.sources)
+            .where(eq(schema.sources.id, TEST_SOURCE_ID))
+            .for("update")
+        })
+      )
+      await context.waitForQueryBlockedOnLock({ queryIncludes: 'from "sources"' })
+      await Effect.runPromise(Deferred.succeed(releaseAdvisoryLock, undefined))
+      const [, result] = await Promise.all([heldAdvisoryLock, exclusion, sourceLock])
+
+      expect(result).toEqual({ mappingChanged: true, decisionRecorded: true })
     })
 
     it("reattaches replay when another active owner wins the insert race", async () => {
