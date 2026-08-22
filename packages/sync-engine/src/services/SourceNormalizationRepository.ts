@@ -305,6 +305,17 @@ export interface PersistedSourceProviderTransfer {
   readonly metadata: unknown
 }
 
+/** Principal-scoped provider asset decision applied while deriving replayed legs. */
+export interface EffectiveSourceProviderAsset {
+  readonly providerAssetRowId: string
+  readonly asset: {
+    readonly id: string
+    readonly symbol: string
+    readonly type: "fungible" | "nft"
+  } | null
+  readonly inclusionState: "included" | "excluded" | "blocked"
+}
+
 /**
  * PersistedSourceLeg - Persisted leg projection used for FIFO side effects.
  */
@@ -341,6 +352,7 @@ export interface PersistNormalizedSourceArtifactsContext {
   readonly venueContext: PersistedSourceVenueContext
   readonly providerTransfers: ReadonlyArray<PersistedSourceProviderTransfer>
   readonly canonicalTransfers: ReadonlyArray<PersistedSourceTransfer>
+  readonly effectiveProviderAssets: ReadonlyArray<EffectiveSourceProviderAsset>
 }
 
 /**
@@ -358,6 +370,8 @@ export interface PersistNormalizedSourceArtifactsParamsBase {
   readonly venueContext: SourceVenueContextDraft
   readonly onchainContext?: SourceOnchainContextDraft | null | undefined
   readonly providerTransfers: ReadonlyArray<SourceProviderTransferDraft>
+  /** Provider assets observed by this raw record, including uses without a provider transfer. */
+  readonly providerAssetRowIds?: ReadonlyArray<string>
   readonly canonicalTransfers: ReadonlyArray<SourceTransferDraft>
   readonly transactionReview: SourceTransactionReviewDraft | null
   readonly resolvedTransactionType: ResolvedProviderTransactionTypeMapping

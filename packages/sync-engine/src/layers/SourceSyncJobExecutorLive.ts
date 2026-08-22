@@ -329,6 +329,7 @@ const make = Effect.gen(function* () {
           venueContext: decision.venueContext,
           onchainContext: decision.onchainContext,
           providerTransfers: decision.providerTransfers,
+          providerAssetRowIds: decision.providerAssetRowIds,
           canonicalTransfers: decision.canonicalTransfers,
           transactionReview: decision.transactionReview,
           resolvedTransactionType: decision.resolvedTransactionType,

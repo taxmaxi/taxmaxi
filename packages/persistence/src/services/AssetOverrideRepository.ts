@@ -97,13 +97,19 @@ export interface AssetOverrideRepositoryShape {
     readonly principalId: string
     readonly kind: AssetOverrideKind
     readonly target: AssetOverrideTarget
-  }) => Effect.Effect<Option.Option<AssetOverrideProjection>, PersistenceError>
+  }) => Effect.Effect<
+    Option.Option<AssetOverrideProjection>,
+    AssetOverrideValidationError | PersistenceError
+  >
 
   readonly getProjection: (params: {
     readonly principalId: string
     readonly kind: AssetOverrideKind
     readonly target: AssetOverrideTarget
-  }) => Effect.Effect<AssetOverrideProjection, AssetOverrideTargetNotFoundError | PersistenceError>
+  }) => Effect.Effect<
+    AssetOverrideProjection,
+    AssetOverrideTargetNotFoundError | AssetOverrideValidationError | PersistenceError
+  >
 
   readonly setOverride: (params: {
     readonly principalId: string

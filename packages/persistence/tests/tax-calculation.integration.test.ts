@@ -324,6 +324,126 @@ const insertUnresolvedProviderAssetSourceUse = ({
     }
   }).pipe(Effect.provide(context.TestPgClientLive))
 
+const insertRejectedOverrideFixture = ({
+  observedContracts = [],
+  observedRepresentationType = "token",
+}: {
+  readonly observedContracts?: ReadonlyArray<string>
+  readonly observedRepresentationType?: "token" | null
+} = {}) =>
+  Effect.gen(function* () {
+    const db = yield* drizzle
+    const [canonicalAsset] = yield* db
+      .select({ id: schema.assets.id })
+      .from(schema.assets)
+      .where(eq(schema.assets.symbol, "BTC"))
+      .limit(1)
+    const [baseBlockchain] = yield* db
+      .select({ id: schema.blockchains.id })
+      .from(schema.blockchains)
+      .where(eq(schema.blockchains.name, "base"))
+      .limit(1)
+
+    if (canonicalAsset === undefined || baseBlockchain === undefined) {
+      return yield* Effect.die("Missing override tax calculation fixtures")
+    }
+
+    const [providerAsset] = yield* db
+      .insert(schema.providerAssets)
+      .values({
+        provider: "coinbase",
+        naturalKey: `coinbase-rejected-${observedContracts.join("-") || "chainless"}`,
+        currencyCode: "XYZ",
+        exponent: 8,
+        providerType: "crypto",
+        retrievedAt: new Date("2025-01-01T00:00:00.000Z"),
+      })
+      .returning({ id: schema.providerAssets.id })
+
+    if (providerAsset === undefined) {
+      return yield* Effect.die("Failed to create override provider asset fixture")
+    }
+
+    yield* db.insert(schema.providerAssetSourceUses).values({
+      providerAssetRowId: providerAsset.id,
+      sourceId,
+    })
+    yield* db.insert(schema.providerAssetMappings).values({
+      providerAssetRowId: providerAsset.id,
+      mappingKind: "asset",
+      canonicalAssetId: canonicalAsset.id,
+      mappingStatus: "rejected",
+      sourceNotes: "Rejected mapping retained for principal inclusion",
+    })
+
+    for (const [index, contractAddress] of observedContracts.entries()) {
+      const [transaction] = yield* db
+        .insert(schema.transactions)
+        .values({
+          sourceId,
+          externalId: `override-coverage-transaction-${index}`,
+          timestamp: new Date(`2025-06-0${index + 1}T10:00:00.000Z`),
+          principalId,
+        })
+        .returning({ id: schema.transactions.id })
+
+      if (transaction === undefined) {
+        return yield* Effect.die("Failed to create override coverage transaction")
+      }
+
+      yield* db.insert(schema.providerTransfers).values({
+        sourceId,
+        transactionId: transaction.id,
+        externalId: `override-coverage-transfer-${index}`,
+        timestamp: new Date(`2025-06-0${index + 1}T10:00:00.000Z`),
+        direction: "inbound",
+        processingMode: "accounting_and_evidence",
+        fromAccountRef: "external",
+        toAccountRef: "coinbase-tax-account",
+        providerAssetId: providerAsset.id,
+        observedBlockchainId: baseBlockchain.id,
+        observedRepresentationType,
+        observedContractAddress: contractAddress,
+        observedDecimals: 8,
+        amount: "100000000",
+      })
+    }
+
+    return {
+      blockchainId: baseBlockchain.id,
+      providerAssetRowId: providerAsset.id,
+    }
+  }).pipe(Effect.provide(context.TestPgClientLive))
+
+const insertInclusionOverride = ({
+  blockchainId,
+  contractAddress,
+  providerAssetRowId,
+}: {
+  readonly blockchainId?: string
+  readonly contractAddress?: string
+  readonly providerAssetRowId?: string
+}) =>
+  Effect.gen(function* () {
+    const db = yield* drizzle
+    yield* db.insert(schema.principalAssetOverrides).values({
+      principalId,
+      kind: "inclusion",
+      targetKind: providerAssetRowId === undefined ? "representation" : "provider_asset",
+      blockchainId: blockchainId ?? null,
+      representationType: blockchainId === undefined ? null : "token",
+      contractAddress: contractAddress ?? null,
+      providerAssetRowId: providerAssetRowId ?? null,
+      action: "set",
+      inspectedSystemRevision: "tax-calculation-fixture",
+      inspectedInclusionState: "excluded",
+      inspectedInclusionReason: "taxmaxi_policy",
+      replacementInclusionState: "included",
+      actorId: userId,
+      reason: "Include the reviewed asset in tax calculation",
+    })
+  }).pipe(Effect.provide(context.TestPgClientLive))
+
 await Effect.runPromise(context.recreateTestDatabase())
 
 describe("TaxCalculationServiceLive", () => {
@@ -443,6 +563,65 @@ describe("TaxCalculationServiceLive", () => {
         }
       })
     )
+  })
+
+  it("allows an included override to clear a rejected mapping with a canonical asset", async () => {
+    const fixture = await Effect.runPromise(insertRejectedOverrideFixture())
+    await Effect.runPromise(
+      insertInclusionOverride({ providerAssetRowId: fixture.providerAssetRowId })
+    )
+
+    const tax = await Effect.runPromise(calculateTax())
+
+    expect(tax.taxableGains).toBe(2000)
+  })
+
+  it("keeps a provider observation pending until every exact representation is included", async () => {
+    const firstContract = "0x0000000000000000000000000000000000000001"
+    const secondContract = "0x0000000000000000000000000000000000000002"
+    const fixture = await Effect.runPromise(
+      insertRejectedOverrideFixture({ observedContracts: [firstContract, secondContract] })
+    )
+
+    await Effect.runPromise(
+      insertInclusionOverride({
+        blockchainId: fixture.blockchainId,
+        contractAddress: firstContract,
+      })
+    )
+
+    const partialCoverageError = await Effect.runPromise(calculateTax().pipe(Effect.flip))
+    expect(partialCoverageError._tag).toBe("TaxCalculationPendingObservationsError")
+
+    await Effect.runPromise(
+      insertInclusionOverride({
+        blockchainId: fixture.blockchainId,
+        contractAddress: secondContract,
+      })
+    )
+
+    const tax = await Effect.runPromise(calculateTax())
+    expect(tax.taxableGains).toBe(2000)
+  })
+
+  it("covers an exact observation with an unknown type by immutable representation identity", async () => {
+    const contractAddress = "0x0000000000000000000000000000000000000003"
+    const fixture = await Effect.runPromise(
+      insertRejectedOverrideFixture({
+        observedContracts: [contractAddress],
+        observedRepresentationType: null,
+      })
+    )
+
+    await Effect.runPromise(
+      insertInclusionOverride({
+        blockchainId: fixture.blockchainId,
+        contractAddress,
+      })
+    )
+
+    const tax = await Effect.runPromise(calculateTax())
+    expect(tax.taxableGains).toBe(2000)
   })
 
   it("returns zero totals when the selected year has no disposals or income", async () => {

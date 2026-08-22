@@ -21,7 +21,7 @@ import {
   type AssetOverrideTarget,
   type AssetOverrideWriteResult,
 } from "../services/AssetOverrideRepository.ts"
-import { PersistenceError, wrapSqlError } from "../errors/RepositoryError.ts"
+import { PersistenceError } from "../errors/RepositoryError.ts"
 import { schema, type PrincipalAssetOverrideRow } from "../schema/index.ts"
 import { drizzle } from "./PgClientLive.ts"
 
@@ -40,6 +40,14 @@ const wrapAssetOverrideError =
         ? error
         : new PersistenceError({ operation, cause: error })
     )
+
+const canonicalizeTarget = (target: AssetOverrideTarget): AssetOverrideTarget =>
+  target._tag === "representation"
+    ? {
+        ...target,
+        contractAddress: target.contractAddress?.toLowerCase() ?? null,
+      }
+    : target
 
 const targetPredicate = (target: AssetOverrideTarget) =>
   target._tag === "provider_asset"
@@ -64,7 +72,10 @@ const providerTransferTargetPredicate = (
 ) =>
   and(
     eq(schema.providerTransfers.observedBlockchainId, target.blockchainId),
-    eq(schema.providerTransfers.observedRepresentationType, target.representationType),
+    or(
+      eq(schema.providerTransfers.observedRepresentationType, target.representationType),
+      isNull(schema.providerTransfers.observedRepresentationType)
+    ),
     target.contractAddress === null
       ? sql`${schema.providerTransfers.observedContractAddress} is null`
       : sql`lower(${schema.providerTransfers.observedContractAddress}) = lower(${target.contractAddress})`,
@@ -359,7 +370,15 @@ const make = Effect.gen(function* () {
           eq(schema.providerAssetMappings.providerAssetRowId, schema.providerAssets.id)
         )
         .where(providerTransferTargetPredicate(target))
-        .orderBy(asc(schema.providerAssets.id))
+        .orderBy(
+          asc(schema.providerAssets.id),
+          asc(schema.providerAssets.evidenceRevision),
+          asc(schema.providerAssetMappings.id),
+          asc(schema.providerAssetMappings.mappingStatus),
+          asc(schema.providerAssetMappings.canonicalAssetId),
+          asc(sql`${schema.providerAssetMappings.updatedAt}::text`),
+          asc(schema.providerTransfers.observedDecimals)
+        )
 
       const revision = JSON.stringify({
         representation:
@@ -524,17 +543,28 @@ const make = Effect.gen(function* () {
     target,
   }) =>
     Effect.gen(function* () {
-      yield* validateTargetShape(target)
-      const sourceIds = yield* loadOwnedSourceIds({ executor: db, principalId, target })
+      const canonicalTarget = canonicalizeTarget(target)
+      yield* validateTargetShape(canonicalTarget)
+      const sourceIds = yield* loadOwnedSourceIds({
+        executor: db,
+        principalId,
+        target: canonicalTarget,
+      })
       if (sourceIds.length === 0) return Option.none<AssetOverrideProjection>()
       return Option.some(
-        yield* buildProjection({ executor: db, kind, principalId, target, sourceIds })
+        yield* buildProjection({
+          executor: db,
+          kind,
+          principalId,
+          target: canonicalTarget,
+          sourceIds,
+        })
       )
     }).pipe(
-      Effect.catchTag("AssetOverrideValidationError", () =>
+      Effect.catchTag("AssetOverrideTargetNotFoundError", () =>
         Effect.succeed(Option.none<AssetOverrideProjection>())
       ),
-      wrapSqlError("assetOverrideRepository.findProjection")
+      wrapAssetOverrideError("assetOverrideRepository.findProjection")
     )
 
   const getProjection: AssetOverrideRepositoryShape["getProjection"] = (params) =>
@@ -615,36 +645,55 @@ const make = Effect.gen(function* () {
       const now = yield* currentDate
       yield* Effect.forEach(
         sourceIds,
-        (sourceId) =>
-          Effect.gen(function* () {
-            const [active] = yield* executor
-              .update(schema.processingJobs)
-              .set({ followUpMode: "replay", updatedAt: now })
-              .where(
-                and(
-                  eq(schema.processingJobs.sourceId, sourceId),
-                  eq(schema.processingJobs.principalId, principalId),
-                  inArray(schema.processingJobs.status, ["pending", "processing"])
+        (sourceId) => {
+          const requestReplay = (attemptsRemaining: number): Effect.Effect<void, unknown> =>
+            Effect.gen(function* () {
+              const [active] = yield* executor
+                .update(schema.processingJobs)
+                .set({ followUpMode: "replay", updatedAt: now })
+                .where(
+                  and(
+                    eq(schema.processingJobs.sourceId, sourceId),
+                    eq(schema.processingJobs.principalId, principalId),
+                    inArray(schema.processingJobs.status, ["pending", "processing"])
+                  )
                 )
-              )
-              .returning({ id: schema.processingJobs.id })
-            if (active !== undefined) return
+                .returning({ id: schema.processingJobs.id })
+              if (active !== undefined) return
 
-            yield* executor
-              .insert(schema.processingJobs)
-              .values({
-                sourceId,
-                principalId,
-                mode: "replay",
-                status: "pending",
-                attemptCount: 0,
-                maxAttempts: 3,
-                progressDetails: { mode: "replay", reason: "principal_asset_override" },
-                createdAt: now,
-                updatedAt: now,
+              const [created] = yield* executor
+                .insert(schema.processingJobs)
+                .values({
+                  sourceId,
+                  principalId,
+                  mode: "replay",
+                  status: "pending",
+                  attemptCount: 0,
+                  maxAttempts: 3,
+                  progressDetails: { mode: "replay", reason: "principal_asset_override" },
+                  createdAt: now,
+                  updatedAt: now,
+                })
+                .onConflictDoNothing()
+                .returning({ id: schema.processingJobs.id })
+
+              if (created !== undefined) return
+              if (attemptsRemaining > 1) {
+                return yield* Effect.suspend(() => requestReplay(attemptsRemaining - 1))
+              }
+
+              return yield* new PersistenceError({
+                operation: "assetOverrideRepository.requestReplays",
+                cause: {
+                  principalId,
+                  sourceId,
+                  message: "Active replay owner changed repeatedly.",
+                },
               })
-              .onConflictDoNothing()
-          }),
+            })
+
+          return requestReplay(3)
+        },
         { discard: true }
       )
     })
@@ -656,11 +705,22 @@ const make = Effect.gen(function* () {
     replacement,
   }) =>
     Effect.gen(function* () {
-      yield* validateTargetShape(target)
-      const sourceIds = yield* loadOwnedSourceIds({ executor: db, principalId, target })
+      const canonicalTarget = canonicalizeTarget(target)
+      yield* validateTargetShape(canonicalTarget)
+      const sourceIds = yield* loadOwnedSourceIds({
+        executor: db,
+        principalId,
+        target: canonicalTarget,
+      })
       if (sourceIds.length === 0) return yield* new AssetOverrideTargetNotFoundError()
-      yield* validateReplacement({ executor: db, kind, replacement, target })
-      return yield* buildProjection({ executor: db, kind, principalId, target, sourceIds })
+      yield* validateReplacement({ executor: db, kind, replacement, target: canonicalTarget })
+      return yield* buildProjection({
+        executor: db,
+        kind,
+        principalId,
+        target: canonicalTarget,
+        sourceIds,
+      })
     }).pipe(wrapAssetOverrideError("assetOverrideRepository.validateOverride"))
 
   const writeOverride = ({
@@ -686,7 +746,8 @@ const make = Effect.gen(function* () {
   }): Effect.Effect<AssetOverrideWriteResult, unknown> =>
     db.transaction((tx) =>
       Effect.gen(function* () {
-        yield* validateTargetShape(target)
+        const canonicalTarget = canonicalizeTarget(target)
+        yield* validateTargetShape(canonicalTarget)
         if (reason.trim() === "") {
           return yield* new AssetOverrideValidationError({
             code: "reason_required",
@@ -694,15 +755,19 @@ const make = Effect.gen(function* () {
           })
         }
         yield* tx.execute(
-          sql`select pg_advisory_xact_lock(hashtextextended(${`${principalId}:${kind}:${JSON.stringify(target)}`}, 0))`
+          sql`select pg_advisory_xact_lock(hashtextextended(${`${principalId}:${kind}:${JSON.stringify(canonicalTarget)}`}, 0))`
         )
-        const sourceIds = yield* loadOwnedSourceIds({ executor: tx, principalId, target })
+        const sourceIds = yield* loadOwnedSourceIds({
+          executor: tx,
+          principalId,
+          target: canonicalTarget,
+        })
         if (sourceIds.length === 0) return yield* new AssetOverrideTargetNotFoundError()
         const before = yield* buildProjection({
           executor: tx,
           kind,
           principalId,
-          target,
+          target: canonicalTarget,
           sourceIds,
         })
         const currentActiveId = before.activeOverride?.id ?? null
@@ -719,7 +784,7 @@ const make = Effect.gen(function* () {
           })
         }
         if (replacement !== null) {
-          yield* validateReplacement({ executor: tx, kind, replacement, target })
+          yield* validateReplacement({ executor: tx, kind, replacement, target: canonicalTarget })
         }
 
         const latest = before.history.at(-1) ?? null
@@ -730,7 +795,7 @@ const make = Effect.gen(function* () {
         yield* tx.insert(schema.principalAssetOverrides).values({
           principalId,
           kind,
-          ...targetValues(target),
+          ...targetValues(canonicalTarget),
           action,
           inspectedSystemRevision: before.systemRevision,
           inspectedIdentityState: inspectedIdentity?.state ?? null,
@@ -748,7 +813,7 @@ const make = Effect.gen(function* () {
           executor: tx,
           kind,
           principalId,
-          target,
+          target: canonicalTarget,
           sourceIds,
         })
         return { _tag: "accepted", projection } as const

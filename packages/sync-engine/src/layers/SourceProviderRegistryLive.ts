@@ -100,18 +100,43 @@ const makeCoinbaseProviderModule = (
                 canonicalTransfers: prepared.canonicalTransfers,
                 transactionReview: prepared.transactionReview,
                 resolvedTransactionType: prepared.resolvedTransactionType,
-                deriveLegs:
-                  prepared.legDerivationStrategy === "derive"
-                    ? ({ transaction, venueContext, canonicalTransfers }) =>
-                        coinbaseSourceSyncProvider
-                          .deriveLegs({
-                            transaction,
-                            venueContext,
-                            primaryAsset: prepared.primaryAsset,
-                            canonicalTransfers,
-                          })
-                          .pipe(Effect.mapError(toCoinbaseRecoverableNormalizationError))
-                    : () => Effect.succeed([]),
+                deriveLegs: ({
+                  transaction,
+                  venueContext,
+                  canonicalTransfers,
+                  effectiveProviderAssets,
+                }) => {
+                  const effectivePrimaryAsset = effectiveProviderAssets.find(
+                    ({ providerAssetRowId }) =>
+                      providerAssetRowId === prepared.primaryProviderAssetId
+                  )
+                  const primaryAsset =
+                    effectivePrimaryAsset === undefined
+                      ? prepared.primaryAsset
+                      : effectivePrimaryAsset.asset
+                  const allProviderAssetsIncluded = prepared.providerAssetRowIds.every(
+                    (providerAssetRowId) =>
+                      effectiveProviderAssets.find(
+                        (effectiveAsset) => effectiveAsset.providerAssetRowId === providerAssetRowId
+                      )?.inclusionState === "included"
+                  )
+                  const canDerive =
+                    prepared.legDerivationStrategy === "derive" ||
+                    (prepared.canDeriveWithAssetOverrides &&
+                      allProviderAssetsIncluded &&
+                      primaryAsset !== null)
+
+                  return canDerive
+                    ? coinbaseSourceSyncProvider
+                        .deriveLegs({
+                          transaction,
+                          venueContext,
+                          primaryAsset,
+                          canonicalTransfers,
+                        })
+                        .pipe(Effect.mapError(toCoinbaseRecoverableNormalizationError))
+                    : Effect.succeed([])
+                },
               } as const
             })
       )

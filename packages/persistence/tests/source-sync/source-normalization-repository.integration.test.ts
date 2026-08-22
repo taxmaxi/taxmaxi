@@ -20,6 +20,7 @@ import {
   TEST_RAW_RECORD_ID,
   TEST_SOURCE_ID,
   TEST_PRINCIPAL_ID,
+  TEST_USER_ID,
   makeIntegrationTestDatabaseContext,
   type SyncEngineRepositoryFixture,
   seedSyncEngineAssets,
@@ -276,6 +277,7 @@ const persistCoinbaseNormalization = ({
             transaction: prepared.transaction,
             venueContext: prepared.venueContext,
             providerTransfers,
+            providerAssetRowIds: prepared.providerAssetRowIds,
             canonicalTransfers: prepared.canonicalTransfers,
             transactionReview: prepared.transactionReview,
             resolvedTransactionType: prepared.resolvedTransactionType,
@@ -291,6 +293,7 @@ const persistCoinbaseNormalization = ({
             transaction: prepared.transaction,
             venueContext: prepared.venueContext,
             providerTransfers,
+            providerAssetRowIds: prepared.providerAssetRowIds,
             canonicalTransfers: prepared.canonicalTransfers,
             transactionReview: prepared.transactionReview,
             resolvedTransactionType: prepared.resolvedTransactionType,
@@ -2356,7 +2359,7 @@ describe("SourceNormalizationRepositoryLive", () => {
     )
   })
 
-  it("materializes a policy-excluded chainless asset after a principal inclusion override", async () => {
+  it("reruns provider leg classification for an included asset use without a provider transfer", async () => {
     const occurredAt = new Date("2025-01-01T11:00:00.000Z")
     const providerAssetRowId = await runPg(
       Effect.gen(function* () {
@@ -2440,33 +2443,39 @@ describe("SourceNormalizationRepositoryLive", () => {
             commissionCurrency: null,
             metadata: null,
           },
-          providerTransfers: [
-            {
-              sourceId: TEST_SOURCE_ID,
-              sourceRawRecordId: TEST_RAW_RECORD_ID,
-              externalId: "principal-included-transfer",
-              externalGroupId: "group-principal-included",
-              providerAssetId: providerAssetRowId,
-              timestamp: occurredAt,
-              direction: "inbound",
-              processingMode: "accounting_and_evidence",
-              fromAccountRef: "external-account",
-              toAccountRef: "coinbase-account-1",
-              fromAddress: null,
-              toAddress: null,
-              networkName: null,
-              networkHash: null,
-              observedBlockchainId: null,
-              observedRepresentationType: null,
-              observedContractAddress: null,
-              observedMintAddress: null,
-              observedDecimals: null,
-              amount: "2.5",
-              metadata: { provider: "coinbase" },
-            },
-          ],
+          providerTransfers: [],
+          providerAssetRowIds: [providerAssetRowId],
           canonicalTransfers: [],
-          legs: [],
+          deriveLegs: ({ effectiveProviderAssets, transaction }) => {
+            const effectiveAsset = effectiveProviderAssets[0]?.asset
+            return Effect.succeed(
+              effectiveAsset === null || effectiveAsset === undefined
+                ? []
+                : [
+                    {
+                      sourceId: transaction.sourceId,
+                      sourceRawRecordId: transaction.sourceRawRecordId,
+                      externalId: "principal-included-income",
+                      txHash: null,
+                      timestamp: transaction.timestamp,
+                      principalId: transaction.principalId,
+                      addressId: null,
+                      assetId: effectiveAsset.id,
+                      assetRepresentationId: null,
+                      amount: "2.5",
+                      kind: "income" as const,
+                      provenance: "deterministic" as const,
+                      derivationRule: "coinbase_staking_reward_inflow",
+                      metadata: { provider: "coinbase" },
+                      transactionId: transaction.id,
+                      sourceTransferId: null,
+                      fiatAmount: null,
+                      fiatCurrency: null,
+                      feeForTransactionId: null,
+                    },
+                  ]
+            )
+          },
           transactionReview: null,
           resolvedTransactionType: APPROVED_MAPPING,
         })
@@ -2477,11 +2486,206 @@ describe("SourceNormalizationRepositoryLive", () => {
       expect.objectContaining({
         assetId: TEST_BTC_ASSET_ID,
         amount: expect.stringMatching(/^2\.5(?:0+)?$/),
-        kind: "acquisition",
-        derivationRule: "principal_asset_override",
+        kind: "income",
+        derivationRule: "coinbase_staking_reward_inflow",
         fiatAmount: null,
       }),
     ])
+  })
+
+  it("does not fabricate an accounting leg for override-owned evidence-only movement", async () => {
+    const occurredAt = new Date("2025-01-01T11:10:00.000Z")
+    const providerAssetRowId = await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const [providerAsset] = yield* db
+          .insert(schema.providerAssets)
+          .values({
+            provider: "helius",
+            providerAssetId: "evidence-only-override",
+            currencyCode: "EVIDENCE",
+            name: "Evidence Token",
+            exponent: 8,
+            providerType: "crypto",
+            retrievedAt: occurredAt,
+          })
+          .returning({ id: schema.providerAssets.id })
+        if (providerAsset === undefined) return yield* Effect.die("Failed to seed provider asset")
+        yield* db.insert(schema.providerAssetMappings).values({
+          providerAssetRowId: providerAsset.id,
+          mappingKind: "asset",
+          mappingStatus: "approved",
+          canonicalAssetId: TEST_BTC_ASSET_ID,
+          assetRepresentationId: null,
+          canonicalFiatCurrency: null,
+        })
+        yield* db.insert(schema.principalAssetOverrides).values({
+          principalId: TEST_PRINCIPAL_ID,
+          kind: "identity",
+          targetKind: "representation",
+          providerAssetRowId: null,
+          blockchainId: fixture.baseBlockchainId,
+          representationType: "token",
+          contractAddress: null,
+          mintAddress: "So11111111111111111111111111111111111111112",
+          action: "set",
+          inspectedSystemRevision: "evidence-only-revision",
+          inspectedIdentityState: "resolved",
+          inspectedInclusionState: null,
+          inspectedInclusionReason: null,
+          inspectedAssetId: TEST_BTC_ASSET_ID,
+          replacementAssetId: TEST_BTC_ASSET_ID,
+          replacementInclusionState: null,
+          actorId: TEST_USER_ID,
+          reason: "Confirm the observed representation identity.",
+        })
+        return providerAsset.id
+      })
+    )
+
+    const result = await runRepository(
+      Effect.flatMap(SourceNormalizationRepository, (repository) =>
+        repository.persistNormalizedArtifacts({
+          ...buildBuyArtifacts({
+            externalId: "tx-evidence-only-override",
+            occurredAt,
+            sourceRawRecordId: TEST_RAW_RECORD_ID,
+          }),
+          providerTransfers: [
+            {
+              sourceId: TEST_SOURCE_ID,
+              sourceRawRecordId: TEST_RAW_RECORD_ID,
+              externalId: "evidence-only-provider-transfer",
+              externalGroupId: "evidence-only-group",
+              providerAssetId: providerAssetRowId,
+              timestamp: occurredAt,
+              direction: "inbound",
+              processingMode: "evidence_only",
+              fromAccountRef: null,
+              toAccountRef: null,
+              fromAddress: "external-solana-wallet",
+              toAddress: "principal-solana-wallet",
+              networkName: "solana",
+              networkHash: "evidence-only-signature",
+              observedBlockchainId: fixture.baseBlockchainId,
+              observedRepresentationType: "token",
+              observedContractAddress: null,
+              observedMintAddress: "So11111111111111111111111111111111111111112",
+              observedDecimals: 8,
+              amount: "1",
+              metadata: null,
+            },
+          ],
+          providerAssetRowIds: [providerAssetRowId],
+          legs: [],
+        })
+      )
+    )
+
+    expect(result.legs).toEqual([])
+  })
+
+  it("keeps technical and policy inclusion blockers active after an identity override", async () => {
+    const occurredAt = new Date("2025-01-01T11:20:00.000Z")
+    const providerAssetRowId = await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const [providerAsset] = yield* db
+          .insert(schema.providerAssets)
+          .values({
+            provider: "coinbase",
+            providerAssetId: "identity-only-blocked",
+            currencyCode: "BLOCKED",
+            name: "Blocked Token",
+            exponent: null,
+            providerType: "crypto",
+            retrievedAt: occurredAt,
+          })
+          .returning({ id: schema.providerAssets.id })
+        if (providerAsset === undefined) return yield* Effect.die("Failed to seed provider asset")
+        yield* db.insert(schema.providerAssetMappings).values({
+          providerAssetRowId: providerAsset.id,
+          mappingKind: "asset",
+          mappingStatus: "rejected",
+          canonicalAssetId: TEST_BTC_ASSET_ID,
+          assetRepresentationId: null,
+          canonicalFiatCurrency: null,
+        })
+        yield* db.insert(schema.principalAssetOverrides).values({
+          principalId: TEST_PRINCIPAL_ID,
+          kind: "identity",
+          targetKind: "provider_asset",
+          providerAssetRowId: providerAsset.id,
+          action: "set",
+          inspectedSystemRevision: "identity-only-revision",
+          inspectedIdentityState: "excluded",
+          inspectedInclusionState: null,
+          inspectedInclusionReason: null,
+          inspectedAssetId: null,
+          replacementAssetId: TEST_BTC_ASSET_ID,
+          replacementInclusionState: null,
+          actorId: TEST_USER_ID,
+          reason: "Resolve identity without changing inclusion.",
+        })
+        return providerAsset.id
+      })
+    )
+    const artifacts = buildBuyArtifacts({
+      externalId: "tx-identity-only-blocked",
+      occurredAt,
+      sourceRawRecordId: TEST_RAW_RECORD_ID,
+    })
+    const { legs: _unusedLegs, ...derivableArtifacts } = artifacts
+
+    const persist = () =>
+      runRepository(
+        Effect.flatMap(SourceNormalizationRepository, (repository) =>
+          repository.persistNormalizedArtifacts({
+            ...derivableArtifacts,
+            providerAssetRowIds: [providerAssetRowId],
+            deriveLegs: ({ effectiveProviderAssets, transaction }) =>
+              Effect.succeed(
+                effectiveProviderAssets[0]?.asset === null
+                  ? []
+                  : [
+                      {
+                        sourceId: transaction.sourceId,
+                        sourceRawRecordId: transaction.sourceRawRecordId,
+                        externalId: "identity-only-blocked-leg",
+                        txHash: null,
+                        timestamp: transaction.timestamp,
+                        principalId: transaction.principalId,
+                        addressId: null,
+                        assetId: TEST_BTC_ASSET_ID,
+                        assetRepresentationId: null,
+                        amount: "1",
+                        kind: "acquisition" as const,
+                        provenance: "deterministic" as const,
+                        derivationRule: "test_provider_classification",
+                        metadata: null,
+                        transactionId: transaction.id,
+                        sourceTransferId: null,
+                        fiatAmount: null,
+                        fiatCurrency: null,
+                        feeForTransactionId: null,
+                      },
+                    ]
+              ),
+          })
+        )
+      )
+
+    expect((await persist()).legs).toEqual([])
+    await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        yield* db
+          .update(schema.providerAssets)
+          .set({ exponent: 8 })
+          .where(eq(schema.providerAssets.id, providerAssetRowId))
+      })
+    )
+    expect((await persist()).legs).toEqual([])
   })
 
   it("persists normalized artifacts idempotently and feeds FIFO side effects", async () => {
