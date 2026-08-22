@@ -20,6 +20,7 @@ import * as legalRules from "./LegalRulesTable.ts"
 import * as oauthStates from "./OAuthStatesTable.ts"
 import * as processingJobs from "./ProcessingJobsTable.ts"
 import * as principalClaims from "./PrincipalClaimsTable.ts"
+import * as principalAssetOverrides from "./PrincipalAssetOverridesTable.ts"
 import * as principals from "./PrincipalsTable.ts"
 import * as protocolCandidateObservations from "./ProtocolCandidateObservationsTable.ts"
 import * as protocolCandidates from "./ProtocolCandidatesTable.ts"
@@ -33,6 +34,7 @@ import * as providerTransactionTypeCatalog from "./ProviderTransactionTypeCatalo
 import * as providerTransactionTypeMappings from "./ProviderTransactionTypeMappingsTable.ts"
 import * as sessions from "./SessionsTable.ts"
 import * as sourceRecordsRaw from "./SourceRecordsRawTable.ts"
+import * as sourceRepresentationUses from "./SourceRepresentationUsesTable.ts"
 import * as sourceSyncState from "./SourceSyncStateTable.ts"
 import * as sources from "./SourcesTable.ts"
 import * as syncRunItems from "./SyncRunItemsTable.ts"
@@ -72,6 +74,7 @@ export const schema = {
   ...oauthStates,
   ...processingJobs,
   ...principalClaims,
+  ...principalAssetOverrides,
   ...principals,
   ...protocolCandidateObservations,
   ...protocolCandidates,
@@ -85,6 +88,7 @@ export const schema = {
   ...providerTransactionTypeMappings,
   ...sessions,
   ...sourceRecordsRaw,
+  ...sourceRepresentationUses,
   ...sourceSyncState,
   ...sources,
   ...syncRunItems,
@@ -161,6 +165,10 @@ export type {
 export type { OAuthStateRow } from "./OAuthStatesTable.ts"
 export type { ProcessingJob, ProcessingJobInsert } from "./ProcessingJobsTable.ts"
 export type { PrincipalClaimInsert, PrincipalClaimRow } from "./PrincipalClaimsTable.ts"
+export type {
+  PrincipalAssetOverrideInsert,
+  PrincipalAssetOverrideRow,
+} from "./PrincipalAssetOverridesTable.ts"
 export type { PrincipalInsert, PrincipalRow } from "./PrincipalsTable.ts"
 export type {
   ProtocolCandidateObservationInsert,
@@ -208,6 +216,10 @@ export type {
 } from "./ProviderTransactionTypeMappingsTable.ts"
 export type { SessionRow } from "./SessionsTable.ts"
 export type { SourceRecordRaw, SourceRecordRawInsert } from "./SourceRecordsRawTable.ts"
+export type {
+  SourceRepresentationUse,
+  SourceRepresentationUseInsert,
+} from "./SourceRepresentationUsesTable.ts"
 export type { SourceSyncState, SourceSyncStateInsert } from "./SourceSyncStateTable.ts"
 export type { SourceInsert, SourceRow } from "./SourcesTable.ts"
 export type { SyncRunItem, SyncRunItemInsert } from "./SyncRunItemsTable.ts"

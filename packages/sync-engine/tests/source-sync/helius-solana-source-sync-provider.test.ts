@@ -1099,6 +1099,12 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
       observedContractAddress: null,
       observedMintAddress: null,
       observedDecimals: 9,
+      metadata: expect.objectContaining({
+        overrideAccountingPlan: {
+          kind: "disposal",
+          derivationRule: "helius_solana_outbound",
+        },
+      }),
     })
     expect(result.transactionReview).toBeNull()
   })
@@ -3863,9 +3869,16 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
       observedContractAddress: null,
       observedMintAddress: UNKNOWN_MINT,
       observedDecimals: 5,
+      metadata: expect.objectContaining({
+        overrideAccountingPlan: {
+          kind: "acquisition",
+          derivationRule: "helius_solana_inbound",
+        },
+      }),
     })
     expect(result.legDerivationStrategy).toBe("skip")
     expect(result.legPlans).toEqual([])
+    expect(result.transactionReview?.matchedLayer).toBe("solana_asset_mapping")
   })
 
   it("records separate SPL token and NFT facts in a multi-transfer transaction", async () => {

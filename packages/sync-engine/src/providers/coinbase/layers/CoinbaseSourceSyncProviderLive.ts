@@ -1141,6 +1141,8 @@ const make = Effect.gen(function* () {
         transactionReview,
         resolvedTransactionType,
         primaryAsset: Option.getOrNull(maybePrimaryAsset),
+        primaryProviderAssetId,
+        canDeriveWithAssetOverrides: baseTransactionReview === null,
         legDerivationStrategy: unresolvedAssetCurrencies.length === 0 ? "derive" : "skip",
       }
     })

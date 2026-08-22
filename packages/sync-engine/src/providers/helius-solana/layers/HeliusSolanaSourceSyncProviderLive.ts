@@ -1089,51 +1089,59 @@ const buildProviderTransferDraft = ({
   readonly canonicalTransferExternalId: string | null
   readonly processingMode: SourceProviderTransferDraft["processingMode"]
   readonly observedRepresentationIdentityKnown: boolean
-}): SourceProviderTransferDraft => ({
-  sourceId,
-  sourceRawRecordId,
-  externalId,
-  externalGroupId: signature,
-  providerAssetId: movement.asset.providerAssetRowId,
-  timestamp,
-  direction: movement.direction,
-  processingMode,
-  fromAccountRef: null,
-  toAccountRef: null,
-  fromAddress: movement.fromAddress,
-  toAddress: movement.toAddress,
-  networkName: SOLANA_BLOCKCHAIN_NAME,
-  networkHash: signature,
-  observedBlockchainId:
-    processingMode === "accounting_only" || !observedRepresentationIdentityKnown
-      ? null
-      : blockchainId,
-  observedRepresentationType:
-    processingMode === "accounting_only" ||
-    !observedRepresentationIdentityKnown ||
-    movement.asset.representationTypeObserved !== true
-      ? null
-      : movement.asset.assetKind,
-  observedContractAddress: null,
-  observedMintAddress:
-    processingMode === "accounting_only" || !observedRepresentationIdentityKnown
-      ? null
-      : movement.asset.mintAddress,
-  observedDecimals:
-    processingMode === "accounting_only" || !observedRepresentationIdentityKnown
-      ? null
-      : movement.observedDecimals,
-  amount: movement.amount,
-  metadata: {
-    provider: HELIUS_SOLANA_PROVIDER_KEY,
-    role: movement.role,
-    canonicalTransferExternalId,
-    evidenceKind: movement.evidenceKind,
-    rawUnits: movement.rawUnits,
-    mintAddress: movement.asset.mintAddress,
-    supplementalTransferRow: movement.supplementalTransferRow,
-  },
-})
+}): SourceProviderTransferDraft => {
+  const overrideAccountingPlan = buildLegPlan({ movement, signature })
+
+  return {
+    sourceId,
+    sourceRawRecordId,
+    externalId,
+    externalGroupId: signature,
+    providerAssetId: movement.asset.providerAssetRowId,
+    timestamp,
+    direction: movement.direction,
+    processingMode,
+    fromAccountRef: null,
+    toAccountRef: null,
+    fromAddress: movement.fromAddress,
+    toAddress: movement.toAddress,
+    networkName: SOLANA_BLOCKCHAIN_NAME,
+    networkHash: signature,
+    observedBlockchainId:
+      processingMode === "accounting_only" || !observedRepresentationIdentityKnown
+        ? null
+        : blockchainId,
+    observedRepresentationType:
+      processingMode === "accounting_only" ||
+      !observedRepresentationIdentityKnown ||
+      movement.asset.representationTypeObserved !== true
+        ? null
+        : movement.asset.assetKind,
+    observedContractAddress: null,
+    observedMintAddress:
+      processingMode === "accounting_only" || !observedRepresentationIdentityKnown
+        ? null
+        : movement.asset.mintAddress,
+    observedDecimals:
+      processingMode === "accounting_only" || !observedRepresentationIdentityKnown
+        ? null
+        : movement.observedDecimals,
+    amount: movement.amount,
+    metadata: {
+      provider: HELIUS_SOLANA_PROVIDER_KEY,
+      role: movement.role,
+      canonicalTransferExternalId,
+      evidenceKind: movement.evidenceKind,
+      rawUnits: movement.rawUnits,
+      mintAddress: movement.asset.mintAddress,
+      supplementalTransferRow: movement.supplementalTransferRow,
+      overrideAccountingPlan: {
+        kind: overrideAccountingPlan.kind,
+        derivationRule: overrideAccountingPlan.derivationRule,
+      },
+    },
+  }
+}
 
 const resolveWalletAddress = ({
   sourceId,

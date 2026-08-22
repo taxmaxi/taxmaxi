@@ -24,6 +24,7 @@ import { LegalReferenceApiLive } from "./LegalReferenceApiLive.ts"
 import { PrincipalResolutionServiceLive } from "./PrincipalResolutionServiceLive.ts"
 import { PrincipalsApiLive } from "./PrincipalsApiLive.ts"
 import { AssetsApiLive } from "./AssetsApiLive.ts"
+import { AssetOverridesApiLive } from "./AssetOverridesApiLive.ts"
 import { PortfolioApiLive } from "./PortfolioApiLive.ts"
 import { CoinGeckoPriceServiceLive } from "./CoinGeckoPriceServiceLive.ts"
 import { CoinGeckoClientLive } from "./CoinGeckoClientLive.ts"
@@ -74,6 +75,7 @@ const CoreApiGroup = Layer.mergeAll(
   AnonApiLive,
   PrincipalsApiLive,
   AssetsApiLive.pipe(Layer.provide(AssetCanonicalizationServiceLive)),
+  AssetOverridesApiLive,
   PortfolioApiLive.pipe(Layer.provide(CoinGeckoPriceServiceLive)),
   SourcesApiLive,
   SyncRunsApiLive,

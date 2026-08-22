@@ -73,6 +73,7 @@ type TaxMaxiPublicGroup =
   | "adminProtocolReview"
   | "anon"
   | "assets"
+  | "assetOverrides"
   | "auth"
   | "authSession"
   | "billing"
@@ -92,6 +93,7 @@ const toTaxMaxiEffectClient = (client: TaxMaxiApiFullClient): TaxMaxiEffectClien
   adminProtocolReview: client.adminProtocolReview,
   anon: client.anon,
   assets: client.assets,
+  assetOverrides: client.assetOverrides,
   auth: client.auth,
   authSession: client.authSession,
   billing: client.billing,

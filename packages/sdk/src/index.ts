@@ -35,6 +35,12 @@ import {
   type AssetsEffectResource,
   type AssetsPromiseResource,
 } from "./assets/index.ts"
+import {
+  makeAssetOverridesEffectResource,
+  makeAssetOverridesPromiseResource,
+  type AssetOverridesEffectResource,
+  type AssetOverridesPromiseResource,
+} from "./asset-overrides/index.ts"
 import { toTaxMaxiError } from "./errors.ts"
 import {
   makeBillingEffectResource,
@@ -101,6 +107,19 @@ export type {
   PendingAssetListInput,
   TaxMaxiAssetType,
 } from "./assets/index.ts"
+export type {
+  AssetOverrideHistory,
+  AssetOverrideProjection,
+  AssetOverrideReadInput,
+  AssetOverrideReplaceInput,
+  AssetOverrideReplacement,
+  AssetOverrideSetInput,
+  AssetOverrideTarget,
+  AssetOverrideValidation,
+  AssetOverrideWithdrawInput,
+  AssetOverridesEffectResource,
+  AssetOverridesPromiseResource,
+} from "./asset-overrides/index.ts"
 export type {
   Account,
   AuthAuthorizeRedirectResponse,
@@ -176,6 +195,7 @@ export type TaxMaxiEffectResources = {
   readonly adminProtocolReview: AdminProtocolReviewEffectResource
   readonly anon: AnonEffectResource
   readonly assets: AssetsEffectResource
+  readonly assetOverrides: AssetOverridesEffectResource
   readonly auth: AuthEffectResource
   readonly billing: BillingEffectResource
   readonly portfolio: PortfolioEffectResource
@@ -187,6 +207,7 @@ export type TaxMaxiPromiseResources = {
   readonly adminProtocolReview: AdminProtocolReviewPromiseResource
   readonly anon: AnonPromiseResource
   readonly assets: AssetsPromiseResource
+  readonly assetOverrides: AssetOverridesPromiseResource
   readonly auth: AuthPromiseResource
   readonly billing: BillingPromiseResource
   readonly portfolio: PortfolioPromiseResource
@@ -200,6 +221,7 @@ const makeTaxMaxiEffectResources = (
   adminProtocolReview: makeAdminProtocolReviewEffectResource(client),
   anon: makeAnonEffectResource(client),
   assets: makeAssetsEffectResource(client),
+  assetOverrides: makeAssetOverridesEffectResource(client),
   auth: makeAuthEffectResource(client),
   billing: makeBillingEffectResource(client),
   portfolio: makePortfolioEffectResource(client),
@@ -221,6 +243,7 @@ export class TaxMaxi implements TaxMaxiPromiseResources {
   readonly adminProtocolReview: AdminProtocolReviewPromiseResource
   readonly anon: AnonPromiseResource
   readonly assets: AssetsPromiseResource
+  readonly assetOverrides: AssetOverridesPromiseResource
   readonly auth: AuthPromiseResource
   readonly billing: BillingPromiseResource
   readonly portfolio: PortfolioPromiseResource
@@ -239,6 +262,7 @@ export class TaxMaxi implements TaxMaxiPromiseResources {
     )
     this.anon = makeAnonPromiseResource(this.effect.anon, this.run)
     this.assets = makeAssetsPromiseResource(this.effect.assets, this.run)
+    this.assetOverrides = makeAssetOverridesPromiseResource(this.effect.assetOverrides, this.run)
     this.auth = makeAuthPromiseResource(this.effect.auth, this.run)
     this.billing = makeBillingPromiseResource(this.effect.billing, this.run)
     this.portfolio = makePortfolioPromiseResource(this.effect.portfolio, this.run)

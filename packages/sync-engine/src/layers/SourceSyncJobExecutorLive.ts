@@ -329,8 +329,12 @@ const make = Effect.gen(function* () {
           venueContext: decision.venueContext,
           onchainContext: decision.onchainContext,
           providerTransfers: decision.providerTransfers,
+          providerAssetRowIds: decision.providerAssetRowIds,
           canonicalTransfers: decision.canonicalTransfers,
           transactionReview: decision.transactionReview,
+          ...(decision.overrideMaterializationAllowed === undefined
+            ? {}
+            : { overrideMaterializationAllowed: decision.overrideMaterializationAllowed }),
           resolvedTransactionType: decision.resolvedTransactionType,
           deriveLegs: decision.deriveLegs,
         })

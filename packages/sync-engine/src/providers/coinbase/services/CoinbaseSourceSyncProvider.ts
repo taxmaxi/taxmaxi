@@ -65,6 +65,8 @@ export interface PreparedCoinbaseNormalization {
   readonly transactionReview: SourceTransactionReviewDraft | null
   readonly resolvedTransactionType: CoinbaseResolvedTransactionTypeMapping
   readonly primaryAsset: SyncEngineAsset | null
+  readonly primaryProviderAssetId: string | null
+  readonly canDeriveWithAssetOverrides: boolean
   readonly legDerivationStrategy: "derive" | "skip"
 }
 

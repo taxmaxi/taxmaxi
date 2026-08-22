@@ -592,6 +592,7 @@ const makeExecutorLayer = ({
             venueContext,
             providerTransfers: [],
             canonicalTransfers: [],
+            effectiveProviderAssets: [],
           })
         }
         if (params.transaction.sourceRawRecordId !== null) {
