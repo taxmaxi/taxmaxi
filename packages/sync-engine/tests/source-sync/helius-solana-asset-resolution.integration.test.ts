@@ -592,6 +592,58 @@ describe("HeliusSolanaAssetResolutionServiceLive", () => {
     })
   })
 
+  it("resolves an excluded fallback observation without refreshing DAS metadata", async () => {
+    await runAssetService(
+      Effect.flatMap(HeliusSolanaAssetResolutionService, (service) =>
+        service.resolveAsset({
+          kind: "spl",
+          mintAddress: UNKNOWN_MINT,
+          rawProviderPayload: { signature: "fallback-observation" },
+        })
+      ),
+      () => Effect.succeed([])
+    )
+
+    const state = await context.runPg(fetchProviderAssetState({ mintAddress: UNKNOWN_MINT }))
+    if (state === null) {
+      expect.fail("Expected the fallback Helius provider asset fixture to exist")
+    }
+
+    await context.runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        yield* db
+          .update(schema.providerAssetMappings)
+          .set({ mappingStatus: "excluded" })
+          .where(eq(schema.providerAssetMappings.providerAssetRowId, state.providerAssetRowId))
+      })
+    )
+
+    let dasCalls = 0
+    const result = await runAssetService(
+      Effect.flatMap(HeliusSolanaAssetResolutionService, (service) =>
+        service.resolveAsset({
+          kind: "spl",
+          mintAddress: UNKNOWN_MINT,
+          rawProviderPayload: { signature: "replay-observation" },
+        })
+      ),
+      () => {
+        dasCalls += 1
+        return Effect.die("DAS outage must not block a settled exclusion replay")
+      }
+    )
+
+    expect(dasCalls).toBe(0)
+    expect(result).toMatchObject({
+      kind: "excluded",
+      mintAddress: UNKNOWN_MINT,
+      mappingStatus: "excluded",
+      canonicalAssetId: null,
+      assetRepresentationId: null,
+    })
+  })
+
   it("keeps an exact known non-default representation pending and schedules resolution", async () => {
     await context.runPg(
       Effect.gen(function* () {

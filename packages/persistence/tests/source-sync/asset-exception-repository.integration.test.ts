@@ -1,5 +1,5 @@
 import { AssetExceptionRepository } from "@my/sync-engine/services"
-import { eq } from "drizzle-orm"
+import { and, eq } from "drizzle-orm"
 import * as Effect from "effect/Effect"
 import * as Option from "effect/Option"
 import { beforeEach, describe, expect, it } from "vitest"
@@ -845,6 +845,256 @@ describe("AssetExceptionRepositoryLive", () => {
     expect(results.map((result) => result._tag).sort()).toEqual(["accepted", "ambiguous_identity"])
   })
 
+  it("normalizes EVM contract identities before previewing and persisting them", async () => {
+    const fixture = await seedException("-evm-case")
+    const mixedCaseAddress = "0xAbCdEf0000000000000000000000000000001234"
+    const alternateCaseAddress = "0xABCDEF0000000000000000000000000000001234"
+    const normalizedAddress = mixedCaseAddress.toLowerCase()
+
+    await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const [blockchain] = yield* db
+          .select({ id: schema.blockchains.id })
+          .from(schema.blockchains)
+          .where(eq(schema.blockchains.name, "base"))
+        if (blockchain === undefined) {
+          return yield* Effect.die("Failed to seed Base blockchain observation")
+        }
+        yield* db
+          .update(schema.providerTransfers)
+          .set({
+            observedBlockchainId: blockchain.id,
+            observedRepresentationType: "token",
+            observedContractAddress: mixedCaseAddress,
+            observedDecimals: 6,
+          })
+          .where(eq(schema.providerTransfers.providerAssetId, fixture.providerAssetRowId))
+      })
+    )
+
+    const firstInput = {
+      providerAssetRowId: fixture.providerAssetRowId,
+      claim: {
+        _tag: "identity",
+        assetId: null,
+        newAsset: { name: "Case Token", symbol: "CASE", type: "fungible" },
+        representation: {
+          blockchain: "base",
+          type: "token",
+          contractAddress: mixedCaseAddress,
+          mintAddress: null,
+          decimals: 6,
+        },
+      } as const,
+      evidenceRevision: 2,
+      activeDecisionRevision: fixture.decisionId,
+      evidenceSnapshotIds: [fixture.evidenceId],
+      rationale: "The observed Base contract identifies this economic asset.",
+      expectedResultingAssetId: null,
+      expectedAssetOutcome: "create" as const,
+      expectedRepresentationOutcome: "create" as const,
+    }
+
+    const first = await runRepository(
+      Effect.gen(function* () {
+        const repository = yield* AssetExceptionRepository
+        const preview = yield* repository.previewDecision(firstInput)
+        const submitted = yield* repository.submitDecision({
+          input: firstInput,
+          actorId: TEST_USER_ID,
+        })
+        return { preview, submitted }
+      })
+    )
+
+    expect(first.preview).toMatchObject({
+      _tag: "ready",
+      preview: { assetOutcome: "create", representationOutcome: "create" },
+    })
+    expect(first.submitted).toMatchObject({ _tag: "accepted" })
+
+    const created = await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const [asset] = yield* db
+          .select({ id: schema.assets.id })
+          .from(schema.assets)
+          .where(eq(schema.assets.name, "Case Token"))
+        const [decision] = yield* db
+          .select({ id: schema.assetResolutionDecisions.id })
+          .from(schema.assetResolutionDecisions)
+          .where(
+            and(
+              eq(schema.assetResolutionDecisions.providerAssetRowId, fixture.providerAssetRowId),
+              eq(schema.assetResolutionDecisions.status, "active")
+            )
+          )
+        if (asset === undefined || decision === undefined) {
+          return yield* Effect.die("Failed to load the first EVM identity decision")
+        }
+        return { assetId: asset.id, decisionId: decision.id }
+      })
+    )
+
+    const secondInput = {
+      ...firstInput,
+      claim: {
+        _tag: "identity",
+        assetId: created.assetId,
+        newAsset: null,
+        representation: {
+          ...firstInput.claim.representation,
+          contractAddress: alternateCaseAddress,
+        },
+      } as const,
+      activeDecisionRevision: created.decisionId,
+      rationale: "A differently cased address still identifies the existing Base representation.",
+      expectedResultingAssetId: created.assetId,
+      expectedAssetOutcome: "reuse" as const,
+      expectedRepresentationOutcome: "reuse" as const,
+    }
+
+    const second = await runRepository(
+      Effect.gen(function* () {
+        const repository = yield* AssetExceptionRepository
+        const preview = yield* repository.previewDecision(secondInput)
+        const submitted = yield* repository.submitDecision({
+          input: secondInput,
+          actorId: TEST_USER_ID,
+        })
+        return { preview, submitted }
+      })
+    )
+
+    expect(second.preview).toMatchObject({
+      _tag: "ready",
+      preview: { assetOutcome: "reuse", representationOutcome: "reuse" },
+    })
+    expect(second.submitted).toMatchObject({ _tag: "accepted" })
+
+    const stored = await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const representations = yield* db
+          .select({ contractAddress: schema.assetRepresentations.contractAddress })
+          .from(schema.assetRepresentations)
+          .where(eq(schema.assetRepresentations.assetId, created.assetId))
+        const decisions = yield* db
+          .select({
+            contractAddress: schema.assetResolutionDecisions.contractAddress,
+            humanClaim: schema.assetResolutionDecisions.humanClaim,
+          })
+          .from(schema.assetResolutionDecisions)
+          .where(eq(schema.assetResolutionDecisions.assetId, created.assetId))
+        return { representations, decisions }
+      })
+    )
+
+    expect(stored.representations).toEqual([{ contractAddress: normalizedAddress }])
+    expect(stored.decisions).toHaveLength(2)
+    expect(stored.decisions.map((decision) => decision.contractAddress)).toEqual([
+      normalizedAddress,
+      normalizedAddress,
+    ])
+    for (const decision of stored.decisions) {
+      expect(decision.humanClaim).toEqual(
+        expect.objectContaining({
+          representation: expect.objectContaining({ contractAddress: normalizedAddress }),
+        })
+      )
+    }
+  })
+
+  it("reuses a legacy mixed-case EVM representation", async () => {
+    const fixture = await seedException("-legacy-evm-case")
+    const storedAddress = "0xAbCdEf0000000000000000000000000000005678"
+    const claimedAddress = "0xABCDEF0000000000000000000000000000005678"
+
+    const seeded = await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const [blockchain] = yield* db
+          .select({ id: schema.blockchains.id })
+          .from(schema.blockchains)
+          .where(eq(schema.blockchains.name, "base"))
+        const [asset] = yield* db
+          .insert(schema.assets)
+          .values({ name: "Legacy Case Token", symbol: "LCASE", type: "fungible" })
+          .returning({ id: schema.assets.id })
+        if (blockchain === undefined || asset === undefined) {
+          return yield* Effect.die("Failed to seed legacy EVM representation")
+        }
+        yield* db.insert(schema.assetRepresentations).values({
+          assetId: asset.id,
+          blockchainId: blockchain.id,
+          type: "token",
+          contractAddress: storedAddress,
+          decimals: 6,
+        })
+        yield* db
+          .update(schema.providerTransfers)
+          .set({
+            observedBlockchainId: blockchain.id,
+            observedRepresentationType: "token",
+            observedContractAddress: claimedAddress,
+            observedDecimals: 6,
+          })
+          .where(eq(schema.providerTransfers.providerAssetId, fixture.providerAssetRowId))
+        return { assetId: asset.id }
+      })
+    )
+
+    const input = {
+      providerAssetRowId: fixture.providerAssetRowId,
+      claim: {
+        _tag: "identity",
+        assetId: seeded.assetId,
+        newAsset: null,
+        representation: {
+          blockchain: "base",
+          type: "token",
+          contractAddress: claimedAddress,
+          mintAddress: null,
+          decimals: 6,
+        },
+      } as const,
+      evidenceRevision: 2,
+      activeDecisionRevision: fixture.decisionId,
+      evidenceSnapshotIds: [fixture.evidenceId],
+      rationale: "The legacy mixed-case row is the same Base contract identity.",
+      expectedResultingAssetId: seeded.assetId,
+      expectedAssetOutcome: "reuse" as const,
+      expectedRepresentationOutcome: "reuse" as const,
+    }
+
+    const result = await runRepository(
+      Effect.gen(function* () {
+        const repository = yield* AssetExceptionRepository
+        const preview = yield* repository.previewDecision(input)
+        const submitted = yield* repository.submitDecision({ input, actorId: TEST_USER_ID })
+        return { preview, submitted }
+      })
+    )
+
+    expect(result.preview).toMatchObject({
+      _tag: "ready",
+      preview: { assetOutcome: "reuse", representationOutcome: "reuse" },
+    })
+    expect(result.submitted).toMatchObject({ _tag: "accepted" })
+
+    const representations = await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        return yield* db
+          .select({ contractAddress: schema.assetRepresentations.contractAddress })
+          .from(schema.assetRepresentations)
+          .where(eq(schema.assetRepresentations.assetId, seeded.assetId))
+      })
+    )
+    expect(representations).toEqual([{ contractAddress: storedAddress }])
+  })
+
   it("serializes concurrent claims for the same new canonical identity", async () => {
     const [first, second] = await Promise.all([seedException("-a"), seedException("-b")])
     const submit = (fixture: Awaited<ReturnType<typeof seedException>>) =>
@@ -894,6 +1144,35 @@ describe("AssetExceptionRepositoryLive", () => {
 
   it("supports exact lookup after the exception leaves the queue", async () => {
     const fixture = await seedException()
+
+    await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const [previousDecision] = yield* db
+          .insert(schema.assetResolutionDecisions)
+          .values({
+            providerAssetRowId: fixture.providerAssetRowId,
+            evidenceRevision: 1,
+            policyRevision: "test-policy.0",
+            outcome: "pending",
+            reason: "display_collision",
+            status: "superseded",
+            actor: "policy:test-policy.0",
+          })
+          .returning({ id: schema.assetResolutionDecisions.id })
+        if (previousDecision === undefined) {
+          return yield* Effect.die("Failed to seed previous policy decision")
+        }
+        yield* db
+          .update(schema.assetResolutionEvidence)
+          .set({ decisionId: previousDecision.id })
+          .where(eq(schema.assetResolutionEvidence.id, fixture.evidenceId))
+        yield* db.insert(schema.assetResolutionDecisionEvidenceLinks).values({
+          decisionId: fixture.decisionId,
+          evidenceId: fixture.evidenceId,
+        })
+      })
+    )
 
     const detail = await runRepository(
       Effect.gen(function* () {

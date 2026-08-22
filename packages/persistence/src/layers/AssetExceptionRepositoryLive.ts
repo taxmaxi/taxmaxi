@@ -84,6 +84,17 @@ type IdentityResolution =
       readonly blockchainId: string | null
     }
 
+type IdentityClaim = Extract<AssetExceptionDecisionInput["claim"], { readonly _tag: "identity" }>
+
+type PreparedIdentityClaim = {
+  readonly _tag: "prepared"
+  readonly claim: IdentityClaim
+  readonly blockchainId: string | null
+  readonly isEvm: boolean
+}
+
+type PrepareIdentityClaimResult = { readonly _tag: "invalid_claim" } | PreparedIdentityClaim
+
 type SubmitTransactionResult =
   | Exclude<AssetExceptionDecisionResult, { readonly _tag: "accepted" }>
   | { readonly _tag: "accepted_pending_detail" }
@@ -707,7 +718,15 @@ const make = Effect.gen(function* () {
         policyDecision === null ? (activeHumanDecision?.evidenceSnapshotIds ?? []) : []
       const evidenceCondition =
         policyDecision !== null
-          ? eq(schema.assetResolutionEvidence.decisionId, policyDecision.id)
+          ? or(
+              eq(schema.assetResolutionEvidence.decisionId, policyDecision.id),
+              sql<boolean>`exists (
+                select 1
+                from ${schema.assetResolutionDecisionEvidenceLinks} evidence_link
+                where evidence_link.evidence_id = ${schema.assetResolutionEvidence.id}
+                  and evidence_link.decision_id = ${policyDecision.id}
+              )`
+            )
           : settledEvidenceIds.length > 0
             ? inArray(schema.assetResolutionEvidence.id, settledEvidenceIds)
             : null
@@ -852,17 +871,17 @@ const make = Effect.gen(function* () {
       return { _tag: "valid" as const }
     })
 
-  const resolveIdentity = (
+  const prepareIdentityClaim = (
     client: QueryClient,
-    claim: Extract<AssetExceptionDecisionInput["claim"], { readonly _tag: "identity" }>
-  ): Effect.Effect<IdentityResolution, unknown, never> =>
+    claim: IdentityClaim
+  ): Effect.Effect<PrepareIdentityClaimResult, unknown, never> =>
     Effect.gen(function* () {
       const representation = claim.representation
       const blockchainRows =
         representation === null
           ? []
           : yield* client
-              .select({ id: schema.blockchains.id })
+              .select({ id: schema.blockchains.id, chainType: schema.blockchains.chainType })
               .from(schema.blockchains)
               .where(
                 eq(sql`lower(${schema.blockchains.name})`, representation.blockchain.toLowerCase())
@@ -872,7 +891,33 @@ const make = Effect.gen(function* () {
         return { _tag: "invalid_claim" as const }
       }
 
-      const blockchainId = blockchainRows[0]?.id ?? null
+      const blockchain = blockchainRows[0]
+      const normalizedRepresentation =
+        representation !== null && blockchain?.chainType === "evm"
+          ? {
+              ...representation,
+              contractAddress: representation.contractAddress?.toLowerCase() ?? null,
+            }
+          : representation
+
+      return {
+        _tag: "prepared" as const,
+        claim:
+          normalizedRepresentation === representation
+            ? claim
+            : { ...claim, representation: normalizedRepresentation },
+        blockchainId: blockchain?.id ?? null,
+        isEvm: blockchain?.chainType === "evm",
+      }
+    })
+
+  const resolvePreparedIdentity = (
+    client: QueryClient,
+    prepared: PreparedIdentityClaim
+  ): Effect.Effect<IdentityResolution, unknown, never> =>
+    Effect.gen(function* () {
+      const { claim, blockchainId, isEvm } = prepared
+      const representation = claim.representation
       const representationRows =
         representation === null || blockchainId === null
           ? []
@@ -889,10 +934,15 @@ const make = Effect.gen(function* () {
                   eq(schema.assetRepresentations.blockchainId, blockchainId),
                   representation.contractAddress === null
                     ? isNull(schema.assetRepresentations.contractAddress)
-                    : eq(
-                        sql`lower(${schema.assetRepresentations.contractAddress})`,
-                        representation.contractAddress.toLowerCase()
-                      ),
+                    : isEvm
+                      ? eq(
+                          sql`lower(${schema.assetRepresentations.contractAddress})`,
+                          representation.contractAddress
+                        )
+                      : eq(
+                          schema.assetRepresentations.contractAddress,
+                          representation.contractAddress
+                        ),
                   representation.mintAddress === null
                     ? isNull(schema.assetRepresentations.mintAddress)
                     : eq(schema.assetRepresentations.mintAddress, representation.mintAddress)
@@ -991,11 +1041,23 @@ const make = Effect.gen(function* () {
       }
     })
 
+  const resolveIdentity = (
+    client: QueryClient,
+    claim: IdentityClaim
+  ): Effect.Effect<IdentityResolution, unknown, never> =>
+    Effect.gen(function* () {
+      const prepared = yield* prepareIdentityClaim(client, claim)
+      if (prepared._tag === "invalid_claim") {
+        return prepared
+      }
+      return yield* resolvePreparedIdentity(client, prepared)
+    })
+
   const lockIdentityResolution = ({
     claim,
     tx,
   }: {
-    readonly claim: Extract<AssetExceptionDecisionInput["claim"], { readonly _tag: "identity" }>
+    readonly claim: IdentityClaim
     readonly tx: DbTransactionClient
   }): Effect.Effect<void, unknown> => {
     const representation = claim.representation
@@ -1006,7 +1068,7 @@ const make = Effect.gen(function* () {
         : `display:${claim.newAsset.name.toLowerCase()}:${claim.newAsset.symbol.toLowerCase()}:${claim.newAsset.type}`,
       representation === null
         ? null
-        : `representation:${representation.blockchain.toLowerCase()}:${representation.contractAddress?.toLowerCase() ?? ""}:${representation.mintAddress ?? ""}`,
+        : `representation:${representation.blockchain.toLowerCase()}:${representation.contractAddress ?? ""}:${representation.mintAddress ?? ""}`,
     ]
       .filter((key): key is string => key !== null)
       .sort((left, right) => left.localeCompare(right))
@@ -1221,7 +1283,13 @@ const make = Effect.gen(function* () {
             return validation
           }
 
-          if (input.claim._tag === "identity") {
+          const preparedIdentityClaim =
+            input.claim._tag === "identity" ? yield* prepareIdentityClaim(tx, input.claim) : null
+          if (preparedIdentityClaim?._tag === "invalid_claim") {
+            return preparedIdentityClaim
+          }
+
+          if (input.claim._tag === "identity" && preparedIdentityClaim?._tag === "prepared") {
             if (
               !(yield* isClaimCompatibleWithObservedRepresentation({
                 client: tx,
@@ -1231,10 +1299,12 @@ const make = Effect.gen(function* () {
             ) {
               return { _tag: "invalid_claim" as const }
             }
-            yield* lockIdentityResolution({ claim: input.claim, tx })
+            yield* lockIdentityResolution({ claim: preparedIdentityClaim.claim, tx })
           }
           const identityResolution =
-            input.claim._tag === "identity" ? yield* resolveIdentity(tx, input.claim) : null
+            preparedIdentityClaim?._tag === "prepared"
+              ? yield* resolvePreparedIdentity(tx, preparedIdentityClaim)
+              : null
           if (identityResolution !== null && identityResolution._tag !== "resolved") {
             return identityResolution
           }
@@ -1253,9 +1323,14 @@ const make = Effect.gen(function* () {
           let assetId: string | null = null
           let representationId: string | null = null
 
-          if (input.claim._tag === "identity" && identityResolution?._tag === "resolved") {
+          if (
+            input.claim._tag === "identity" &&
+            preparedIdentityClaim?._tag === "prepared" &&
+            identityResolution?._tag === "resolved"
+          ) {
+            const preparedClaim = preparedIdentityClaim.claim
             if (identityResolution.assetId === null) {
-              const newAsset = input.claim.newAsset
+              const newAsset = preparedClaim.newAsset
               if (newAsset === null) {
                 return { _tag: "invalid_claim" as const }
               }
@@ -1282,7 +1357,7 @@ const make = Effect.gen(function* () {
 
             representationId = identityResolution.representationId
             if (
-              input.claim.representation !== null &&
+              preparedClaim.representation !== null &&
               identityResolution.representationOutcome === "create"
             ) {
               if (identityResolution.blockchainId === null || assetId === null) {
@@ -1293,10 +1368,10 @@ const make = Effect.gen(function* () {
                 .values({
                   assetId,
                   blockchainId: identityResolution.blockchainId,
-                  type: input.claim.representation.type,
-                  contractAddress: input.claim.representation.contractAddress,
-                  mintAddress: input.claim.representation.mintAddress,
-                  decimals: input.claim.representation.decimals,
+                  type: preparedClaim.representation.type,
+                  contractAddress: preparedClaim.representation.contractAddress,
+                  mintAddress: preparedClaim.representation.mintAddress,
+                  decimals: preparedClaim.representation.decimals,
                   metadata: { authority: "human_asset_exception" },
                   createdAt: now,
                   updatedAt: now,
@@ -1311,6 +1386,9 @@ const make = Effect.gen(function* () {
               representationId = insertedRepresentation.id
             }
           }
+
+          const persistedClaim =
+            preparedIdentityClaim?._tag === "prepared" ? preparedIdentityClaim.claim : input.claim
 
           const activeDecision = detail.activeDecision
           if (activeDecision !== null) {
@@ -1345,25 +1423,27 @@ const make = Effect.gen(function* () {
               assetId,
               assetRepresentationId: representationId,
               blockchain:
-                input.claim._tag === "identity"
-                  ? (input.claim.representation?.blockchain ?? null)
+                persistedClaim._tag === "identity"
+                  ? (persistedClaim.representation?.blockchain ?? null)
                   : null,
               representationType:
-                input.claim._tag === "identity" ? (input.claim.representation?.type ?? null) : null,
+                persistedClaim._tag === "identity"
+                  ? (persistedClaim.representation?.type ?? null)
+                  : null,
               contractAddress:
-                input.claim._tag === "identity"
-                  ? (input.claim.representation?.contractAddress ?? null)
+                persistedClaim._tag === "identity"
+                  ? (persistedClaim.representation?.contractAddress ?? null)
                   : null,
               mintAddress:
-                input.claim._tag === "identity"
-                  ? (input.claim.representation?.mintAddress ?? null)
+                persistedClaim._tag === "identity"
+                  ? (persistedClaim.representation?.mintAddress ?? null)
                   : null,
               decimals:
-                input.claim._tag === "identity"
-                  ? (input.claim.representation?.decimals ?? null)
+                persistedClaim._tag === "identity"
+                  ? (persistedClaim.representation?.decimals ?? null)
                   : null,
-              reason: input.claim._tag === "exclusion" ? input.claim.reason : null,
-              humanClaim: input.claim,
+              reason: persistedClaim._tag === "exclusion" ? persistedClaim.reason : null,
+              humanClaim: persistedClaim,
               rationale: input.rationale.trim(),
               actor: actorId,
               createdAt: now,

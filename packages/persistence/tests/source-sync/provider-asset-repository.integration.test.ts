@@ -1,4 +1,4 @@
-import { eq, sql } from "drizzle-orm"
+import { and, eq, sql } from "drizzle-orm"
 import * as Deferred from "effect/Deferred"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
@@ -1075,6 +1075,80 @@ describe("ProviderAssetRepositoryLive", () => {
           })
         )
       )
+      const reviewedEvidenceIds = await runPg(
+        Effect.gen(function* () {
+          const db = yield* drizzle
+          const [exclusionDecision] = yield* db
+            .select({ id: schema.assetResolutionDecisions.id })
+            .from(schema.assetResolutionDecisions)
+            .where(
+              and(
+                eq(schema.assetResolutionDecisions.providerAssetRowId, providerAsset.id),
+                eq(schema.assetResolutionDecisions.status, "active")
+              )
+            )
+            .limit(1)
+          const [linkedEvidenceOwner] = yield* db
+            .insert(schema.providerAssets)
+            .values({
+              provider: "coinbase",
+              providerAssetId: "linked-reversal-evidence-owner",
+              currencyCode: "LINKED",
+              evidenceRevision: 1,
+              retrievedAt: new Date("2026-08-21T12:00:00.000Z"),
+            })
+            .returning({ id: schema.providerAssets.id })
+          if (exclusionDecision === undefined || linkedEvidenceOwner === undefined) {
+            return yield* Effect.die("Failed to seed exclusion reversal evidence owners")
+          }
+          const [linkedEvidenceDecision] = yield* db
+            .insert(schema.assetResolutionDecisions)
+            .values({
+              providerAssetRowId: linkedEvidenceOwner.id,
+              evidenceRevision: 1,
+              policyRevision: "linked-evidence.1",
+              outcome: "excluded",
+              reason: "explicit_banned_verdict",
+              actor: "system:asset-resolution-policy",
+            })
+            .returning({ id: schema.assetResolutionDecisions.id })
+          if (linkedEvidenceDecision === undefined) {
+            return yield* Effect.die("Failed to seed linked evidence decision")
+          }
+          const [ownedEvidence] = yield* db
+            .insert(schema.assetResolutionEvidence)
+            .values({
+              decisionId: exclusionDecision.id,
+              authority: "owned-authority",
+              claimKind: "spam",
+              retrievedAt: new Date("2026-08-21T12:01:00.000Z"),
+              evidenceRevision: 1,
+              decodedClaim: { verdict: "excluded" },
+              rawPayload: { source: "owned" },
+            })
+            .returning({ id: schema.assetResolutionEvidence.id })
+          const [linkedEvidence] = yield* db
+            .insert(schema.assetResolutionEvidence)
+            .values({
+              decisionId: linkedEvidenceDecision.id,
+              authority: "linked-authority",
+              claimKind: "spam",
+              retrievedAt: new Date("2026-08-21T12:02:00.000Z"),
+              evidenceRevision: 1,
+              decodedClaim: { verdict: "excluded" },
+              rawPayload: { source: "linked" },
+            })
+            .returning({ id: schema.assetResolutionEvidence.id })
+          if (ownedEvidence === undefined || linkedEvidence === undefined) {
+            return yield* Effect.die("Failed to seed exclusion reversal evidence")
+          }
+          yield* db.insert(schema.assetResolutionDecisionEvidenceLinks).values([
+            { decisionId: exclusionDecision.id, evidenceId: ownedEvidence.id },
+            { decisionId: exclusionDecision.id, evidenceId: linkedEvidence.id },
+          ])
+          return [ownedEvidence.id, linkedEvidence.id].sort()
+        })
+      )
       const revisedProviderAsset = await runRepository(
         Effect.gen(function* () {
           const repository = yield* ProviderAssetRepository
@@ -1161,6 +1235,23 @@ describe("ProviderAssetRepositoryLive", () => {
         reason: "manual_exclusion_reversal",
         actor: "human:admin",
       })
+      const reversalEvidenceIds = await runPg(
+        Effect.gen(function* () {
+          const db = yield* drizzle
+          return (yield* db
+            .select({ evidenceId: schema.assetResolutionDecisionEvidenceLinks.evidenceId })
+            .from(schema.assetResolutionDecisionEvidenceLinks)
+            .where(
+              eq(
+                schema.assetResolutionDecisionEvidenceLinks.decisionId,
+                state.history[1]?.id ?? "00000000-0000-0000-0000-000000000000"
+              )
+            ))
+            .map(({ evidenceId }) => evidenceId)
+            .sort()
+        })
+      )
+      expect(reversalEvidenceIds).toEqual(reviewedEvidenceIds)
     })
 
     it("accepts exact representation evidence observed after approval", async () => {

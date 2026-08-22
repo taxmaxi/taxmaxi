@@ -662,6 +662,24 @@ const make = Effect.gen(function* () {
                 })
               }
 
+              const ownedEvidence = yield* tx
+                .select({ evidenceId: schema.assetResolutionEvidence.id })
+                .from(schema.assetResolutionEvidence)
+                .where(eq(schema.assetResolutionEvidence.decisionId, activeDecision.id))
+              const linkedEvidence = yield* tx
+                .select({
+                  evidenceId: schema.assetResolutionDecisionEvidenceLinks.evidenceId,
+                })
+                .from(schema.assetResolutionDecisionEvidenceLinks)
+                .where(
+                  eq(schema.assetResolutionDecisionEvidenceLinks.decisionId, activeDecision.id)
+                )
+              const reviewedEvidenceIds = [
+                ...new Set(
+                  [...ownedEvidence, ...linkedEvidence].map(({ evidenceId }) => evidenceId)
+                ),
+              ].sort()
+
               const [superseded] = yield* tx
                 .update(schema.assetResolutionDecisions)
                 .set({ status: "superseded" })
@@ -681,7 +699,7 @@ const make = Effect.gen(function* () {
               }
 
               const observed = expectedObservedRepresentations[0]
-              yield* insertAssetResolutionDecision({
+              const reversalDecision = yield* insertAssetResolutionDecision({
                 tx,
                 supersedesDecisionId: activeDecision.id,
                 decision: {
@@ -703,6 +721,30 @@ const make = Effect.gen(function* () {
                 operation:
                   "providerAssetRepository.approveProviderAssetMappingAndRequestReplay.recordReversal",
               })
+              if (reversalDecision === null) {
+                return yield* new SyncEngineStorageError({
+                  operation:
+                    "providerAssetRepository.approveProviderAssetMappingAndRequestReplay.recordReversal",
+                  cause: "The manual exclusion reversal decision was not recorded.",
+                })
+              }
+              if (reviewedEvidenceIds.length > 0) {
+                yield* tx
+                  .insert(schema.assetResolutionDecisionEvidenceLinks)
+                  .values(
+                    reviewedEvidenceIds.map((evidenceId) => ({
+                      decisionId: reversalDecision.id,
+                      evidenceId,
+                      createdAt: now,
+                    }))
+                  )
+                  .onConflictDoNothing()
+                  .pipe(
+                    wrapSyncEngineSqlError(
+                      "providerAssetRepository.approveProviderAssetMappingAndRequestReplay.linkReversalEvidence"
+                    )
+                  )
+              }
             }
 
             const [approved] = yield* tx
