@@ -1449,7 +1449,7 @@ describe("asset resolution attach and rebuild", () => {
     )
   })
 
-  it("neither excludes nor creates on suspicious or unverified signals alone", async () => {
+  it("pauses on suspicious signals but creates when a later signal is unverified", async () => {
     await Effect.runPromise(
       Effect.gen(function* () {
         coinGeckoMode = "not_found"
@@ -1473,8 +1473,8 @@ describe("asset resolution attach and rebuild", () => {
         const blockedTax = yield* calculateTax().pipe(Effect.result)
         expect(blockedTax._tag).toBe("Failure")
 
-        // Unverified is also non-final: the same observation at a new
-        // evidence revision remains pending instead of creating an asset.
+        // Unverified decides nothing: the same observation at a new evidence
+        // revision follows the normal standalone-create path.
         jupiterMode = "unverified"
         const secondJobId = "00000000-4000-4000-8000-000000000772"
         yield* Effect.gen(function* () {
@@ -1506,11 +1506,13 @@ describe("asset resolution attach and rebuild", () => {
         }).pipe(Effect.provide(TestPgClientLive))
 
         const unverified = yield* runResolutionJob({ jobId: secondJobId })
-        expect(unverified.outcome).toBe("pending")
+        expect(unverified.outcome).toBe("created")
 
         const unverifiedState = yield* fetchAttachState()
-        expect(unverifiedState.mapping).toMatchObject({ mappingStatus: "pending_review" })
-        expect(unverifiedState.representations).toEqual([])
+        expect(unverifiedState.mapping).toMatchObject({ mappingStatus: "approved" })
+        expect(unverifiedState.representations).toEqual([
+          expect.objectContaining({ type: "token", mintAddress: ORB_MINT, decimals: 8 }),
+        ])
       })
     )
   })

@@ -811,7 +811,7 @@ describe("AssetResolutionPolicy", () => {
       })
     })
 
-    it("keeps suspicious, unverified, and low-activity signals non-final", () => {
+    it("pauses on suspicious signals but creates for non-decisive legitimacy signals", () => {
       const suspicious = decide({
         chain: longTailChainClaim(),
         legitimacy: [AssetLegitimacyClaim.make({ authority: "jupiter", verdict: "suspicious" })],
@@ -829,8 +829,8 @@ describe("AssetResolutionPolicy", () => {
         _tag: "pending",
         reason: "spam_evidence",
       })
-      expect(unverified).toMatchObject({ _tag: "pending", reason: "spam_evidence" })
-      expect(lowActivity).toMatchObject({ _tag: "pending", reason: "spam_evidence" })
+      expect(unverified).toMatchObject({ _tag: "create_standalone" })
+      expect(lowActivity).toMatchObject({ _tag: "create_standalone" })
     })
 
     it("fails closed when banned evidence conflicts with exact attach evidence", () => {

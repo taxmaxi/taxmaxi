@@ -853,19 +853,12 @@ const decideStandaloneCreation = ({
 }): AssetResolutionDecision => {
   // An explicit banned verdict is a final answer, not an open question: the
   // observation is excluded from derived accounting instead of waiting for
-  // review. Weaker risk signals block automatic creation but neither exclude
-  // nor approve the observation.
+  // review. A suspicious signal pauses automatic creation, while unverified
+  // and low-activity signals decide nothing.
   if (legitimacy.some((claim) => claim.verdict === "banned")) {
     return excluded("authority_banned")
   }
-  if (
-    legitimacy.some(
-      (claim) =>
-        claim.verdict === "suspicious" ||
-        claim.verdict === "unverified" ||
-        claim.verdict === "low_activity"
-    )
-  ) {
+  if (legitimacy.some((claim) => claim.verdict === "suspicious")) {
     return pending("spam_evidence")
   }
   if (!STANDALONE_CREATION_SUPPORTED_TYPES.includes(chain.type)) {
