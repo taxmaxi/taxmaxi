@@ -917,6 +917,56 @@ describe("ProviderAssetRepositoryLive", () => {
       expect(jobs).toEqual([{ followUpMode: null, mode: "replay", status: "pending" }])
     })
 
+    it("tracks automatic exclusion replay work against the active decision", async () => {
+      const providerAsset = await seedPendingApprovalAsset("tracked-automatic-exclusion")
+
+      await runRepository(
+        Effect.flatMap(ProviderAssetRepository, (repository) =>
+          repository.excludeProviderAssetMappingAndRequestReplay({
+            providerAssetRowId: providerAsset.id,
+            decision: makeExcludedDecision(providerAsset.id),
+            sourceNotes: "Automatic exclusion with tracked replay",
+            expectedObservedRepresentations: [],
+            expectedProviderAssetRetrievedAt: providerAsset.retrievedAt,
+          })
+        )
+      )
+
+      const work = await runPg(
+        Effect.gen(function* () {
+          const db = yield* drizzle
+          return yield* db
+            .select({
+              decisionStatus: schema.assetResolutionDecisions.status,
+              decisionOutcome: schema.assetResolutionDecisions.outcome,
+              sourceId: schema.assetDecisionRematerializations.sourceId,
+              jobStatus: schema.processingJobs.status,
+            })
+            .from(schema.assetDecisionRematerializations)
+            .innerJoin(
+              schema.assetResolutionDecisions,
+              eq(
+                schema.assetResolutionDecisions.id,
+                schema.assetDecisionRematerializations.decisionId
+              )
+            )
+            .innerJoin(
+              schema.processingJobs,
+              eq(schema.processingJobs.id, schema.assetDecisionRematerializations.processingJobId)
+            )
+        })
+      )
+
+      expect(work).toEqual([
+        {
+          decisionStatus: "active",
+          decisionOutcome: "excluded",
+          sourceId: TEST_SOURCE_ID,
+          jobStatus: "pending",
+        },
+      ])
+    })
+
     it("rolls back the exclusion decision when the mapping transition fails", async () => {
       const providerAsset = await seedPendingApprovalAsset("atomic-exclusion-rollback", {
         withProviderTransfer: false,

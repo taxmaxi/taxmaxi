@@ -922,8 +922,14 @@ export const decideAssetResolution = ({
 
   const { claims: legitimacyClaims, failure: legitimacyFailure } = partitionLegitimacy(legitimacy)
   const hasBannedClaim = legitimacyClaims.some((claim) => claim.verdict === "banned")
-  const guardAttachAgainstBan = (decision: AssetResolutionDecision): AssetResolutionDecision =>
-    decision._tag === "attach" && hasBannedClaim ? failClosed("conflicting_evidence") : decision
+  const settleWithBannedClaim = (decision: AssetResolutionDecision): AssetResolutionDecision => {
+    if (!hasBannedClaim) {
+      return decision
+    }
+    return decision._tag === "attach"
+      ? failClosed("conflicting_evidence")
+      : excluded("authority_banned")
+  }
 
   const representationKey = exactRepresentationKey(chain)
   const owned = identity.representations.find((representation) => {
@@ -931,7 +937,7 @@ export const decideAssetResolution = ({
     return ownedKey !== null && ownedKey === representationKey
   })
   if (owned !== undefined) {
-    return guardAttachAgainstBan(decideForOwnedRepresentation({ owned, chain, registry, identity }))
+    return settleWithBannedClaim(decideForOwnedRepresentation({ owned, chain, registry, identity }))
   }
 
   if (
@@ -939,14 +945,11 @@ export const decideAssetResolution = ({
     registry._tag !== "registry_not_found" &&
     registry._tag !== "registry_not_queried"
   ) {
-    if (hasBannedClaim) {
-      return excluded("authority_banned")
-    }
-    return failClosed(evidenceFailureReason(registry))
+    return settleWithBannedClaim(failClosed(evidenceFailureReason(registry)))
   }
 
   if (legitimacyFailure !== null) {
-    return failClosed(evidenceFailureReason(legitimacyFailure))
+    return settleWithBannedClaim(failClosed(evidenceFailureReason(legitimacyFailure)))
   }
 
   if (registry._tag === "coingecko_claim") {
@@ -955,38 +958,40 @@ export const decideAssetResolution = ({
       // The registry answered a lookup for this exact representation with a
       // coin that does not list it. That is contradictory evidence, not a
       // safe basis to attach or create.
-      return failClosed("conflicting_evidence")
+      return settleWithBannedClaim(failClosed("conflicting_evidence"))
     }
 
     const registryOwner = identity.registryOwner
     if (registryOwner !== null && registryOwner.coingeckoCoinId === registry.coinId) {
       if (!typesAreCompatible({ asset: registryOwner, chain })) {
-        return failClosed("incompatible_type")
+        return settleWithBannedClaim(failClosed("incompatible_type"))
       }
       if (platform.decimals === null) {
-        return hasBannedClaim ? excluded("authority_banned") : pending("non_exact_platform_match")
+        return settleWithBannedClaim(pending("non_exact_platform_match"))
       }
       if (platform.decimals !== chain.decimals) {
-        return failClosed("incompatible_decimals")
+        return settleWithBannedClaim(failClosed("incompatible_decimals"))
       }
 
-      return guardAttachAgainstBan(attach({ assetKey: registryOwner.assetKey, chain }))
+      return settleWithBannedClaim(attach({ assetKey: registryOwner.assetKey, chain }))
     }
 
     // No local asset owns the coin id. Registry decimals must not contradict
     // the chain, but their absence is missing data, not a conflict.
     if (platform.decimals !== null && platform.decimals !== chain.decimals) {
-      return failClosed("incompatible_decimals")
+      return settleWithBannedClaim(failClosed("incompatible_decimals"))
     }
   }
 
-  return decideStandaloneCreation({
-    chain,
-    coinGecko: registry._tag === "coingecko_claim" ? registry : null,
-    legitimacy: legitimacyClaims,
-    identity,
-    providerDisplay,
-  })
+  return settleWithBannedClaim(
+    decideStandaloneCreation({
+      chain,
+      coinGecko: registry._tag === "coingecko_claim" ? registry : null,
+      legitimacy: legitimacyClaims,
+      identity,
+      providerDisplay,
+    })
+  )
 }
 
 const decodeChainEvidence = (

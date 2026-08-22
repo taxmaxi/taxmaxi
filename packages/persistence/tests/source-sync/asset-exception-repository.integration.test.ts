@@ -190,6 +190,7 @@ describe("AssetExceptionRepositoryLive", () => {
       _tag: "accepted",
       detail: {
         reviewStatus: "excluded",
+        impact: { blockedReports: 1, affectedSources: 1 },
         rematerialization: { status: "pending", affectedSourceCount: 1 },
       },
     })
@@ -252,7 +253,10 @@ describe("AssetExceptionRepositoryLive", () => {
       })
     )
 
-    expect(completedDetail.rematerialization.status).toBe("complete")
+    expect(completedDetail).toMatchObject({
+      impact: { blockedReports: 0, affectedSources: 1 },
+      rematerialization: { status: "complete" },
+    })
 
     const failedAt = new Date("2026-08-21T18:00:00.000Z")
     await runPg(
@@ -278,11 +282,14 @@ describe("AssetExceptionRepositoryLive", () => {
       })
     )
 
-    expect(failedDetail.rematerialization).toMatchObject({
-      status: "operator_attention",
-      failedSourceCount: 1,
-      lastFailureAt: failedAt,
-      failureCode: "rematerialization_failed",
+    expect(failedDetail).toMatchObject({
+      impact: { blockedReports: 1, affectedSources: 1 },
+      rematerialization: {
+        status: "operator_attention",
+        failedSourceCount: 1,
+        lastFailureAt: failedAt,
+        failureCode: "rematerialization_failed",
+      },
     })
   })
 
@@ -487,6 +494,56 @@ describe("AssetExceptionRepositoryLive", () => {
     expect(result).toMatchObject({ _tag: "invalid_claim" })
   })
 
+  it("rejects chainless identity claims incompatible with the provider asset type", async () => {
+    const fiatFixture = await seedException("-fiat-claim")
+    const nftFixture = await seedException("-nft-claim")
+    await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        yield* db
+          .update(schema.providerAssets)
+          .set({ providerType: "fiat" })
+          .where(eq(schema.providerAssets.id, fiatFixture.providerAssetRowId))
+      })
+    )
+
+    const results = await runRepository(
+      Effect.gen(function* () {
+        const repository = yield* AssetExceptionRepository
+        const fiatAsAsset = yield* repository.previewDecision({
+          providerAssetRowId: fiatFixture.providerAssetRowId,
+          claim: {
+            _tag: "identity",
+            assetId: null,
+            newAsset: { name: "Fiat as asset", symbol: "FIA", type: "fungible" },
+            representation: null,
+          },
+          evidenceRevision: 2,
+          activeDecisionRevision: fiatFixture.decisionId,
+          evidenceSnapshotIds: [fiatFixture.evidenceId],
+          rationale: "A fiat observation must not become an economic asset mapping.",
+        })
+        const cryptoAsNft = yield* repository.previewDecision({
+          providerAssetRowId: nftFixture.providerAssetRowId,
+          claim: {
+            _tag: "identity",
+            assetId: null,
+            newAsset: { name: "Crypto NFT", symbol: "CNF", type: "nft" },
+            representation: null,
+          },
+          evidenceRevision: 2,
+          activeDecisionRevision: nftFixture.decisionId,
+          evidenceSnapshotIds: [nftFixture.evidenceId],
+          rationale: "A chainless crypto observation must remain fungible.",
+        })
+        return { fiatAsAsset, cryptoAsNft }
+      })
+    )
+
+    expect(results.fiatAsAsset).toMatchObject({ _tag: "invalid_claim" })
+    expect(results.cryptoAsNft).toMatchObject({ _tag: "invalid_claim" })
+  })
+
   it("rejects a representation incompatible with an existing asset type", async () => {
     const fixture = await seedException()
     const assetId = await runPg(
@@ -571,45 +628,20 @@ describe("AssetExceptionRepositoryLive", () => {
         if (humanDecision === undefined) {
           return yield* Effect.die("Failed to seed human decision")
         }
+        yield* db.insert(schema.assetResolutionDecisionEvidenceLinks).values({
+          decisionId: humanDecision.id,
+          evidenceId: fixture.evidenceId,
+        })
 
         yield* db
           .update(schema.providerAssets)
           .set({ evidenceRevision: 3 })
           .where(eq(schema.providerAssets.id, fixture.providerAssetRowId))
-        yield* db.insert(schema.assetResolutionJobs).values({
-          providerAssetRowId: fixture.providerAssetRowId,
-          evidenceRevision: 3,
-          status: "completed",
-        })
-        const [policyDecision] = yield* db
-          .insert(schema.assetResolutionDecisions)
-          .values({
-            providerAssetRowId: fixture.providerAssetRowId,
-            evidenceRevision: 3,
-            policyRevision: "test-policy.2",
-            outcome: "pending",
-            reason: "display_collision",
-            actor: "policy:test-policy.2",
-          })
-          .returning({ id: schema.assetResolutionDecisions.id })
-        if (policyDecision === undefined) {
-          return yield* Effect.die("Failed to seed current policy decision")
-        }
-        yield* db.insert(schema.assetResolutionEvidence).values({
-          decisionId: policyDecision.id,
-          authority: "chain",
-          claimKind: "representation",
-          sourceLocator: "coinbase:exception-token:revision-3",
-          retrievedAt: new Date("2025-01-03T00:00:00.000Z"),
-          evidenceRevision: 3,
-          decodedClaim: { blockchain: "base", decimals: 6 },
-          rawPayload: { revision: 3 },
-        })
         return humanDecision.id
       })
     )
 
-    const detail = await runRepository(
+    const result = await runRepository(
       Effect.gen(function* () {
         const repository = yield* AssetExceptionRepository
         const found = yield* repository.findDetail({
@@ -619,17 +651,26 @@ describe("AssetExceptionRepositoryLive", () => {
         if (Option.isNone(found)) {
           return yield* Effect.die("Expected exception detail")
         }
-        return found.value
+        const preview = yield* repository.previewDecision({
+          providerAssetRowId: fixture.providerAssetRowId,
+          claim: { _tag: "exclusion", reason: "provider_artifact" },
+          evidenceRevision: 3,
+          activeDecisionRevision: humanDecisionId,
+          evidenceSnapshotIds: [fixture.evidenceId],
+          rationale: "The active settled evidence remains available for supersession.",
+        })
+        return { detail: found.value, preview }
       })
     )
 
-    expect(detail).toMatchObject({
+    expect(result.detail).toMatchObject({
       reviewStatus: "excluded",
       activeDecisionRevision: humanDecisionId,
       activeDecision: { id: humanDecisionId, evidenceRevision: 2 },
-      policyOutput: { outcome: "pending", reason: "display_collision" },
-      evidence: [expect.objectContaining({ evidenceRevision: 3 })],
+      policyOutput: null,
+      evidence: [expect.objectContaining({ id: fixture.evidenceId, evidenceRevision: 2 })],
     })
+    expect(result.preview).toMatchObject({ _tag: "ready" })
   })
 
   it("treats a display match for a new asset as an explicit identity conflict", async () => {

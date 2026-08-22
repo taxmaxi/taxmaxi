@@ -93,12 +93,14 @@ const make = Effect.gen(function* () {
     now,
     reason,
     operation,
+    decisionId,
   }: {
     readonly tx: DbTransactionClient
     readonly providerAssetRowId: string
     readonly now: Date
     readonly reason: string
     readonly operation: string
+    readonly decisionId: string | null
   }): Effect.Effect<void, SyncEngineStorageError> =>
     Effect.gen(function* () {
       const recordedReplaySources = yield* tx
@@ -136,7 +138,7 @@ const make = Effect.gen(function* () {
           Effect.gen(function* () {
             const requestReplay = (
               attemptsRemaining: number
-            ): Effect.Effect<void, SyncEngineStorageError> =>
+            ): Effect.Effect<string, SyncEngineStorageError> =>
               Effect.gen(function* () {
                 const [activeJob] = yield* tx
                   .update(schema.processingJobs)
@@ -152,7 +154,7 @@ const make = Effect.gen(function* () {
                   .pipe(wrapSyncEngineSqlError(`${operation}.requestActiveReplay`))
 
                 if (activeJob !== undefined) {
-                  return
+                  return activeJob.id
                 }
 
                 const [createdJob] = yield* tx
@@ -173,7 +175,7 @@ const make = Effect.gen(function* () {
                   .pipe(wrapSyncEngineSqlError(`${operation}.createReplay`))
 
                 if (createdJob !== undefined) {
-                  return
+                  return createdJob.id
                 }
 
                 if (attemptsRemaining > 1) {
@@ -190,7 +192,26 @@ const make = Effect.gen(function* () {
                 })
               })
 
-            yield* requestReplay(3)
+            const processingJobId = yield* requestReplay(3)
+            if (decisionId !== null) {
+              yield* tx
+                .insert(schema.assetDecisionRematerializations)
+                .values({
+                  decisionId,
+                  sourceId,
+                  processingJobId,
+                  status: "pending",
+                  createdAt: now,
+                  updatedAt: now,
+                })
+                .onConflictDoNothing({
+                  target: [
+                    schema.assetDecisionRematerializations.decisionId,
+                    schema.assetDecisionRematerializations.sourceId,
+                  ],
+                })
+                .pipe(wrapSyncEngineSqlError(`${operation}.trackReplay`))
+            }
           }),
         { discard: true }
       )
@@ -668,12 +689,28 @@ const make = Effect.gen(function* () {
               })
             }
 
+            const [replayDecision] = yield* tx
+              .select({ id: schema.assetResolutionDecisions.id })
+              .from(schema.assetResolutionDecisions)
+              .where(
+                and(
+                  eq(
+                    schema.assetResolutionDecisions.providerAssetRowId,
+                    mapping.providerAssetRowId
+                  ),
+                  eq(schema.assetResolutionDecisions.status, "active")
+                )
+              )
+              .orderBy(desc(schema.assetResolutionDecisions.createdAt))
+              .limit(1)
+
             yield* requestReplayForProviderAssetSources({
               tx,
               providerAssetRowId: mapping.providerAssetRowId,
               now,
               reason: "asset_mapping_approved",
               operation: "providerAssetRepository.approveProviderAssetMappingAndRequestReplay",
+              decisionId: replayDecision?.id ?? null,
             })
 
             return { mappingChanged: true }
@@ -741,9 +778,13 @@ const make = Effect.gen(function* () {
               operation:
                 "providerAssetRepository.excludeProviderAssetMappingAndRequestReplay.recordDecision",
             })
+            let replayDecisionId = insertedDecision?.id ?? null
             if (insertedDecision === null) {
               const [activeDecision] = yield* tx
-                .select({ outcome: schema.assetResolutionDecisions.outcome })
+                .select({
+                  id: schema.assetResolutionDecisions.id,
+                  outcome: schema.assetResolutionDecisions.outcome,
+                })
                 .from(schema.assetResolutionDecisions)
                 .where(
                   and(
@@ -761,6 +802,7 @@ const make = Effect.gen(function* () {
                   cause: "A different active resolution decision won before exclusion.",
                 })
               }
+              replayDecisionId = activeDecision.id
             }
 
             const [excluded] = yield* tx
@@ -795,6 +837,7 @@ const make = Effect.gen(function* () {
               now,
               reason: "asset_observation_excluded",
               operation: "providerAssetRepository.excludeProviderAssetMappingAndRequestReplay",
+              decisionId: replayDecisionId,
             })
 
             return { mappingChanged: true, decisionRecorded: insertedDecision !== null }

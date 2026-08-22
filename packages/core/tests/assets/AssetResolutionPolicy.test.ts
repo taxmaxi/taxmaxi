@@ -522,6 +522,52 @@ describe("AssetResolutionPolicy", () => {
       })
     })
 
+    it("lets a banned verdict win whenever registry evidence cannot attach", () => {
+      const banned = [AssetLegitimacyClaim.make({ authority: "jupiter", verdict: "banned" })]
+      const decisions = [
+        decide({
+          chain: ChainClaim.make({ ...solanaUsdcChainFact, decimals: 8 }),
+          registry: usdcCoinGeckoClaim(),
+          identity: { ...usdcIdentity(), representations: [] },
+          legitimacy: banned,
+        }),
+        decide({
+          chain: ChainClaim.make({ ...solanaUsdcChainFact, type: "nft" }),
+          registry: usdcCoinGeckoClaim(),
+          identity: { ...usdcIdentity(), representations: [] },
+          legitimacy: banned,
+        }),
+        decide({
+          chain: solanaUsdcChainClaim(),
+          registry: CoinGeckoClaim.make({
+            coinId: "usd-coin",
+            name: "USDC",
+            symbol: "usdc",
+            platforms: [
+              CoinGeckoPlatformMapping.make({
+                platformId: "ethereum",
+                contractAddress: ETHEREUM_USDC_CONTRACT,
+                decimals: 6,
+              }),
+            ],
+          }),
+          identity: { ...usdcIdentity(), representations: [] },
+          legitimacy: banned,
+        }),
+        decide({
+          chain: longTailChainClaim(),
+          registry: longTailCoinGeckoClaim({ decimals: 6 }),
+          legitimacy: banned,
+        }),
+      ]
+
+      expect(decisions).toEqual(
+        decisions.map(() =>
+          expect.objectContaining({ _tag: "excluded", reason: "authority_banned" })
+        )
+      )
+    })
+
     it("fails closed when the owned representation disagrees with the chain claim", () => {
       const incompatibleDecimals = decide({
         chain: ChainClaim.make({

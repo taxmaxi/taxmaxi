@@ -25,7 +25,7 @@ import {
   type AssetExceptionRepositoryShape,
   SyncEngineStorageError,
 } from "@my/sync-engine/services"
-import { and, asc, desc, eq, inArray, isNull, sql } from "drizzle-orm"
+import { and, asc, desc, eq, inArray, isNull, or, sql } from "drizzle-orm"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import * as Option from "effect/Option"
@@ -152,8 +152,26 @@ const make = Effect.gen(function* () {
       if (!isClaimCompatibleWithHeliusObservation({ detail, claim })) {
         return false
       }
-      if (detail.provider === "helius-solana" || claim.representation === null) {
+      if (detail.provider === "helius-solana") {
         return true
+      }
+      if (claim.representation === null) {
+        if (detail.provider !== "coinbase") {
+          return true
+        }
+
+        const claimedAssetType =
+          claim.newAsset?.type ??
+          (claim.assetId === null
+            ? null
+            : ((yield* client
+                .select({ type: schema.assets.type })
+                .from(schema.assets)
+                .where(eq(schema.assets.id, claim.assetId))
+                .limit(1))[0]?.type ?? null))
+        return (
+          detail.providerType?.trim().toLowerCase() === "crypto" && claimedAssetType === "fungible"
+        )
       }
 
       const representation = claim.representation
@@ -196,8 +214,44 @@ const make = Effect.gen(function* () {
     ) affected_sources
   )`
 
-  // Asset exceptions block the per-source report projection until every affected source is rebuilt.
-  const blockedReportsSql = affectedSourcesSql
+  const blockedReportsSql = sql<number>`(
+    select count(distinct affected_sources.source_id)::int
+    from (
+      select ${schema.providerAssetSourceUses.sourceId} as source_id
+      from ${schema.providerAssetSourceUses}
+      where ${schema.providerAssetSourceUses.providerAssetRowId} = ${schema.providerAssets.id}
+      union
+      select ${schema.providerTransfers.sourceId} as source_id
+      from ${schema.providerTransfers}
+      where ${schema.providerTransfers.providerAssetId} = ${schema.providerAssets.id}
+    ) affected_sources
+    left join ${schema.providerAssetMappings} mapping
+      on mapping.provider_asset_row_id = ${schema.providerAssets.id}
+    where mapping.id is null
+      or mapping.mapping_status not in ('approved', 'excluded')
+      or exists (
+        select 1
+        from ${schema.assetDecisionRematerializations} rematerialization
+        inner join ${schema.assetResolutionDecisions} decision
+          on decision.id = rematerialization.decision_id
+        left join ${schema.processingJobs} replay_job
+          on replay_job.id = rematerialization.processing_job_id
+        left join ${schema.processingJobs} follow_up_job
+          on follow_up_job.id = replay_job.follow_up_job_id
+        where rematerialization.source_id = affected_sources.source_id
+          and decision.provider_asset_row_id = ${schema.providerAssets.id}
+          and decision.status = 'active'
+          and (
+            rematerialization.status = 'operator_attention'
+            or replay_job.id is null
+            or replay_job.status <> 'completed'
+            or (
+              replay_job.follow_up_mode = 'replay'
+              and (follow_up_job.id is null or follow_up_job.status <> 'completed')
+            )
+          )
+      )
+  )`
 
   const affectedPrincipalsSql = sql<number>`(
     select count(distinct ${schema.sources.principalId})::int
@@ -638,8 +692,16 @@ const make = Effect.gen(function* () {
             decision.evidenceRevision === providerAsset.evidenceRevision
         ) ??
         null
+      const settledEvidenceIds =
+        policyDecision === null ? (activeHumanDecision?.evidenceSnapshotIds ?? []) : []
+      const evidenceCondition =
+        policyDecision !== null
+          ? eq(schema.assetResolutionEvidence.decisionId, policyDecision.id)
+          : settledEvidenceIds.length > 0
+            ? inArray(schema.assetResolutionEvidence.id, settledEvidenceIds)
+            : null
       const evidence =
-        policyDecision === null
+        evidenceCondition === null
           ? []
           : yield* client
               .select({
@@ -653,7 +715,7 @@ const make = Effect.gen(function* () {
                 rawPayload: schema.assetResolutionEvidence.rawPayload,
               })
               .from(schema.assetResolutionEvidence)
-              .where(eq(schema.assetResolutionEvidence.decisionId, policyDecision.id))
+              .where(evidenceCondition)
               .orderBy(
                 asc(schema.assetResolutionEvidence.authority),
                 asc(schema.assetResolutionEvidence.claimKind)
@@ -745,6 +807,18 @@ const make = Effect.gen(function* () {
         return { _tag: "invalid_evidence" as const }
       }
 
+      const evidenceRevisionCondition =
+        detail.activeDecision === null
+          ? eq(schema.assetResolutionEvidence.evidenceRevision, detail.evidenceRevision)
+          : or(
+              eq(schema.assetResolutionEvidence.evidenceRevision, detail.evidenceRevision),
+              sql<boolean>`exists (
+                select 1
+                from ${schema.assetResolutionDecisionEvidenceLinks} evidence_link
+                where evidence_link.evidence_id = ${schema.assetResolutionEvidence.id}
+                  and evidence_link.decision_id = ${detail.activeDecision.id}
+              )`
+            )
       const evidenceRows = yield* client
         .select({ id: schema.assetResolutionEvidence.id })
         .from(schema.assetResolutionEvidence)
@@ -755,7 +829,7 @@ const make = Effect.gen(function* () {
         .where(
           and(
             inArray(schema.assetResolutionEvidence.id, uniqueEvidenceIds),
-            eq(schema.assetResolutionEvidence.evidenceRevision, detail.evidenceRevision),
+            evidenceRevisionCondition,
             eq(schema.assetResolutionDecisions.providerAssetRowId, detail.providerAssetRowId)
           )
         )

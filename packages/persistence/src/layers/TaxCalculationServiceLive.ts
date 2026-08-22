@@ -7,7 +7,7 @@
  * @module TaxCalculationServiceLive
  */
 
-import { and, count, eq, gte, isNull, lt, notInArray, or, sql } from "drizzle-orm"
+import { and, count, eq, gte, inArray, isNull, lt, notInArray, or, sql } from "drizzle-orm"
 import { EUR } from "@my/core/currency"
 import { withObservedOperation } from "@my/core/shared/observability/ObservedOperation"
 import * as BigDecimal from "effect/BigDecimal"
@@ -237,10 +237,10 @@ const make = Effect.gen(function* () {
    * Filter for observations used by the source whose transactions stay
    * outside derived accounting AND make the calculation incomplete: no
    * mapping row yet, or a mapping that is still an open question
-   * (pending_review or rejected). An excluded observation remains blocking
-   * while its decision replay is incomplete because stale derived rows may
-   * still contain its accounting. Shared by the count and the list so the two
-   * can never disagree about what blocks a calculation.
+   * (pending_review or rejected). A settled observation remains blocking
+   * while its active decision replay is incomplete because derived rows may
+   * still reflect its previous state. Shared by the count and the list so the
+   * two can never disagree about what blocks a calculation.
    *
    * @param sourceId - Source identifier
    * @returns Drizzle where condition over source uses joined with mappings
@@ -252,7 +252,7 @@ const make = Effect.gen(function* () {
         isNull(schema.providerAssetMappings.id),
         notInArray(schema.providerAssetMappings.mappingStatus, ["approved", "excluded"]),
         and(
-          eq(schema.providerAssetMappings.mappingStatus, "excluded"),
+          inArray(schema.providerAssetMappings.mappingStatus, ["approved", "excluded"]),
           sql<boolean>`exists (
             select 1
             from ${schema.assetDecisionRematerializations} rematerialization
@@ -264,7 +264,6 @@ const make = Effect.gen(function* () {
               on follow_up_job.id = replay_job.follow_up_job_id
             where rematerialization.source_id = ${schema.providerAssetSourceUses.sourceId}
               and decision.provider_asset_row_id = ${schema.providerAssetMappings.providerAssetRowId}
-              and decision.outcome = 'excluded'
               and decision.status = 'active'
               and (
                 rematerialization.status = 'operator_attention'

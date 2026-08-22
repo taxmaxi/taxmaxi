@@ -260,10 +260,13 @@
           "conflictingEvidence": "Conflicting evidence",
           "incompatibleDecimals": "Incompatible decimals",
           "incompatibleType": "Incompatible asset type",
+          "malformedPayload": "Malformed provider payload",
+          "upstreamFailure": "Upstream provider failure",
           "displayCollision": "Display identity collision",
           "nonExactPlatformMatch": "Non-exact platform match",
           "spamEvidence": "Spam evidence",
-          "unsupportedRepresentationType": "Unsupported representation type"
+          "unsupportedRepresentationType": "Unsupported representation type",
+          "manualExclusionReversal": "Manual exclusion reversal"
         },
         "preview": {
           "reuse": "Reuse existing",

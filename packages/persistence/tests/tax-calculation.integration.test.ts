@@ -590,6 +590,32 @@ describe("TaxCalculationServiceLive", () => {
 
         const taxAfterSupersession = yield* calculateTax()
         expect(taxAfterSupersession.taxableGains).toBe(2000)
+
+        const [approvedAsset] = yield* db
+          .insert(schema.assets)
+          .values({ name: "Approved replay asset", symbol: "APR", type: "fungible" })
+          .returning({ id: schema.assets.id })
+        if (approvedAsset === undefined) {
+          return yield* Effect.die("Failed to create approved replay asset")
+        }
+        yield* db
+          .update(schema.providerAssetMappings)
+          .set({
+            mappingStatus: "approved",
+            canonicalAssetId: approvedAsset.id,
+          })
+          .where(eq(schema.providerAssetMappings.providerAssetRowId, fixture.providerAssetRowId))
+        yield* db
+          .update(schema.assetResolutionDecisions)
+          .set({ outcome: "identity", assetId: approvedAsset.id })
+          .where(eq(schema.assetResolutionDecisions.id, activeDecision.id))
+        yield* db
+          .update(schema.processingJobs)
+          .set({ status: "pending", completedAt: null })
+          .where(eq(schema.processingJobs.id, completedJob.id))
+
+        const approvedReplayError = yield* calculateTax().pipe(Effect.flip)
+        expect(approvedReplayError._tag).toBe("TaxCalculationPendingObservationsError")
       }).pipe(Effect.provide(context.TestPgClientLive))
     )
   })

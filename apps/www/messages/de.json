@@ -260,10 +260,13 @@
           "conflictingEvidence": "Widersprüchliche Evidenz",
           "incompatibleDecimals": "Unvereinbare Dezimalstellen",
           "incompatibleType": "Unvereinbarer Asset-Typ",
+          "malformedPayload": "Fehlerhafte Provider-Nutzdaten",
+          "upstreamFailure": "Fehler beim vorgelagerten Provider",
           "displayCollision": "Kollision der Anzeigeidentität",
           "nonExactPlatformMatch": "Keine exakte Plattformübereinstimmung",
           "spamEvidence": "Spam-Evidenz",
-          "unsupportedRepresentationType": "Nicht unterstützter Abbildungstyp"
+          "unsupportedRepresentationType": "Nicht unterstützter Abbildungstyp",
+          "manualExclusionReversal": "Manuelle Aufhebung des Ausschlusses"
         },
         "preview": {
           "reuse": "Bestehendes verwenden",

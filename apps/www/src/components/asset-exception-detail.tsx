@@ -860,6 +860,10 @@ function reasonLabel(reason: string | null): string {
       return m["assetCatalog.exceptions.labels.reason.incompatibleDecimals"]()
     case "incompatible_type":
       return m["assetCatalog.exceptions.labels.reason.incompatibleType"]()
+    case "malformed_payload":
+      return m["assetCatalog.exceptions.labels.reason.malformedPayload"]()
+    case "upstream_failure":
+      return m["assetCatalog.exceptions.labels.reason.upstreamFailure"]()
     case "display_collision":
       return m["assetCatalog.exceptions.labels.reason.displayCollision"]()
     case "non_exact_platform_match":
@@ -876,6 +880,8 @@ function reasonLabel(reason: string | null): string {
       return m["assetCatalog.exceptions.exclusion.unsupportedAssetType"]()
     case "provider_artifact":
       return m["assetCatalog.exceptions.exclusion.providerArtifact"]()
+    case "manual_exclusion_reversal":
+      return m["assetCatalog.exceptions.labels.reason.manualExclusionReversal"]()
     default:
       return m["assetCatalog.exceptions.unknown"]()
   }
