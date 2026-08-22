@@ -72,4 +72,29 @@ describe("AssetException", () => {
       })
     ).toThrow()
   })
+
+  it.each([
+    { field: "name", name: "   ", symbol: "WST" },
+    { field: "symbol", name: "Whitespace", symbol: "\t" },
+  ])("rejects a whitespace-only new asset $field", ({ name, symbol }) => {
+    expect(() =>
+      Schema.decodeUnknownSync(AssetExceptionClaim)({
+        _tag: "identity",
+        assetId: null,
+        newAsset: { name, symbol, type: "fungible" },
+        representation: null,
+      })
+    ).toThrow()
+  })
+
+  it("rejects surrounding whitespace in new asset display fields", () => {
+    expect(() =>
+      Schema.decodeUnknownSync(AssetExceptionClaim)({
+        _tag: "identity",
+        assetId: null,
+        newAsset: { name: " Wrapped Ether ", symbol: "WETH", type: "fungible" },
+        representation: null,
+      })
+    ).toThrow()
+  })
 })

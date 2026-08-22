@@ -990,18 +990,24 @@ const make = Effect.gen(function* () {
       .pipe(
         Effect.map((mapping) => ({
           assetId: Option.fromNullishOr(mapping.canonicalAssetId),
-          requiresReview: mapping.mappingKind !== "fiat" && mapping.canonicalAssetId === null,
+          requiresReview:
+            mapping.kind !== "excluded" &&
+            mapping.mappingKind !== "fiat" &&
+            mapping.canonicalAssetId === null,
+          excluded: mapping.kind === "excluded",
         })),
         Effect.catchTag("CoinbaseProviderAssetMappingNotFoundError", () =>
           Effect.succeed({
             assetId: Option.none(),
             requiresReview: true,
+            excluded: false,
           })
         ),
         Effect.catchTag("CoinbasePendingProviderAssetMappingError", () =>
           Effect.succeed({
             assetId: Option.none(),
             requiresReview: true,
+            excluded: false,
           })
         )
       )
@@ -1025,6 +1031,7 @@ const make = Effect.gen(function* () {
     lookups,
   }) =>
     Effect.gen(function* () {
+      const excludedAssetCurrencies = new Set<string>()
       const normalized = yield* coinbaseRecordNormalizer.normalize({
         source,
         sourceRecord,
@@ -1033,7 +1040,12 @@ const make = Effect.gen(function* () {
             currencyCode,
             rawSourcePayload: sourceRecord.payload,
           }).pipe(
-            Effect.map((resolution) => resolution.assetId),
+            Effect.map((resolution) => {
+              if (resolution.excluded) {
+                excludedAssetCurrencies.add(currencyCode.toUpperCase())
+              }
+              return resolution.assetId
+            }),
             Effect.mapError(
               (cause) =>
                 new CoinbaseRecordNormalizationError({
@@ -1107,7 +1119,9 @@ const make = Effect.gen(function* () {
       const reviewableAssetCurrencies = primaryAssetResolution.requiresReview
         ? [normalized.primaryAssetCurrency.toUpperCase(), ...normalized.unresolvedAssetCurrencies]
         : normalized.unresolvedAssetCurrencies
-      const unresolvedAssetCurrencies = Array.from(new Set(reviewableAssetCurrencies)).sort()
+      const unresolvedAssetCurrencies = Array.from(new Set(reviewableAssetCurrencies))
+        .filter((currencyCode) => !excludedAssetCurrencies.has(currencyCode.toUpperCase()))
+        .sort()
       const transactionReview =
         unresolvedAssetCurrencies.length === 0
           ? baseTransactionReview
@@ -1141,7 +1155,10 @@ const make = Effect.gen(function* () {
         transactionReview,
         resolvedTransactionType,
         primaryAsset: Option.getOrNull(maybePrimaryAsset),
-        legDerivationStrategy: unresolvedAssetCurrencies.length === 0 ? "derive" : "skip",
+        legDerivationStrategy:
+          primaryAssetResolution.excluded || unresolvedAssetCurrencies.length > 0
+            ? "skip"
+            : "derive",
       }
     })
 

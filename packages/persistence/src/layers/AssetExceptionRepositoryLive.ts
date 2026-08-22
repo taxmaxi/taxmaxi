@@ -88,6 +88,51 @@ type SubmitTransactionResult =
   | Exclude<AssetExceptionDecisionResult, { readonly _tag: "accepted" }>
   | { readonly _tag: "accepted_pending_detail" }
 
+const isRepresentationCompatibleWithAssetType = ({
+  assetType,
+  representationType,
+}: {
+  readonly assetType: "fungible" | "nft"
+  readonly representationType: "native" | "token" | "nft"
+}): boolean => (assetType === "nft" ? representationType === "nft" : representationType !== "nft")
+
+const isClaimCompatibleWithObservedRepresentation = ({
+  detail,
+  claim,
+}: {
+  readonly detail: AssetExceptionDetail
+  readonly claim: Extract<AssetExceptionDecisionInput["claim"], { readonly _tag: "identity" }>
+}): boolean => {
+  if (detail.provider !== "helius-solana") {
+    return true
+  }
+
+  const representation = claim.representation
+  const providerType = detail.providerType?.trim().toLowerCase() ?? null
+  const expectedType =
+    providerType === "native"
+      ? "native"
+      : providerType === "nft"
+        ? "nft"
+        : providerType === "spl-token" || providerType === "spl-token-2022"
+          ? "token"
+          : null
+
+  if (representation === null || expectedType === null || detail.exponent === null) {
+    return false
+  }
+
+  return (
+    representation.blockchain.toLowerCase() === "solana" &&
+    representation.type === expectedType &&
+    representation.decimals === detail.exponent &&
+    (expectedType === "native"
+      ? representation.contractAddress === null && representation.mintAddress === null
+      : representation.contractAddress === null &&
+        representation.mintAddress === detail.providerAssetId)
+  )
+}
+
 const make = Effect.gen(function* () {
   const db = yield* drizzle
 
@@ -530,12 +575,8 @@ const make = Effect.gen(function* () {
       }
 
       const history = yield* loadDecisionHistory(client, providerAsset.id)
-      const activeDecision =
-        history.find(
-          (decision) =>
-            decision.status === "active" &&
-            decision.evidenceRevision === providerAsset.evidenceRevision
-        ) ?? null
+      const activeHumanDecision =
+        history.find((decision) => decision.status === "active" && decision.claim !== null) ?? null
       const policyDecision =
         [...history]
           .reverse()
@@ -544,6 +585,15 @@ const make = Effect.gen(function* () {
               decision.claim === null &&
               decision.evidenceRevision === providerAsset.evidenceRevision
           ) ?? null
+      const activeDecision =
+        activeHumanDecision ??
+        history.find(
+          (decision) =>
+            decision.status === "active" &&
+            decision.claim === null &&
+            decision.evidenceRevision === providerAsset.evidenceRevision
+        ) ??
+        null
       const evidence =
         policyDecision === null
           ? []
@@ -731,12 +781,22 @@ const make = Effect.gen(function* () {
 
       if (claim.assetId !== null) {
         const assets = yield* client
-          .select({ id: schema.assets.id })
+          .select({ id: schema.assets.id, type: schema.assets.type })
           .from(schema.assets)
           .where(eq(schema.assets.id, claim.assetId))
           .limit(1)
-        if (assets.length !== 1) {
+        const asset = assets[0]
+        if (asset === undefined || assets.length !== 1) {
           return { _tag: "invalid_claim" as const }
+        }
+        if (
+          representation !== null &&
+          !isRepresentationCompatibleWithAssetType({
+            assetType: asset.type,
+            representationType: representation.type,
+          })
+        ) {
+          return { _tag: "ambiguous_identity" as const }
         }
         if (representationRows.some((row) => row.assetId !== claim.assetId)) {
           return { _tag: "ambiguous_identity" as const }
@@ -773,15 +833,20 @@ const make = Effect.gen(function* () {
           )
         )
         .limit(2)
-      const candidateIds = new Set([
-        ...displayMatches.map((row) => row.id),
-        ...representationRows.map((row) => row.assetId),
-      ])
-      if (candidateIds.size > 1) {
+      if (representationRows.length === 0 && displayMatches.length > 0) {
         return { _tag: "ambiguous_identity" as const }
       }
 
-      const existingAssetId = [...candidateIds][0] ?? null
+      const existingAssetId = representationRows[0]?.assetId ?? null
+      if (
+        representation !== null &&
+        !isRepresentationCompatibleWithAssetType({
+          assetType: newAsset.type,
+          representationType: representation.type,
+        })
+      ) {
+        return { _tag: "ambiguous_identity" as const }
+      }
       return {
         _tag: "resolved" as const,
         assetId: existingAssetId,
@@ -812,7 +877,7 @@ const make = Effect.gen(function* () {
         : `display:${claim.newAsset.name.toLowerCase()}:${claim.newAsset.symbol.toLowerCase()}:${claim.newAsset.type}`,
       representation === null
         ? null
-        : `representation:${representation.blockchain.toLowerCase()}:${representation.type}:${representation.contractAddress?.toLowerCase() ?? ""}:${representation.mintAddress ?? ""}:${representation.decimals}`,
+        : `representation:${representation.blockchain.toLowerCase()}:${representation.contractAddress?.toLowerCase() ?? ""}:${representation.mintAddress ?? ""}`,
     ]
       .filter((key): key is string => key !== null)
       .sort((left, right) => left.localeCompare(right))
@@ -861,6 +926,10 @@ const make = Effect.gen(function* () {
             activeDecisionRevision: detail.activeDecisionRevision,
           } satisfies AssetExceptionDecisionPreview,
         }
+      }
+
+      if (!isClaimCompatibleWithObservedRepresentation({ detail, claim: input.claim })) {
+        return { _tag: "invalid_claim" as const }
       }
 
       const resolution = yield* resolveIdentity(db, input.claim)
@@ -1018,6 +1087,9 @@ const make = Effect.gen(function* () {
           }
 
           if (input.claim._tag === "identity") {
+            if (!isClaimCompatibleWithObservedRepresentation({ detail, claim: input.claim })) {
+              return { _tag: "invalid_claim" as const }
+            }
             yield* lockIdentityResolution({ claim: input.claim, tx })
           }
           const identityResolution =

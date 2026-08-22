@@ -1,10 +1,11 @@
 import { AlertTriangle, CheckCircle2, Search, ShieldAlert } from "lucide-react"
 import { useEffect, useRef, useState } from "react"
 import {
-  TaxMaxiError,
+  getTaxMaxiAssetDecisionConflict,
   type AssetExceptionDecisionInput,
   type AssetExceptionDetail,
   type AssetExceptionPreview,
+  type TaxMaxiAssetDecisionConflict,
 } from "taxmaxi"
 
 import type { AssetExceptionActions } from "#/components/asset-catalog-context"
@@ -16,6 +17,19 @@ import { m } from "#/paraglide/messages"
 
 type DecisionMode = "existing" | "new" | "exclusion"
 type LookupKind = "provider_asset_id" | "natural_key"
+
+const conflictMessage = (conflict: TaxMaxiAssetDecisionConflict | null): string | null => {
+  switch (conflict) {
+    case "stale_revision":
+      return m["assetCatalog.exceptions.errors.stale"]()
+    case "ambiguous_identity":
+      return m["assetCatalog.exceptions.errors.ambiguousIdentity"]()
+    case "identity_changed":
+      return m["assetCatalog.exceptions.errors.identityChanged"]()
+    case null:
+      return null
+  }
+}
 
 export function AssetExceptionDetailPane({
   actions,
@@ -320,9 +334,13 @@ function AssetExceptionReview({
     try {
       setPreview({ request, response: await actions.preview(request) })
     } catch (cause) {
-      if (cause instanceof TaxMaxiError && cause.status === 409) {
+      const conflict = getTaxMaxiAssetDecisionConflict(cause)
+      const decisionConflict = conflictMessage(conflict)
+      if (conflict === "stale_revision") {
         onDetailChange(await actions.get(detail.providerAssetRowId))
-        setMessage(m["assetCatalog.exceptions.errors.stale"]())
+        setMessage(decisionConflict)
+      } else if (decisionConflict !== null) {
+        setMessage(decisionConflict)
       } else {
         setMessage(m["assetCatalog.exceptions.errors.preview"]())
       }
@@ -353,9 +371,13 @@ function AssetExceptionReview({
       setPreview(null)
       setMessage(m["assetCatalog.exceptions.success"]())
     } catch (cause) {
-      if (cause instanceof TaxMaxiError && cause.status === 409) {
+      const conflict = getTaxMaxiAssetDecisionConflict(cause)
+      const decisionConflict = conflictMessage(conflict)
+      if (conflict === "stale_revision") {
         onDetailChange(await actions.get(detail.providerAssetRowId))
-        setMessage(m["assetCatalog.exceptions.errors.stale"]())
+        setMessage(decisionConflict)
+      } else if (decisionConflict !== null) {
+        setMessage(decisionConflict)
       } else {
         setMessage(m["assetCatalog.exceptions.errors.submit"]())
       }

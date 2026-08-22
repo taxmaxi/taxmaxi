@@ -324,6 +324,72 @@ const insertUnresolvedProviderAssetSourceUse = ({
     }
   }).pipe(Effect.provide(context.TestPgClientLive))
 
+const insertExcludedProviderAssetSourceUseWithRematerialization = () =>
+  Effect.gen(function* () {
+    const db = yield* drizzle
+
+    const [providerAsset] = yield* db
+      .insert(schema.providerAssets)
+      .values({
+        provider: "coinbase",
+        naturalKey: "coinbase-excluded-asset",
+        currencyCode: "EXCLUDED",
+        retrievedAt: new Date("2025-01-01T00:00:00.000Z"),
+      })
+      .returning({ id: schema.providerAssets.id })
+
+    if (providerAsset === undefined) {
+      return yield* Effect.die("Failed to create excluded provider asset fixture")
+    }
+
+    yield* db.insert(schema.providerAssetSourceUses).values({
+      providerAssetRowId: providerAsset.id,
+      sourceId,
+    })
+    yield* db.insert(schema.providerAssetMappings).values({
+      providerAssetRowId: providerAsset.id,
+      mappingKind: "asset",
+      canonicalAssetId: null,
+      mappingStatus: "excluded",
+      sourceNotes: "Human exclusion awaiting replay",
+    })
+
+    const [decision] = yield* db
+      .insert(schema.assetResolutionDecisions)
+      .values({
+        providerAssetRowId: providerAsset.id,
+        evidenceRevision: 1,
+        policyRevision: "human:test",
+        outcome: "excluded",
+        status: "active",
+        reason: "not_economic_activity",
+        actor: userId,
+      })
+      .returning({ id: schema.assetResolutionDecisions.id })
+    const [job] = yield* db
+      .insert(schema.processingJobs)
+      .values({
+        sourceId,
+        principalId,
+        mode: "replay",
+        status: "pending",
+      })
+      .returning({ id: schema.processingJobs.id })
+
+    if (decision === undefined || job === undefined) {
+      return yield* Effect.die("Failed to create exclusion replay fixture")
+    }
+
+    yield* db.insert(schema.assetDecisionRematerializations).values({
+      decisionId: decision.id,
+      sourceId,
+      processingJobId: job.id,
+      status: "pending",
+    })
+
+    return { decisionId: decision.id, jobId: job.id }
+  }).pipe(Effect.provide(context.TestPgClientLive))
+
 await Effect.runPromise(context.recreateTestDatabase())
 
 describe("TaxCalculationServiceLive", () => {
@@ -442,6 +508,46 @@ describe("TaxCalculationServiceLive", () => {
           ])
         }
       })
+    )
+  })
+
+  it("blocks an excluded observation until its rematerialization replay completes", async () => {
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const fixture = yield* insertExcludedProviderAssetSourceUseWithRematerialization()
+        const db = yield* drizzle
+
+        for (const status of ["pending", "processing", "failed"] as const) {
+          yield* db
+            .update(schema.processingJobs)
+            .set({ status })
+            .where(eq(schema.processingJobs.id, fixture.jobId))
+
+          const error = yield* calculateTax().pipe(Effect.flip)
+          expect(error._tag).toBe("TaxCalculationPendingObservationsError")
+        }
+
+        yield* db
+          .update(schema.assetDecisionRematerializations)
+          .set({ status: "operator_attention" })
+          .where(eq(schema.assetDecisionRematerializations.decisionId, fixture.decisionId))
+        yield* db
+          .update(schema.processingJobs)
+          .set({ status: "completed" })
+          .where(eq(schema.processingJobs.id, fixture.jobId))
+
+        const operatorAttentionError = yield* calculateTax().pipe(Effect.flip)
+        expect(operatorAttentionError._tag).toBe("TaxCalculationPendingObservationsError")
+
+        yield* db
+          .update(schema.assetDecisionRematerializations)
+          .set({ status: "pending" })
+          .where(eq(schema.assetDecisionRematerializations.decisionId, fixture.decisionId))
+
+        const tax = yield* calculateTax()
+        expect(tax.taxableGains).toBe(2000)
+        expect(tax.incomeTotal).toBe(700)
+      }).pipe(Effect.provide(context.TestPgClientLive))
     )
   })
 

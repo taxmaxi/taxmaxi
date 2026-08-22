@@ -389,6 +389,292 @@ describe("AssetExceptionRepositoryLive", () => {
     expect(state.mappings).toEqual([{ assetId: state.assets[0]?.id, status: "approved" }])
   })
 
+  it("requires Helius identity claims to match the observed representation", async () => {
+    const fixture = await seedException()
+    await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        yield* db
+          .update(schema.providerAssets)
+          .set({
+            provider: "helius-solana",
+            providerAssetId: "ObservedMint111",
+            naturalKey: "solana:mint:ObservedMint111",
+            providerType: "spl-token",
+            exponent: 6,
+          })
+          .where(eq(schema.providerAssets.id, fixture.providerAssetRowId))
+      })
+    )
+
+    const preview = (
+      representation: {
+        readonly blockchain: string
+        readonly type: "token"
+        readonly contractAddress: null
+        readonly mintAddress: string
+        readonly decimals: number
+      } | null
+    ) =>
+      runRepository(
+        Effect.gen(function* () {
+          const repository = yield* AssetExceptionRepository
+          return yield* repository.previewDecision({
+            providerAssetRowId: fixture.providerAssetRowId,
+            claim: {
+              _tag: "identity",
+              assetId: null,
+              newAsset: { name: "Observed Asset", symbol: "OBS", type: "fungible" },
+              representation,
+            },
+            evidenceRevision: 2,
+            activeDecisionRevision: fixture.decisionId,
+            evidenceSnapshotIds: [fixture.evidenceId],
+            rationale: "The exact Solana representation is confirmed by stored evidence.",
+          })
+        })
+      )
+
+    await expect(preview(null)).resolves.toMatchObject({ _tag: "invalid_claim" })
+    await expect(
+      preview({
+        blockchain: "solana",
+        type: "token",
+        contractAddress: null,
+        mintAddress: "DifferentMint222",
+        decimals: 6,
+      })
+    ).resolves.toMatchObject({ _tag: "invalid_claim" })
+    await expect(
+      preview({
+        blockchain: "solana",
+        type: "token",
+        contractAddress: null,
+        mintAddress: "ObservedMint111",
+        decimals: 6,
+      })
+    ).resolves.toMatchObject({ _tag: "ready" })
+  })
+
+  it("rejects a representation incompatible with an existing asset type", async () => {
+    const fixture = await seedException()
+    const assetId = await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const [asset] = yield* db
+          .insert(schema.assets)
+          .values({ name: "Fungible Target", symbol: "FUN", type: "fungible" })
+          .returning({ id: schema.assets.id })
+        if (asset === undefined) {
+          return yield* Effect.die("Failed to seed target asset")
+        }
+        return asset.id
+      })
+    )
+
+    const result = await runRepository(
+      Effect.gen(function* () {
+        const repository = yield* AssetExceptionRepository
+        return yield* repository.previewDecision({
+          providerAssetRowId: fixture.providerAssetRowId,
+          claim: {
+            _tag: "identity",
+            assetId,
+            newAsset: null,
+            representation: {
+              blockchain: "base",
+              type: "nft",
+              contractAddress: "0x-fungible-target",
+              mintAddress: null,
+              decimals: 0,
+            },
+          },
+          evidenceRevision: 2,
+          activeDecisionRevision: fixture.decisionId,
+          evidenceSnapshotIds: [fixture.evidenceId],
+          rationale: "Attempt to attach an incompatible NFT representation.",
+        })
+      })
+    )
+
+    expect(result).toMatchObject({ _tag: "ambiguous_identity" })
+  })
+
+  it("keeps an active human decision visible after the evidence revision advances", async () => {
+    const fixture = await seedException()
+    const humanDecisionId = await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        yield* db
+          .update(schema.assetResolutionDecisions)
+          .set({ status: "superseded" })
+          .where(eq(schema.assetResolutionDecisions.id, fixture.decisionId))
+        const [humanDecision] = yield* db
+          .insert(schema.assetResolutionDecisions)
+          .values({
+            providerAssetRowId: fixture.providerAssetRowId,
+            evidenceRevision: 2,
+            policyRevision: "human-test.1",
+            outcome: "excluded",
+            status: "active",
+            supersedesDecisionId: fixture.decisionId,
+            reason: "confirmed_spam",
+            humanClaim: { _tag: "exclusion", reason: "confirmed_spam" },
+            rationale: "Human evidence settles the observation.",
+            actor: TEST_USER_ID,
+          })
+          .returning({ id: schema.assetResolutionDecisions.id })
+        if (humanDecision === undefined) {
+          return yield* Effect.die("Failed to seed human decision")
+        }
+
+        yield* db
+          .update(schema.providerAssets)
+          .set({ evidenceRevision: 3 })
+          .where(eq(schema.providerAssets.id, fixture.providerAssetRowId))
+        yield* db.insert(schema.assetResolutionJobs).values({
+          providerAssetRowId: fixture.providerAssetRowId,
+          evidenceRevision: 3,
+          status: "completed",
+        })
+        const [policyDecision] = yield* db
+          .insert(schema.assetResolutionDecisions)
+          .values({
+            providerAssetRowId: fixture.providerAssetRowId,
+            evidenceRevision: 3,
+            policyRevision: "test-policy.2",
+            outcome: "pending",
+            reason: "display_collision",
+            actor: "policy:test-policy.2",
+          })
+          .returning({ id: schema.assetResolutionDecisions.id })
+        if (policyDecision === undefined) {
+          return yield* Effect.die("Failed to seed current policy decision")
+        }
+        yield* db.insert(schema.assetResolutionEvidence).values({
+          decisionId: policyDecision.id,
+          authority: "chain",
+          claimKind: "representation",
+          sourceLocator: "coinbase:exception-token:revision-3",
+          retrievedAt: new Date("2025-01-03T00:00:00.000Z"),
+          evidenceRevision: 3,
+          decodedClaim: { blockchain: "base", decimals: 6 },
+          rawPayload: { revision: 3 },
+        })
+        return humanDecision.id
+      })
+    )
+
+    const detail = await runRepository(
+      Effect.gen(function* () {
+        const repository = yield* AssetExceptionRepository
+        const found = yield* repository.findDetail({
+          _tag: "row_id",
+          providerAssetRowId: fixture.providerAssetRowId,
+        })
+        if (Option.isNone(found)) {
+          return yield* Effect.die("Expected exception detail")
+        }
+        return found.value
+      })
+    )
+
+    expect(detail).toMatchObject({
+      reviewStatus: "excluded",
+      activeDecisionRevision: humanDecisionId,
+      activeDecision: { id: humanDecisionId, evidenceRevision: 2 },
+      policyOutput: { outcome: "pending", reason: "display_collision" },
+      evidence: [expect.objectContaining({ evidenceRevision: 3 })],
+    })
+  })
+
+  it("treats a display match for a new asset as an explicit identity conflict", async () => {
+    const fixture = await seedException()
+    await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        yield* db
+          .insert(schema.assets)
+          .values({ name: "Duplicate Display", symbol: "DUP", type: "fungible" })
+      })
+    )
+
+    const result = await runRepository(
+      Effect.gen(function* () {
+        const repository = yield* AssetExceptionRepository
+        return yield* repository.previewDecision({
+          providerAssetRowId: fixture.providerAssetRowId,
+          claim: {
+            _tag: "identity",
+            assetId: null,
+            newAsset: { name: "duplicate display", symbol: "dup", type: "fungible" },
+            representation: null,
+          },
+          evidenceRevision: 2,
+          activeDecisionRevision: fixture.decisionId,
+          evidenceSnapshotIds: [fixture.evidenceId],
+          rationale: "Display fields alone cannot prove economic identity.",
+        })
+      })
+    )
+
+    expect(result).toMatchObject({ _tag: "ambiguous_identity" })
+  })
+
+  it("serializes conflicting claims for the same representation identity", async () => {
+    const [first, second] = await Promise.all([seedException("-lock-a"), seedException("-lock-b")])
+    const submit = ({
+      fixture,
+      type,
+      decimals,
+    }: {
+      readonly fixture: Awaited<ReturnType<typeof seedException>>
+      readonly type: "token" | "nft"
+      readonly decimals: number
+    }) =>
+      runRepository(
+        Effect.gen(function* () {
+          const repository = yield* AssetExceptionRepository
+          return yield* repository.submitDecision({
+            actorId: TEST_USER_ID,
+            input: {
+              providerAssetRowId: fixture.providerAssetRowId,
+              claim: {
+                _tag: "identity",
+                assetId: null,
+                newAsset: {
+                  name: `Representation ${type}`,
+                  symbol: type === "token" ? "RPT" : "RPN",
+                  type: type === "nft" ? "nft" : "fungible",
+                },
+                representation: {
+                  blockchain: "base",
+                  type,
+                  contractAddress: "0x-shared-representation",
+                  mintAddress: null,
+                  decimals,
+                },
+              },
+              evidenceRevision: 2,
+              activeDecisionRevision: fixture.decisionId,
+              evidenceSnapshotIds: [fixture.evidenceId],
+              rationale: "Concurrent claim for one representation identity.",
+              expectedResultingAssetId: null,
+              expectedAssetOutcome: "create",
+              expectedRepresentationOutcome: "create",
+            },
+          })
+        })
+      )
+
+    const results = await Promise.all([
+      submit({ fixture: first, type: "token", decimals: 6 }),
+      submit({ fixture: second, type: "nft", decimals: 0 }),
+    ])
+
+    expect(results.map((result) => result._tag).sort()).toEqual(["accepted", "ambiguous_identity"])
+  })
+
   it("serializes concurrent claims for the same new canonical identity", async () => {
     const [first, second] = await Promise.all([seedException("-a"), seedException("-b")])
     const submit = (fixture: Awaited<ReturnType<typeof seedException>>) =>
@@ -423,7 +709,7 @@ describe("AssetExceptionRepositoryLive", () => {
 
     const results = await Promise.all([submit(first), submit(second)])
 
-    expect(results.map((result) => result._tag).sort()).toEqual(["accepted", "identity_changed"])
+    expect(results.map((result) => result._tag).sort()).toEqual(["accepted", "ambiguous_identity"])
     const assets = await runPg(
       Effect.gen(function* () {
         const db = yield* drizzle

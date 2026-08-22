@@ -4,6 +4,7 @@ import {
   DEFAULT_BASE_URL,
   TaxMaxi,
   TaxMaxiError,
+  getTaxMaxiAssetDecisionConflict,
   getTaxMaxiCreditRequired,
   isTaxMaxiUnauthorizedError,
   makeTaxMaxiHttpClientTransform,
@@ -1197,6 +1198,30 @@ describe("TaxMaxi Promise client", () => {
       getTaxMaxiCreditRequired(toTaxMaxiError({ _tag: "SourceNotFoundError", message: "gone" }))
     ).toBeNull()
     expect(getTaxMaxiCreditRequired(null)).toBeNull()
+  })
+
+  it.each(["stale_revision", "ambiguous_identity", "identity_changed"] as const)(
+    "extracts the %s asset decision conflict from a wrapped API error",
+    (code) => {
+      const cause = {
+        _tag: code === "stale_revision" ? "AssetStaleRevisionError" : "AssetDecisionConflictError",
+        code,
+        ...(code === "stale_revision"
+          ? {
+              evidenceRevision: 3,
+              activeDecisionRevision: "00000000-0000-4000-8000-000000000704",
+            }
+          : {}),
+      }
+
+      expect(getTaxMaxiAssetDecisionConflict(toTaxMaxiError(cause))).toBe(code)
+      expect(getTaxMaxiAssetDecisionConflict(cause)).toBe(code)
+    }
+  )
+
+  it("returns null asset decision conflict details for unrelated errors", () => {
+    expect(getTaxMaxiAssetDecisionConflict(new Error("boom"))).toBeNull()
+    expect(getTaxMaxiAssetDecisionConflict(null)).toBeNull()
   })
 
   it("builds explicit first-party request clients with cookie headers", async () => {

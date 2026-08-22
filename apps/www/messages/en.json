@@ -283,6 +283,7 @@
         "providerAssetId": "Observation ID",
         "naturalKey": "Natural key",
         "key": "Exact value",
+        "open": "Open exact lookup",
         "action": "Look up"
       },
       "impact": {
@@ -374,7 +375,9 @@
         "claim": "Complete the selected identity claim.",
         "preview": "The decision could not be previewed.",
         "submit": "The decision could not be accepted.",
-        "stale": "Evidence or the active decision changed. Detail was refreshed; preview again."
+        "stale": "Evidence or the active decision changed. Detail was refreshed; preview again.",
+        "ambiguousIdentity": "This claim matches more than one economic identity. Choose an existing asset ID explicitly.",
+        "identityChanged": "The economic identity changed after preview. Review the current identity and preview again."
       }
     },
     "logoAlt": "{name} logo",

@@ -1,7 +1,9 @@
 // @vitest-environment jsdom
 
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react"
+import * as DateTime from "effect/DateTime"
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest"
+import { toTaxMaxiError, type AssetExceptionDetail } from "taxmaxi"
 
 import {
   ASSET_CATALOG_SEARCH_QUERY_MAX_LENGTH,
@@ -10,6 +12,8 @@ import {
 } from "#/lib/assets"
 import { m } from "#/paraglide/messages"
 import { AssetCatalog as AssetCatalogView } from "#/components/asset-catalog"
+import type { AssetExceptionActions } from "#/components/asset-catalog-context"
+import { AssetExceptionDetailPane } from "#/components/asset-exception-detail"
 import type { TaxMaxiAssetException } from "#/components/asset-catalog-model"
 
 function AssetCatalog({
@@ -20,6 +24,7 @@ function AssetCatalog({
   isLoadingApproved = false,
   isLoadingPending = false,
   exceptions,
+  exceptionActions,
   onClose,
   onLoadMoreApproved,
   onLoadMorePending,
@@ -36,6 +41,7 @@ function AssetCatalog({
   readonly isLoadingApproved?: boolean
   readonly isLoadingPending?: boolean
   readonly exceptions?: ReadonlyArray<TaxMaxiAssetException>
+  readonly exceptionActions?: AssetExceptionActions
   readonly onClose: () => void
   readonly onLoadMoreApproved?: () => Promise<unknown> | void
   readonly onLoadMorePending?: () => Promise<unknown> | void
@@ -47,6 +53,7 @@ function AssetCatalog({
 }) {
   return (
     <AssetCatalogView
+      exceptionActions={exceptionActions}
       feeds={{
         approved: {
           canLoadMore: canLoadMoreApproved,
@@ -139,6 +146,75 @@ const makePendingAsset = ({
   symbol,
 })
 
+const exceptionListRow: TaxMaxiAssetException = {
+  providerAssetRowId: "00000000-0000-4000-8000-000000000701",
+  provider: "coinbase",
+  providerAssetId: "exception-token",
+  naturalKey: null,
+  currencyCode: "EXC",
+  name: "Exception Token",
+  reason: "ownership_conflict",
+  severity: "critical",
+}
+
+const exceptionDetail = {
+  providerAssetRowId: exceptionListRow.providerAssetRowId,
+  provider: exceptionListRow.provider,
+  providerAssetId: exceptionListRow.providerAssetId,
+  naturalKey: exceptionListRow.naturalKey,
+  currencyCode: exceptionListRow.currencyCode,
+  name: exceptionListRow.name,
+  exponent: 6,
+  providerType: "crypto",
+  rawProviderPayload: null,
+  evidenceRevision: 2,
+  policyRevision: "policy.1",
+  activeDecisionRevision: "00000000-0000-4000-8000-000000000702",
+  reviewStatus: "unresolved",
+  policyOutput: null,
+  activeDecision: null,
+  decisionHistory: [],
+  evidence: [
+    {
+      id: "00000000-0000-4000-8000-000000000703",
+      authority: "coinbase",
+      claimKind: "other",
+      sourceLocator: null,
+      retrievedAt: DateTime.makeUnsafe("2026-08-21T12:00:00.000Z"),
+      evidenceRevision: 2,
+      decodedClaim: { symbol: "EXC" },
+      rawPayload: null,
+    },
+  ],
+  impact: {
+    blockedReports: 1,
+    affectedPrincipals: 1,
+    affectedTransactions: 1,
+    affectedSources: 1,
+    affectedTransactionValueEur: "10.00",
+  },
+  rematerialization: {
+    status: "complete",
+    affectedSourceCount: 1,
+    failedSourceCount: 0,
+    lastFailureAt: null,
+    failureCode: null,
+  },
+} satisfies AssetExceptionDetail
+
+const exceptionPreview = {
+  claim: { _tag: "exclusion", reason: "confirmed_spam" },
+  decisionAction: "initial",
+  resultingAssetId: null,
+  assetOutcome: "none",
+  representationOutcome: "none",
+  supersededDecision: null,
+  impact: exceptionDetail.impact,
+  rematerializationSourceCount: 1,
+  evidenceRevision: exceptionDetail.evidenceRevision,
+  activeDecisionRevision: exceptionDetail.activeDecisionRevision,
+} as const
+
 describe("AssetCatalog", () => {
   beforeAll(() => {
     Object.defineProperty(window, "matchMedia", {
@@ -213,6 +289,120 @@ describe("AssetCatalog", () => {
 
     expect(screen.getByRole("option", { name: /EXC/ })).toBeTruthy()
     expect(screen.getByText("Critical")).toBeTruthy()
+  })
+
+  it("opens exact exception lookup on mobile without a selected exception", async () => {
+    const exceptionActions: AssetExceptionActions = {
+      get: vi.fn(),
+      lookup: vi.fn(),
+      preview: vi.fn(),
+      submit: vi.fn(),
+    }
+
+    render(
+      <AssetCatalog
+        assets={[]}
+        exceptionActions={exceptionActions}
+        exceptions={[]}
+        onClose={vi.fn()}
+        pendingAssets={[]}
+      />
+    )
+
+    fireEvent.click(screen.getByRole("button", { name: "Exceptions" }))
+    const openLookup = screen.getByRole("button", { name: "Open exact lookup" })
+    fireEvent.click(openLookup)
+
+    expect(screen.getByRole("heading", { name: "Exact observation lookup" })).toBeTruthy()
+    const backButton = screen.getByRole("button", { name: "Back to asset list" })
+    expect(document.activeElement).toBe(backButton)
+
+    fireEvent.click(backButton)
+    await waitFor(() => expect(document.activeElement).toBe(openLookup))
+  })
+
+  it.each([
+    {
+      code: "stale_revision",
+      expected: "Evidence or the active decision changed. Detail was refreshed; preview again.",
+      expectedGetCalls: 2,
+    },
+    {
+      code: "ambiguous_identity",
+      expected:
+        "This claim matches more than one economic identity. Choose an existing asset ID explicitly.",
+      expectedGetCalls: 1,
+    },
+    {
+      code: "identity_changed",
+      expected:
+        "The economic identity changed after preview. Review the current identity and preview again.",
+      expectedGetCalls: 1,
+    },
+  ] as const)("shows actionable $code decision conflict copy", async (testCase) => {
+    const get = vi.fn(async () => exceptionDetail)
+    const preview = vi.fn(async () => {
+      throw toTaxMaxiError({
+        _tag:
+          testCase.code === "stale_revision"
+            ? "AssetStaleRevisionError"
+            : "AssetDecisionConflictError",
+        code: testCase.code,
+        ...(testCase.code === "stale_revision"
+          ? {
+              evidenceRevision: 3,
+              activeDecisionRevision: "00000000-0000-4000-8000-000000000704",
+            }
+          : {}),
+      })
+    })
+
+    render(
+      <AssetExceptionDetailPane
+        actions={{ get, lookup: vi.fn(), preview, submit: vi.fn() }}
+        exception={exceptionListRow}
+      />
+    )
+
+    const rationale = await screen.findByRole("textbox", { name: "Rationale" })
+    fireEvent.change(rationale, { target: { value: "Reviewed the attached evidence." } })
+    fireEvent.click(screen.getByRole("button", { name: "Preview decision" }))
+
+    expect(await screen.findByText(testCase.expected)).toBeTruthy()
+    expect(get).toHaveBeenCalledTimes(testCase.expectedGetCalls)
+  })
+
+  it("shows an actionable identity conflict when confirmation fails", async () => {
+    const submit = vi.fn(async () => {
+      throw toTaxMaxiError({
+        _tag: "AssetDecisionConflictError",
+        code: "identity_changed",
+      })
+    })
+
+    render(
+      <AssetExceptionDetailPane
+        actions={{
+          get: vi.fn(async () => exceptionDetail),
+          lookup: vi.fn(),
+          preview: vi.fn(async () => exceptionPreview),
+          submit,
+        }}
+        exception={exceptionListRow}
+      />
+    )
+
+    const rationale = await screen.findByRole("textbox", { name: "Rationale" })
+    fireEvent.change(rationale, { target: { value: "Reviewed the attached evidence." } })
+    fireEvent.click(screen.getByRole("button", { name: "Preview decision" }))
+    fireEvent.click(await screen.findByRole("button", { name: "Confirm decision" }))
+
+    expect(
+      await screen.findByText(
+        "The economic identity changed after preview. Review the current identity and preview again."
+      )
+    ).toBeTruthy()
+    expect(submit).toHaveBeenCalledOnce()
   })
 
   it("moves focus to search when the catalog opens", () => {

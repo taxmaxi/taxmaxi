@@ -7,10 +7,8 @@
 import * as Context from "effect/Context"
 import type * as Effect from "effect/Effect"
 import * as Schema from "effect/Schema"
-import type {
-  ProviderMappingStatus,
-  ResolvedProviderTransactionTypeMapping,
-} from "../../../services/ProviderReferenceRepository.ts"
+import type { ProviderAssetMappingStatus } from "../../../services/ProviderAssetRepository.ts"
+import type { ResolvedProviderTransactionTypeMapping } from "../../../services/ProviderReferenceRepository.ts"
 import { SyncEngineStorageError } from "../../../services/SyncEngineStorageError.ts"
 
 /**
@@ -92,9 +90,10 @@ export interface EnsureCoinbaseReferenceMappingsResult {
  * CoinbaseResolvedCurrencyMapping - Deterministic Coinbase currency mapping result.
  */
 export interface CoinbaseResolvedCurrencyMapping {
+  readonly kind: "canonical" | "excluded"
   readonly providerAssetRowId: string
   readonly currencyCode: string
-  readonly mappingStatus: ProviderMappingStatus
+  readonly mappingStatus: ProviderAssetMappingStatus
   readonly mappingKind: "asset" | "fiat"
   readonly canonicalAssetId: string | null
   readonly assetRepresentationId: string | null

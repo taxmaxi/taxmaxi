@@ -508,27 +508,35 @@ const make = Effect.gen(function* () {
         })
       }
 
-      if (persistedMapping.mappingStatus !== "approved") {
+      if (
+        persistedMapping.mappingStatus !== "approved" &&
+        persistedMapping.mappingStatus !== "excluded"
+      ) {
         return yield* failPendingProviderAssetMapping({
           currencyCode: upperCurrencyCode,
           providerAssetRowId: providerAssetRecord.id,
         })
       }
 
-      const canonicalAssetId = yield* resolveCanonicalAssetId({
-        persistedMapping: {
-          providerAssetRowId: providerAssetRecord.id,
-          currencyCode: upperCurrencyCode,
-          mappingStatus: persistedMapping.mappingStatus,
-          mappingKind: persistedMapping.mappingKind,
-          canonicalAssetId: persistedMapping.canonicalAssetId,
-          assetRepresentationId: persistedMapping.assetRepresentationId,
-          canonicalFiatCurrency: persistedMapping.canonicalFiatCurrency,
-        },
-        currencyCode: upperCurrencyCode,
-      })
+      const canonicalAssetId =
+        persistedMapping.mappingStatus === "excluded"
+          ? null
+          : yield* resolveCanonicalAssetId({
+              persistedMapping: {
+                kind: "canonical",
+                providerAssetRowId: providerAssetRecord.id,
+                currencyCode: upperCurrencyCode,
+                mappingStatus: persistedMapping.mappingStatus,
+                mappingKind: persistedMapping.mappingKind,
+                canonicalAssetId: persistedMapping.canonicalAssetId,
+                assetRepresentationId: persistedMapping.assetRepresentationId,
+                canonicalFiatCurrency: persistedMapping.canonicalFiatCurrency,
+              },
+              currencyCode: upperCurrencyCode,
+            })
 
       return {
+        kind: persistedMapping.mappingStatus === "excluded" ? "excluded" : "canonical",
         providerAssetRowId: providerAssetRecord.id,
         currencyCode: upperCurrencyCode,
         mappingStatus: persistedMapping.mappingStatus,

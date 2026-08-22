@@ -81,13 +81,17 @@ const TransferReconciliationCursorPayload = Schema.Struct({
   reconciliationId: Schema.String.check(Schema.isUUID()),
 })
 
+const AssetExceptionValueEur = Schema.String.check(
+  Schema.isPattern(/^(?:0|[1-9][0-9]*)(?:\.[0-9]+)?$/)
+)
+
 const AssetExceptionCursorPayload = Schema.Struct({
   version: Schema.Literal(1),
   blockedReports: Schema.Number,
   affectedPrincipals: Schema.Number,
   affectedTransactions: Schema.Number,
   affectedSources: Schema.Number,
-  affectedTransactionValueEur: Schema.NullOr(Schema.String),
+  affectedTransactionValueEur: Schema.NullOr(AssetExceptionValueEur),
   severity: Schema.Literals(["critical", "high", "medium", "low"]),
   oldestAt: Schema.DateTimeUtcFromString,
   providerAssetRowId: Schema.String.check(Schema.isUUID()),

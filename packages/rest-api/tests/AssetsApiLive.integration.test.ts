@@ -937,6 +937,21 @@ describe("AssetsApiLive", () => {
       path: `/v1/assets/transfer-reconciliations/unresolved?cursor=${Buffer.from("not-json").toString("base64url")}`,
       requiresAdmin: true,
     },
+    {
+      endpoint: "admin asset exceptions with a non-numeric transaction value",
+      path: `/v1/assets/exceptions?cursor=${encodeTestCursor({
+        version: 1,
+        blockedReports: 1,
+        affectedPrincipals: 1,
+        affectedTransactions: 1,
+        affectedSources: 1,
+        affectedTransactionValueEur: "not-a-number",
+        severity: "high",
+        oldestAt: "2026-08-21T12:00:00.000Z",
+        providerAssetRowId: crypto.randomUUID(),
+      })}`,
+      requiresAdmin: true,
+    },
   ] as const)("rejects an invalid cursor for $endpoint", async ({ path, requiresAdmin }) => {
     const status = await Effect.runPromise(
       (requiresAdmin ? getAdminStatus(path) : getStatus(path)).pipe(

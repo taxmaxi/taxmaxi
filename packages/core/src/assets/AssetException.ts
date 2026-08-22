@@ -8,6 +8,7 @@ import * as Schema from "effect/Schema"
 import { AssetDecimals, EconomicAssetType, RepresentationType } from "./AssetResolutionPolicy.ts"
 
 const NonEmptyString = Schema.String.check(Schema.isNonEmpty())
+const NonEmptyTrimmedString = Schema.Trimmed.check(Schema.isNonEmpty())
 
 /** Stable token used when an observation has no active decision. */
 export const NO_ACTIVE_ASSET_DECISION = "no_active_decision" as const
@@ -85,8 +86,8 @@ export type AssetExceptionRepresentation = typeof AssetExceptionRepresentation.T
 
 /** Display facts required when the claimed economic identity does not exist yet. */
 export const AssetExceptionNewAsset = Schema.Struct({
-  name: NonEmptyString,
-  symbol: NonEmptyString,
+  name: NonEmptyTrimmedString,
+  symbol: NonEmptyTrimmedString,
   type: EconomicAssetType,
 })
 

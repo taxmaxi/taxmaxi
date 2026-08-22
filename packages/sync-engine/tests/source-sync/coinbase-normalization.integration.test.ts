@@ -1049,6 +1049,37 @@ const approveProviderAssetMappingToCanonicalAsset = ({
       .where(eq(schema.providerAssetMappings.providerAssetRowId, providerAsset.id))
   }).pipe(Effect.provide(TestPgClientLive))
 
+const excludeProviderAssetMapping = ({ currencyCode }: { readonly currencyCode: string }) =>
+  Effect.gen(function* () {
+    const db = yield* drizzle
+    const [providerAsset] = yield* db
+      .select({ id: schema.providerAssets.id })
+      .from(schema.providerAssets)
+      .where(
+        and(
+          eq(schema.providerAssets.provider, "coinbase"),
+          eq(schema.providerAssets.currencyCode, currencyCode.toUpperCase())
+        )
+      )
+      .limit(1)
+
+    if (providerAsset === undefined) {
+      return yield* Effect.die(`Missing ${currencyCode} provider asset fixture for exclusion`)
+    }
+
+    yield* db
+      .update(schema.providerAssetMappings)
+      .set({
+        mappingStatus: "excluded",
+        canonicalAssetId: null,
+        assetRepresentationId: null,
+        canonicalFiatCurrency: null,
+        reviewerNotes: "Excluded by administrator",
+        sourceNotes: "Settled exclusion fixture",
+      })
+      .where(eq(schema.providerAssetMappings.providerAssetRowId, providerAsset.id))
+  }).pipe(Effect.provide(TestPgClientLive))
+
 await Effect.runPromise(recreateTestDatabase())
 
 describe("coinbase normalization persistence", () => {
@@ -1347,6 +1378,121 @@ describe("coinbase normalization persistence", () => {
           mappingStatus: "pending_review",
           mappingKind: "asset",
         })
+      })
+    )
+  })
+
+  it("omits accounting and review work for an excluded Coinbase asset", async () => {
+    activeSyncRecords = makeHypeReviewableSyncRecords()
+    activeCryptoCurrencies = [...defaultCryptoCurrencies, hypeCryptoCurrency]
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        yield* seedPendingProviderAssetMapping({
+          currencyCode: "HYPE",
+          providerAssetId: "hype-provider-asset",
+          providerType: "crypto",
+        })
+        yield* excludeProviderAssetMapping({ currencyCode: "HYPE" })
+
+        const jobsBefore = yield* Effect.gen(function* () {
+          const db = yield* drizzle
+          return yield* db
+            .select({ id: schema.assetResolutionJobs.id })
+            .from(schema.assetResolutionJobs)
+        }).pipe(Effect.provide(TestPgClientLive))
+        yield* runSync()
+        const counts = yield* fetchCounts()
+        const providerAssetState = yield* fetchProviderAssetState({ currencyCode: "HYPE" })
+        const resolutionJobsAfter = yield* Effect.gen(function* () {
+          const db = yield* drizzle
+          return yield* db
+            .select({ id: schema.assetResolutionJobs.id })
+            .from(schema.assetResolutionJobs)
+        }).pipe(Effect.provide(TestPgClientLive))
+
+        expect(
+          counts.rawRows.find((row) => row.externalRecordId === "tx-hype-buy-1")?.normalizationError
+        ).toBeNull()
+        expect(counts.transactions).toEqual([
+          expect.objectContaining({ externalId: "tx-hype-buy-1" }),
+        ])
+        expect(counts.legs).toHaveLength(0)
+        expect(counts.transactionReviews).toHaveLength(0)
+        expect(providerAssetState.mapping).toMatchObject({ mappingStatus: "excluded" })
+        expect(resolutionJobsAfter).toHaveLength(jobsBefore.length)
+      })
+    )
+  })
+
+  it("does not create mapping review work for an excluded secondary currency", async () => {
+    activeSyncRecords = [
+      makeCoinbaseRecord({
+        recordType: "coinbase_account",
+        externalRecordId: "coinbase-account-1",
+        occurredAt: new Date("2025-01-01T00:00:00.000Z"),
+        payload: {
+          id: "coinbase-account-1",
+          created_at: "2025-01-01T00:00:00.000Z",
+          updated_at: "2025-01-01T00:00:00.000Z",
+        },
+      }),
+      makeCoinbaseRecord({
+        externalRecordId: "tx-btc-with-excluded-fee",
+        occurredAt: new Date("2025-05-01T10:00:00.000Z"),
+        payload: {
+          id: "tx-btc-with-excluded-fee",
+          type: "buy",
+          status: "completed",
+          amount: { amount: "0.01000000", currency: "BTC" },
+          native_amount: { amount: "500.00", currency: "EUR" },
+          network: {
+            status: "confirmed",
+            network_name: "base",
+            transaction_fee: { amount: "0.10000000", currency: "HYPE" },
+          },
+          created_at: "2025-05-01T10:00:00.000Z",
+          resource_path: "/v2/accounts/coinbase-account-1/transactions/tx-btc-with-excluded-fee",
+        },
+      }),
+    ]
+    activeCryptoCurrencies = [...defaultCryptoCurrencies, hypeCryptoCurrency]
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        yield* seedPendingProviderAssetMapping({
+          currencyCode: "HYPE",
+          providerAssetId: "hype-provider-asset",
+          providerType: "crypto",
+        })
+        yield* excludeProviderAssetMapping({ currencyCode: "HYPE" })
+
+        const jobsBefore = yield* Effect.gen(function* () {
+          const db = yield* drizzle
+          return yield* db
+            .select({ id: schema.assetResolutionJobs.id })
+            .from(schema.assetResolutionJobs)
+        }).pipe(Effect.provide(TestPgClientLive))
+        yield* runSync()
+        const counts = yield* fetchCounts()
+        const jobsAfter = yield* Effect.gen(function* () {
+          const db = yield* drizzle
+          return yield* db
+            .select({ id: schema.assetResolutionJobs.id })
+            .from(schema.assetResolutionJobs)
+        }).pipe(Effect.provide(TestPgClientLive))
+
+        expect(
+          counts.transactionReviews.some(
+            (review) => review.matchedLayer?.includes("provider_asset_mapping") === true
+          )
+        ).toBe(false)
+        expect(
+          counts.rawRows.find((row) => row.externalRecordId === "tx-btc-with-excluded-fee")
+            ?.normalizationError
+        ).toBeNull()
+        expect(counts.legs.length).toBeGreaterThan(0)
+        expect(jobsAfter).toHaveLength(jobsBefore.length)
       })
     )
   })

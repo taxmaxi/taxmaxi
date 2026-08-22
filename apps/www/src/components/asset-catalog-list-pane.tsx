@@ -28,16 +28,19 @@ export function AssetCatalogListPane() {
     canLoadMoreNow,
     canRetryNow,
     catalogStatus,
+    exceptionActions,
     hasLoadError,
     hasMoreItems,
     isLoading,
     exceptionsAvailable,
     mobileDetailOpen,
+    mobileDetailOpenerRef,
     onLoadMore,
     onQueryChange,
     onRetry,
     onScopeChange,
     onSelect,
+    onShowMobileDetail,
     pendingAssetsUnavailable,
     query,
     scope,
@@ -95,6 +98,19 @@ export function AssetCatalogListPane() {
           ))}
         </div>
       </div>
+      {scope === "exceptions" && exceptionActions !== undefined ? (
+        <div className="px-4 pb-4 lg:hidden">
+          <Button
+            className="h-11 w-full"
+            onClick={onShowMobileDetail}
+            ref={mobileDetailOpenerRef}
+            variant="outline"
+          >
+            <Search data-icon="inline-start" />
+            {m["assetCatalog.exceptions.lookup.open"]()}
+          </Button>
+        </div>
+      ) : null}
       <Separator />
       <div
         aria-label={m["assetCatalog.listLabel"]()}

@@ -283,6 +283,7 @@
         "providerAssetId": "Beobachtungs-ID",
         "naturalKey": "Natürlicher Schlüssel",
         "key": "Exakter Wert",
+        "open": "Exakte Suche öffnen",
         "action": "Suchen"
       },
       "impact": {
@@ -374,7 +375,9 @@
         "claim": "Vervollständige die gewählte Identitätsaussage.",
         "preview": "Die Entscheidung konnte nicht geprüft werden.",
         "submit": "Die Entscheidung konnte nicht angenommen werden.",
-        "stale": "Evidenz oder aktive Entscheidung haben sich geändert. Die Details wurden aktualisiert; prüfe erneut."
+        "stale": "Evidenz oder aktive Entscheidung haben sich geändert. Die Details wurden aktualisiert; prüfe erneut.",
+        "ambiguousIdentity": "Diese Aussage passt zu mehreren wirtschaftlichen Identitäten. Wähle ausdrücklich eine bestehende Asset-ID.",
+        "identityChanged": "Die wirtschaftliche Identität hat sich nach der Vorschau geändert. Prüfe die aktuelle Identität und die Vorschau erneut."
       }
     },
     "logoAlt": "Logo von {name}",

@@ -1,4 +1,9 @@
-import { AuthValidationError, SourceCreditRequiredError } from "@my/rest-api/contracts"
+import {
+  AssetDecisionConflictError,
+  AssetStaleRevisionError,
+  AuthValidationError,
+  SourceCreditRequiredError,
+} from "@my/rest-api/contracts"
 import * as Exit from "effect/Exit"
 import * as Option from "effect/Option"
 import * as Schema from "effect/Schema"
@@ -147,6 +152,27 @@ export const getTaxMaxiCreditRequired = (error: unknown): TaxMaxiCreditRequired 
   return Exit.match(decodeCreditRequired(candidate), {
     onFailure: () => null,
     onSuccess: ({ availableCredits, reasonCode }) => ({ availableCredits, reasonCode }),
+  })
+}
+
+export type TaxMaxiAssetDecisionConflict =
+  | "stale_revision"
+  | "ambiguous_identity"
+  | "identity_changed"
+
+const decodeAssetDecisionConflict = Schema.decodeUnknownExit(
+  Schema.Union([AssetStaleRevisionError, AssetDecisionConflictError])
+)
+
+/** Extract the machine-readable conflict from an asset exception decision failure. */
+export const getTaxMaxiAssetDecisionConflict = (
+  error: unknown
+): TaxMaxiAssetDecisionConflict | null => {
+  const candidate = error instanceof TaxMaxiError ? error.cause : error
+
+  return Exit.match(decodeAssetDecisionConflict(candidate), {
+    onFailure: () => null,
+    onSuccess: ({ code }) => code,
   })
 }
 

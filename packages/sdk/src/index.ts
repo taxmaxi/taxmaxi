@@ -118,11 +118,16 @@ export type {
 } from "./auth/index.ts"
 export {
   TaxMaxiError,
+  getTaxMaxiAssetDecisionConflict,
   getTaxMaxiCreditRequired,
   isTaxMaxiUnauthorizedError,
   toTaxMaxiError,
 } from "./errors.ts"
-export type { TaxMaxiCreditRequired, TaxMaxiFieldError } from "./errors.ts"
+export type {
+  TaxMaxiAssetDecisionConflict,
+  TaxMaxiCreditRequired,
+  TaxMaxiFieldError,
+} from "./errors.ts"
 export type {
   BillingCatalog,
   BillingEffectResource,

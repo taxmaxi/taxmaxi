@@ -7,7 +7,7 @@
  * @module TaxCalculationServiceLive
  */
 
-import { and, count, eq, gte, isNull, lt, notInArray, or } from "drizzle-orm"
+import { and, count, eq, gte, isNull, lt, notInArray, or, sql } from "drizzle-orm"
 import { EUR } from "@my/core/currency"
 import { withObservedOperation } from "@my/core/shared/observability/ObservedOperation"
 import * as BigDecimal from "effect/BigDecimal"
@@ -237,10 +237,10 @@ const make = Effect.gen(function* () {
    * Filter for observations used by the source whose transactions stay
    * outside derived accounting AND make the calculation incomplete: no
    * mapping row yet, or a mapping that is still an open question
-   * (pending_review or rejected). An excluded observation also stays outside
-   * derived accounting, but it is a final answer, so it does not block the
-   * calculation. Shared by the count and the list so the two can never
-   * disagree about what blocks a calculation.
+   * (pending_review or rejected). An excluded observation remains blocking
+   * while its decision replay is incomplete because stale derived rows may
+   * still contain its accounting. Shared by the count and the list so the two
+   * can never disagree about what blocks a calculation.
    *
    * @param sourceId - Source identifier
    * @returns Drizzle where condition over source uses joined with mappings
@@ -250,7 +250,32 @@ const make = Effect.gen(function* () {
       eq(schema.providerAssetSourceUses.sourceId, sourceId),
       or(
         isNull(schema.providerAssetMappings.id),
-        notInArray(schema.providerAssetMappings.mappingStatus, ["approved", "excluded"])
+        notInArray(schema.providerAssetMappings.mappingStatus, ["approved", "excluded"]),
+        and(
+          eq(schema.providerAssetMappings.mappingStatus, "excluded"),
+          sql<boolean>`exists (
+            select 1
+            from ${schema.assetDecisionRematerializations} rematerialization
+            inner join ${schema.assetResolutionDecisions} decision
+              on decision.id = rematerialization.decision_id
+            left join ${schema.processingJobs} replay_job
+              on replay_job.id = rematerialization.processing_job_id
+            left join ${schema.processingJobs} follow_up_job
+              on follow_up_job.id = replay_job.follow_up_job_id
+            where rematerialization.source_id = ${schema.providerAssetSourceUses.sourceId}
+              and decision.provider_asset_row_id = ${schema.providerAssetMappings.providerAssetRowId}
+              and decision.outcome = 'excluded'
+              and (
+                rematerialization.status = 'operator_attention'
+                or replay_job.id is null
+                or replay_job.status <> 'completed'
+                or (
+                  replay_job.follow_up_mode = 'replay'
+                  and (follow_up_job.id is null or follow_up_job.status <> 'completed')
+                )
+              )
+          )`
+        )
       )
     )
 
