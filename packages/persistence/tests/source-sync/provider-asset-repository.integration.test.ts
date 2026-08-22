@@ -984,7 +984,7 @@ describe("ProviderAssetRepositoryLive", () => {
       expect(state.decisions).toEqual([])
     })
 
-    it("atomically reverses an exclusion after the provider evidence revision advances", async () => {
+    it("atomically reverses a chainless exclusion after the provider evidence revision advances", async () => {
       const providerAssetId = "btc-approval-manual-exclusion-reversal"
       const providerAsset = await seedPendingApprovalAsset("manual-exclusion-reversal")
       await runRepository(
@@ -1033,7 +1033,7 @@ describe("ProviderAssetRepositoryLive", () => {
               providerAssetRowId: providerAsset.id,
               mappingKind: "asset",
               canonicalAssetId: TEST_BTC_ASSET_ID,
-              assetRepresentationId: TEST_BTC_REPRESENTATION_ID,
+              assetRepresentationId: null,
               canonicalFiatCurrency: null,
               mappingStatus: "approved",
               reviewerNotes: "Human reversed a false exclusion",
@@ -1065,7 +1065,7 @@ describe("ProviderAssetRepositoryLive", () => {
       expect(Option.getOrNull(state.mapping)).toMatchObject({
         mappingStatus: "approved",
         canonicalAssetId: TEST_BTC_ASSET_ID,
-        assetRepresentationId: TEST_BTC_REPRESENTATION_ID,
+        assetRepresentationId: null,
       })
       expect(state.history).toHaveLength(2)
       expect(state.history[0]).toMatchObject({
@@ -1080,7 +1080,7 @@ describe("ProviderAssetRepositoryLive", () => {
         status: "active",
         supersedesDecisionId: state.history[0]?.id,
         assetId: TEST_BTC_ASSET_ID,
-        assetRepresentationId: TEST_BTC_REPRESENTATION_ID,
+        assetRepresentationId: null,
         reason: "manual_exclusion_reversal",
         actor: "human:admin",
       })

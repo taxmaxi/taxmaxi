@@ -1,3 +1,3 @@
 ALTER TYPE "asset_resolution_outcome" ADD VALUE 'create_standalone' BEFORE 'pending';--> statement-breakpoint
 ALTER TABLE "asset_resolution_decisions" DROP CONSTRAINT "asset_resolution_decisions_attach_requires_target";--> statement-breakpoint
-ALTER TABLE "asset_resolution_decisions" ADD CONSTRAINT "asset_resolution_decisions_approval_requires_target" CHECK ("outcome"::text not in ('attach', 'create_standalone') or ("asset_id" is not null and "asset_representation_id" is not null));
+ALTER TABLE "asset_resolution_decisions" ADD CONSTRAINT "asset_resolution_decisions_approval_requires_target" CHECK ("outcome"::text not in ('attach', 'create_standalone') or ("asset_id" is not null and ("blockchain" is null or "asset_representation_id" is not null)));

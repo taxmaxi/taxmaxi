@@ -387,7 +387,7 @@ const insertExcludedProviderAssetSourceUseWithRematerialization = () =>
       status: "pending",
     })
 
-    return { decisionId: decision.id, jobId: job.id }
+    return { decisionId: decision.id, jobId: job.id, providerAssetRowId: providerAsset.id }
   }).pipe(Effect.provide(context.TestPgClientLive))
 
 await Effect.runPromise(context.recreateTestDatabase())
@@ -547,6 +547,49 @@ describe("TaxCalculationServiceLive", () => {
         const tax = yield* calculateTax()
         expect(tax.taxableGains).toBe(2000)
         expect(tax.incomeTotal).toBe(700)
+
+        yield* db
+          .update(schema.assetDecisionRematerializations)
+          .set({ status: "operator_attention" })
+          .where(eq(schema.assetDecisionRematerializations.decisionId, fixture.decisionId))
+        yield* db
+          .update(schema.assetResolutionDecisions)
+          .set({ status: "superseded" })
+          .where(eq(schema.assetResolutionDecisions.id, fixture.decisionId))
+        const [activeDecision] = yield* db
+          .insert(schema.assetResolutionDecisions)
+          .values({
+            providerAssetRowId: fixture.providerAssetRowId,
+            evidenceRevision: 1,
+            policyRevision: "human:test:latest",
+            outcome: "excluded",
+            status: "active",
+            supersedesDecisionId: fixture.decisionId,
+            reason: "not_economic_activity",
+            actor: userId,
+          })
+          .returning({ id: schema.assetResolutionDecisions.id })
+        const [completedJob] = yield* db
+          .insert(schema.processingJobs)
+          .values({
+            sourceId,
+            principalId,
+            mode: "replay",
+            status: "completed",
+          })
+          .returning({ id: schema.processingJobs.id })
+        if (activeDecision === undefined || completedJob === undefined) {
+          return yield* Effect.die("Failed to create active exclusion replay fixture")
+        }
+        yield* db.insert(schema.assetDecisionRematerializations).values({
+          decisionId: activeDecision.id,
+          sourceId,
+          processingJobId: completedJob.id,
+          status: "pending",
+        })
+
+        const taxAfterSupersession = yield* calculateTax()
+        expect(taxAfterSupersession.taxableGains).toBe(2000)
       }).pipe(Effect.provide(context.TestPgClientLive))
     )
   })

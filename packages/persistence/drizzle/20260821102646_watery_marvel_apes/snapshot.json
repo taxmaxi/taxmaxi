@@ -15204,7 +15204,7 @@
       "table": "asset_resolution_decisions"
     },
     {
-      "value": "\"outcome\"::text not in ('attach', 'create_standalone') or (\"asset_id\" is not null and \"asset_representation_id\" is not null)",
+      "value": "\"outcome\"::text not in ('attach', 'create_standalone') or (\"asset_id\" is not null and (\"blockchain\" is null or \"asset_representation_id\" is not null))",
       "name": "asset_resolution_decisions_approval_requires_target",
       "entityType": "checks",
       "schema": "public",

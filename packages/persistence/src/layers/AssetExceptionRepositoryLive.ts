@@ -96,7 +96,7 @@ const isRepresentationCompatibleWithAssetType = ({
   readonly representationType: "native" | "token" | "nft"
 }): boolean => (assetType === "nft" ? representationType === "nft" : representationType !== "nft")
 
-const isClaimCompatibleWithObservedRepresentation = ({
+const isClaimCompatibleWithHeliusObservation = ({
   detail,
   claim,
 }: {
@@ -138,6 +138,50 @@ const make = Effect.gen(function* () {
 
   type DbTransactionClient = Parameters<Parameters<typeof db.transaction>[0]>[0]
   type QueryClient = typeof db | DbTransactionClient
+
+  const isClaimCompatibleWithObservedRepresentation = ({
+    client,
+    detail,
+    claim,
+  }: {
+    readonly client: QueryClient
+    readonly detail: AssetExceptionDetail
+    readonly claim: Extract<AssetExceptionDecisionInput["claim"], { readonly _tag: "identity" }>
+  }): Effect.Effect<boolean, unknown, never> =>
+    Effect.gen(function* () {
+      if (!isClaimCompatibleWithHeliusObservation({ detail, claim })) {
+        return false
+      }
+      if (detail.provider === "helius-solana" || claim.representation === null) {
+        return true
+      }
+
+      const representation = claim.representation
+      const observations = yield* client
+        .select({
+          blockchain: schema.blockchains.name,
+          type: schema.providerTransfers.observedRepresentationType,
+          contractAddress: schema.providerTransfers.observedContractAddress,
+          mintAddress: schema.providerTransfers.observedMintAddress,
+          decimals: schema.providerTransfers.observedDecimals,
+        })
+        .from(schema.providerTransfers)
+        .innerJoin(
+          schema.blockchains,
+          eq(schema.blockchains.id, schema.providerTransfers.observedBlockchainId)
+        )
+        .where(eq(schema.providerTransfers.providerAssetId, detail.providerAssetRowId))
+
+      return observations.some(
+        (observation) =>
+          observation.blockchain.toLowerCase() === representation.blockchain.toLowerCase() &&
+          observation.type === representation.type &&
+          observation.contractAddress?.toLowerCase() ===
+            representation.contractAddress?.toLowerCase() &&
+          observation.mintAddress === representation.mintAddress &&
+          observation.decimals === representation.decimals
+      )
+    })
 
   const affectedSourcesSql = sql<number>`(
     select count(distinct affected_sources.source_id)::int
@@ -928,7 +972,13 @@ const make = Effect.gen(function* () {
         }
       }
 
-      if (!isClaimCompatibleWithObservedRepresentation({ detail, claim: input.claim })) {
+      if (
+        !(yield* isClaimCompatibleWithObservedRepresentation({
+          client: db,
+          detail,
+          claim: input.claim,
+        }))
+      ) {
         return { _tag: "invalid_claim" as const }
       }
 
@@ -1087,7 +1137,13 @@ const make = Effect.gen(function* () {
           }
 
           if (input.claim._tag === "identity") {
-            if (!isClaimCompatibleWithObservedRepresentation({ detail, claim: input.claim })) {
+            if (
+              !(yield* isClaimCompatibleWithObservedRepresentation({
+                client: tx,
+                detail,
+                claim: input.claim,
+              }))
+            ) {
               return { _tag: "invalid_claim" as const }
             }
             yield* lockIdentityResolution({ claim: input.claim, tx })

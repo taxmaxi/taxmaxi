@@ -265,6 +265,7 @@ const make = Effect.gen(function* () {
             where rematerialization.source_id = ${schema.providerAssetSourceUses.sourceId}
               and decision.provider_asset_row_id = ${schema.providerAssetMappings.providerAssetRowId}
               and decision.outcome = 'excluded'
+              and decision.status = 'active'
               and (
                 rematerialization.status = 'operator_attention'
                 or replay_job.id is null

@@ -456,18 +456,62 @@ describe("AssetExceptionRepositoryLive", () => {
     ).resolves.toMatchObject({ _tag: "ready" })
   })
 
+  it("rejects representations for chainless observations", async () => {
+    const fixture = await seedException()
+
+    const result = await runRepository(
+      Effect.gen(function* () {
+        const repository = yield* AssetExceptionRepository
+        return yield* repository.previewDecision({
+          providerAssetRowId: fixture.providerAssetRowId,
+          claim: {
+            _tag: "identity",
+            assetId: null,
+            newAsset: { name: "Chainless Asset", symbol: "CHA", type: "fungible" },
+            representation: {
+              blockchain: "base",
+              type: "token",
+              contractAddress: "0x0000000000000000000000000000000000000001",
+              mintAddress: null,
+              decimals: 6,
+            },
+          },
+          evidenceRevision: 2,
+          activeDecisionRevision: fixture.decisionId,
+          evidenceSnapshotIds: [fixture.evidenceId],
+          rationale: "A chainless provider observation cannot prove an on-chain representation.",
+        })
+      })
+    )
+
+    expect(result).toMatchObject({ _tag: "invalid_claim" })
+  })
+
   it("rejects a representation incompatible with an existing asset type", async () => {
     const fixture = await seedException()
     const assetId = await runPg(
       Effect.gen(function* () {
         const db = yield* drizzle
+        const [blockchain] = yield* db
+          .select({ id: schema.blockchains.id })
+          .from(schema.blockchains)
+          .where(eq(schema.blockchains.name, "base"))
         const [asset] = yield* db
           .insert(schema.assets)
           .values({ name: "Fungible Target", symbol: "FUN", type: "fungible" })
           .returning({ id: schema.assets.id })
-        if (asset === undefined) {
+        if (asset === undefined || blockchain === undefined) {
           return yield* Effect.die("Failed to seed target asset")
         }
+        yield* db
+          .update(schema.providerTransfers)
+          .set({
+            observedBlockchainId: blockchain.id,
+            observedRepresentationType: "nft",
+            observedContractAddress: "0x-fungible-target",
+            observedDecimals: 0,
+          })
+          .where(eq(schema.providerTransfers.providerAssetId, fixture.providerAssetRowId))
         return asset.id
       })
     )
@@ -623,6 +667,38 @@ describe("AssetExceptionRepositoryLive", () => {
 
   it("serializes conflicting claims for the same representation identity", async () => {
     const [first, second] = await Promise.all([seedException("-lock-a"), seedException("-lock-b")])
+    await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const [blockchain] = yield* db
+          .select({ id: schema.blockchains.id })
+          .from(schema.blockchains)
+          .where(eq(schema.blockchains.name, "base"))
+        if (blockchain === undefined) {
+          return yield* Effect.die("Failed to seed Base blockchain")
+        }
+        yield* Effect.all([
+          db
+            .update(schema.providerTransfers)
+            .set({
+              observedBlockchainId: blockchain.id,
+              observedRepresentationType: "token",
+              observedContractAddress: "0x-shared-representation",
+              observedDecimals: 6,
+            })
+            .where(eq(schema.providerTransfers.providerAssetId, first.providerAssetRowId)),
+          db
+            .update(schema.providerTransfers)
+            .set({
+              observedBlockchainId: blockchain.id,
+              observedRepresentationType: "nft",
+              observedContractAddress: "0x-shared-representation",
+              observedDecimals: 0,
+            })
+            .where(eq(schema.providerTransfers.providerAssetId, second.providerAssetRowId)),
+        ])
+      })
+    )
     const submit = ({
       fixture,
       type,

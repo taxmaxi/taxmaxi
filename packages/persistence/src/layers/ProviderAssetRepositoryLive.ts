@@ -546,10 +546,11 @@ const make = Effect.gen(function* () {
 
             const now = nowDate()
             if (reversesExclusion) {
+              const onChainObservation = expectedObservedRepresentations.length > 0
               if (
                 exclusionReversal === undefined ||
                 mapping.canonicalAssetId === null ||
-                mapping.assetRepresentationId === null
+                (onChainObservation && mapping.assetRepresentationId === null)
               ) {
                 return yield* new SyncEngineStorageError({
                   operation:

@@ -12,6 +12,7 @@ import {
 import {
   HeliusSolanaAssetResolutionService,
   type HeliusSolanaResolvedAsset,
+  type HeliusSolanaAssetResolutionServiceShape,
 } from "../../src/providers/helius-solana/services/HeliusSolanaAssetResolutionService.ts"
 import {
   HeliusSolanaAuthError,
@@ -142,10 +143,12 @@ const makeProviderLayer = ({
       },
     }),
   recordProviderAssetSourceUses = () => Effect.succeed(0),
+  resolveNativeAsset,
 }: {
   readonly fetchTransactionsForAddress: HeliusSolanaSyncClientShape["fetchTransactionsForAddress"]
   readonly fetchTransfersForAddress?: HeliusSolanaSyncClientShape["fetchTransfersForAddress"]
   readonly recordProviderAssetSourceUses?: ProviderAssetRepositoryShape["recordProviderAssetSourceUses"]
+  readonly resolveNativeAsset?: HeliusSolanaAssetResolutionServiceShape["resolveAsset"]
 }) =>
   HeliusSolanaSourceSyncProviderFromClientLive.pipe(
     Layer.provide(
@@ -235,26 +238,28 @@ const makeProviderLayer = ({
               providerAssetCatalogCount: 0,
               defaultProviderAssetMappingCount: 0,
             }),
-          resolveAsset: () =>
-            Effect.succeed({
-              kind: "canonical",
-              assetKind: "native",
-              representationTypeObserved: true,
-              mintAddress: null,
-              providerAssetRowId: "provider-asset-sol",
-              providerAssetId: null,
-              naturalKey: "native:SOL",
-              currencyCode: "SOL",
-              name: "Solana",
-              decimals: 9,
-              tokenProgram: null,
-              nftHint: false,
-              mappingStatus: "approved",
-              mappingKind: "asset",
-              canonicalAssetId: "asset-sol",
-              assetRepresentationId: "representation-sol",
-              canonicalFiatCurrency: null,
-            } satisfies HeliusSolanaResolvedAsset),
+          resolveAsset:
+            resolveNativeAsset ??
+            (() =>
+              Effect.succeed({
+                kind: "canonical",
+                assetKind: "native",
+                representationTypeObserved: true,
+                mintAddress: null,
+                providerAssetRowId: "provider-asset-sol",
+                providerAssetId: null,
+                naturalKey: "native:SOL",
+                currencyCode: "SOL",
+                name: "Solana",
+                decimals: 9,
+                tokenProgram: null,
+                nftHint: false,
+                mappingStatus: "approved",
+                mappingKind: "asset",
+                canonicalAssetId: "asset-sol",
+                assetRepresentationId: "representation-sol",
+                canonicalFiatCurrency: null,
+              } satisfies HeliusSolanaResolvedAsset)),
           resolveAssets: ({ assets }) =>
             Effect.succeed(
               assets.flatMap(
@@ -3959,6 +3964,100 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
     ])
     expect(result.legDerivationStrategy).toBe("skip")
     expect(result.legPlans).toEqual([])
+  })
+
+  it("keeps approved SPL accounting when native SOL is excluded", async () => {
+    const payload = {
+      slot: 129,
+      transactionIndex: 5,
+      transaction: {
+        signatures: ["signature-excluded-native-sol"],
+        message: {
+          accountKeys: [
+            { pubkey: WALLET_ADDRESS, signer: true },
+            { pubkey: "counterparty-address", signer: false },
+            { pubkey: "wallet-usdc-account", signer: false },
+          ],
+          instructions: [],
+        },
+      },
+      meta: {
+        err: null,
+        fee: 0,
+        preBalances: [1_000_000_000, 1_000_000_000, 0],
+        postBalances: [2_000_000_000, 0, 0],
+        preTokenBalances: [
+          {
+            accountIndex: 2,
+            mint: USDC_MINT,
+            owner: WALLET_ADDRESS,
+            uiTokenAmount: { amount: "0", decimals: 6 },
+          },
+        ],
+        postTokenBalances: [
+          {
+            accountIndex: 2,
+            mint: USDC_MINT,
+            owner: WALLET_ADDRESS,
+            uiTokenAmount: { amount: "12500000", decimals: 6 },
+          },
+        ],
+      },
+      blockTime: 1_735_689_600,
+    }
+
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const provider = yield* HeliusSolanaSourceSyncProvider
+        const lookups = yield* provider.loadNormalizationLookups()
+        return yield* provider.prepareNormalization({
+          source: makeSource(),
+          sourceRecord: makeRawRecord({ fullTransaction: payload }),
+          lookups,
+        })
+      }).pipe(
+        Effect.provide(
+          makeProviderLayer({
+            fetchTransactionsForAddress: () =>
+              Effect.die("Helius client should not be called during normalization"),
+            resolveNativeAsset: () =>
+              Effect.succeed({
+                kind: "excluded",
+                assetKind: "native",
+                representationTypeObserved: true,
+                mintAddress: null,
+                providerAssetRowId: "provider-asset-sol",
+                providerAssetId: null,
+                naturalKey: "native:SOL",
+                currencyCode: "SOL",
+                name: "Solana",
+                decimals: 9,
+                tokenProgram: null,
+                nftHint: false,
+                mappingStatus: "excluded",
+                mappingKind: "asset",
+                canonicalAssetId: null,
+                assetRepresentationId: null,
+                canonicalFiatCurrency: null,
+              }),
+          })
+        )
+      )
+    )
+
+    expect(result.canonicalTransfers).toEqual([
+      expect.objectContaining({ assetId: "asset-usdc", amount: "12.5", type: "spl" }),
+    ])
+    expect(result.providerTransfers).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          providerAssetId: "provider-asset-sol",
+          processingMode: "evidence_only",
+        }),
+      ])
+    )
+    expect(result.legDerivationStrategy).not.toBe("skip")
+    expect(result.legPlans).not.toEqual([])
   })
 
   it("ignores excluded SPL contradictions while deriving valid accounting legs", async () => {

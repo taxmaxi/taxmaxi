@@ -92,7 +92,7 @@ export const assetResolutionDecisions = pgTable(
     ),
     check(
       "asset_resolution_decisions_approval_requires_target",
-      sql`${table.outcome}::text not in ('attach', 'create_standalone') or (${table.assetId} is not null and ${table.assetRepresentationId} is not null)`
+      sql`${table.outcome}::text not in ('attach', 'create_standalone') or (${table.assetId} is not null and (${table.blockchain} is null or ${table.assetRepresentationId} is not null))`
     ),
   ]
 )
