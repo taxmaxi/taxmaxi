@@ -14,6 +14,7 @@ import {
   gt,
   gte,
   inArray,
+  isNull,
   lte,
   ne,
   or,
@@ -39,6 +40,7 @@ import {
 import { drizzle } from "./PgClientLive.ts"
 import { nowDate, wrapSyncEngineSqlError } from "./SyncEngineRepositorySupport.ts"
 import { schema } from "../schema/index.ts"
+import { sourceInventoryLockQuery } from "./SourceInventoryLock.ts"
 
 const isUniformCaseBitcoinBech32Address = (address: SQLWrapper) => sql`
   (${address} = lower(${address}) or ${address} = upper(${address}))
@@ -1286,6 +1288,13 @@ const make = Effect.gen(function* () {
           ].sort()
           if (affectedSourceIds.length > 0) {
             yield* tx
+              .execute(sourceInventoryLockQuery(affectedSourceIds))
+              .pipe(
+                wrapSyncEngineSqlError(
+                  "transferReconciliationRepository.persistReconciliation.lockSourceInventory"
+                )
+              )
+            yield* tx
               .select({ id: schema.sources.id })
               .from(schema.sources)
               .where(inArray(schema.sources.id, affectedSourceIds))
@@ -2531,6 +2540,13 @@ const make = Effect.gen(function* () {
               ]),
             ].sort()
 
+            yield* tx
+              .execute(sourceInventoryLockQuery(inventorySourceIds))
+              .pipe(
+                wrapSyncEngineSqlError(
+                  "transferReconciliationRepository.applyDeterministicInternalTransferCanonicalization.lockSourceInventory"
+                )
+              )
             const lockedSources = yield* tx
               .select({ id: schema.sources.id })
               .from(schema.sources)
@@ -2553,6 +2569,33 @@ const make = Effect.gen(function* () {
                 operation:
                   "transferReconciliationRepository.applyDeterministicInternalTransferCanonicalization.lockSourceInventory",
                 cause: "Internal transfer sources are not owned by the reconciliation principal",
+              })
+            }
+
+            const [pendingOverrideApplication] = yield* tx
+              .select({ id: schema.principalAssetOverrideApplications.id })
+              .from(schema.principalAssetOverrideApplications)
+              .leftJoin(
+                schema.processingJobs,
+                eq(schema.processingJobs.id, schema.principalAssetOverrideApplications.replayJobId)
+              )
+              .where(
+                and(
+                  inArray(schema.principalAssetOverrideApplications.sourceId, inventorySourceIds),
+                  isNull(schema.principalAssetOverrideApplications.supersededAt),
+                  or(
+                    isNull(schema.principalAssetOverrideApplications.replayJobId),
+                    ne(schema.processingJobs.status, "completed"),
+                    sql`${schema.processingJobs.progressDetails} ->> 'failedRecords' is distinct from '0'`
+                  )
+                )
+              )
+              .limit(1)
+            if (pendingOverrideApplication !== undefined) {
+              return yield* new SyncEngineStorageError({
+                operation:
+                  "transferReconciliationRepository.applyDeterministicInternalTransferCanonicalization.lockSourceInventory",
+                cause: "Source inventory is waiting for a principal asset override replay.",
               })
             }
 

@@ -4,7 +4,7 @@
  * @module AssetOverrideRepositoryLive
  */
 
-import { and, asc, desc, eq, exists, inArray, isNull, ne, notExists, or, sql } from "drizzle-orm"
+import { and, asc, eq, exists, inArray, isNull, ne, notExists, or, sql } from "drizzle-orm"
 import * as Data from "effect/Data"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
@@ -26,6 +26,7 @@ import { PersistenceError } from "../errors/RepositoryError.ts"
 import { schema, type PrincipalAssetOverrideRow } from "../schema/index.ts"
 import { drizzle } from "./PgClientLive.ts"
 import { decodeSourceSyncJobProgressSnapshot } from "./SyncEngineRepositorySupport.ts"
+import { sourceInventoryLockQuery } from "./SourceInventoryLock.ts"
 
 class AssetOverrideRevisionChanged extends Data.TaggedError("AssetOverrideRevisionChanged")<{}> {}
 
@@ -564,31 +565,41 @@ const make = Effect.gen(function* () {
 
   const loadRecomputationState = ({
     executor,
+    overrideId,
     sourceIds,
   }: {
     readonly executor: AssetOverrideExecutor
+    readonly overrideId: string | null
     readonly sourceIds: ReadonlyArray<string>
   }) =>
     Effect.gen(function* () {
-      if (sourceIds.length === 0) return "complete" as const
+      if (sourceIds.length === 0 || overrideId === null) return "complete" as const
       const rows = yield* executor
         .select({
-          sourceId: schema.processingJobs.sourceId,
+          sourceId: schema.principalAssetOverrideApplications.sourceId,
+          replayJobId: schema.principalAssetOverrideApplications.replayJobId,
           status: schema.processingJobs.status,
           progressDetails: schema.processingJobs.progressDetails,
         })
-        .from(schema.processingJobs)
-        .where(inArray(schema.processingJobs.sourceId, sourceIds))
-        .orderBy(desc(schema.processingJobs.createdAt), desc(schema.processingJobs.id))
-      const latestBySource = new Map<string, (typeof rows)[number]>()
-      for (const row of rows) {
-        if (!latestBySource.has(row.sourceId)) latestBySource.set(row.sourceId, row)
-      }
-      const latest = Array.from(latestBySource.values())
-      if (latest.some((row) => row.status === "pending" || row.status === "processing")) {
+        .from(schema.principalAssetOverrideApplications)
+        .leftJoin(
+          schema.processingJobs,
+          eq(schema.processingJobs.id, schema.principalAssetOverrideApplications.replayJobId)
+        )
+        .where(
+          and(
+            eq(schema.principalAssetOverrideApplications.overrideId, overrideId),
+            isNull(schema.principalAssetOverrideApplications.supersededAt),
+            inArray(schema.principalAssetOverrideApplications.sourceId, sourceIds)
+          )
+        )
+      if (rows.length < sourceIds.length || rows.some((row) => row.replayJobId === null)) {
         return "updating" as const
       }
-      const completedProgress = yield* Effect.forEach(latest, (row) =>
+      if (rows.some((row) => row.status === "pending" || row.status === "processing")) {
+        return "updating" as const
+      }
+      const completedProgress = yield* Effect.forEach(rows, (row) =>
         decodeSourceSyncJobProgressSnapshot(row.progressDetails).pipe(
           Effect.map((progress) => ({ row, progress }))
         )
@@ -621,7 +632,11 @@ const make = Effect.gen(function* () {
       const history = yield* loadHistory({ executor, kind, principalId, target })
       const latest = history.at(-1) ?? null
       const activeOverride = latest?.action === "set" ? latest : null
-      const recomputationState = yield* loadRecomputationState({ executor, sourceIds })
+      const recomputationState = yield* loadRecomputationState({
+        executor,
+        overrideId: latest?.id ?? null,
+        sourceIds,
+      })
 
       return {
         kind,
@@ -710,13 +725,36 @@ const make = Effect.gen(function* () {
             message: "Identity override must select an existing economic asset.",
           })
         }
-        if (
-          target._tag === "representation" &&
-          (target.representationType === "nft") !== (asset.type === "nft")
-        ) {
+        const targetAssetKind =
+          target._tag === "representation"
+            ? target.representationType === "nft"
+              ? "nft"
+              : "fungible"
+            : yield* executor
+                .select({ providerType: schema.providerAssets.providerType })
+                .from(schema.providerAssets)
+                .where(eq(schema.providerAssets.id, target.providerAssetRowId))
+                .limit(1)
+                .pipe(
+                  Effect.map(([providerAsset]) => {
+                    const providerType = providerAsset?.providerType
+                    if (providerType === "nft") return "nft" as const
+                    if (
+                      providerType === "crypto" ||
+                      providerType === "fiat" ||
+                      providerType === "native" ||
+                      providerType === "spl-token" ||
+                      providerType === "spl-token-2022"
+                    ) {
+                      return "fungible" as const
+                    }
+                    return null
+                  })
+                )
+        if (targetAssetKind !== null && targetAssetKind !== asset.type) {
           return yield* new AssetOverrideValidationError({
             code: "asset_type_mismatch",
-            message: "Economic asset type is incompatible with the representation type.",
+            message: "Economic asset type is incompatible with the observed target type.",
           })
         }
       }
@@ -743,13 +781,21 @@ const make = Effect.gen(function* () {
     readonly executor: AssetOverrideExecutor
     readonly principalId: string
     readonly sourceIds: ReadonlyArray<string>
-  }) =>
+  }): Effect.Effect<
+    ReadonlyArray<{ readonly sourceId: string; readonly replayJobId: string | null }>,
+    unknown
+  > =>
     Effect.gen(function* () {
       const now = yield* currentDate
-      yield* Effect.forEach(
+      return yield* Effect.forEach(
         sourceIds,
         (sourceId) => {
-          const requestReplay = (attemptsRemaining: number): Effect.Effect<void, unknown> =>
+          const requestReplay = (
+            attemptsRemaining: number
+          ): Effect.Effect<
+            { readonly sourceId: string; readonly replayJobId: string | null },
+            unknown
+          > =>
             Effect.gen(function* () {
               const [active] = yield* executor
                 .update(schema.processingJobs)
@@ -762,7 +808,7 @@ const make = Effect.gen(function* () {
                   )
                 )
                 .returning({ id: schema.processingJobs.id })
-              if (active !== undefined) return
+              if (active !== undefined) return { sourceId, replayJobId: null }
 
               const [created] = yield* executor
                 .insert(schema.processingJobs)
@@ -780,7 +826,7 @@ const make = Effect.gen(function* () {
                 .onConflictDoNothing()
                 .returning({ id: schema.processingJobs.id })
 
-              if (created !== undefined) return
+              if (created !== undefined) return { sourceId, replayJobId: created.id }
               if (attemptsRemaining > 1) {
                 return yield* Effect.suspend(() => requestReplay(attemptsRemaining - 1))
               }
@@ -797,7 +843,7 @@ const make = Effect.gen(function* () {
 
           return requestReplay(3)
         },
-        { discard: true }
+        { concurrency: 1 }
       )
     })
 
@@ -862,6 +908,13 @@ const make = Effect.gen(function* () {
           yield* tx.execute(
             sql`select pg_advisory_xact_lock(hashtextextended(${`${principalId}:${kind}:${JSON.stringify(canonicalTarget)}`}, 0))`
           )
+          const sourceIds = yield* loadOwnedSourceIds({
+            executor: tx,
+            principalId,
+            target: canonicalTarget,
+          })
+          if (sourceIds.length === 0) return yield* new AssetOverrideTargetNotFoundError()
+          yield* tx.execute(sourceInventoryLockQuery(sourceIds))
           yield* tx.execute(sql`
             lock table
               ${schema.providerAssetSourceUses},
@@ -872,12 +925,6 @@ const make = Effect.gen(function* () {
               ${schema.assetRepresentations}
             in share mode
           `)
-          const sourceIds = yield* loadOwnedSourceIds({
-            executor: tx,
-            principalId,
-            target: canonicalTarget,
-          })
-          if (sourceIds.length === 0) return yield* new AssetOverrideTargetNotFoundError()
           yield* validateReplayDependencies({ executor: tx, sourceIds })
           const before = yield* buildProjection({
             executor: tx,
@@ -908,22 +955,32 @@ const make = Effect.gen(function* () {
             before.systemConclusion._tag === "identity" ? before.systemConclusion : null
           const inspectedInclusion =
             before.systemConclusion._tag === "inclusion" ? before.systemConclusion : null
-          yield* tx.insert(schema.principalAssetOverrides).values({
-            principalId,
-            kind,
-            ...targetValues(canonicalTarget),
-            action,
-            inspectedSystemRevision: before.systemRevision,
-            inspectedIdentityState: inspectedIdentity?.state ?? null,
-            inspectedInclusionState: inspectedInclusion?.state ?? null,
-            inspectedInclusionReason: inspectedInclusion?.reason ?? null,
-            inspectedAssetId: inspectedIdentity?.assetId ?? null,
-            replacementAssetId: replacement?._tag === "identity" ? replacement.assetId : null,
-            replacementInclusionState: replacement?._tag === "inclusion" ? replacement.state : null,
-            actorId,
-            reason: reason.trim(),
-            supersedesOverrideId: latest?.id ?? null,
-          })
+          const [insertedOverride] = yield* tx
+            .insert(schema.principalAssetOverrides)
+            .values({
+              principalId,
+              kind,
+              ...targetValues(canonicalTarget),
+              action,
+              inspectedSystemRevision: before.systemRevision,
+              inspectedIdentityState: inspectedIdentity?.state ?? null,
+              inspectedInclusionState: inspectedInclusion?.state ?? null,
+              inspectedInclusionReason: inspectedInclusion?.reason ?? null,
+              inspectedAssetId: inspectedIdentity?.assetId ?? null,
+              replacementAssetId: replacement?._tag === "identity" ? replacement.assetId : null,
+              replacementInclusionState:
+                replacement?._tag === "inclusion" ? replacement.state : null,
+              actorId,
+              reason: reason.trim(),
+              supersedesOverrideId: latest?.id ?? null,
+            })
+            .returning({ id: schema.principalAssetOverrides.id })
+          if (insertedOverride === undefined) {
+            return yield* new PersistenceError({
+              operation: "assetOverrideRepository.writeOverride.insert",
+              cause: "Override insert returned no row.",
+            })
+          }
           const confirmedSourceIds = yield* loadOwnedSourceIds({
             executor: tx,
             principalId,
@@ -943,7 +1000,28 @@ const make = Effect.gen(function* () {
           ) {
             return yield* new AssetOverrideRevisionChanged()
           }
-          yield* requestReplays({ executor: tx, principalId, sourceIds })
+          const replayRequests = yield* requestReplays({ executor: tx, principalId, sourceIds })
+          const now = yield* currentDate
+          if (latest !== null) {
+            yield* tx
+              .update(schema.principalAssetOverrideApplications)
+              .set({ supersededAt: now })
+              .where(
+                and(
+                  eq(schema.principalAssetOverrideApplications.overrideId, latest.id),
+                  isNull(schema.principalAssetOverrideApplications.supersededAt)
+                )
+              )
+          }
+          yield* tx.insert(schema.principalAssetOverrideApplications).values(
+            replayRequests.map(({ sourceId, replayJobId }) => ({
+              overrideId: insertedOverride.id,
+              sourceId,
+              replayJobId,
+              requiresReplay: true,
+              createdAt: now,
+            }))
+          )
           const projection = yield* buildProjection({
             executor: tx,
             kind,

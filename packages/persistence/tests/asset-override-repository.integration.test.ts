@@ -6,6 +6,7 @@ import { beforeEach, describe, expect, it } from "vitest"
 import { AssetOverrideRepository } from "../src/services/AssetOverrideRepository.ts"
 import { AssetOverrideRepositoryLive } from "../src/layers/AssetOverrideRepositoryLive.ts"
 import { drizzle } from "../src/layers/PgClientLive.ts"
+import { sourceInventoryLockQuery } from "../src/layers/SourceInventoryLock.ts"
 import { schema } from "../src/schema/index.ts"
 import {
   TEST_BTC_ASSET_ID,
@@ -19,6 +20,7 @@ import {
 const context = makeIntegrationTestDatabaseContext({
   databaseNamePrefix: "taxmaxi_asset_override_repository",
 })
+const TEST_NFT_ASSET_ID = "00000000-0000-0000-0000-0000000000f1"
 
 const RepositoryTestLive = AssetOverrideRepositoryLive.pipe(
   Layer.provideMerge(context.TestPgClientLive)
@@ -172,7 +174,10 @@ const seedUnknownTypeRepresentation = () =>
     })
   )
 
-const seedCrossSourceFifoDependency = (providerAssetRowId: string) =>
+const seedCrossSourceFifoDependency = (
+  providerAssetRowId: string,
+  { insertDependency = true }: { readonly insertDependency?: boolean } = {}
+) =>
   context.runPg(
     Effect.gen(function* () {
       const db = yield* drizzle
@@ -295,16 +300,18 @@ const seedCrossSourceFifoDependency = (providerAssetRowId: string) =>
         .returning({ id: schema.fifoLots.id })
       if (lot === undefined) return yield* Effect.die("Failed to seed FIFO lot")
 
-      yield* db.insert(schema.disposalMatches).values({
-        disposalLegId: dependentLegId,
-        fifoLotId: lot.id,
-        matchedAmount: "1",
-        costBasis: "10",
-        proceeds: "12",
-        gainLoss: "2",
-      })
+      if (insertDependency) {
+        yield* db.insert(schema.disposalMatches).values({
+          disposalLegId: dependentLegId,
+          fifoLotId: lot.id,
+          matchedAmount: "1",
+          costBasis: "10",
+          proceeds: "12",
+          gainLoss: "2",
+        })
+      }
 
-      return dependentSourceId
+      return { dependentLegId, dependentSourceId, lotId: lot.id }
     })
   )
 
@@ -526,6 +533,16 @@ describe("AssetOverrideRepository", () => {
           .update(schema.processingJobs)
           .set({ status: "completed", progressDetails: { failedRecords: 1 } })
           .where(eq(schema.processingJobs.sourceId, TEST_SOURCE_ID))
+        yield* db.insert(schema.processingJobs).values({
+          sourceId: TEST_SOURCE_ID,
+          principalId: TEST_PRINCIPAL_ID,
+          mode: "sync",
+          status: "completed",
+          progressDetails: { failedRecords: 0 },
+          completedAt: new Date("2026-08-23T02:00:00.000Z"),
+          createdAt: new Date("2026-08-23T01:00:00.000Z"),
+          updatedAt: new Date("2026-08-23T02:00:00.000Z"),
+        })
       })
     )
 
@@ -535,6 +552,78 @@ describe("AssetOverrideRepository", () => {
       )
     )
     expect(projection.recomputationState).toBe("failed")
+  })
+
+  it("validates provider asset identity replacements against known NFT type hints", async () => {
+    const providerAssetRowId = await seedChainlessProviderAsset()
+    const target = { _tag: "provider_asset" as const, providerAssetRowId }
+    await context.runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        yield* db
+          .update(schema.providerAssets)
+          .set({ providerType: "nft" })
+          .where(eq(schema.providerAssets.id, providerAssetRowId))
+        yield* db.insert(schema.assets).values({
+          id: TEST_NFT_ASSET_ID,
+          name: "Override NFT Fixture",
+          symbol: "ONFT",
+          type: "nft",
+        })
+      })
+    )
+
+    const mismatch = await runRepository(
+      Effect.flatMap(AssetOverrideRepository, (repository) =>
+        repository
+          .validateOverride({
+            principalId: TEST_PRINCIPAL_ID,
+            kind: "identity",
+            target,
+            replacement: { _tag: "identity", assetId: TEST_BTC_ASSET_ID },
+          })
+          .pipe(Effect.flip)
+      )
+    )
+    expect(mismatch).toMatchObject({
+      _tag: "AssetOverrideValidationError",
+      code: "asset_type_mismatch",
+    })
+
+    await expect(
+      runRepository(
+        Effect.flatMap(AssetOverrideRepository, (repository) =>
+          repository.validateOverride({
+            principalId: TEST_PRINCIPAL_ID,
+            kind: "identity",
+            target,
+            replacement: { _tag: "identity", assetId: TEST_NFT_ASSET_ID },
+          })
+        )
+      )
+    ).resolves.toMatchObject({ kind: "identity" })
+
+    await context.runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        yield* db
+          .update(schema.providerAssets)
+          .set({ providerType: "unknown" })
+          .where(eq(schema.providerAssets.id, providerAssetRowId))
+      })
+    )
+    await expect(
+      runRepository(
+        Effect.flatMap(AssetOverrideRepository, (repository) =>
+          repository.validateOverride({
+            principalId: TEST_PRINCIPAL_ID,
+            kind: "identity",
+            target,
+            replacement: { _tag: "identity", assetId: TEST_BTC_ASSET_ID },
+          })
+        )
+      )
+    ).resolves.toMatchObject({ kind: "identity" })
   })
 
   it("keeps the accepted system revision stable until the override commits", async () => {
@@ -651,6 +740,10 @@ describe("AssetOverrideRepository", () => {
         const db = yield* drizzle
         yield* db.transaction((tx) =>
           Effect.gen(function* () {
+            yield* tx.execute(sourceInventoryLockQuery([TEST_SOURCE_ID]))
+            yield* tx.execute(
+              sql`select id from ${schema.sources} where id = ${TEST_SOURCE_ID} for update`
+            )
             yield* tx
               .update(schema.providerAssetSourceUses)
               .set({ updatedAt: new Date("2026-08-22T11:00:00.000Z") })
@@ -757,6 +850,63 @@ describe("AssetOverrideRepository", () => {
         expect(jobs).toHaveLength(0)
       })
     )
+  })
+
+  it("rechecks FIFO dependencies after a concurrent inventory writer releases the source", async () => {
+    const providerAssetRowId = await seedChainlessProviderAsset()
+    const { dependentLegId, lotId } = await seedCrossSourceFifoDependency(providerAssetRowId, {
+      insertDependency: false,
+    })
+    const target = { _tag: "provider_asset" as const, providerAssetRowId }
+    const initial = await runRepository(
+      Effect.flatMap(AssetOverrideRepository, (repository) =>
+        repository.getProjection({ principalId: TEST_PRINCIPAL_ID, kind: "identity", target })
+      )
+    )
+
+    const concurrentConsumer = context.runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        yield* db.transaction((tx) =>
+          Effect.gen(function* () {
+            yield* tx.execute(sourceInventoryLockQuery([TEST_SOURCE_ID]))
+            yield* tx.execute(sql`select pg_sleep(0.4)`)
+            yield* tx.insert(schema.disposalMatches).values({
+              disposalLegId: dependentLegId,
+              fifoLotId: lotId,
+              matchedAmount: "1",
+              costBasis: "10",
+              proceeds: "12",
+              gainLoss: "2",
+            })
+          })
+        )
+      })
+    )
+
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    const overrideResult = runRepository(
+      Effect.flatMap(AssetOverrideRepository, (repository) =>
+        repository
+          .setOverride({
+            principalId: TEST_PRINCIPAL_ID,
+            actorId: "00000000-0000-0000-0000-000000000181",
+            kind: "identity",
+            target,
+            expectedSystemRevision: initial.systemRevision,
+            expectedActiveOverrideId: null,
+            replacement: { _tag: "identity", assetId: TEST_BTC_ASSET_ID },
+            reason: "Reject if a concurrent source consumes affected inventory.",
+          })
+          .pipe(Effect.flip)
+      )
+    )
+
+    const [, error] = await Promise.all([concurrentConsumer, overrideResult])
+    expect(error).toMatchObject({
+      _tag: "AssetOverrideValidationError",
+      code: "cross_source_fifo_dependency",
+    })
   })
 
   it("does not reveal whether an unowned provider asset exists", async () => {

@@ -9,6 +9,7 @@ import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import { drizzle } from "./PgClientLive.ts"
 import { schema } from "../schema/index.ts"
+import { sourceInventoryLockQuery } from "./SourceInventoryLock.ts"
 import {
   SourceReplayDependencyError,
   SourceReplayRepository,
@@ -29,6 +30,13 @@ const make = Effect.gen(function* () {
     db
       .transaction((tx) =>
         Effect.gen(function* () {
+          yield* tx
+            .execute(sourceInventoryLockQuery([sourceId]))
+            .pipe(
+              wrapSyncEngineSqlError(
+                "sourceReplayRepository.resetSourceDerivedState.lockSourceInventory"
+              )
+            )
           const [source] = yield* tx
             .select({ principalId: schema.sources.principalId })
             .from(schema.sources)

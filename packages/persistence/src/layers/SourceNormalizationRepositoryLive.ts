@@ -21,6 +21,7 @@ import {
   powerOfTen,
 } from "./SourceNormalizationFixedPoint.ts"
 import { drizzle } from "./PgClientLive.ts"
+import { sourceInventoryLockQuery } from "./SourceInventoryLock.ts"
 import { schema } from "../schema/index.ts"
 import {
   type PersistNormalizedSourceArtifactsParams,
@@ -2953,6 +2954,13 @@ const make = Effect.gen(function* () {
             { concurrency: 1, discard: true }
           )
 
+          yield* tx
+            .execute(sourceInventoryLockQuery([params.transaction.sourceId]))
+            .pipe(
+              wrapSyncEngineSqlError(
+                "sourceNormalizationRepository.persistNormalizedArtifacts.lockSourceInventory"
+              )
+            )
           const [ownedSource] = yield* tx
             .select({ id: schema.sources.id })
             .from(schema.sources)

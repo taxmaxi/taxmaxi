@@ -536,10 +536,35 @@ const make = Effect.gen(function* () {
   const hasPendingOverrideReplay = (sourceId: string) =>
     db
       .select({
-        pending: sql<boolean>`exists (
+        pending: sql<boolean>`(
+        exists (
           select 1
-          from principal_asset_overrides affecting_override
-          where affecting_override.principal_id = ${schema.sources.principalId}
+          from ${schema.principalAssetOverrideApplications} application
+          left join ${schema.processingJobs} application_job
+            on application_job.id = application.replay_job_id
+          where application.source_id = ${sourceId}
+            and application.superseded_at is null
+            and (
+              application.replay_job_id is null
+              or application_job.status <> 'completed'
+              or application_job.progress_details ->> 'failedRecords' is distinct from '0'
+            )
+        )
+        or exists (
+          select 1
+          from ${schema.principalAssetOverrides} affecting_override
+          where not exists (
+            select 1
+            from ${schema.principalAssetOverrides} superseding_override
+            where superseding_override.supersedes_override_id = affecting_override.id
+          )
+            and not exists (
+              select 1
+              from ${schema.principalAssetOverrideApplications} existing_application
+              where existing_application.override_id = affecting_override.id
+                and existing_application.source_id = ${sourceId}
+                and existing_application.superseded_at is null
+            )
             and exists (
               select 1
               from (
@@ -579,6 +604,7 @@ const make = Effect.gen(function* () {
                   )
               )
             )
+        )
         )`,
       })
       .from(schema.sources)

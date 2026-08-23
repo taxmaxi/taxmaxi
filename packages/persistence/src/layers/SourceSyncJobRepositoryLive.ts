@@ -5,7 +5,7 @@
  */
 
 import { SyncCreditReasonCode } from "@my/core/billing"
-import { and, asc, eq, inArray, isNotNull, isNull, lt, or } from "drizzle-orm"
+import { and, asc, eq, inArray, isNotNull, isNull, lt, or, sql } from "drizzle-orm"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import * as Schema from "effect/Schema"
@@ -161,7 +161,98 @@ const make = Effect.gen(function* () {
           Effect.asVoid,
           wrapSyncEngineSqlError("sourceSyncJobRepository.materializeFollowUpJob.link")
         )
+
+      if (followUpMode === "replay") {
+        yield* executor
+          .update(schema.principalAssetOverrideApplications)
+          .set({ replayJobId: followUpJob.id })
+          .where(
+            and(
+              eq(schema.principalAssetOverrideApplications.sourceId, sourceId),
+              isNull(schema.principalAssetOverrideApplications.replayJobId),
+              isNull(schema.principalAssetOverrideApplications.supersededAt)
+            )
+          )
+          .pipe(
+            Effect.asVoid,
+            wrapSyncEngineSqlError(
+              "sourceSyncJobRepository.materializeFollowUpJob.linkOverrideApplications"
+            )
+          )
+      }
     })
+
+  const recordNewlyObservedOverrideApplications = ({
+    executor,
+    jobId,
+    sourceId,
+    completedAt,
+  }: {
+    readonly executor: SourceSyncJobExecutor & Pick<typeof db, "execute">
+    readonly jobId: string
+    readonly sourceId: string
+    readonly completedAt: Date
+  }) =>
+    executor
+      .execute(sql`
+        insert into principal_asset_override_applications (
+          override_id,
+          source_id,
+          replay_job_id,
+          requires_replay,
+          created_at
+        )
+        select
+          asset_override.id,
+          ${sourceId}::uuid,
+          ${jobId}::uuid,
+          false,
+          ${completedAt}
+        from ${schema.principalAssetOverrides} asset_override
+        where not exists (
+          select 1
+          from ${schema.principalAssetOverrides} superseding_override
+          where superseding_override.supersedes_override_id = asset_override.id
+        )
+          and (
+            (
+              asset_override.target_kind = 'provider_asset'
+              and exists (
+                select 1
+                from ${schema.providerAssetSourceUses} source_use
+                where source_use.source_id = ${sourceId}
+                  and source_use.provider_asset_row_id = asset_override.provider_asset_row_id
+              )
+            )
+            or (
+              asset_override.target_kind = 'representation'
+              and exists (
+                select 1
+                from ${schema.sourceRepresentationUses} representation_use
+                where representation_use.source_id = ${sourceId}
+                  and representation_use.blockchain_id = asset_override.blockchain_id
+                  and representation_use.representation_type = asset_override.representation_type
+                  and lower(representation_use.contract_address) is not distinct from lower(asset_override.contract_address)
+                  and representation_use.mint_address is not distinct from asset_override.mint_address
+              )
+            )
+          )
+        on conflict (override_id, source_id) do update
+          set replay_job_id = excluded.replay_job_id,
+              created_at = excluded.created_at
+          where principal_asset_override_applications.requires_replay = false
+            and not exists (
+              select 1
+              from ${schema.processingJobs} applied_job
+              where applied_job.id = principal_asset_override_applications.replay_job_id
+                and applied_job.status = 'completed'
+                and applied_job.progress_details ->> 'failedRecords' = '0'
+            )
+      `)
+      .pipe(
+        Effect.asVoid,
+        wrapSyncEngineSqlError("sourceSyncJobRepository.recordNewlyObservedOverrideApplications")
+      )
 
   const selectActiveJobFields = {
     id: schema.processingJobs.id,
@@ -562,6 +653,13 @@ const make = Effect.gen(function* () {
               )
             )
 
+          yield* recordNewlyObservedOverrideApplications({
+            executor: tx,
+            jobId: job.id,
+            sourceId: job.sourceId,
+            completedAt,
+          })
+
           yield* materializeFollowUpJob({
             executor: tx,
             jobId: job.id,
@@ -612,6 +710,13 @@ const make = Effect.gen(function* () {
               reason: "Only processing jobs can fail.",
             })
           }
+
+          yield* recordNewlyObservedOverrideApplications({
+            executor: tx,
+            jobId: job.id,
+            sourceId: job.sourceId,
+            completedAt,
+          })
 
           yield* materializeFollowUpJob({
             executor: tx,
@@ -672,6 +777,13 @@ const make = Effect.gen(function* () {
             })
           }
 
+          yield* recordNewlyObservedOverrideApplications({
+            executor: tx,
+            jobId: job.id,
+            sourceId: job.sourceId,
+            completedAt,
+          })
+
           yield* materializeFollowUpJob({
             executor: tx,
             jobId: job.id,
@@ -730,6 +842,13 @@ const make = Effect.gen(function* () {
               reason: "Only processing jobs can complete.",
             })
           }
+
+          yield* recordNewlyObservedOverrideApplications({
+            executor: tx,
+            jobId: job.id,
+            sourceId: job.sourceId,
+            completedAt,
+          })
 
           yield* materializeFollowUpJob({
             executor: tx,

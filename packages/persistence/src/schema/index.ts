@@ -21,6 +21,7 @@ import * as oauthStates from "./OAuthStatesTable.ts"
 import * as processingJobs from "./ProcessingJobsTable.ts"
 import * as principalClaims from "./PrincipalClaimsTable.ts"
 import * as principalAssetOverrides from "./PrincipalAssetOverridesTable.ts"
+import * as principalAssetOverrideApplications from "./PrincipalAssetOverrideApplicationsTable.ts"
 import * as principals from "./PrincipalsTable.ts"
 import * as protocolCandidateObservations from "./ProtocolCandidateObservationsTable.ts"
 import * as protocolCandidates from "./ProtocolCandidatesTable.ts"
@@ -75,6 +76,7 @@ export const schema = {
   ...processingJobs,
   ...principalClaims,
   ...principalAssetOverrides,
+  ...principalAssetOverrideApplications,
   ...principals,
   ...protocolCandidateObservations,
   ...protocolCandidates,
