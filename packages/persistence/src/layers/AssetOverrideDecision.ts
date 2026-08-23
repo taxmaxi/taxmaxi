@@ -6,6 +6,14 @@
 
 export type AssetInclusionState = "included" | "excluded" | "blocked"
 
+/**
+ * Inputs used to choose the effective asset and inclusion state.
+ *
+ * `technicalBlocker` is true for non-overridable facts such as missing decimals or an
+ * unsupported provider asset type. The identity override falls back to the system asset,
+ * and the inclusion override falls back to the system inclusion state. An included result
+ * without either an override or system asset remains blocked.
+ */
 export interface AssetOverrideDecisionInput {
   readonly systemAssetId: string | null
   readonly systemInclusionState: AssetInclusionState

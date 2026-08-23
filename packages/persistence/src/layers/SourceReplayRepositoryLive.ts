@@ -4,9 +4,10 @@
  * @module SourceReplayRepositoryLive
  */
 
-import { and, eq, ne, sql } from "drizzle-orm"
+import { and, asc, eq, inArray, ne, sql } from "drizzle-orm"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
+import * as Schema from "effect/Schema"
 import { drizzle } from "./PgClientLive.ts"
 import { schema } from "../schema/index.ts"
 import { sourceInventoryLockQuery } from "./SourceInventoryLock.ts"
@@ -21,6 +22,11 @@ import {
   wrapSyncEngineSqlError,
 } from "./SyncEngineRepositorySupport.ts"
 
+class ReplayInventoryOwnerSetChanged extends Schema.TaggedError<ReplayInventoryOwnerSetChanged>()(
+  "ReplayInventoryOwnerSetChanged",
+  {}
+) {}
+
 const make = Effect.gen(function* () {
   const db = yield* drizzle
 
@@ -30,18 +36,77 @@ const make = Effect.gen(function* () {
     db
       .transaction((tx) =>
         Effect.gen(function* () {
+          const loadReferencedOwnerSourceIds = () =>
+            Effect.gen(function* () {
+              const allocationOwners = yield* tx
+                .selectDistinct({ sourceId: schema.fifoLots.sourceId })
+                .from(schema.inventoryMovementAllocations)
+                .innerJoin(
+                  schema.inventoryMovements,
+                  eq(
+                    schema.inventoryMovements.id,
+                    schema.inventoryMovementAllocations.inventoryMovementId
+                  )
+                )
+                .innerJoin(
+                  schema.fifoLots,
+                  eq(schema.fifoLots.id, schema.inventoryMovementAllocations.fifoLotId)
+                )
+                .where(
+                  and(
+                    eq(schema.inventoryMovements.sourceId, sourceId),
+                    ne(schema.fifoLots.sourceId, sourceId)
+                  )
+                )
+                .pipe(
+                  wrapSyncEngineSqlError(
+                    "sourceReplayRepository.resetSourceDerivedState.loadAllocationOwners"
+                  )
+                )
+              const disposalMatchOwners = yield* tx
+                .selectDistinct({ sourceId: schema.fifoLots.sourceId })
+                .from(schema.disposalMatches)
+                .innerJoin(
+                  schema.transactionLegs,
+                  eq(schema.transactionLegs.id, schema.disposalMatches.disposalLegId)
+                )
+                .innerJoin(
+                  schema.fifoLots,
+                  eq(schema.fifoLots.id, schema.disposalMatches.fifoLotId)
+                )
+                .where(
+                  and(
+                    eq(schema.transactionLegs.sourceId, sourceId),
+                    ne(schema.fifoLots.sourceId, sourceId)
+                  )
+                )
+                .pipe(
+                  wrapSyncEngineSqlError(
+                    "sourceReplayRepository.resetSourceDerivedState.loadDisposalMatchOwners"
+                  )
+                )
+
+              return [
+                ...new Set(
+                  [...allocationOwners, ...disposalMatchOwners].map((row) => row.sourceId)
+                ),
+              ].sort()
+            })
+
+          const referencedOwnerSourceIds = yield* loadReferencedOwnerSourceIds()
+          const lockedSourceIds = [...new Set([sourceId, ...referencedOwnerSourceIds])].sort()
           yield* tx
-            .execute(sourceInventoryLockQuery([sourceId]))
+            .execute(sourceInventoryLockQuery(lockedSourceIds))
             .pipe(
               wrapSyncEngineSqlError(
                 "sourceReplayRepository.resetSourceDerivedState.lockSourceInventory"
               )
             )
-          const [source] = yield* tx
-            .select({ principalId: schema.sources.principalId })
+          const lockedSources = yield* tx
+            .select({ id: schema.sources.id })
             .from(schema.sources)
-            .where(eq(schema.sources.id, sourceId))
-            .limit(1)
+            .where(inArray(schema.sources.id, lockedSourceIds))
+            .orderBy(asc(schema.sources.id))
             .for("update")
             .pipe(
               wrapSyncEngineSqlError(
@@ -49,8 +114,18 @@ const make = Effect.gen(function* () {
               )
             )
 
-          if (source === undefined) {
+          if (!lockedSources.some((source) => source.id === sourceId)) {
             return
+          }
+
+          const revalidatedOwnerSourceIds = yield* loadReferencedOwnerSourceIds()
+          if (
+            revalidatedOwnerSourceIds.length !== referencedOwnerSourceIds.length ||
+            revalidatedOwnerSourceIds.some(
+              (ownerSourceId, index) => ownerSourceId !== referencedOwnerSourceIds[index]
+            )
+          ) {
+            return yield* new ReplayInventoryOwnerSetChanged()
           }
 
           const crossSourceAllocations = yield* tx
@@ -225,6 +300,10 @@ const make = Effect.gen(function* () {
         })
       )
       .pipe(
+        Effect.retry({
+          times: 2,
+          while: (error) => error instanceof ReplayInventoryOwnerSetChanged,
+        }),
         Effect.mapError((error) =>
           error instanceof SourceReplayDependencyError
             ? error

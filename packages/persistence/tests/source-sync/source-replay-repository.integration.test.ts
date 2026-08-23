@@ -6,6 +6,7 @@ import { drizzle } from "../../src/layers/PgClientLive.ts"
 import { SourceNormalizationRepositoryLive } from "../../src/layers/SourceNormalizationRepositoryLive.ts"
 import { SourceRawRecordRepositoryLive } from "../../src/layers/SourceRawRecordRepositoryLive.ts"
 import { SourceReplayRepositoryLive } from "../../src/layers/SourceReplayRepositoryLive.ts"
+import { sourceInventoryLockQuery } from "../../src/layers/SourceInventoryLock.ts"
 import { schema } from "../../src/schema/index.ts"
 import {
   TEST_BTC_ASSET_ID,
@@ -58,6 +59,172 @@ const seedReplayRawRecord = () =>
       updatedAt: new Date("2025-01-01T10:00:00.000Z"),
     })
   })
+
+const seedUpstreamConsumption = ({
+  ownerSourceId,
+  relationshipKind,
+  suffix,
+}: {
+  readonly ownerSourceId: string
+  readonly relationshipKind: "inventory allocation" | "disposal match"
+  readonly suffix: string
+}) =>
+  Effect.gen(function* () {
+    const db = yield* drizzle
+    const [address] = yield* db
+      .insert(schema.addresses)
+      .values({
+        address: `bc1qupstream-replay-${suffix}`,
+        type: "bitcoin",
+        name: `Upstream replay owner ${suffix}`,
+        principalId: TEST_PRINCIPAL_ID,
+      })
+      .returning({ id: schema.addresses.id })
+    if (address === undefined) {
+      return yield* Effect.die("Failed to create upstream replay address")
+    }
+
+    yield* db.insert(schema.sources).values({
+      id: ownerSourceId,
+      principalId: TEST_PRINCIPAL_ID,
+      name: `Upstream replay owner ${suffix}`,
+      providerKey: "bitcoin-rpc",
+      sourceableType: "onchain",
+      cexAccountId: null,
+      addressId: address.id,
+    })
+    const [ownerTransaction] = yield* db
+      .insert(schema.transactions)
+      .values({
+        sourceId: ownerSourceId,
+        externalId: `upstream-owner-${suffix}`,
+        timestamp: new Date("2025-01-01T08:00:00.000Z"),
+        principalId: TEST_PRINCIPAL_ID,
+      })
+      .returning({ id: schema.transactions.id })
+    const [consumerTransaction] = yield* db
+      .insert(schema.transactions)
+      .values({
+        sourceId: TEST_SOURCE_ID,
+        externalId: `upstream-consumer-${suffix}`,
+        timestamp: new Date("2025-01-02T08:00:00.000Z"),
+        principalId: TEST_PRINCIPAL_ID,
+      })
+      .returning({ id: schema.transactions.id })
+    if (ownerTransaction === undefined || consumerTransaction === undefined) {
+      return yield* Effect.die("Failed to create upstream replay transactions")
+    }
+
+    const [ownerLeg] = yield* db
+      .insert(schema.transactionLegs)
+      .values({
+        sourceId: ownerSourceId,
+        externalId: `upstream-owner-leg-${suffix}`,
+        timestamp: new Date("2025-01-01T08:00:00.000Z"),
+        principalId: TEST_PRINCIPAL_ID,
+        assetId: TEST_BTC_ASSET_ID,
+        amount: "1.00000000",
+        kind: "acquisition",
+        provenance: "deterministic",
+        transactionId: ownerTransaction.id,
+      })
+      .returning({ id: schema.transactionLegs.id })
+    const [consumerLeg] = yield* db
+      .insert(schema.transactionLegs)
+      .values({
+        sourceId: TEST_SOURCE_ID,
+        externalId: `upstream-consumer-leg-${suffix}`,
+        timestamp: new Date("2025-01-02T08:00:00.000Z"),
+        principalId: TEST_PRINCIPAL_ID,
+        assetId: TEST_BTC_ASSET_ID,
+        amount: "-0.20000000",
+        kind: relationshipKind === "inventory allocation" ? "fee" : "disposal",
+        provenance: "deterministic",
+        transactionId: consumerTransaction.id,
+      })
+      .returning({ id: schema.transactionLegs.id })
+    if (ownerLeg === undefined || consumerLeg === undefined) {
+      return yield* Effect.die("Failed to create upstream replay legs")
+    }
+
+    const [lot] = yield* db
+      .insert(schema.fifoLots)
+      .values({
+        principalId: TEST_PRINCIPAL_ID,
+        sourceId: ownerSourceId,
+        assetId: TEST_BTC_ASSET_ID,
+        acquiredAt: new Date("2025-01-01T08:00:00.000Z"),
+        originalAmount: "1.00000000",
+        remainingAmount: "0.80000000",
+        costBasisPerToken: "10000.00",
+        costBasisCurrency: "EUR",
+        sourceLegId: ownerLeg.id,
+      })
+      .returning({ id: schema.fifoLots.id })
+    if (lot === undefined) {
+      return yield* Effect.die("Failed to create upstream replay inventory")
+    }
+
+    if (relationshipKind === "inventory allocation") {
+      const [movement] = yield* db
+        .insert(schema.inventoryMovements)
+        .values({
+          principalId: TEST_PRINCIPAL_ID,
+          sourceId: TEST_SOURCE_ID,
+          transactionId: consumerTransaction.id,
+          transactionLegId: consumerLeg.id,
+          assetId: TEST_BTC_ASSET_ID,
+          timestamp: new Date("2025-01-02T08:00:00.000Z"),
+          direction: "outbound",
+          purpose: "fee",
+          taxTreatment: "pending_review",
+          reconciliationStatus: "unmatched",
+          amount: "0.20000000",
+        })
+        .returning({ id: schema.inventoryMovements.id })
+      if (movement === undefined) {
+        return yield* Effect.die("Failed to create upstream replay movement")
+      }
+      yield* db.insert(schema.inventoryMovementAllocations).values({
+        inventoryMovementId: movement.id,
+        fifoLotId: lot.id,
+        matchedAmount: "0.20000000",
+      })
+    } else {
+      yield* db.insert(schema.disposalMatches).values({
+        disposalLegId: consumerLeg.id,
+        fifoLotId: lot.id,
+        matchedAmount: "0.20000000",
+        costBasis: "2000.00",
+        proceeds: "2500.00",
+        gainLoss: "500.00",
+      })
+    }
+
+    return { lotId: lot.id }
+  })
+
+const holdSourceInventoryLock = ({
+  sourceId,
+  acquired,
+  release,
+}: {
+  readonly sourceId: string
+  readonly acquired: Deferred.Deferred<void>
+  readonly release: Deferred.Deferred<void>
+}) =>
+  runPg(
+    Effect.gen(function* () {
+      const db = yield* drizzle
+      yield* db.transaction((tx) =>
+        Effect.gen(function* () {
+          yield* tx.execute(sourceInventoryLockQuery([sourceId]))
+          yield* Deferred.succeed(acquired, undefined)
+          yield* Deferred.await(release)
+        })
+      )
+    })
+  )
 
 describe("SourceReplayRepositoryLive", () => {
   let fixture: SyncEngineRepositoryFixture
@@ -114,6 +281,108 @@ describe("SourceReplayRepositoryLive", () => {
     const [, laterOutcome] = await Promise.all([heldSourceLock, replayWaitingForSource])
 
     expect(laterOutcome).toBe("completed")
+  })
+
+  it.each([
+    { relationshipKind: "inventory allocation", ownerSourceSuffix: "291" },
+    { relationshipKind: "disposal match", ownerSourceSuffix: "294" },
+  ] as const)(
+    "waits for an upstream FIFO lot owner's inventory lock for a $relationshipKind",
+    async ({ relationshipKind, ownerSourceSuffix }) => {
+      const ownerSourceId = `00000000-0000-0000-0000-000000000${ownerSourceSuffix}`
+      const { lotId } = await runPg(
+        seedUpstreamConsumption({
+          ownerSourceId,
+          relationshipKind,
+          suffix: `owner-lock-${ownerSourceSuffix}`,
+        })
+      )
+      const lockAcquired = await Effect.runPromise(Deferred.make<void>())
+      const releaseLock = await Effect.runPromise(Deferred.make<void>())
+      const heldLock = holdSourceInventoryLock({
+        sourceId: ownerSourceId,
+        acquired: lockAcquired,
+        release: releaseLock,
+      })
+      await Effect.runPromise(Deferred.await(lockAcquired))
+
+      const replay = runReplayRepository(
+        Effect.flatMap(SourceReplayRepository, (repository) =>
+          repository.resetSourceDerivedState({ sourceId: TEST_SOURCE_ID })
+        )
+      )
+
+      await context.waitForQueryBlockedOnLock({ queryIncludes: "source-inventory:" })
+      await Effect.runPromise(Deferred.succeed(releaseLock, undefined))
+      await Promise.all([heldLock, replay])
+
+      const [lot] = await runPg(
+        Effect.gen(function* () {
+          const db = yield* drizzle
+          return yield* db.select().from(schema.fifoLots).where(eq(schema.fifoLots.id, lotId))
+        })
+      )
+      expect(lot?.remainingAmount).toContain("1.00000000")
+    }
+  )
+
+  it("retries with a newly referenced upstream FIFO owner locked", async () => {
+    const firstOwnerSourceId = "00000000-0000-0000-0000-000000000292"
+    const secondOwnerSourceId = "00000000-0000-0000-0000-000000000293"
+    await runPg(
+      seedUpstreamConsumption({
+        ownerSourceId: firstOwnerSourceId,
+        relationshipKind: "inventory allocation",
+        suffix: "first",
+      })
+    )
+
+    const firstLockAcquired = await Effect.runPromise(Deferred.make<void>())
+    const releaseFirstLock = await Effect.runPromise(Deferred.make<void>())
+    const firstHeldLock = holdSourceInventoryLock({
+      sourceId: firstOwnerSourceId,
+      acquired: firstLockAcquired,
+      release: releaseFirstLock,
+    })
+    await Effect.runPromise(Deferred.await(firstLockAcquired))
+
+    const replay = runReplayRepository(
+      Effect.flatMap(SourceReplayRepository, (repository) =>
+        repository.resetSourceDerivedState({ sourceId: TEST_SOURCE_ID })
+      )
+    )
+    await context.waitForQueryBlockedOnLock({ queryIncludes: "source-inventory:" })
+
+    const secondLockAcquired = await Effect.runPromise(Deferred.make<void>())
+    const releaseSecondLock = await Effect.runPromise(Deferred.make<void>())
+    const secondHeldLock = holdSourceInventoryLock({
+      sourceId: secondOwnerSourceId,
+      acquired: secondLockAcquired,
+      release: releaseSecondLock,
+    })
+    await Effect.runPromise(Deferred.await(secondLockAcquired))
+    await runPg(
+      seedUpstreamConsumption({
+        ownerSourceId: secondOwnerSourceId,
+        relationshipKind: "inventory allocation",
+        suffix: "second",
+      })
+    )
+
+    await Effect.runPromise(Deferred.succeed(releaseFirstLock, undefined))
+    await firstHeldLock
+    await context.waitForQueryBlockedOnLock({ queryIncludes: "source-inventory:" })
+
+    await Effect.runPromise(Deferred.succeed(releaseSecondLock, undefined))
+    await Promise.all([secondHeldLock, replay])
+
+    const allocations = await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        return yield* db.select().from(schema.inventoryMovementAllocations)
+      })
+    )
+    expect(allocations).toHaveLength(0)
   })
 
   it("clears canonical source-derived rows while keeping cached raw rows reusable", async () => {

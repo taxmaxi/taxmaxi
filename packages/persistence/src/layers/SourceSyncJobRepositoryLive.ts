@@ -169,8 +169,22 @@ const make = Effect.gen(function* () {
           .where(
             and(
               eq(schema.principalAssetOverrideApplications.sourceId, sourceId),
-              isNull(schema.principalAssetOverrideApplications.replayJobId),
-              isNull(schema.principalAssetOverrideApplications.supersededAt)
+              isNull(schema.principalAssetOverrideApplications.supersededAt),
+              or(
+                isNull(schema.principalAssetOverrideApplications.replayJobId),
+                sql`exists (
+                  select 1
+                  from ${schema.processingJobs} previous_replay
+                  where previous_replay.id = ${schema.principalAssetOverrideApplications.replayJobId}
+                    and (
+                      previous_replay.status in ('failed', 'credit_required')
+                      or (
+                        previous_replay.status = 'completed'
+                        and previous_replay.progress_details ->> 'failedRecords' <> '0'
+                      )
+                    )
+                )`
+              )
             )
           )
           .pipe(
@@ -240,14 +254,26 @@ const make = Effect.gen(function* () {
         on conflict (override_id, source_id) do update
           set replay_job_id = excluded.replay_job_id,
               created_at = excluded.created_at
-          where principal_asset_override_applications.requires_replay = false
+          where (
+            principal_asset_override_applications.requires_replay = false
             and not exists (
+                select 1
+                from ${schema.processingJobs} applied_job
+                where applied_job.id = principal_asset_override_applications.replay_job_id
+                  and applied_job.status = 'completed'
+                  and applied_job.progress_details ->> 'failedRecords' = '0'
+              )
+          ) or (
+            principal_asset_override_applications.requires_replay = true
+            and exists (
               select 1
-              from ${schema.processingJobs} applied_job
-              where applied_job.id = principal_asset_override_applications.replay_job_id
-                and applied_job.status = 'completed'
-                and applied_job.progress_details ->> 'failedRecords' = '0'
+              from ${schema.processingJobs} successful_replay
+              where successful_replay.id = excluded.replay_job_id
+                and successful_replay.mode = 'replay'
+                and successful_replay.status = 'completed'
+                and successful_replay.progress_details ->> 'failedRecords' = '0'
             )
+          )
       `)
       .pipe(
         Effect.asVoid,

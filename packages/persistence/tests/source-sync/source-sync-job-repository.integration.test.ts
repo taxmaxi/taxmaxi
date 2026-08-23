@@ -41,6 +41,11 @@ const completedState: SourceSyncExecutionState = {
   checkpointRawRecordId: "00000000-0000-0000-0000-000000000999",
 }
 
+const successfulCompletedState: SourceSyncExecutionState = {
+  ...completedState,
+  failedRecords: 0,
+}
+
 const createJob = ({
   mode = "sync",
   maxAttempts = 3,
@@ -1068,4 +1073,174 @@ describe("SourceSyncJobRepositoryLive", () => {
 
     expect(visibleJob).toMatchObject({ jobId: followUpJob?.id, status: "queued" })
   })
+
+  it.each([
+    { initialStatus: "failed" as const, progressDetails: null },
+    { initialStatus: "completed" as const, progressDetails: { failedRecords: 1 } },
+  ])(
+    "relinks a required override application after a $initialStatus replay",
+    async ({ initialStatus, progressDetails }) => {
+      const { applicationId, initialReplayJobId } = await runPg(
+        Effect.gen(function* () {
+          const db = yield* drizzle
+          const [blockchain] = yield* db
+            .select({ id: schema.blockchains.id })
+            .from(schema.blockchains)
+            .where(eq(schema.blockchains.name, "base"))
+            .limit(1)
+
+          if (blockchain === undefined) return yield* Effect.die("Missing Base blockchain")
+
+          yield* db.insert(schema.sourceRepresentationUses).values({
+            sourceId: TEST_SOURCE_ID,
+            blockchainId: blockchain.id,
+            representationType: "token",
+            contractAddress: "0x0000000000000000000000000000000000000149",
+          })
+
+          const [override] = yield* db
+            .insert(schema.principalAssetOverrides)
+            .values({
+              principalId: TEST_PRINCIPAL_ID,
+              kind: "inclusion",
+              targetKind: "representation",
+              blockchainId: blockchain.id,
+              representationType: "token",
+              contractAddress: "0x0000000000000000000000000000000000000149",
+              action: "set",
+              inspectedSystemRevision: "required-replay-retry-test",
+              inspectedInclusionState: "excluded",
+              inspectedInclusionReason: "taxmaxi_policy",
+              replacementInclusionState: "included",
+              actorId: TEST_USER_ID,
+              reason: "Test required replay retry",
+            })
+            .returning({ id: schema.principalAssetOverrides.id })
+
+          if (override === undefined) return yield* Effect.die("Failed to insert override")
+
+          const [initialReplay] = yield* db
+            .insert(schema.processingJobs)
+            .values({
+              sourceId: TEST_SOURCE_ID,
+              principalId: TEST_PRINCIPAL_ID,
+              mode: "replay",
+              status: initialStatus,
+              completedAt: new Date("2025-01-03T00:00:00.000Z"),
+              progressDetails,
+            })
+            .returning({ id: schema.processingJobs.id })
+
+          if (initialReplay === undefined) {
+            return yield* Effect.die("Failed to insert initial replay")
+          }
+
+          const [application] = yield* db
+            .insert(schema.principalAssetOverrideApplications)
+            .values({
+              overrideId: override.id,
+              sourceId: TEST_SOURCE_ID,
+              replayJobId: initialReplay.id,
+              requiresReplay: true,
+            })
+            .returning({ id: schema.principalAssetOverrideApplications.id })
+
+          if (application === undefined) {
+            return yield* Effect.die("Failed to insert override application")
+          }
+
+          return {
+            applicationId: application.id,
+            initialReplayJobId: initialReplay.id,
+          }
+        })
+      )
+
+      let retryReplayJobId: string
+      if (initialStatus === "failed") {
+        const retryJob = await createJob({ mode: "replay" })
+        retryReplayJobId = retryJob.id
+      } else {
+        const activeJobId = await runPg(
+          Effect.gen(function* () {
+            const db = yield* drizzle
+            const [activeJob] = yield* db
+              .insert(schema.processingJobs)
+              .values({
+                sourceId: TEST_SOURCE_ID,
+                principalId: TEST_PRINCIPAL_ID,
+                mode: "sync",
+                status: "processing",
+                followUpMode: "replay",
+              })
+              .returning({ id: schema.processingJobs.id })
+
+            if (activeJob === undefined) return yield* Effect.die("Failed to insert active job")
+            return activeJob.id
+          })
+        )
+
+        await runRepository(
+          Effect.flatMap(SourceSyncJobRepository, (repository) =>
+            repository.completeJob({ jobId: activeJobId, state: completedState })
+          )
+        )
+
+        retryReplayJobId = await runPg(
+          Effect.gen(function* () {
+            const db = yield* drizzle
+            const [activeJob] = yield* db
+              .select({ followUpJobId: schema.processingJobs.followUpJobId })
+              .from(schema.processingJobs)
+              .where(eq(schema.processingJobs.id, activeJobId))
+              .limit(1)
+
+            if (activeJob?.followUpJobId === null || activeJob === undefined) {
+              return yield* Effect.die("Missing replay follow-up job")
+            }
+            return activeJob.followUpJobId
+          })
+        )
+      }
+
+      const linkedReplayJobId = await runPg(
+        Effect.gen(function* () {
+          const db = yield* drizzle
+          const [application] = yield* db
+            .select({ replayJobId: schema.principalAssetOverrideApplications.replayJobId })
+            .from(schema.principalAssetOverrideApplications)
+            .where(eq(schema.principalAssetOverrideApplications.id, applicationId))
+
+          return application?.replayJobId
+        })
+      )
+
+      if (initialStatus === "completed") {
+        expect(linkedReplayJobId).toBe(retryReplayJobId)
+      } else {
+        expect(linkedReplayJobId).toBe(initialReplayJobId)
+      }
+
+      await claimJob({ jobId: retryReplayJobId })
+      await runRepository(
+        Effect.flatMap(SourceSyncJobRepository, (repository) =>
+          repository.completeJob({ jobId: retryReplayJobId, state: successfulCompletedState })
+        )
+      )
+
+      const appliedReplayJobId = await runPg(
+        Effect.gen(function* () {
+          const db = yield* drizzle
+          const [application] = yield* db
+            .select({ replayJobId: schema.principalAssetOverrideApplications.replayJobId })
+            .from(schema.principalAssetOverrideApplications)
+            .where(eq(schema.principalAssetOverrideApplications.id, applicationId))
+
+          return application?.replayJobId
+        })
+      )
+
+      expect(appliedReplayJobId).toBe(retryReplayJobId)
+    }
+  )
 })
