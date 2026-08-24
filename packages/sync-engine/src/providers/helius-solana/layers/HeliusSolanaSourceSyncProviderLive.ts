@@ -85,6 +85,10 @@ const SOLANA_TOKEN_PROGRAM_IDS = new Set([
 ])
 const SOLANA_TOKEN_PROGRAM_NAMES = new Set(["spl-token", "spl-token-2022"])
 const MAX_NATIVE_SUBSET_SEARCH_STATES = 4_096
+// Helius wallet transfer rows report native SOL under this pseudo-mint. It is
+// not a real SPL mint, so it must never reach SPL asset resolution or DAS
+// lookups; rows carrying it are native SOL evidence.
+const HELIUS_NATIVE_SOL_PSEUDO_MINT = "So11111111111111111111111111111111111111111"
 
 const HeliusSolanaTransactionsPageSchema = Schema.Struct({
   data: Schema.Array(Schema.Unknown),
@@ -1201,7 +1205,7 @@ const collectSplTokenMints = ({
       ),
       ...walletTransferEvidence.map((transfer) => transfer.mint),
     ])
-  )
+  ).filter((mintAddress) => mintAddress !== HELIUS_NATIVE_SOL_PSEUDO_MINT)
 
 const collectObservedSplDecimals = ({
   payload,
@@ -1691,18 +1695,25 @@ const make = ({
         (movement) => movement.role !== "fee" && movement.asset.assetKind === "native"
       )
       const sentinelTransfers = transfers.filter(
-        (transfer) => transfer.mint === SOLANA_WRAPPED_NATIVE_MINT
+        (transfer) =>
+          transfer.mint === SOLANA_WRAPPED_NATIVE_MINT ||
+          transfer.mint === HELIUS_NATIVE_SOL_PSEUDO_MINT
       )
       if (sentinelTransfers.length === 0) {
         return { nativeMovements, splTransfers: transfers, ambiguousTransfers: [] }
       }
 
+      // Only wrapped-SOL rows can be explained by wrapped-SOL token evidence;
+      // pseudo-mint rows are native lamport evidence and skip that matching.
+      const wrappedSolSentinelTransfers = sentinelTransfers.filter(
+        (transfer) => transfer.mint === SOLANA_WRAPPED_NATIVE_MINT
+      )
       const matchedWrappedSolRows = matchExplicitWrappedSolRows({
-        transfers: sentinelTransfers,
+        transfers: wrappedSolSentinelTransfers,
         payload,
         walletAddress,
       })
-      const candidateTransfersBeforeBalanceEvidence = sentinelTransfers.filter(
+      const candidateTransfersBeforeBalanceEvidence = wrappedSolSentinelTransfers.filter(
         (transfer) => !matchedWrappedSolRows.has(transfer)
       )
       matchWrappedSolBalanceRows({
@@ -1744,7 +1755,19 @@ const make = ({
         }
       }
 
-      const splTransfers = transfers.filter((transfer) => !nativeWalletTransfers.includes(transfer))
+      // Pseudo-mint rows left over after native matching stay native evidence
+      // for review; routing them into the SPL path would double-count lamports
+      // already covered by the balance-delta movement.
+      const leftoverPseudoMintTransfers = candidateNativeTransfers.filter(
+        (transfer) =>
+          transfer.mint === HELIUS_NATIVE_SOL_PSEUDO_MINT &&
+          !nativeWalletTransfers.includes(transfer)
+      )
+      const splTransfers = transfers.filter(
+        (transfer) =>
+          !nativeWalletTransfers.includes(transfer) &&
+          !leftoverPseudoMintTransfers.includes(transfer)
+      )
 
       const refinedNativeMovements = buildRefinedNativeMovements({
         transfers: nativeWalletTransfers,
@@ -1761,7 +1784,7 @@ const make = ({
           (movement, position) => ({ ...movement, position })
         ),
         splTransfers,
-        ambiguousTransfers: [],
+        ambiguousTransfers: leftoverPseudoMintTransfers,
       }
     }
 
