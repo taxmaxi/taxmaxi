@@ -503,11 +503,16 @@ const make = Effect.gen(function* () {
         failedRawRecordIds: new Set(),
       }
 
+      // A sync clears lastSyncedAt while it runs and stamps it on completion.
+      // A replay (prepared records present) must leave the stored timestamp
+      // of the last real provider fetch untouched.
+      const lastSyncedAtUpdate = preparedReplayRecords === undefined ? { lastSyncedAt: null } : {}
+
       yield* sourceSyncStateRepository.persistProgress({
         sourceId: source.id,
         jobId,
         state: initialClassification.execution,
-        lastSyncedAt: null,
+        ...lastSyncedAtUpdate,
         lastErrorMessage: null,
       })
 
@@ -565,7 +570,7 @@ const make = Effect.gen(function* () {
             sourceId: source.id,
             jobId,
             state: execution,
-            lastSyncedAt: null,
+            ...lastSyncedAtUpdate,
             lastErrorMessage: null,
           })
           yield* heartbeatSourceSyncJob({ jobId, workerId })
@@ -1132,7 +1137,6 @@ const make = Effect.gen(function* () {
           sourceId: source.id,
           jobId,
           state: reconciliationExecution,
-          lastSyncedAt: null,
           lastErrorMessage: null,
         })
         const reconciliationSummary = yield* reconcilePrincipalTransfers({
@@ -1150,6 +1154,13 @@ const make = Effect.gen(function* () {
           processedRecords: classification.execution.totalRecords ?? 0,
           totalRecords: classification.execution.totalRecords,
         }
+
+        yield* sourceSyncStateRepository.persistProgress({
+          sourceId: source.id,
+          jobId,
+          state: replayExecution,
+          lastErrorMessage: null,
+        })
 
         yield* Effect.annotateCurrentSpan({
           sourceId: source.id,

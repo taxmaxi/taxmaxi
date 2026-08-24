@@ -85,6 +85,10 @@ const make = Effect.gen(function* () {
         highWatermark: highWatermarkToIso(state.highWatermark),
       }
 
+      // An omitted lastSyncedAt leaves the stored value untouched, so replay
+      // runs keep the timestamp of the last real provider fetch.
+      const lastSyncedAtUpdate = lastSyncedAt === undefined ? {} : { lastSyncedAt }
+
       yield* db
         .insert(schema.sourceSyncState)
         .values({
@@ -93,7 +97,7 @@ const make = Effect.gen(function* () {
           highWatermark: state.highWatermark,
           checkpointRawRecordId: state.checkpointRawRecordId,
           checkpointExternalId: state.checkpointExternalId,
-          lastSyncedAt,
+          ...lastSyncedAtUpdate,
           lastErrorMessage,
           updatedAt: now,
         })
@@ -104,7 +108,7 @@ const make = Effect.gen(function* () {
             highWatermark: state.highWatermark,
             checkpointRawRecordId: state.checkpointRawRecordId,
             checkpointExternalId: state.checkpointExternalId,
-            lastSyncedAt,
+            ...lastSyncedAtUpdate,
             lastErrorMessage,
             updatedAt: now,
           },
