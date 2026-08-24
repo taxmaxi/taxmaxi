@@ -18,12 +18,12 @@ import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import * as Option from "effect/Option"
 import {
-  ASSET_RESOLUTION_POLICY_REVISION,
   AssetResolutionConflictingEvidence,
   AssetResolutionMalformedPayload,
-  AttachRepresentationDecision,
   canonicalizeAddress,
   decodeCoinGeckoClaim,
+  decodeJupiterLegitimacyClaim,
+  JUPITER_AUTHORITY,
   RegistryLookupSkipped,
   evaluateAssetResolution,
   type AssetResolutionDecision,
@@ -32,14 +32,17 @@ import {
   type AssetResolutionOwnedRepresentation,
   type AssetResolutionProviderEvidence,
   type AssetResolutionRegistryEvidence,
+  type LegitimacyResolutionInput,
   ChainFactPayload,
 } from "@my/core/assets"
 import {
   AssetRepository,
   AssetResolutionCoinGeckoClient,
+  AssetResolutionEvidenceRetryableError,
   AssetResolutionJobExecutor,
   AssetResolutionJobRepository,
   ProviderAssetRepository,
+  SyncEngineTransaction,
   type AssetResolutionDecisionRecord,
   type AssetResolutionEvidenceRecord,
   type AssetResolutionJobExecutionResult,
@@ -48,6 +51,10 @@ import {
   type ProviderAssetObservedRepresentationRecord,
   type SyncEngineStorageError,
 } from "../services/index.ts"
+import {
+  AssetResolutionJupiterClient,
+  JUPITER_SUPPORTED_BLOCKCHAIN,
+} from "../providers/jupiter/services/AssetResolutionJupiterClient.ts"
 import { nowDate } from "./internal/SourceSyncTelemetry.ts"
 
 const RESOLUTION_POLICY_ACTOR = "system:asset-resolution-policy"
@@ -177,9 +184,85 @@ const decisionToRecord = ({
 
 const make = Effect.gen(function* () {
   const providerAssetRepository = yield* ProviderAssetRepository
+  const syncEngineTransaction = yield* SyncEngineTransaction
   const assetResolutionJobRepository = yield* AssetResolutionJobRepository
   const assetRepository = yield* AssetRepository
   const coinGeckoClient = yield* AssetResolutionCoinGeckoClient
+  const jupiterClient = yield* AssetResolutionJupiterClient
+
+  /**
+   * Gather Jupiter legitimacy evidence for one exact Solana mint. Chains
+   * Jupiter cannot testify about produce no claim and no evidence record. A
+   * response without the mint is a definitive not-indexed answer and also
+   * produces no claim; a malformed payload or terminal upstream failure
+   * becomes a legitimacy failure input the policy fails closed on.
+   */
+  const gatherJupiterLegitimacy = ({
+    fact,
+    evidenceRevision,
+  }: {
+    readonly fact: ChainFactPayload
+    readonly evidenceRevision: number
+  }): Effect.Effect<
+    {
+      readonly legitimacy: ReadonlyArray<LegitimacyResolutionInput>
+      readonly evidence: ReadonlyArray<AssetResolutionEvidenceRecord>
+    },
+    AssetResolutionJobExecutorError
+  > =>
+    Effect.gen(function* () {
+      const mintAddress = fact.mintAddress
+      if (
+        fact.blockchain.trim().toLowerCase() !== JUPITER_SUPPORTED_BLOCKCHAIN ||
+        mintAddress === null
+      ) {
+        return { legitimacy: [], evidence: [] }
+      }
+
+      const jupiterEvidence = yield* jupiterClient.fetchTokenByMint({ mintAddress }).pipe(
+        Effect.mapError(
+          (error) =>
+            new AssetResolutionEvidenceRetryableError({
+              source: "jupiter",
+              status: error.status,
+              cause: error.cause,
+            })
+        )
+      )
+      const retrievedAt = nowDate()
+      const decodeResult =
+        jupiterEvidence._tag === "payload"
+          ? yield* Effect.result(
+              decodeJupiterLegitimacyClaim({ payload: jupiterEvidence.payload, mintAddress })
+            )
+          : null
+
+      const decodedClaim =
+        decodeResult?._tag === "Success" && decodeResult.success._tag === "legitimacy_claim"
+          ? decodeResult.success
+          : null
+      const legitimacy: ReadonlyArray<LegitimacyResolutionInput> =
+        jupiterEvidence._tag === "malformed_payload" || jupiterEvidence._tag === "upstream_failure"
+          ? [jupiterEvidence]
+          : decodeResult?._tag === "Failure"
+            ? [decodeResult.failure]
+            : decodedClaim === null
+              ? []
+              : [decodedClaim]
+
+      const evidenceRecord: AssetResolutionEvidenceRecord = {
+        authority: JUPITER_AUTHORITY,
+        claimKind: "legitimacy",
+        sourceLocator: `jupiter://tokens/v2/search?query=${mintAddress}`,
+        retrievedAt,
+        evidenceRevision,
+        decodedClaim,
+        rawPayload:
+          jupiterEvidence._tag === "payload" ? jupiterEvidence : { _tag: jupiterEvidence._tag },
+      }
+
+      return { legitimacy, evidence: [evidenceRecord] }
+    })
 
   const findOwnedRepresentations = (
     fact: ChainFactPayload
@@ -255,23 +338,33 @@ const make = Effect.gen(function* () {
       // exact chain identity is enough, and no registry call is needed.
       const ownedForReuse =
         chainResult.fact === null ? [] : yield* findOwnedRepresentations(chainResult.fact)
+      const jupiterResult =
+        chainResult.fact === null
+          ? { legitimacy: [], evidence: [] }
+          : yield* gatherJupiterLegitimacy({
+              fact: chainResult.fact,
+              evidenceRevision,
+            })
       const [settled] = ownedForReuse
       if (
         settled !== undefined &&
         settled.type === chainResult.fact?.type &&
         settled.decimals === chainResult.fact.decimals
       ) {
+        const decision = yield* evaluateAssetResolution({
+          chain: chainResult.evidence,
+          registry: new RegistryLookupSkipped(),
+          identity: {
+            registryOwner: null,
+            displayCandidates: [],
+            representations: ownedForReuse,
+          },
+          legitimacy: jupiterResult.legitimacy,
+          providerDisplay,
+        })
         return {
-          decision: AttachRepresentationDecision.make({
-            policyRevision: ASSET_RESOLUTION_POLICY_REVISION,
-            assetKey: settled.assetKey,
-            blockchain: settled.blockchain.toLowerCase(),
-            type: settled.type,
-            contractAddress: settled.contractAddress,
-            mintAddress: settled.mintAddress,
-            decimals: settled.decimals,
-          }),
-          evidence: [chainEvidenceRecord],
+          decision,
+          evidence: [chainEvidenceRecord, ...jupiterResult.evidence],
         }
       }
 
@@ -291,15 +384,25 @@ const make = Effect.gen(function* () {
             displayCandidates: [],
             representations: ownedForReuse,
           },
-          legitimacy: [],
+          legitimacy: jupiterResult.legitimacy,
           providerDisplay,
         })
-        return { decision, evidence: [chainEvidenceRecord] }
+        return { decision, evidence: [chainEvidenceRecord, ...jupiterResult.evidence] }
       }
 
       const platformId = chainResult.fact.blockchain.trim().toLowerCase()
-      const registryEvidence: AssetResolutionRegistryEvidence =
-        yield* coinGeckoClient.fetchCoinByContract({ platformId, address: factAddress })
+      const registryEvidence: AssetResolutionRegistryEvidence = yield* coinGeckoClient
+        .fetchCoinByContract({ platformId, address: factAddress })
+        .pipe(
+          Effect.mapError(
+            (error) =>
+              new AssetResolutionEvidenceRetryableError({
+                source: "coingecko",
+                status: error.status,
+                cause: error.cause,
+              })
+          )
+        )
       const registryRetrievedAt = nowDate()
       const registryDecodedClaim =
         registryEvidence._tag === "payload"
@@ -372,11 +475,14 @@ const make = Effect.gen(function* () {
         chain: chainResult.evidence,
         registry: registryEvidence,
         identity,
-        legitimacy: [],
+        legitimacy: jupiterResult.legitimacy,
         providerDisplay,
       })
 
-      return { decision, evidence: [chainEvidenceRecord, registryEvidenceRecord] }
+      return {
+        decision,
+        evidence: [chainEvidenceRecord, registryEvidenceRecord, ...jupiterResult.evidence],
+      }
     })
 
   // A replay after a crash between recording and the follow-up steps still
@@ -480,6 +586,19 @@ const make = Effect.gen(function* () {
       }
 
       const { providerAsset } = reviewOption.value
+
+      // An exclusion is settled. New registry evidence alone must never
+      // resurrect an excluded observation; reversal requires a human-approved
+      // superseding decision. Later jobs complete without a new decision.
+      if (reviewOption.value.mapping?.mappingStatus === "excluded") {
+        yield* assetResolutionJobRepository.finishResolutionJob({ jobId, status: "completed" })
+        return {
+          outcome: "excluded",
+          providerAssetRowId,
+          evidenceRevision,
+        } satisfies AssetResolutionJobExecutionResult
+      }
+
       const observations = yield* providerAssetRepository.listProviderAssetObservedRepresentations({
         providerAssetRowId,
       })
@@ -500,85 +619,130 @@ const make = Effect.gen(function* () {
       })
 
       if (decision._tag === "attach") {
-        const representation = yield* assetRepository.attachRepresentationToExistingAsset({
-          assetId: decision.assetKey,
-          blockchainName: decision.blockchain,
-          representation: {
-            contractAddress: decision.contractAddress,
-            mintAddress: decision.mintAddress,
-            decimals: decision.decimals,
-            type: decision.type,
-            logoUrl: null,
-            isSpam: false,
-            metadata: null,
-          },
-        })
+        return yield* syncEngineTransaction.run(
+          Effect.gen(function* () {
+            yield* providerAssetRepository.lockProviderAssetApprovalSnapshot({
+              providerAssetRowId,
+              expectedObservedRepresentations: observations,
+              expectedProviderAssetRetrievedAt: providerAsset.retrievedAt,
+            })
 
-        yield* recordDecision({
-          jobId,
-          record: {
-            ...decisionRecord,
-            assetId: decision.assetKey,
-            assetRepresentationId: representation.id,
-          },
-        })
+            const representation = yield* assetRepository.attachRepresentationToExistingAsset({
+              assetId: decision.assetKey,
+              blockchainName: decision.blockchain,
+              representation: {
+                contractAddress: decision.contractAddress,
+                mintAddress: decision.mintAddress,
+                decimals: decision.decimals,
+                type: decision.type,
+                logoUrl: null,
+                isSpam: false,
+                metadata: null,
+              },
+            })
 
-        yield* settleApprovedResolution({
-          jobId,
-          providerAssetRowId,
-          assetId: decision.assetKey,
-          assetRepresentationId: representation.id,
-          policyRevision: decision.policyRevision,
-          observations,
-          providerAssetRetrievedAt: providerAsset.retrievedAt,
-          sourceNotes: `Resolution policy ${decision.policyRevision} attached the exact representation and requested a replay of affected sources.`,
-        })
+            yield* recordDecision({
+              jobId,
+              record: {
+                ...decisionRecord,
+                assetId: decision.assetKey,
+                assetRepresentationId: representation.id,
+              },
+            })
 
-        return {
-          outcome: "attached",
-          providerAssetRowId,
-          evidenceRevision,
-        } satisfies AssetResolutionJobExecutionResult
+            yield* settleApprovedResolution({
+              jobId,
+              providerAssetRowId,
+              assetId: decision.assetKey,
+              assetRepresentationId: representation.id,
+              policyRevision: decision.policyRevision,
+              observations,
+              providerAssetRetrievedAt: providerAsset.retrievedAt,
+              sourceNotes: `Resolution policy ${decision.policyRevision} attached the exact representation and requested a replay of affected sources.`,
+            })
+
+            return {
+              outcome: "attached",
+              providerAssetRowId,
+              evidenceRevision,
+            } satisfies AssetResolutionJobExecutionResult
+          })
+        )
       }
 
       if (decision._tag === "create_standalone") {
-        // The repository records the create_standalone decision inside the
-        // creation transaction, so the audit can never show a created asset
-        // without the decision that created it.
-        const created = yield* assetRepository.createStandaloneAssetRepresentation({
-          blockchainName: decision.blockchain,
-          asset: {
-            name: decision.name,
-            symbol: decision.symbol,
-            coingeckoCoinId: decision.coingeckoCoinId,
-            logoUrl: null,
-            type: decision.type === "nft" ? "nft" : "fungible",
-          },
-          representation: {
-            contractAddress: decision.contractAddress,
-            mintAddress: decision.mintAddress,
-            decimals: decision.decimals,
-            type: decision.type,
-            logoUrl: null,
-            isSpam: false,
-            metadata: null,
-          },
-          decision: decisionRecord,
-        })
+        return yield* syncEngineTransaction.run(
+          Effect.gen(function* () {
+            yield* providerAssetRepository.lockProviderAssetApprovalSnapshot({
+              providerAssetRowId,
+              expectedObservedRepresentations: observations,
+              expectedProviderAssetRetrievedAt: providerAsset.retrievedAt,
+            })
 
-        yield* settleApprovedResolution({
-          jobId,
-          providerAssetRowId,
-          assetId: created.id,
-          assetRepresentationId: created.representationId,
-          policyRevision: decision.policyRevision,
-          observations,
-          providerAssetRetrievedAt: providerAsset.retrievedAt,
-          sourceNotes: `Resolution policy ${decision.policyRevision} created a standalone economic asset for the exact representation and requested a replay of affected sources.`,
-        })
+            // The repository records the create_standalone decision inside
+            // the same outer transaction as mapping approval and replay.
+            const created = yield* assetRepository.createStandaloneAssetRepresentation({
+              blockchainName: decision.blockchain,
+              asset: {
+                name: decision.name,
+                symbol: decision.symbol,
+                coingeckoCoinId: decision.coingeckoCoinId,
+                logoUrl: null,
+                type: decision.type === "nft" ? "nft" : "fungible",
+              },
+              representation: {
+                contractAddress: decision.contractAddress,
+                mintAddress: decision.mintAddress,
+                decimals: decision.decimals,
+                type: decision.type,
+                logoUrl: null,
+                isSpam: false,
+                metadata: null,
+              },
+              decision: decisionRecord,
+            })
 
+            yield* settleApprovedResolution({
+              jobId,
+              providerAssetRowId,
+              assetId: created.id,
+              assetRepresentationId: created.representationId,
+              policyRevision: decision.policyRevision,
+              observations,
+              providerAssetRetrievedAt: providerAsset.retrievedAt,
+              sourceNotes: `Resolution policy ${decision.policyRevision} created a standalone economic asset for the exact representation and requested a replay of affected sources.`,
+            })
+
+            return {
+              outcome: "created",
+              providerAssetRowId,
+              evidenceRevision,
+            } satisfies AssetResolutionJobExecutionResult
+          })
+        )
+      }
+
+      if (decision._tag === "excluded") {
+        // The exclusion is a final answer. Its immutable decision, mapping
+        // projection, and replay request commit together so approval cannot
+        // win between separate writes.
+        const { decisionRecorded } =
+          yield* providerAssetRepository.excludeProviderAssetMappingAndRequestReplay({
+            providerAssetRowId,
+            decision: decisionRecord,
+            sourceNotes: `Resolution policy ${decision.policyRevision} excluded the observation (${decision.reason}) and requested a replay of affected sources.`,
+            expectedObservedRepresentations: observations,
+            expectedProviderAssetRetrievedAt: providerAsset.retrievedAt,
+          })
+        if (!decisionRecorded) {
+          yield* Effect.logInfo(
+            { jobId, providerAssetRowId, evidenceRevision, outcome: decisionRecord.outcome },
+            "asset-resolution:decision-replay-detected"
+          )
+        }
+        yield* assetResolutionJobRepository.finishResolutionJob({ jobId, status: "completed" })
         return {
-          outcome: "created",
+          outcome: "excluded",
           providerAssetRowId,
           evidenceRevision,
         } satisfies AssetResolutionJobExecutionResult

@@ -968,7 +968,7 @@ describe("TaxMaxi Promise client", () => {
     await expect(
       taxmaxi.assets.listProviderAssetReviews({
         provider: "coinbase",
-        status: "pending_review",
+        status: "excluded",
         cursor: "00000000-0000-4000-8000-000000000008",
         limit: 25,
       })
@@ -1025,7 +1025,7 @@ describe("TaxMaxi Promise client", () => {
 
     expect(capturedRequests).toEqual([
       expect.objectContaining({
-        url: "https://sdk.example.test/v1/assets/provider-assets?provider=coinbase&status=pending_review&cursor=00000000-0000-4000-8000-000000000008&limit=25",
+        url: "https://sdk.example.test/v1/assets/provider-assets?provider=coinbase&status=excluded&cursor=00000000-0000-4000-8000-000000000008&limit=25",
       }),
       expect.objectContaining({
         url: "https://sdk.example.test/v1/assets/transfer-reconciliations/unresolved?status=pending&cursor=opaque-cursor&limit=25",

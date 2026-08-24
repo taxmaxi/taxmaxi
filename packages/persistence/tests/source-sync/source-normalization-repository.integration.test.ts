@@ -3466,7 +3466,7 @@ describe("SourceNormalizationRepositoryLive", () => {
     expect(counts.rawRecord?.normalizationError).toBeNull()
   })
 
-  it("persists a Coinbase send provider transfer without creating a canonical principal leg", async () => {
+  it("persists Coinbase send movements without duplicating matching fee inventory", async () => {
     const acquisitionRawRecordId = "00000000-0000-0000-0000-000000000690"
     const acquiredAt = new Date("2025-03-01T10:00:00.000Z")
     const acquisitionPayload = {
@@ -3612,7 +3612,7 @@ describe("SourceNormalizationRepositoryLive", () => {
     const feeRolePayload = {
       ...payload,
       id: "tx-provider-fee-role-1",
-      amount: { amount: "-0.01000000", currency: "BTC" },
+      amount: { amount: "-0.00010000", currency: "BTC" },
       native_amount: { amount: "-150.00", currency: "EUR" },
       created_at: feeRoleAt.toISOString(),
       resource_path: "/v2/accounts/coinbase-account-1/transactions/tx-provider-fee-role-1",
@@ -3643,24 +3643,50 @@ describe("SourceNormalizationRepositoryLive", () => {
       })
     )
     const feeRoleProviderTransfer = feeRoleResult.providerTransfers[0]
-    const [feeRoleMovement] = await runPg(
+    const feeRoleState = await runPg(
       Effect.gen(function* () {
         const db = yield* drizzle
-        return yield* db
+        const [feeRoleMovement] = yield* db
           .select()
           .from(schema.inventoryMovements)
           .where(
             eq(schema.inventoryMovements.providerTransferId, feeRoleProviderTransfer?.id ?? "")
           )
+        const allocations = yield* db
+          .select({
+            matchedAmount: schema.inventoryMovementAllocations.matchedAmount,
+            providerTransferId: schema.inventoryMovements.providerTransferId,
+            transactionLegId: schema.inventoryMovements.transactionLegId,
+          })
+          .from(schema.inventoryMovementAllocations)
+          .innerJoin(
+            schema.inventoryMovements,
+            eq(
+              schema.inventoryMovementAllocations.inventoryMovementId,
+              schema.inventoryMovements.id
+            )
+          )
+          .where(eq(schema.inventoryMovements.transactionId, feeRoleResult.transaction.id))
+        const [lot] = yield* db.select().from(schema.fifoLots).limit(1)
+
+        return { allocations, feeRoleMovement, lot }
       })
     )
 
-    expect(feeRoleMovement).toEqual(
+    expect(feeRoleState.feeRoleMovement).toEqual(
       expect.objectContaining({
         direction: "outbound",
         purpose: "fee",
       })
     )
+    expect(feeRoleState.allocations).toEqual([
+      expect.objectContaining({
+        matchedAmount: expect.stringContaining("0.00010000"),
+        providerTransferId: null,
+        transactionLegId: expect.any(String),
+      }),
+    ])
+    expect(feeRoleState.lot?.remainingAmount).toContain("0.89980000")
   })
 
   it("does not allocate an internal-transfer outflow after its disposal leg consumed inventory", async () => {

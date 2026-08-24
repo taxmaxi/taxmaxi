@@ -1010,6 +1010,7 @@ const make = Effect.gen(function* () {
               or ${onchainProviderTransferTable.observedMintAddress} is not null
               or ${onchainProviderTransferTable.observedContractAddress} is not null
             )`,
+          sql`${schema.providerAssetMappings.mappingStatus} is distinct from 'excluded'`,
           observedTimeCondition,
           networkName === null
             ? sql`true`

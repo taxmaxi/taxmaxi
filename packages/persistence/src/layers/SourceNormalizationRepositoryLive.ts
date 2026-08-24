@@ -2196,8 +2196,11 @@ const make = Effect.gen(function* () {
             "sourceNormalizationRepository.allocateProviderInventoryMovements.removeStaleInboundLot",
         })
 
-        const matchingDisposalResults = yield* Effect.forEach(
-          legs.filter((leg) => leg.kind === "disposal" && leg.assetId === assetMapping.assetId),
+        const matchingLegKind = purpose === "fee" ? "fee" : "disposal"
+        const matchingOutboundLegResults = yield* Effect.forEach(
+          legs.filter(
+            (leg) => leg.kind === matchingLegKind && leg.assetId === assetMapping.assetId
+          ),
           (leg) =>
             compareDecimalQuantities({
               left: leg.amount,
@@ -2205,7 +2208,7 @@ const make = Effect.gen(function* () {
             })
         )
 
-        if (matchingDisposalResults.some((comparison) => comparison === 0)) {
+        if (matchingOutboundLegResults.some((comparison) => comparison === 0)) {
           return
         }
 
