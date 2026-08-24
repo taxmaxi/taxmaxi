@@ -5,6 +5,7 @@ import { RefreshCw } from "lucide-react"
 
 import { cn } from "#/lib/utils"
 
+import { AddWalletCard, type EnsResolution } from "./add-wallet-card"
 import { SourceCard, type Source } from "./source-card"
 import { ContentContainer } from "./content-container"
 
@@ -14,6 +15,12 @@ import { ContentContainer } from "./content-container"
  *   0ms   resting cards sit half behind the content section
  * 120ms   hovered card peeks 90% above the section
  * 220ms   selected card peeks fully above the section
+ *
+ * The add-wallet card is the leftmost slot in the fan. It
+ * follows the same choreography; focusing its input lifts it
+ * in place to the selected height, exactly like a selected
+ * source card. After a successful add, the new source card
+ * starts at that lifted spot and springs into the fan.
  * --------------------------------------------------------- */
 
 const SOURCE_STACK = {
@@ -130,12 +137,14 @@ const sourceFixtures: ReadonlyArray<Source> = [
   ...stressSources,
 ]
 
-export const mockSources: ReadonlyArray<Source> = sourceFixtures.slice(0, 2)
+export const mockSources: ReadonlyArray<Source> = sourceFixtures.slice(0, 10)
 
 export function SourceCards({
   children,
   className,
   contentClassName,
+  onAddWallet,
+  onResolveEnsName,
   onSelectedSourceIdChange,
   onSourceSync,
   selectedSourceId,
@@ -145,6 +154,8 @@ export function SourceCards({
   children?: React.ReactNode
   className?: string
   contentClassName?: string
+  onAddWallet?: (walletAddress: string) => Promise<void>
+  onResolveEnsName?: (name: string) => Promise<EnsResolution>
   onSelectedSourceIdChange?: (sourceId: Source["id"] | undefined) => void
   onSourceSync?: (source: Source) => void | Promise<void>
   selectedSourceId?: Source["id"]
@@ -157,6 +168,8 @@ export function SourceCards({
       style={{ paddingTop: SOURCE_STACK.sectionOffset }}
     >
       <SourceCardRail
+        onAddWallet={onAddWallet}
+        onResolveEnsName={onResolveEnsName}
         onSelectedSourceIdChange={onSelectedSourceIdChange}
         onSourceSync={onSourceSync}
         selectedSourceId={selectedSourceId}
@@ -182,12 +195,16 @@ export function SourceCards({
 }
 
 function SourceCardRail({
+  onAddWallet,
+  onResolveEnsName,
   onSelectedSourceIdChange,
   onSourceSync,
   selectedSourceId,
   syncingSourceIds,
   sources,
 }: {
+  onAddWallet?: (walletAddress: string) => Promise<void>
+  onResolveEnsName?: (name: string) => Promise<EnsResolution>
   onSelectedSourceIdChange?: (sourceId: Source["id"] | undefined) => void
   onSourceSync?: (source: Source) => void | Promise<void>
   selectedSourceId?: Source["id"]
@@ -196,9 +213,11 @@ function SourceCardRail({
 }) {
   const scrollerRef = useRef<HTMLDivElement>(null)
   const [containerWidth, setContainerWidth] = useState(0)
+  const [isAddingWallet, setIsAddingWallet] = useState(false)
+  const totalSlots = sources.length + (onAddWallet === undefined ? 0 : 1)
   const stackLayout = useMemo(
-    () => getStackLayout({ containerWidth, total: sources.length }),
-    [containerWidth, sources.length]
+    () => getStackLayout({ containerWidth, total: totalSlots }),
+    [containerWidth, totalSlots]
   )
 
   useEffect(() => {
@@ -208,6 +227,12 @@ function SourceCardRail({
       scroller.scrollLeft = 0
     }
   }, [])
+
+  useEffect(() => {
+    if (isAddingWallet) {
+      scrollerRef.current?.scrollTo({ behavior: "smooth", left: 0 })
+    }
+  }, [isAddingWallet])
 
   useLayoutEffect(() => {
     const scroller = scrollerRef.current
@@ -243,7 +268,11 @@ function SourceCardRail({
               a zero-width layout. */}
           {stackLayout.ready ? (
             <SourceCardStack
+              isAddingWallet={isAddingWallet}
               layout={stackLayout}
+              onAddWallet={onAddWallet}
+              onResolveEnsName={onResolveEnsName}
+              onAddingWalletChange={setIsAddingWallet}
               onSelectedSourceIdChange={onSelectedSourceIdChange}
               onSourceSync={onSourceSync}
               selectedSourceId={selectedSourceId}
@@ -258,25 +287,99 @@ function SourceCardRail({
 }
 
 function SourceCardStack({
+  isAddingWallet,
   layout,
+  onAddWallet,
+  onAddingWalletChange,
+  onResolveEnsName,
   onSelectedSourceIdChange,
   onSourceSync,
   selectedSourceId,
   syncingSourceIds,
   sources,
 }: {
+  isAddingWallet: boolean
   layout: SourceStackLayout
+  onAddWallet?: (walletAddress: string) => Promise<void>
+  onResolveEnsName?: (name: string) => Promise<EnsResolution>
+  onAddingWalletChange: (isAddingWallet: boolean) => void
   onSelectedSourceIdChange?: (sourceId: Source["id"] | undefined) => void
   onSourceSync?: (source: Source) => void | Promise<void>
   selectedSourceId?: Source["id"]
   syncingSourceIds?: ReadonlySet<Source["id"]>
   sources: ReadonlyArray<Source>
 }) {
-  const reduceMotion = useReducedMotion()
+  const stackRef = useRef<HTMLDivElement>(null)
+  const knownSourceIdsRef = useRef<ReadonlySet<Source["id"]>>(
+    new Set(sources.map((source) => source.id))
+  )
+  const showAddCard = onAddWallet !== undefined
+  const slotOffset = showAddCard ? 1 : 0
+  const totalSlots = sources.length + slotOffset
   const selectedIndex =
     selectedSourceId === undefined
       ? -1
       : sources.findIndex((source) => source.id === selectedSourceId)
+  const selectedSlot =
+    showAddCard && isAddingWallet ? 0 : selectedIndex >= 0 ? selectedIndex + slotOffset : -1
+
+  // A source that appeared while the add card is lifted was just created
+  // through it; it mounts at the lifted spot and springs into the fan.
+  const dealSourceId =
+    showAddCard && isAddingWallet
+      ? sources.find((source) => !knownSourceIdsRef.current.has(source.id))?.id
+      : undefined
+
+  // The lifted add card takes the exact placement a selected source card
+  // gets in its slot: it rises in place, without traveling to the center.
+  const liftedPlacement = getCardPlacement({
+    index: 0,
+    layout,
+    selectedIndex: 0,
+    total: totalSlots,
+  })
+
+  const addCardPlacement = getAddCardPlacement({ layout, selectedSlot, totalSlots })
+
+  useEffect(() => {
+    knownSourceIdsRef.current = new Set(sources.map((source) => source.id))
+  }, [sources])
+
+  // Escape clears the selection, matching the add-wallet card. Presses
+  // inside text fields are left to the field itself — that is how the
+  // add-wallet input closes first and a second press deselects. Focus
+  // leaves the card as well, again matching the add-wallet card, so the
+  // keyboard focus ring does not linger after a mouse-driven dismiss.
+  useEffect(() => {
+    if (selectedSourceId === undefined) {
+      return
+    }
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape" || event.defaultPrevented) {
+        return
+      }
+
+      const target = event.target
+      if (
+        target instanceof HTMLElement &&
+        (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable)
+      ) {
+        return
+      }
+
+      const focused = document.activeElement
+      if (focused instanceof HTMLElement && stackRef.current?.contains(focused)) {
+        focused.blur()
+      }
+
+      onSelectedSourceIdChange?.(undefined)
+    }
+
+    document.addEventListener("keydown", handleKeyDown)
+
+    return () => document.removeEventListener("keydown", handleKeyDown)
+  }, [onSelectedSourceIdChange, selectedSourceId])
 
   return (
     <div
@@ -289,31 +392,55 @@ function SourceCardStack({
         width: layout.stackWidth,
       }}
     >
-      <div className="relative isolate overflow-visible" style={{ height: SOURCE_STACK.height }}>
+      <div
+        className="relative isolate overflow-visible"
+        ref={stackRef}
+        style={{ height: SOURCE_STACK.height }}
+      >
+        {showAddCard ? (
+          <FanCard
+            className={isAddingWallet ? undefined : "cursor-pointer"}
+            hoverPlacement={{
+              ...addCardPlacement,
+              scale: addCardPlacement.scale * SOURCE_STACK.hoverScale,
+              y: isAddingWallet ? addCardPlacement.y : SOURCE_STACK.hoverY,
+            }}
+            placement={addCardPlacement}
+            tapScale={isAddingWallet ? undefined : addCardPlacement.scale * SOURCE_STACK.tapScale}
+            zIndex={addCardPlacement.zIndex}
+          >
+            <AddWalletCard
+              active={isAddingWallet}
+              height={SOURCE_STACK.cardHeight}
+              onActiveChange={onAddingWalletChange}
+              onResolveEnsName={onResolveEnsName}
+              onSubmit={onAddWallet}
+              width={SOURCE_STACK.cardWidth}
+            />
+          </FanCard>
+        ) : null}
         {sources.map((source, index) => {
           const active = selectedSourceId === source.id
           const isSyncing = syncingSourceIds?.has(source.id) ?? false
+          const isNewlyAdded = source.id === dealSourceId
           const resting = getCardPlacement({
-            index,
+            index: index + slotOffset,
             layout,
-            selectedIndex,
-            total: sources.length,
+            selectedIndex: selectedSlot,
+            total: totalSlots,
           })
 
           return (
-            <motion.div
+            <FanCard
               aria-label={`${active ? "Show all sources" : `Show ${source.name}`}`}
               aria-pressed={active}
-              role="button"
-              animate={{
-                opacity: 1,
-                rotate: resting.rotate,
-                scale: resting.scale,
-                x: resting.x,
-                y: resting.y,
+              className="cursor-pointer rounded-2xl outline-none focus-visible:ring-3 focus-visible:ring-ring/40"
+              hoverPlacement={{
+                ...resting,
+                scale: resting.scale * SOURCE_STACK.hoverScale,
+                y: active ? resting.y : SOURCE_STACK.hoverY,
               }}
-              className="absolute left-0 top-0 cursor-pointer outline-none will-change-transform focus-visible:ring-3 focus-visible:ring-ring/40"
-              initial={false}
+              initialPlacement={isNewlyAdded ? liftedPlacement : false}
               key={source.id}
               onClick={() => onSelectedSourceIdChange?.(active ? undefined : source.id)}
               onKeyDown={(event) => {
@@ -328,18 +455,11 @@ function SourceCardStack({
                 event.preventDefault()
                 onSelectedSourceIdChange?.(active ? undefined : source.id)
               }}
-              style={{ zIndex: resting.zIndex }}
+              placement={resting}
+              role="button"
               tabIndex={0}
-              transition={reduceMotion ? SOURCE_STACK.reducedTransition : SOURCE_STACK.spring}
-              whileHover={
-                reduceMotion
-                  ? undefined
-                  : {
-                      scale: resting.scale * SOURCE_STACK.hoverScale,
-                      y: active ? resting.y : SOURCE_STACK.hoverY,
-                    }
-              }
-              whileTap={reduceMotion ? undefined : { scale: resting.scale * SOURCE_STACK.tapScale }}
+              tapScale={resting.scale * SOURCE_STACK.tapScale}
+              zIndex={isNewlyAdded ? totalSlots + 3 : resting.zIndex}
             >
               <SourceCard
                 action={
@@ -363,11 +483,77 @@ function SourceCardStack({
                 source={source}
                 width={SOURCE_STACK.cardWidth}
               />
-            </motion.div>
+            </FanCard>
           )
         })}
       </div>
     </div>
+  )
+}
+
+/**
+ * Shared motion wrapper for every card in the fan. Source cards and the
+ * add-wallet card animate through this one component so spring, hover, and
+ * tap behavior cannot drift apart. Hover is folded into the animate target
+ * instead of whileHover: motion does not retarget a whileHover whose values
+ * change while the pointer stays on the card.
+ */
+function FanCard({
+  children,
+  className,
+  hoverPlacement,
+  initialPlacement = false,
+  placement,
+  tapScale,
+  zIndex,
+  ...interactionProps
+}: {
+  children: React.ReactNode
+  className?: string
+  hoverPlacement?: CardPlacement
+  initialPlacement?: CardPlacement | false
+  placement: CardPlacement
+  tapScale?: number
+  zIndex: number
+} & Pick<
+  React.ComponentProps<typeof motion.div>,
+  "aria-label" | "aria-pressed" | "onClick" | "onKeyDown" | "role" | "tabIndex"
+>) {
+  const reduceMotion = useReducedMotion()
+  const [isHovered, setIsHovered] = useState(false)
+  const target =
+    !reduceMotion && isHovered && hoverPlacement !== undefined ? hoverPlacement : placement
+
+  return (
+    <motion.div
+      {...interactionProps}
+      animate={{
+        opacity: 1,
+        rotate: target.rotate,
+        scale: target.scale,
+        x: target.x,
+        y: target.y,
+      }}
+      className={cn("absolute left-0 top-0 will-change-transform", className)}
+      initial={
+        initialPlacement === false
+          ? false
+          : {
+              opacity: 1,
+              rotate: initialPlacement.rotate,
+              scale: initialPlacement.scale,
+              x: initialPlacement.x,
+              y: initialPlacement.y,
+            }
+      }
+      onHoverEnd={() => setIsHovered(false)}
+      onHoverStart={() => setIsHovered(true)}
+      style={{ zIndex }}
+      transition={reduceMotion ? SOURCE_STACK.reducedTransition : SOURCE_STACK.spring}
+      whileTap={reduceMotion || tapScale === undefined ? undefined : { scale: tapScale }}
+    >
+      {children}
+    </motion.div>
   )
 }
 
@@ -427,6 +613,40 @@ function getCardPlacement({
     y: SOURCE_STACK.fan.inactiveY,
     zIndex: Math.max(1, total - Math.abs(distance)),
   }
+}
+
+/**
+ * Placement for the add-wallet card in the leftmost slot. It goes through
+ * the same placement math as source cards (including the lifted state,
+ * where slot 0 is the selected slot), with one exception at rest: the fan
+ * shrinks and lowers cards toward its edges, and taking that penalty on
+ * the permanently-leftmost add card made it read as smaller than every
+ * source card. It borrows its neighbor's scale and height while keeping
+ * its own position and rotation for the arc.
+ */
+function getAddCardPlacement({
+  layout,
+  selectedSlot,
+  totalSlots,
+}: {
+  layout: SourceStackLayout
+  selectedSlot: number
+  totalSlots: number
+}): CardPlacement {
+  const placement = getCardPlacement({
+    index: 0,
+    layout,
+    selectedIndex: selectedSlot,
+    total: totalSlots,
+  })
+
+  if (selectedSlot >= 0 || totalSlots <= 2) {
+    return placement
+  }
+
+  const neighbor = getRestingPlacement({ index: 1, layout, total: totalSlots })
+
+  return { ...placement, scale: neighbor.scale, y: neighbor.y }
 }
 
 function getRestingPlacement({

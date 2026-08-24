@@ -4,7 +4,7 @@ import { PageShell } from "#/components/page-shell"
 import { cn } from "#/lib/utils"
 
 export const appSurfaceClassName =
-  "border border-marketing-border text-marketing-foreground ring-0 [background:var(--app-content-background)] [box-shadow:var(--app-content-shadow)] supports-[backdrop-filter]:backdrop-blur-[48px]"
+  "border border-marketing-border text-marketing-foreground ring-0 [background:var(--app-content-background)] [box-shadow:var(--app-content-shadow)] supports-[backdrop-filter]:backdrop-blur-[64px]"
 
 export const appPanelClassName =
   "rounded-2xl bg-card text-card-foreground [box-shadow:var(--app-panel-shadow)] supports-[backdrop-filter]:backdrop-blur-[24px]"

@@ -78,6 +78,33 @@ function RouteComponent() {
     [taxmaxi]
   )
 
+  const replaySourceSync = useCallback(
+    async (sourceId: string) => taxmaxi().sources.replaySync({ sourceId }),
+    [taxmaxi]
+  )
+
+  const resolveEnsName = useCallback(
+    async (name: string) => taxmaxi().sources.resolveEns({ name }),
+    [taxmaxi]
+  )
+
+  const createWalletSource = useCallback(
+    async (walletAddress: string): Promise<Account> => {
+      const client = taxmaxi()
+      const created = await client.sources.create({ type: "onchain", walletAddress })
+
+      // Cache the overview before the source list refetches, so the suspense
+      // queries for the new source resolve without unmounting the dashboard.
+      const overview = await queryClient.ensureQueryData(
+        queries.sourceOverview(client, created.source.id)
+      )
+      await queryClient.invalidateQueries({ exact: true, queryKey: queryKeys.sourceList() })
+
+      return toDashboardAccount(created.source, overview)
+    },
+    [queryClient, taxmaxi]
+  )
+
   const getSourceSyncJob = useCallback(
     async ({ jobId, sourceId }: { sourceId: string; jobId: string }) =>
       taxmaxi().sources.getSyncJob({ jobId, sourceId }),
@@ -109,9 +136,12 @@ function RouteComponent() {
       </AppHeader>
       <Dashboard
         accounts={sourceAccounts}
+        createWalletSource={createWalletSource}
         getSourceSyncJob={getSourceSyncJob}
         onSourceSyncCompleted={onSourceSyncCompleted}
         onUnauthorized={onUnauthorized}
+        replaySourceSync={replaySourceSync}
+        resolveEnsName={resolveEnsName}
         startSourceSync={startSourceSync}
       />
       <Outlet />
@@ -121,6 +151,7 @@ function RouteComponent() {
 
 function toDashboardAccount(source: TaxMaxiSource, overview: SourceOverview | undefined): Account {
   const network = source.sourceRef._tag === "cex" ? undefined : formatProviderNetwork(source)
+  const lastSyncedAt = overview?.latestSync.lastSyncedAt ?? null
 
   return {
     id: source.id,
@@ -130,7 +161,8 @@ function toDashboardAccount(source: TaxMaxiSource, overview: SourceOverview | un
     ...(source.providerKey === null ? {} : { providerKey: source.providerKey }),
     importedTransactions: overview?.totals.transactionCount ?? 0,
     unresolvedItems: overview?.review.needsReviewCount ?? 0,
-    lastSync: formatLastSync(overview?.latestSync.lastSyncedAt ?? null),
+    lastSync: formatLastSync(lastSyncedAt),
+    ...(lastSyncedAt === null ? {} : { lastSyncedAt }),
   }
 }
 
