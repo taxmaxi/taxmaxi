@@ -15,7 +15,7 @@ import {
   type BillingStatus,
 } from "taxmaxi"
 
-import { BillingPageContent } from "#/routes/app_.billing"
+import { BillingPageContent } from "#/routes/app.billing"
 
 const catalog: BillingCatalog = {
   prices: [
@@ -139,7 +139,8 @@ describe("BillingPageContent", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Close billing" }))
 
-    expect(onClose).toHaveBeenCalledTimes(1)
+    // The overlay plays its exit animation before calling onClose.
+    await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1))
   })
 
   it.each([

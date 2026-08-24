@@ -1,10 +1,9 @@
 import { createFileRoute, redirect } from "@tanstack/react-router"
 import { CheckCircle2, CircleAlert, Mail, Settings } from "lucide-react"
-import { useCallback } from "react"
 import type { Account } from "taxmaxi"
 import { isTaxMaxiUnauthorizedError } from "taxmaxi"
 
-import { AppFocusSurface } from "#/components/app-focus-surface"
+import { AppOverlay, useAppOverlayClose } from "#/components/app-overlay"
 import { appPanelClassName } from "#/components/app-workspace"
 import { Badge } from "#/components/ui/badge"
 import CoinbaseIcon from "#/components/ui/logos/coinbase/coinbase-app.svg"
@@ -13,16 +12,15 @@ import { Text } from "#/components/ui/typography"
 import { cn } from "#/lib/utils"
 import { m } from "#/paraglide/messages"
 import { getLocale } from "#/paraglide/runtime"
-import { clearAuthSessionCookie, getAuthStatus } from "#/server-functions/auth"
+import { queries } from "#/integrations/taxmaxi/queries"
+import { clearAuthSessionCookie } from "#/server-functions/auth"
 
-export const Route = createFileRoute("/app_/settings")({
-  beforeLoad: async () => {
-    const { isAuthenticated } = await getAuthStatus()
-    if (!isAuthenticated) throw redirect({ to: "/login" })
-  },
+export const Route = createFileRoute("/app/settings")({
+  // ensureQueryData keeps the account cached, so hover preload and reopens
+  // resolve instantly instead of refetching on every open.
   loader: async ({ context }) => {
     try {
-      return await context.taxmaxi().auth.account()
+      return await context.queryClient.ensureQueryData(queries.account(context.taxmaxi()))
     } catch (error) {
       if (!isTaxMaxiUnauthorizedError(error)) throw error
       await clearAuthSessionCookie()
@@ -34,10 +32,7 @@ export const Route = createFileRoute("/app_/settings")({
 
 function SettingsPage() {
   const account = Route.useLoaderData()
-  const navigate = Route.useNavigate()
-  const onClose = useCallback(() => {
-    void navigate({ to: "/app" })
-  }, [navigate])
+  const onClose = useAppOverlayClose()
 
   return <SettingsPageContent account={account} onClose={onClose} />
 }
@@ -82,14 +77,12 @@ export function SettingsPageContent({
   readonly onClose: () => void
 }) {
   return (
-    <AppFocusSurface
-      bodyClassName="min-h-0 flex-1 overflow-y-auto"
+    <AppOverlay
       closeLabel={m["app.settings.close"]()}
       icon={<Settings aria-hidden="true" className="size-4" />}
       onClose={onClose}
       subtitle={m["app.settings.title"]()}
       title={m["app.settings.eyebrow"]()}
-      titleId="settings-title"
     >
       <div className="mx-auto flex w-full max-w-xl flex-col gap-8 px-4 py-6 sm:px-5 sm:py-8">
         <Text className="max-w-[65ch]" size="bodySm" tone="muted">
@@ -127,7 +120,7 @@ export function SettingsPageContent({
           </ul>
         </section>
       </div>
-    </AppFocusSurface>
+    </AppOverlay>
   )
 }
 

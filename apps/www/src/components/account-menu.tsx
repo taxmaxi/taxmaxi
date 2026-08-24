@@ -45,7 +45,7 @@ export function AccountMenu({ onLogout }: { readonly onLogout: () => Promise<voi
       <DropdownMenuContent align="end" className="min-w-52">
         <DropdownMenuGroup>
           <DropdownMenuItem asChild>
-            <Link preload="intent" to="/assets">
+            <Link mask={{ to: "/assets" }} preload="intent" to="/app/assets">
               <LibraryBig />
               {m["app.accountMenu.assets"]()}
             </Link>

@@ -1,4 +1,4 @@
-import { createFileRoute, redirect } from "@tanstack/react-router"
+import { Outlet, createFileRoute, redirect } from "@tanstack/react-router"
 import { useSuspenseQueries, useSuspenseQuery } from "@tanstack/react-query"
 import { useCallback, useMemo } from "react"
 import {
@@ -114,6 +114,7 @@ function RouteComponent() {
         onUnauthorized={onUnauthorized}
         startSourceSync={startSourceSync}
       />
+      <Outlet />
     </AppWorkspace>
   )
 }

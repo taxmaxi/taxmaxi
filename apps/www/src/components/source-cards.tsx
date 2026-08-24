@@ -238,14 +238,19 @@ function SourceCardRail({
           className="relative -mx-10 h-[21.5rem] overflow-x-auto overflow-y-clip overscroll-x-contain sm:-mx-12"
           ref={scrollerRef}
         >
-          <SourceCardStack
-            layout={stackLayout}
-            onSelectedSourceIdChange={onSelectedSourceIdChange}
-            onSourceSync={onSourceSync}
-            selectedSourceId={selectedSourceId}
-            syncingSourceIds={syncingSourceIds}
-            sources={sources}
-          />
+          {/* The stack mounts only after the scroller is measured, so cards
+              paint at their final placements instead of springing over from
+              a zero-width layout. */}
+          {stackLayout.ready ? (
+            <SourceCardStack
+              layout={stackLayout}
+              onSelectedSourceIdChange={onSelectedSourceIdChange}
+              onSourceSync={onSourceSync}
+              selectedSourceId={selectedSourceId}
+              syncingSourceIds={syncingSourceIds}
+              sources={sources}
+            />
+          ) : null}
         </div>
       </ContentContainer>
     </div>
@@ -276,13 +281,11 @@ function SourceCardStack({
   return (
     <div
       className={cn(
-        "absolute top-0 transition-opacity duration-150",
+        "absolute top-0",
         layout.align === "center" ? "left-1/2 -translate-x-1/2" : "left-0"
       )}
       style={{
         left: layout.align === "center" ? undefined : layout.left,
-        opacity: layout.ready ? 1 : 0,
-        pointerEvents: layout.ready ? undefined : "none",
         width: layout.stackWidth,
       }}
     >

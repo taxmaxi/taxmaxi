@@ -6,11 +6,11 @@ import {
   createRootRoute,
   createRouter,
 } from "@tanstack/react-router"
-import { cleanup, fireEvent, render, screen } from "@testing-library/react"
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import type { Account } from "taxmaxi"
 
-import { SettingsPageContent } from "#/routes/app_.settings"
+import { SettingsPageContent } from "#/routes/app.settings"
 
 const account: Account = {
   account: {
@@ -125,15 +125,15 @@ describe("SettingsPageContent", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Close settings" }))
 
-    expect(onClose).toHaveBeenCalledTimes(1)
+    // The overlay plays its exit animation before calling onClose.
+    await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1))
   })
 
   it("closes on Escape", async () => {
     const { onClose } = await renderSettingsPage()
 
-    const wasNotCancelled = fireEvent.keyDown(window, { key: "Escape" })
+    fireEvent.keyDown(document, { key: "Escape" })
 
-    expect(wasNotCancelled).toBe(false)
-    expect(onClose).toHaveBeenCalledTimes(1)
+    await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1))
   })
 })

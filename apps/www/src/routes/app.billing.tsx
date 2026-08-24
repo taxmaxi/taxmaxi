@@ -1,6 +1,6 @@
 import { createFileRoute, redirect } from "@tanstack/react-router"
 import { CreditCard, Plus } from "lucide-react"
-import { useCallback, useEffect, useState } from "react"
+import { useEffect, useState } from "react"
 import {
   isTaxMaxiUnauthorizedError,
   type BillingCatalog,
@@ -9,14 +9,15 @@ import {
 } from "taxmaxi"
 import { z } from "zod"
 
-import { AppFocusSurface } from "#/components/app-focus-surface"
+import { AppOverlay, useAppOverlayClose } from "#/components/app-overlay"
 import { appPanelClassName } from "#/components/app-workspace"
 import { Button } from "#/components/ui/button"
 import { Text } from "#/components/ui/typography"
 import { cn } from "#/lib/utils"
 import { m } from "#/paraglide/messages"
 import { getLocale, type Locale } from "#/paraglide/runtime"
-import { clearAuthSessionCookie, getAuthStatus } from "#/server-functions/auth"
+import { queries } from "#/integrations/taxmaxi/queries"
+import { clearAuthSessionCookie } from "#/server-functions/auth"
 
 const billingSearchSchema = z.object({
   checkout: z.literal("success").optional(),
@@ -91,18 +92,21 @@ export const refreshBillingStatusAfterCheckout = async ({
   return latest
 }
 
-export const Route = createFileRoute("/app_/billing")({
+export const Route = createFileRoute("/app/billing")({
   validateSearch: billingSearchSchema,
-  beforeLoad: async () => {
-    const { isAuthenticated } = await getAuthStatus()
-    if (!isAuthenticated) throw redirect({ to: "/login" })
-  },
+  // ensureQueryData keeps catalog and status cached, so hover preload and
+  // reopens resolve instantly instead of refetching on every open. Status
+  // revalidates in the background to stay fresh for the next open.
   loader: async ({ context }) => {
     try {
       const client = context.taxmaxi()
       return await loadBillingPageData({
-        loadCatalog: client.billing.catalog,
-        loadStatus: client.billing.status,
+        loadCatalog: () => context.queryClient.ensureQueryData(queries.billingCatalog(client)),
+        loadStatus: () =>
+          context.queryClient.ensureQueryData({
+            ...queries.billingStatus(client),
+            revalidateIfStale: true,
+          }),
       })
     } catch (error) {
       if (!isTaxMaxiUnauthorizedError(error)) throw error
@@ -118,9 +122,7 @@ function BillingPage() {
   const search = Route.useSearch()
   const { taxmaxi } = Route.useRouteContext()
   const navigate = Route.useNavigate()
-  const onClose = useCallback(() => {
-    void navigate({ to: "/app" })
-  }, [navigate])
+  const onClose = useAppOverlayClose()
   const [checkoutReturnKind] = useState<CheckoutReturnKind | null>(() =>
     search.checkout === "success" ? "annual" : search.top_up === "success" ? "topUp" : null
   )
@@ -239,14 +241,12 @@ export function BillingPageContent({
   }
 
   return (
-    <AppFocusSurface
-      bodyClassName="min-h-0 flex-1 overflow-y-auto"
+    <AppOverlay
       closeLabel={m["app.billing.close"]()}
       icon={<CreditCard aria-hidden="true" className="size-4" />}
       onClose={onClose}
       subtitle={m["app.billing.title"]()}
       title={m["app.billing.eyebrow"]()}
-      titleId="billing-title"
     >
       <div className="mx-auto flex w-full max-w-3xl flex-col gap-8 px-4 py-6 sm:px-5 sm:py-8">
         <Text className="max-w-[65ch]" size="bodySm" tone="muted">
@@ -279,7 +279,7 @@ export function BillingPageContent({
           />
         </div>
       </div>
-    </AppFocusSurface>
+    </AppOverlay>
   )
 }
 
