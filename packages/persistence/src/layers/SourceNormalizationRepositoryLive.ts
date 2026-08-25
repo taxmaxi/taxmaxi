@@ -9,7 +9,7 @@
  */
 
 import { createHash } from "node:crypto"
-import { and, asc, eq, gt, inArray, isNotNull, isNull, lte, or, sql } from "drizzle-orm"
+import { and, asc, eq, gt, inArray, isNotNull, isNull, lte, notInArray, or, sql } from "drizzle-orm"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import * as Schema from "effect/Schema"
@@ -1021,6 +1021,73 @@ const make = Effect.gen(function* () {
         }
       })
     )
+
+  /**
+   * Keep the transaction's provider-asset dependencies in step with the
+   * latest normalization pass. Replays can change which provider assets a
+   * record depends on, so stale rows are removed instead of accreting.
+   */
+  const syncProviderAssetTransactionUses = ({
+    executor,
+    transactionId,
+    sourceId,
+    providerAssetRowIds,
+  }: {
+    readonly executor: SourceNormalizationExecutor
+    readonly transactionId: string
+    readonly sourceId: string
+    readonly providerAssetRowIds: ReadonlyArray<string>
+  }) =>
+    Effect.gen(function* () {
+      const now = nowDate()
+      const distinctProviderAssetRowIds = [...new Set(providerAssetRowIds)]
+
+      yield* executor
+        .delete(schema.providerAssetTransactionUses)
+        .where(
+          and(
+            eq(schema.providerAssetTransactionUses.transactionId, transactionId),
+            distinctProviderAssetRowIds.length === 0
+              ? undefined
+              : notInArray(
+                  schema.providerAssetTransactionUses.providerAssetRowId,
+                  distinctProviderAssetRowIds
+                )
+          )
+        )
+        .pipe(
+          wrapSyncEngineSqlError(
+            "sourceNormalizationRepository.syncProviderAssetTransactionUses.deleteStale"
+          )
+        )
+
+      if (distinctProviderAssetRowIds.length === 0) {
+        return
+      }
+
+      yield* executor
+        .insert(schema.providerAssetTransactionUses)
+        .values(
+          distinctProviderAssetRowIds.map((providerAssetRowId) => ({
+            providerAssetRowId,
+            transactionId,
+            sourceId,
+            createdAt: now,
+            updatedAt: now,
+          }))
+        )
+        .onConflictDoNothing({
+          target: [
+            schema.providerAssetTransactionUses.providerAssetRowId,
+            schema.providerAssetTransactionUses.transactionId,
+          ],
+        })
+        .pipe(
+          wrapSyncEngineSqlError(
+            "sourceNormalizationRepository.syncProviderAssetTransactionUses.insert"
+          )
+        )
+    })
 
   const upsertProviderTransfers = ({
     executor,
@@ -2536,6 +2603,12 @@ const make = Effect.gen(function* () {
             executor: tx,
             transactionId: persistedTransaction.id,
             onchainContext: params.onchainContext,
+          })
+          yield* syncProviderAssetTransactionUses({
+            executor: tx,
+            transactionId: persistedTransaction.id,
+            sourceId: persistedTransaction.sourceId,
+            providerAssetRowIds: params.providerAssetRowIds,
           })
           const persistedProviderTransfers = yield* upsertProviderTransfers({
             executor: tx,

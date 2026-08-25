@@ -359,6 +359,13 @@ export interface PersistNormalizedSourceArtifactsParamsBase {
   readonly onchainContext?: SourceOnchainContextDraft | null | undefined
   readonly providerTransfers: ReadonlyArray<SourceProviderTransferDraft>
   readonly canonicalTransfers: ReadonlyArray<SourceTransferDraft>
+  /**
+   * Provider asset rows this transaction depends on, including currencies
+   * that produce no provider transfer (for example exchange trade legs and
+   * fees). Persisted as transaction-level uses so exception impact can count
+   * every blocked transaction.
+   */
+  readonly providerAssetRowIds: ReadonlyArray<string>
   readonly transactionReview: SourceTransactionReviewDraft | null
   readonly resolvedTransactionType: ResolvedProviderTransactionTypeMapping
 }

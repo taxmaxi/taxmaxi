@@ -238,9 +238,11 @@ const make = Effect.gen(function* () {
    * outside derived accounting AND make the calculation incomplete: no
    * mapping row yet, or a mapping that is still an open question
    * (pending_review or rejected). A settled observation remains blocking
-   * while its active decision replay is incomplete because derived rows may
-   * still reflect its previous state. Shared by the count and the list so the
-   * two can never disagree about what blocks a calculation.
+   * while its active decision rebuild is incomplete because derived rows may
+   * still reflect its previous state. Rebuild status is written by the job
+   * lifecycle in SourceSyncJobRepositoryLive when replays finish, so this
+   * predicate only trusts the stored status. Shared by the count and the
+   * list so the two can never disagree about what blocks a calculation.
    *
    * @param sourceId - Source identifier
    * @returns Drizzle where condition over source uses joined with mappings
@@ -258,25 +260,10 @@ const make = Effect.gen(function* () {
             from ${schema.assetDecisionRematerializations} rematerialization
             inner join ${schema.assetResolutionDecisions} decision
               on decision.id = rematerialization.decision_id
-            left join ${schema.processingJobs} replay_job
-              on replay_job.id = rematerialization.processing_job_id
-            left join ${schema.processingJobs} follow_up_job
-              on follow_up_job.id = replay_job.follow_up_job_id
             where rematerialization.source_id = ${schema.providerAssetSourceUses.sourceId}
               and decision.provider_asset_row_id = ${schema.providerAssetMappings.providerAssetRowId}
               and decision.status = 'active'
-              and (
-                rematerialization.status = 'operator_attention'
-                or replay_job.id is null
-                or (
-                  replay_job.follow_up_mode = 'replay'
-                  and (follow_up_job.id is null or follow_up_job.status <> 'completed')
-                )
-                or (
-                  replay_job.follow_up_mode is distinct from 'replay'
-                  and replay_job.status <> 'completed'
-                )
-              )
+              and rematerialization.status <> 'complete'
           )`
         )
       )

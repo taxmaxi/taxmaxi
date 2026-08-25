@@ -151,6 +151,7 @@ describe("SourceReplayRepositoryLive", () => {
           },
           providerTransfers: [],
           canonicalTransfers: [],
+          providerAssetRowIds: [],
           legs: [
             {
               sourceId: TEST_SOURCE_ID,

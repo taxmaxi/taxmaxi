@@ -517,7 +517,11 @@ describe("TaxCalculationServiceLive", () => {
         const fixture = yield* insertExcludedProviderAssetSourceUseWithRematerialization()
         const db = yield* drizzle
 
-        for (const status of ["pending", "processing", "failed"] as const) {
+        // The stored rebuild status is the authority: while the row is
+        // unfinished, no job status alone unblocks the calculation. The job
+        // lifecycle writes the row status when replays finish, which
+        // source-sync-job-repository tests cover.
+        for (const status of ["pending", "processing", "failed", "completed"] as const) {
           yield* db
             .update(schema.processingJobs)
             .set({ status })
@@ -527,34 +531,13 @@ describe("TaxCalculationServiceLive", () => {
           expect(error._tag).toBe("TaxCalculationPendingObservationsError")
         }
 
-        const [completedFollowUp] = yield* db
-          .insert(schema.processingJobs)
-          .values({
-            sourceId,
-            principalId,
-            mode: "replay",
-            status: "completed",
-          })
-          .returning({ id: schema.processingJobs.id })
-        if (completedFollowUp === undefined) {
-          return yield* Effect.die("Failed to create completed replay follow-up fixture")
-        }
         yield* db
-          .update(schema.processingJobs)
-          .set({
-            status: "failed",
-            followUpMode: "replay",
-            followUpJobId: completedFollowUp.id,
-          })
-          .where(eq(schema.processingJobs.id, fixture.jobId))
+          .update(schema.assetDecisionRematerializations)
+          .set({ status: "complete" })
+          .where(eq(schema.assetDecisionRematerializations.decisionId, fixture.decisionId))
 
-        const taxAfterCompletedFollowUp = yield* calculateTax()
-        expect(taxAfterCompletedFollowUp.taxableGains).toBe(2000)
-
-        yield* db
-          .update(schema.processingJobs)
-          .set({ status: "completed", followUpMode: null, followUpJobId: null })
-          .where(eq(schema.processingJobs.id, fixture.jobId))
+        const taxAfterCompletedRebuild = yield* calculateTax()
+        expect(taxAfterCompletedRebuild.taxableGains).toBe(2000)
 
         yield* db
           .update(schema.assetDecisionRematerializations)
@@ -565,7 +548,7 @@ describe("TaxCalculationServiceLive", () => {
 
         yield* db
           .update(schema.assetDecisionRematerializations)
-          .set({ status: "pending" })
+          .set({ status: "complete" })
           .where(eq(schema.assetDecisionRematerializations.decisionId, fixture.decisionId))
 
         const tax = yield* calculateTax()
@@ -609,7 +592,7 @@ describe("TaxCalculationServiceLive", () => {
           decisionId: activeDecision.id,
           sourceId,
           processingJobId: completedJob.id,
-          status: "pending",
+          status: "complete",
         })
 
         const taxAfterSupersession = yield* calculateTax()
@@ -634,9 +617,9 @@ describe("TaxCalculationServiceLive", () => {
           .set({ outcome: "identity", assetId: approvedAsset.id })
           .where(eq(schema.assetResolutionDecisions.id, activeDecision.id))
         yield* db
-          .update(schema.processingJobs)
-          .set({ status: "pending", completedAt: null })
-          .where(eq(schema.processingJobs.id, completedJob.id))
+          .update(schema.assetDecisionRematerializations)
+          .set({ status: "pending" })
+          .where(eq(schema.assetDecisionRematerializations.decisionId, activeDecision.id))
 
         const approvedReplayError = yield* calculateTax().pipe(Effect.flip)
         expect(approvedReplayError._tag).toBe("TaxCalculationPendingObservationsError")

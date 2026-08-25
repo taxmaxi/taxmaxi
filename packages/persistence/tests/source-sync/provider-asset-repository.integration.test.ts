@@ -1787,6 +1787,7 @@ describe("ProviderAssetRepositoryLive", () => {
                   },
                 ],
                 canonicalTransfers: [],
+                providerAssetRowIds: [],
                 legs: [],
                 transactionReview: null,
                 resolvedTransactionType: {
@@ -1922,6 +1923,7 @@ describe("ProviderAssetRepositoryLive", () => {
                 },
               ],
               canonicalTransfers: [],
+              providerAssetRowIds: [],
               legs: [],
               transactionReview: null,
               resolvedTransactionType: {

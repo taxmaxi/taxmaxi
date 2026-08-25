@@ -277,6 +277,7 @@ const persistCoinbaseNormalization = ({
             venueContext: prepared.venueContext,
             providerTransfers,
             canonicalTransfers: prepared.canonicalTransfers,
+            providerAssetRowIds: prepared.providerAssetRowIds,
             transactionReview: prepared.transactionReview,
             resolvedTransactionType: prepared.resolvedTransactionType,
             deriveLegs: ({ transaction, venueContext, canonicalTransfers }) =>
@@ -293,6 +294,7 @@ const persistCoinbaseNormalization = ({
             venueContext: prepared.venueContext,
             providerTransfers,
             canonicalTransfers: prepared.canonicalTransfers,
+            providerAssetRowIds: prepared.providerAssetRowIds,
             transactionReview: prepared.transactionReview,
             resolvedTransactionType: prepared.resolvedTransactionType,
             legs: [],
@@ -345,6 +347,7 @@ describe("SourceNormalizationRepositoryLive", () => {
       },
       providerTransfers: [],
       canonicalTransfers: [],
+      providerAssetRowIds: [],
       legs: [],
       transactionReview: null,
       resolvedTransactionType: APPROVED_MAPPING,
@@ -421,6 +424,7 @@ describe("SourceNormalizationRepositoryLive", () => {
             venueContext,
             providerTransfers: [],
             canonicalTransfers: [],
+            providerAssetRowIds: [],
             legs: [],
             transactionReview: null,
             resolvedTransactionType: APPROVED_MAPPING,
@@ -446,6 +450,111 @@ describe("SourceNormalizationRepositoryLive", () => {
     const recreated = await persist("corrected-stable-external-id")
 
     expect(recreated.transaction.id).toBe(first.transaction.id)
+  })
+
+  it("keeps transaction-level provider asset uses in step with each persist", async () => {
+    const timestamp = new Date("2025-01-01T10:00:00.000Z")
+    const [assetA, assetB] = await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const rows = yield* db
+          .insert(schema.providerAssets)
+          .values([
+            {
+              provider: "coinbase",
+              providerAssetId: "tx-use-asset-a",
+              currencyCode: "TXA",
+              retrievedAt: timestamp,
+            },
+            {
+              provider: "coinbase",
+              providerAssetId: "tx-use-asset-b",
+              currencyCode: "TXB",
+              retrievedAt: timestamp,
+            },
+          ])
+          .returning({ id: schema.providerAssets.id })
+        if (rows.length !== 2) return yield* Effect.die("Failed to seed provider assets")
+        return rows
+      })
+    )
+    if (assetA === undefined || assetB === undefined) {
+      throw new Error("Failed to seed provider assets")
+    }
+
+    const persist = (providerAssetRowIds: ReadonlyArray<string>) =>
+      runRepository(
+        Effect.flatMap(SourceNormalizationRepository, (repository) =>
+          repository.persistNormalizedArtifacts({
+            transaction: {
+              sourceId: TEST_SOURCE_ID,
+              sourceRawRecordId: null,
+              externalId: "transaction-with-provider-asset-uses",
+              externalGroupId: null,
+              timestamp,
+              transactionType: "buy_fiat",
+              providerTransactionType: "buy",
+              providerStatus: "completed",
+              providerResourcePath: null,
+              providerDescription: "Transaction with provider asset uses",
+              providerCreatedAt: timestamp,
+              providerUpdatedAt: timestamp,
+              metadata: { provider: "test" },
+              principalId: TEST_PRINCIPAL_ID,
+            },
+            venueContext: {
+              venueType: "cex",
+              cexAccountId: fixture.cexAccountId,
+              externalAccountId: "test-account",
+              externalOrderId: null,
+              externalFillId: null,
+              side: "buy",
+              instrument: "BTC-EUR",
+              fillPrice: "10000",
+              commissionAmount: null,
+              commissionCurrency: null,
+              metadata: { provider: "test" },
+            },
+            providerTransfers: [],
+            canonicalTransfers: [],
+            providerAssetRowIds,
+            legs: [],
+            transactionReview: null,
+            resolvedTransactionType: APPROVED_MAPPING,
+          })
+        )
+      )
+
+    const selectUses = (transactionId: string) =>
+      runPg(
+        Effect.gen(function* () {
+          const db = yield* drizzle
+          return yield* db
+            .select({
+              providerAssetRowId: schema.providerAssetTransactionUses.providerAssetRowId,
+              sourceId: schema.providerAssetTransactionUses.sourceId,
+            })
+            .from(schema.providerAssetTransactionUses)
+            .where(eq(schema.providerAssetTransactionUses.transactionId, transactionId))
+            .orderBy(asc(schema.providerAssetTransactionUses.providerAssetRowId))
+        })
+      )
+
+    const persisted = await persist([assetA.id, assetB.id, assetA.id])
+    expect(await selectUses(persisted.transaction.id)).toEqual(
+      [assetA.id, assetB.id]
+        .sort()
+        .map((providerAssetRowId) => ({ providerAssetRowId, sourceId: TEST_SOURCE_ID }))
+    )
+
+    // A replay can change the record's dependencies; stale rows must go.
+    await persist([assetB.id])
+    expect(await selectUses(persisted.transaction.id)).toEqual([
+      { providerAssetRowId: assetB.id, sourceId: TEST_SOURCE_ID },
+    ])
+
+    await persist([])
+    expect(await selectUses(persisted.transaction.id)).toEqual([])
   })
 
   it("keeps an external-only transaction ID stable after deletion and re-creation", async () => {
@@ -485,6 +594,7 @@ describe("SourceNormalizationRepositoryLive", () => {
             },
             providerTransfers: [],
             canonicalTransfers: [],
+            providerAssetRowIds: [],
             legs: [],
             transactionReview: null,
             resolvedTransactionType: APPROVED_MAPPING,
@@ -700,6 +810,7 @@ describe("SourceNormalizationRepositoryLive", () => {
             },
             providerTransfers: [],
             canonicalTransfers: [],
+            providerAssetRowIds: [],
             legs: [],
             transactionReview: null,
             resolvedTransactionType: APPROVED_MAPPING,
@@ -732,6 +843,7 @@ describe("SourceNormalizationRepositoryLive", () => {
           },
           providerTransfers: [],
           canonicalTransfers: [],
+          providerAssetRowIds: [],
           legs: [],
           transactionReview: null,
           resolvedTransactionType: APPROVED_MAPPING,
@@ -867,6 +979,7 @@ describe("SourceNormalizationRepositoryLive", () => {
       },
       providerTransfers: [],
       canonicalTransfers: [],
+      providerAssetRowIds: [],
       legs: [],
       transactionReview: null,
       resolvedTransactionType: APPROVED_MAPPING,
@@ -1198,6 +1311,7 @@ describe("SourceNormalizationRepositoryLive", () => {
           },
           providerTransfers: [],
           canonicalTransfers: [],
+          providerAssetRowIds: [],
           legs: [],
           transactionReview: null,
           resolvedTransactionType: APPROVED_MAPPING,
@@ -1258,6 +1372,7 @@ describe("SourceNormalizationRepositoryLive", () => {
         },
         providerTransfers: [],
         canonicalTransfers: [],
+        providerAssetRowIds: [],
         legs: [],
         transactionReview: null,
         resolvedTransactionType: APPROVED_MAPPING,
@@ -1357,6 +1472,7 @@ describe("SourceNormalizationRepositoryLive", () => {
         },
         providerTransfers: [],
         canonicalTransfers: [],
+        providerAssetRowIds: [],
         legs: [],
         transactionReview: null,
         resolvedTransactionType: APPROVED_MAPPING,
@@ -1536,6 +1652,7 @@ describe("SourceNormalizationRepositoryLive", () => {
       },
       providerTransfers: [],
       canonicalTransfers: [],
+      providerAssetRowIds: [],
       legs: [],
       transactionReview: null,
       resolvedTransactionType: APPROVED_MAPPING,
@@ -1632,6 +1749,7 @@ describe("SourceNormalizationRepositoryLive", () => {
       },
       providerTransfers: [],
       canonicalTransfers: [],
+      providerAssetRowIds: [],
       legs: [],
       transactionReview: null,
       resolvedTransactionType: APPROVED_MAPPING,
@@ -1773,6 +1891,7 @@ describe("SourceNormalizationRepositoryLive", () => {
             },
             providerTransfers: [],
             canonicalTransfers: [],
+            providerAssetRowIds: [],
             legs: [],
             transactionReview: null,
             resolvedTransactionType: APPROVED_MAPPING,
@@ -1890,6 +2009,7 @@ describe("SourceNormalizationRepositoryLive", () => {
       },
       providerTransfers,
       canonicalTransfers: [],
+      providerAssetRowIds: [],
       legs: [],
       transactionReview: null,
       resolvedTransactionType: APPROVED_MAPPING,
@@ -2418,6 +2538,7 @@ describe("SourceNormalizationRepositoryLive", () => {
               metadata: { provider: "coinbase" },
             },
           ],
+          providerAssetRowIds: [],
           legs: [
             {
               sourceId: TEST_SOURCE_ID,
@@ -2522,6 +2643,7 @@ describe("SourceNormalizationRepositoryLive", () => {
               metadata: { provider: "coinbase" },
             },
           ],
+          providerAssetRowIds: [],
           legs: [
             {
               sourceId: TEST_SOURCE_ID,
@@ -2605,6 +2727,7 @@ describe("SourceNormalizationRepositoryLive", () => {
           },
           providerTransfers: [],
           canonicalTransfers: [],
+          providerAssetRowIds: [],
           legs: [
             {
               sourceId: TEST_SOURCE_ID,
@@ -2709,6 +2832,7 @@ describe("SourceNormalizationRepositoryLive", () => {
           },
           providerTransfers: [],
           canonicalTransfers: [],
+          providerAssetRowIds: [],
           legs: [
             {
               sourceId: TEST_SOURCE_ID,
@@ -2798,6 +2922,7 @@ describe("SourceNormalizationRepositoryLive", () => {
           },
           providerTransfers: [],
           canonicalTransfers: [],
+          providerAssetRowIds: [],
           legs: [
             {
               sourceId: TEST_SOURCE_ID,
@@ -2885,6 +3010,7 @@ describe("SourceNormalizationRepositoryLive", () => {
           },
           providerTransfers: [],
           canonicalTransfers: [],
+          providerAssetRowIds: [],
           legs: [
             {
               sourceId: TEST_SOURCE_ID,
@@ -2958,6 +3084,7 @@ describe("SourceNormalizationRepositoryLive", () => {
           },
           providerTransfers: [],
           canonicalTransfers: [],
+          providerAssetRowIds: [],
           legs: [
             {
               sourceId: TEST_SOURCE_ID,
@@ -3147,6 +3274,7 @@ describe("SourceNormalizationRepositoryLive", () => {
           },
           providerTransfers: [],
           canonicalTransfers: [],
+          providerAssetRowIds: [],
           legs: [
             {
               sourceId: dependentSourceId,
@@ -3300,6 +3428,7 @@ describe("SourceNormalizationRepositoryLive", () => {
             },
             providerTransfers: [],
             canonicalTransfers: [],
+            providerAssetRowIds: [],
             deriveLegs: ({ transaction }) =>
               Effect.succeed([
                 {
@@ -3399,6 +3528,7 @@ describe("SourceNormalizationRepositoryLive", () => {
           },
           providerTransfers: [],
           canonicalTransfers: [],
+          providerAssetRowIds: [],
           legs: [],
           transactionReview: {
             principalId: TEST_PRINCIPAL_ID,
@@ -4815,6 +4945,7 @@ describe("SourceNormalizationRepositoryLive", () => {
           },
           providerTransfers: [],
           canonicalTransfers: [],
+          providerAssetRowIds: [],
           deriveLegs: ({ transaction }) =>
             Effect.succeed([
               {

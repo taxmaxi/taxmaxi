@@ -6,6 +6,7 @@
 
 import {
   assetExceptionSeverityForReason,
+  canonicalizeDisplayText,
   AssetExceptionClaim,
   AssetExceptionReason,
   NO_ACTIVE_ASSET_DECISION,
@@ -164,7 +165,42 @@ const make = Effect.gen(function* () {
         return false
       }
       if (detail.provider === "helius-solana") {
-        return true
+        // The latest provider metadata is overwritten on every sync, so it
+        // alone cannot vouch for older stored rows. Replay re-validates each
+        // row's observed values against the approved mapping and fails on
+        // any non-null mismatch, so an accepted claim must already be
+        // consistent with every stored observation or the rebuild is
+        // guaranteed to fail.
+        const representation = claim.representation
+        if (representation === null) {
+          return false
+        }
+        const storedObservations = yield* client
+          .select({
+            blockchain: schema.blockchains.name,
+            type: schema.providerTransfers.observedRepresentationType,
+            contractAddress: schema.providerTransfers.observedContractAddress,
+            mintAddress: schema.providerTransfers.observedMintAddress,
+            decimals: schema.providerTransfers.observedDecimals,
+          })
+          .from(schema.providerTransfers)
+          .innerJoin(
+            schema.blockchains,
+            eq(schema.blockchains.id, schema.providerTransfers.observedBlockchainId)
+          )
+          .where(eq(schema.providerTransfers.providerAssetId, detail.providerAssetRowId))
+
+        return storedObservations.every(
+          (observation) =>
+            observation.blockchain.toLowerCase() === representation.blockchain.toLowerCase() &&
+            (observation.type === null || observation.type === representation.type) &&
+            (observation.contractAddress === null ||
+              observation.contractAddress.trim().toLowerCase() ===
+                representation.contractAddress?.trim().toLowerCase()) &&
+            (observation.mintAddress === null ||
+              observation.mintAddress === representation.mintAddress) &&
+            (observation.decimals === null || observation.decimals === representation.decimals)
+        )
       }
       if (claim.representation === null) {
         if (detail.provider !== "coinbase") {
@@ -245,25 +281,10 @@ const make = Effect.gen(function* () {
         from ${schema.assetDecisionRematerializations} rematerialization
         inner join ${schema.assetResolutionDecisions} decision
           on decision.id = rematerialization.decision_id
-        left join ${schema.processingJobs} replay_job
-          on replay_job.id = rematerialization.processing_job_id
-        left join ${schema.processingJobs} follow_up_job
-          on follow_up_job.id = replay_job.follow_up_job_id
         where rematerialization.source_id = affected_sources.source_id
           and decision.provider_asset_row_id = ${schema.providerAssets.id}
           and decision.status = 'active'
-          and (
-            rematerialization.status = 'operator_attention'
-            or replay_job.id is null
-            or (
-              replay_job.follow_up_mode = 'replay'
-              and (follow_up_job.id is null or follow_up_job.status <> 'completed')
-            )
-            or (
-              replay_job.follow_up_mode is distinct from 'replay'
-              and replay_job.status <> 'completed'
-            )
-          )
+          and rematerialization.status <> 'complete'
       )
   )`
 
@@ -282,20 +303,34 @@ const make = Effect.gen(function* () {
   )`
 
   const affectedTransactionsSql = sql<number>`(
-    select count(distinct ${schema.providerTransfers.transactionId})::int
-    from ${schema.providerTransfers}
-    where ${schema.providerTransfers.providerAssetId} = ${schema.providerAssets.id}
+    select count(distinct affected_transaction_ids.transaction_id)::int
+    from (
+      select ${schema.providerTransfers.transactionId} as transaction_id
+      from ${schema.providerTransfers}
+      where ${schema.providerTransfers.providerAssetId} = ${schema.providerAssets.id}
+      union
+      select ${schema.providerAssetTransactionUses.transactionId} as transaction_id
+      from ${schema.providerAssetTransactionUses}
+      where ${schema.providerAssetTransactionUses.providerAssetRowId} = ${schema.providerAssets.id}
+    ) affected_transaction_ids
   )`
 
   const affectedValueEurSql = sql<string | null>`(
     select sum(abs((affected_transactions.metadata -> 'nativeAmount' ->> 'amount')::numeric))::text
     from (
       select distinct ${schema.transactions.id}, ${schema.transactions.metadata}
-      from ${schema.providerTransfers}
+      from (
+        select ${schema.providerTransfers.transactionId} as transaction_id
+        from ${schema.providerTransfers}
+        where ${schema.providerTransfers.providerAssetId} = ${schema.providerAssets.id}
+        union
+        select ${schema.providerAssetTransactionUses.transactionId} as transaction_id
+        from ${schema.providerAssetTransactionUses}
+        where ${schema.providerAssetTransactionUses.providerAssetRowId} = ${schema.providerAssets.id}
+      ) affected_transaction_ids
       inner join ${schema.transactions}
-        on ${schema.transactions.id} = ${schema.providerTransfers.transactionId}
-      where ${schema.providerTransfers.providerAssetId} = ${schema.providerAssets.id}
-        and upper(${schema.transactions.metadata} -> 'nativeAmount' ->> 'currency') = 'EUR'
+        on ${schema.transactions.id} = affected_transaction_ids.transaction_id
+      where upper(${schema.transactions.metadata} -> 'nativeAmount' ->> 'currency') = 'EUR'
         and (${schema.transactions.metadata} -> 'nativeAmount' ->> 'amount') ~ '^-?[0-9]+(\\.[0-9]+)?$'
     ) affected_transactions
   )`
@@ -515,6 +550,9 @@ const make = Effect.gen(function* () {
         )
 
       const decisionIds = rows.map((row) => row.id)
+      // Human decisions reference evidence through link rows while automatic
+      // policy decisions own their evidence directly, so history must union
+      // both, like the detail and validation queries do.
       const links =
         decisionIds.length === 0
           ? []
@@ -526,12 +564,25 @@ const make = Effect.gen(function* () {
               .from(schema.assetResolutionDecisionEvidenceLinks)
               .where(inArray(schema.assetResolutionDecisionEvidenceLinks.decisionId, decisionIds))
               .orderBy(asc(schema.assetResolutionDecisionEvidenceLinks.evidenceId))
+      const ownedEvidence =
+        decisionIds.length === 0
+          ? []
+          : yield* client
+              .select({
+                decisionId: schema.assetResolutionEvidence.decisionId,
+                evidenceId: schema.assetResolutionEvidence.id,
+              })
+              .from(schema.assetResolutionEvidence)
+              .where(inArray(schema.assetResolutionEvidence.decisionId, decisionIds))
+              .orderBy(asc(schema.assetResolutionEvidence.id))
 
       const evidenceIdsByDecision = new Map<string, Array<string>>()
-      for (const link of links) {
-        const evidenceIds = evidenceIdsByDecision.get(link.decisionId) ?? []
-        evidenceIds.push(link.evidenceId)
-        evidenceIdsByDecision.set(link.decisionId, evidenceIds)
+      for (const { decisionId, evidenceId } of [...links, ...ownedEvidence]) {
+        const evidenceIds = evidenceIdsByDecision.get(decisionId) ?? []
+        if (!evidenceIds.includes(evidenceId)) {
+          evidenceIds.push(evidenceId)
+        }
+        evidenceIdsByDecision.set(decisionId, evidenceIds)
       }
 
       return yield* Effect.forEach(rows, (row) =>
@@ -581,28 +632,6 @@ const make = Effect.gen(function* () {
         failureCode: schema.assetDecisionRematerializations.failureCode,
         lastFailureAt: schema.assetDecisionRematerializations.lastFailureAt,
         jobStatus: schema.processingJobs.status,
-        followUpMode: schema.processingJobs.followUpMode,
-        followUpJobId: schema.processingJobs.followUpJobId,
-        followUpStatus: sql<
-          "pending" | "processing" | "completed" | "failed" | "credit_required" | null
-        >`(
-          select follow_up.status
-          from ${schema.processingJobs} follow_up
-          where follow_up.id = ${schema.processingJobs.followUpJobId}
-        )`,
-        followUpCompletedAt: sql<Date | null>`(
-          select follow_up.completed_at
-          from ${schema.processingJobs} follow_up
-          where follow_up.id = ${schema.processingJobs.followUpJobId}
-        )`,
-        followUpCreditReasonCode: sql<string | null>`(
-          select follow_up.credit_reason_code
-          from ${schema.processingJobs} follow_up
-          where follow_up.id = ${schema.processingJobs.followUpJobId}
-        )`,
-        jobStartedAt: schema.processingJobs.startedAt,
-        jobCompletedAt: schema.processingJobs.completedAt,
-        creditReasonCode: schema.processingJobs.creditReasonCode,
       })
       .from(schema.assetDecisionRematerializations)
       .leftJoin(
@@ -622,44 +651,19 @@ const make = Effect.gen(function* () {
             }
           }
 
-          const effectiveStatus = (row: (typeof rows)[number]) => {
-            if (row.storedStatus === "operator_attention") {
-              return "operator_attention" as const
-            }
-            if (
-              row.followUpMode === "replay" &&
-              row.followUpJobId === null &&
-              row.jobStatus === "completed"
-            ) {
-              return "pending" as const
-            }
-            switch (row.followUpStatus ?? row.jobStatus) {
-              case "failed":
-              case "credit_required":
-                return "operator_attention" as const
-              case "processing":
-                return "running" as const
-              case "pending":
-                return "pending" as const
-              case "completed":
-                return "complete" as const
-              case null:
-                return row.storedStatus
-            }
-          }
+          // The stored status is settled by the job lifecycle when replays
+          // finish; the job join only refines an unfinished row into
+          // "running" while its replay is actively processing.
+          const effectiveStatus = (row: (typeof rows)[number]) =>
+            row.storedStatus === "pending" && row.jobStatus === "processing"
+              ? ("running" as const)
+              : row.storedStatus
           const failed = rows.filter((row) => effectiveStatus(row) === "operator_attention")
           const running = rows.some((row) => effectiveStatus(row) === "running")
           const pending = rows.some((row) => effectiveStatus(row) === "pending")
           const lastFailureAt =
             failed
-              .flatMap((row) => {
-                const failedAt =
-                  row.lastFailureAt ??
-                  (row.followUpStatus === "failed" || row.followUpStatus === "credit_required"
-                    ? row.followUpCompletedAt
-                    : row.jobCompletedAt)
-                return failedAt === null ? [] : [failedAt]
-              })
+              .flatMap((row) => (row.lastFailureAt === null ? [] : [row.lastFailureAt]))
               .sort((left, right) => right.getTime() - left.getTime())[0] ?? null
 
           return {
@@ -675,10 +679,7 @@ const make = Effect.gen(function* () {
             failedSourceCount: failed.length,
             lastFailureAt,
             failureCode:
-              failed[0]?.failureCode ??
-              failed[0]?.followUpCreditReasonCode ??
-              failed[0]?.creditReasonCode ??
-              (failed.length > 0 ? "rematerialization_failed" : null),
+              failed[0]?.failureCode ?? (failed.length > 0 ? "rematerialization_failed" : null),
           }
         })
       )
@@ -1001,13 +1002,21 @@ const make = Effect.gen(function* () {
         return { _tag: "invalid_claim" as const }
       }
 
+      // Same canonical form as the automatic resolver's duplicate brake, so
+      // NFKC lookalikes collide here too instead of creating a second asset.
       const displayMatches = yield* client
         .select({ id: schema.assets.id })
         .from(schema.assets)
         .where(
           and(
-            eq(sql`lower(${schema.assets.name})`, newAsset.name.toLowerCase()),
-            eq(sql`lower(${schema.assets.symbol})`, newAsset.symbol.toLowerCase()),
+            eq(
+              sql`btrim(lower(normalize(${schema.assets.name}, NFKC)))`,
+              canonicalizeDisplayText(newAsset.name)
+            ),
+            eq(
+              sql`btrim(lower(normalize(${schema.assets.symbol}, NFKC)))`,
+              canonicalizeDisplayText(newAsset.symbol)
+            ),
             eq(schema.assets.type, newAsset.type)
           )
         )
@@ -1065,7 +1074,7 @@ const make = Effect.gen(function* () {
       claim.assetId === null ? null : `asset:${claim.assetId}`,
       claim.newAsset === null
         ? null
-        : `display:${claim.newAsset.name.toLowerCase()}:${claim.newAsset.symbol.toLowerCase()}:${claim.newAsset.type}`,
+        : `display:${canonicalizeDisplayText(claim.newAsset.name)}:${canonicalizeDisplayText(claim.newAsset.symbol)}:${claim.newAsset.type}`,
       representation === null
         ? null
         : `representation:${representation.blockchain.toLowerCase()}:${representation.contractAddress ?? ""}:${representation.mintAddress ?? ""}`,

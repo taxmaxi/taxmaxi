@@ -658,6 +658,7 @@ describe("TransferReconciliationServiceLive", () => {
             })),
           ],
           canonicalTransfers: [],
+          providerAssetRowIds: [],
           legs: [],
           transactionReview: null,
           resolvedTransactionType: {
@@ -4685,6 +4686,7 @@ describe("TransferReconciliationServiceLive", () => {
           },
           providerTransfers: [],
           canonicalTransfers: [],
+          providerAssetRowIds: [],
           deriveLegs: ({ transaction }) =>
             Effect.succeed([
               {
@@ -6241,6 +6243,7 @@ describe("TransferReconciliationServiceLive", () => {
           },
           providerTransfers: [],
           canonicalTransfers: [],
+          providerAssetRowIds: [],
           deriveLegs: ({ transaction }) =>
             Effect.succeed([
               {

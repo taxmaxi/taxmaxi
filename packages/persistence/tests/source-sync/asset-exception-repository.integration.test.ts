@@ -230,6 +230,9 @@ describe("AssetExceptionRepositoryLive", () => {
     if (processingJobId === undefined || processingJobId === null) {
       throw new Error("Expected rematerialization processing job")
     }
+    // The job lifecycle settles rebuild rows when a replay finishes
+    // (covered by source-sync-job-repository tests); readers trust the
+    // stored row status.
     await runPg(
       Effect.gen(function* () {
         const db = yield* drizzle
@@ -237,6 +240,10 @@ describe("AssetExceptionRepositoryLive", () => {
           .update(schema.processingJobs)
           .set({ status: "completed", completedAt: new Date() })
           .where(eq(schema.processingJobs.id, processingJobId))
+        yield* db
+          .update(schema.assetDecisionRematerializations)
+          .set({ status: "complete" })
+          .where(eq(schema.assetDecisionRematerializations.sourceId, TEST_SOURCE_ID))
       })
     )
     const completedDetail = await runRepository(
@@ -281,6 +288,12 @@ describe("AssetExceptionRepositoryLive", () => {
             followUpJobId: followUpJob.id,
           })
           .where(eq(schema.processingJobs.id, processingJobId))
+        // Follow-up materialization repoints unfinished rows to the new
+        // replay job, and its completion settles them.
+        yield* db
+          .update(schema.assetDecisionRematerializations)
+          .set({ processingJobId: followUpJob.id, status: "complete" })
+          .where(eq(schema.assetDecisionRematerializations.sourceId, TEST_SOURCE_ID))
         return followUpJob.id
       })
     )
@@ -319,6 +332,17 @@ describe("AssetExceptionRepositoryLive", () => {
         yield* db
           .delete(schema.processingJobs)
           .where(eq(schema.processingJobs.id, completedFollowUpJobId))
+        // A failed replay parks the rows at operator_attention; the reader
+        // falls back to the generic failure code when none was stored.
+        yield* db
+          .update(schema.assetDecisionRematerializations)
+          .set({
+            processingJobId,
+            status: "operator_attention",
+            failureCode: null,
+            lastFailureAt: failedAt,
+          })
+          .where(eq(schema.assetDecisionRematerializations.sourceId, TEST_SOURCE_ID))
       })
     )
     const failedDetail = await runRepository(
@@ -505,6 +529,60 @@ describe("AssetExceptionRepositoryLive", () => {
         decimals: 6,
       })
     ).resolves.toMatchObject({ _tag: "invalid_claim" })
+    await expect(
+      preview({
+        blockchain: "solana",
+        type: "token",
+        contractAddress: null,
+        mintAddress: "ObservedMint111",
+        decimals: 6,
+      })
+    ).resolves.toMatchObject({ _tag: "ready" })
+
+    // Older stored evidence can disagree with the latest provider metadata,
+    // and replay validates every stored row against the approved mapping. A
+    // claim that matches only the latest metadata must be rejected, or the
+    // accepted decision would fail its rebuild every time.
+    await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const [solana] = yield* db
+          .select({ id: schema.blockchains.id })
+          .from(schema.blockchains)
+          .where(eq(schema.blockchains.name, "solana"))
+        if (solana === undefined) {
+          return yield* Effect.die("Missing seeded solana blockchain")
+        }
+        yield* db
+          .update(schema.providerTransfers)
+          .set({
+            observedBlockchainId: solana.id,
+            observedRepresentationType: "token",
+            observedMintAddress: "ObservedMint111",
+            observedDecimals: 9,
+          })
+          .where(eq(schema.providerTransfers.providerAssetId, fixture.providerAssetRowId))
+      })
+    )
+    await expect(
+      preview({
+        blockchain: "solana",
+        type: "token",
+        contractAddress: null,
+        mintAddress: "ObservedMint111",
+        decimals: 6,
+      })
+    ).resolves.toMatchObject({ _tag: "invalid_claim" })
+
+    await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        yield* db
+          .update(schema.providerTransfers)
+          .set({ observedDecimals: 6 })
+          .where(eq(schema.providerTransfers.providerAssetId, fixture.providerAssetRowId))
+      })
+    )
     await expect(
       preview({
         blockchain: "solana",
@@ -757,6 +835,121 @@ describe("AssetExceptionRepositoryLive", () => {
     )
 
     expect(result).toMatchObject({ _tag: "ambiguous_identity" })
+  })
+
+  it("treats an NFKC lookalike display for a new asset as an identity conflict", async () => {
+    const fixture = await seedException()
+    await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        yield* db
+          .insert(schema.assets)
+          .values({ name: "Duplicate Display", symbol: "DUP", type: "fungible" })
+      })
+    )
+
+    const result = await runRepository(
+      Effect.gen(function* () {
+        const repository = yield* AssetExceptionRepository
+        return yield* repository.previewDecision({
+          providerAssetRowId: fixture.providerAssetRowId,
+          claim: {
+            _tag: "identity",
+            assetId: null,
+            // Full-width characters NFKC-fold to the existing display text.
+            newAsset: {
+              name: "Ｄｕｐｌｉｃａｔｅ Ｄｉｓｐｌａｙ",
+              symbol: "ＤＵＰ",
+              type: "fungible",
+            },
+            representation: null,
+          },
+          evidenceRevision: 2,
+          activeDecisionRevision: fixture.decisionId,
+          evidenceSnapshotIds: [fixture.evidenceId],
+          rationale: "Lookalike display text must collide with the existing asset.",
+        })
+      })
+    )
+
+    expect(result).toMatchObject({ _tag: "ambiguous_identity" })
+  })
+
+  it("reports directly owned evidence in the decision history", async () => {
+    const fixture = await seedException()
+
+    const detail = await runRepository(
+      Effect.gen(function* () {
+        const repository = yield* AssetExceptionRepository
+        const found = yield* repository.findDetail({
+          _tag: "row_id",
+          providerAssetRowId: fixture.providerAssetRowId,
+        })
+        if (Option.isNone(found)) {
+          return yield* Effect.die("Expected exception detail")
+        }
+        return found.value
+      })
+    )
+
+    // The policy decision stores its evidence directly through
+    // asset_resolution_evidence.decision_id without link rows; history must
+    // still report it.
+    const policyDecision = detail.decisionHistory.find(
+      (decision) => decision.id === fixture.decisionId
+    )
+    expect(policyDecision?.evidenceSnapshotIds).toEqual([fixture.evidenceId])
+  })
+
+  it("counts transactions blocked through source-only uses in the impact", async () => {
+    const fixture = await seedException()
+    await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        // A Coinbase buy blocked by an unresolved currency persists with no
+        // provider transfer; only the transaction-level use records it.
+        const [tradeTransaction] = yield* db
+          .insert(schema.transactions)
+          .values({
+            sourceId: TEST_SOURCE_ID,
+            principalId: TEST_PRINCIPAL_ID,
+            externalId: "exception-trade-without-transfer",
+            timestamp: new Date("2025-01-03T00:00:00.000Z"),
+            metadata: {
+              provider: "coinbase",
+              nativeAmount: { amount: "500.25", currency: "EUR" },
+            },
+          })
+          .returning({ id: schema.transactions.id })
+        if (tradeTransaction === undefined) {
+          return yield* Effect.die("Failed to seed trade transaction")
+        }
+        yield* db.insert(schema.providerAssetTransactionUses).values({
+          providerAssetRowId: fixture.providerAssetRowId,
+          transactionId: tradeTransaction.id,
+          sourceId: TEST_SOURCE_ID,
+        })
+      })
+    )
+
+    const detail = await runRepository(
+      Effect.gen(function* () {
+        const repository = yield* AssetExceptionRepository
+        const found = yield* repository.findDetail({
+          _tag: "row_id",
+          providerAssetRowId: fixture.providerAssetRowId,
+        })
+        if (Option.isNone(found)) {
+          return yield* Effect.die("Expected exception detail")
+        }
+        return found.value
+      })
+    )
+
+    expect(detail.impact).toMatchObject({
+      affectedTransactions: 2,
+      affectedTransactionValueEur: "1750.75",
+    })
   })
 
   it("serializes conflicting claims for the same representation identity", async () => {
