@@ -30,6 +30,7 @@ import {
 import { UserRepositoryLive } from "./UserRepositoryLive.ts"
 import { BillingRepositoryLive } from "./BillingRepositoryLive.ts"
 import { EmailVerificationDeliveryServiceLive } from "./EmailVerificationDeliveryServiceLive.ts"
+import { WalletNameCacheRepositoryLive } from "./WalletNameCacheRepositoryLive.ts"
 import { EmailVerificationRequestRepositoryLive } from "./EmailVerificationRequestRepositoryLive.ts"
 import { IdentityRepositoryLive } from "./IdentityRepositoryLive.ts"
 import { SessionRepositoryLive } from "./SessionRepositoryLive.ts"
@@ -107,6 +108,7 @@ export const RepositoriesLive = Layer.mergeAll(
   BillingRepositoryLive,
   UserRepositoryLive,
   EmailVerificationRequestRepositoryLive,
+  WalletNameCacheRepositoryLive,
   IdentityRepositoryLive,
   SessionRepositoryLive,
   OAuthStateStoreLive,

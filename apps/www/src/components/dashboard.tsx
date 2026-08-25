@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react"
 import { keepPreviousData, useQuery } from "@tanstack/react-query"
 import { useRouteContext } from "@tanstack/react-router"
 import { AnimatePresence, motion, useReducedMotion } from "motion/react"
+import { Ellipsis, RotateCcw } from "lucide-react"
 import {
   isTaxMaxiUnauthorizedError,
   type SourceSyncJob,
@@ -12,9 +13,17 @@ import {
 import { appSurfaceClassName } from "#/components/app-workspace"
 import { AssetsTable } from "#/components/assets-table"
 import { SourceCards } from "#/components/source-cards"
+import { Button } from "#/components/ui/button"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "#/components/ui/dropdown-menu"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "#/components/ui/tabs"
 import { ValueTone } from "#/components/value-tone"
 import { useSourceSyncs } from "#/hooks/use-source-syncs"
+import { m } from "#/paraglide/messages"
 
 import { accounts as mockAccounts, taxYearAccountSummaries } from "#/fixtures/dashboard-data"
 import { formatCurrency, formatPercent, formatSignedCurrency } from "#/lib/dashboard-format"
@@ -44,15 +53,21 @@ type DashboardSummary = {
 
 export function Dashboard({
   accounts = mockAccounts,
+  createWalletSource,
   getSourceSyncJob,
   onSourceSyncCompleted,
   onUnauthorized,
+  replaySourceSync,
+  resolveName,
   startSourceSync,
 }: {
   accounts?: ReadonlyArray<Account>
+  createWalletSource?: (walletAddress: string) => Promise<Account>
   getSourceSyncJob?: (input: SourceSyncJobInput) => Promise<SourceSyncJob>
   onSourceSyncCompleted?: (sourceId: AccountId) => void | Promise<void>
   onUnauthorized?: () => void | Promise<void>
+  replaySourceSync?: (sourceId: AccountId) => Promise<SourceSyncStart>
+  resolveName?: (name: string) => Promise<{ name: string; resolvedAddress: string }>
   startSourceSync?: (sourceId: AccountId) => Promise<SourceSyncStart>
 }) {
   const taxmaxi = useRouteContext({
@@ -175,20 +190,52 @@ export function Dashboard({
     setAccountScope(scope)
   }
 
-  const { activeSyncs, onDismissSync, onRetrySync, onSourceSync, syncingSourceIds } =
-    useSourceSyncs({
-      accountsById,
-      getSourceSyncJob,
-      onCompleted: handleSourceSyncCompleted,
-      onUnauthorized,
-      startSourceSync,
-    })
+  const {
+    activeSyncs,
+    onDismissSync,
+    onRetrySync,
+    onSourceReplay,
+    onSourceSync,
+    syncingSourceIds,
+  } = useSourceSyncs({
+    accountsById,
+    getSourceSyncJob,
+    onCompleted: handleSourceSyncCompleted,
+    onUnauthorized,
+    startSourceReplay: replaySourceSync,
+    startSourceSync,
+  })
+
+  // The replay block only makes sense for a selected source that has synced
+  // at least once; before that there is no cached raw data to replay.
+  const replayAccount = useMemo(() => {
+    if (replaySourceSync === undefined || selectedSourceId === undefined) {
+      return undefined
+    }
+
+    const account = accountsById.get(selectedSourceId)
+    return account?.lastSyncedAt === undefined ? undefined : account
+  }, [accountsById, replaySourceSync, selectedSourceId])
+
+  const handleAddWallet = useCallback(
+    async (walletAddress: string) => {
+      if (!createWalletSource) {
+        return
+      }
+
+      const account = await createWalletSource(walletAddress)
+      void onSourceSync(account)
+    },
+    [createWalletSource, onSourceSync]
+  )
 
   return (
     <div className="text-marketing-foreground flex min-h-screen flex-col pt-28 pb-8 sm:pt-32">
       <SourceSyncIsland items={activeSyncs} onDismiss={onDismissSync} onRetry={onRetrySync} />
       <SourceCards
         contentClassName={appSurfaceClassName}
+        onAddWallet={createWalletSource === undefined ? undefined : handleAddWallet}
+        onResolveName={resolveName}
         onSelectedSourceIdChange={(sourceId) => onAccountScopeChange(sourceId ?? ALL_ACCOUNTS)}
         onSourceSync={onSourceSync}
         selectedSourceId={accountScope === ALL_ACCOUNTS ? undefined : accountScope}
@@ -196,7 +243,14 @@ export function Dashboard({
         sources={accounts}
       >
         <div aria-busy={isSwitchingPortfolio} className="flex min-w-0 flex-col gap-8 py-6 sm:py-8">
-          <PortfolioOverview summary={summary} />
+          <div className="flex flex-col gap-6 sm:flex-row sm:items-start sm:justify-between sm:gap-8">
+            <PortfolioOverview summary={summary} />
+            <SelectedSourceMenu
+              account={replayAccount}
+              isSyncing={replayAccount !== undefined && syncingSourceIds.has(replayAccount.id)}
+              onReplay={onSourceReplay}
+            />
+          </div>
 
           <Tabs defaultValue="assets" className="gap-y-8">
             <TabsList>
@@ -230,6 +284,69 @@ export function Dashboard({
         </div>
       </SourceCards>
     </div>
+  )
+}
+
+/**
+ * Round context-menu button in the top-right of the content sheet. Appears
+ * when a synced source is selected and holds source-level actions. Replay
+ * re-runs the source from the raw data already imported, without fetching
+ * from the provider again; the menu item carries that explanation as a
+ * subtitle so the action is understood before it is chosen.
+ */
+function SelectedSourceMenu({
+  account,
+  isSyncing,
+  onReplay,
+}: {
+  account: Account | undefined
+  isSyncing: boolean
+  onReplay: (source: Account) => void | Promise<void>
+}) {
+  const reduceMotion = useReducedMotion()
+
+  return (
+    <AnimatePresence initial={false}>
+      {account === undefined ? null : (
+        <motion.div
+          animate={{ opacity: 1, y: 0 }}
+          className="shrink-0"
+          exit={{ opacity: 0, y: -8 }}
+          initial={{ opacity: 0, y: -8 }}
+          key={account.id}
+          transition={reduceMotion ? { duration: 0 } : { duration: 0.2, ease: [0.22, 1, 0.36, 1] }}
+        >
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                aria-label={m["app.sourceMenu.label"]()}
+                className="rounded-full"
+                size="icon-sm"
+                title={m["app.sourceMenu.label"]()}
+                variant="outline"
+              >
+                <Ellipsis aria-hidden="true" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-72">
+              <DropdownMenuItem
+                className="items-start"
+                disabled={isSyncing}
+                onSelect={() => void onReplay(account)}
+              >
+                <RotateCcw className="mt-0.5" />
+                <span className="flex min-w-0 flex-col gap-0.5">
+                  <span>{m["app.sourceMenu.replay"]()}</span>
+                  <span className="text-xs font-normal text-muted-foreground">
+                    {m["app.sourceMenu.replayDescription"]()}
+                  </span>
+                </span>
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </motion.div>
+      )}
+    </AnimatePresence>
   )
 }
 

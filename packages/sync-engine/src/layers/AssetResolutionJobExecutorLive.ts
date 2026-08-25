@@ -42,6 +42,7 @@ import {
   AssetResolutionJobExecutor,
   AssetResolutionJobRepository,
   ProviderAssetRepository,
+  SyncEngineTransaction,
   type AssetResolutionDecisionRecord,
   type AssetResolutionEvidenceRecord,
   type AssetResolutionJobExecutionResult,
@@ -183,6 +184,7 @@ const decisionToRecord = ({
 
 const make = Effect.gen(function* () {
   const providerAssetRepository = yield* ProviderAssetRepository
+  const syncEngineTransaction = yield* SyncEngineTransaction
   const assetResolutionJobRepository = yield* AssetResolutionJobRepository
   const assetRepository = yield* AssetRepository
   const coinGeckoClient = yield* AssetResolutionCoinGeckoClient
@@ -617,88 +619,107 @@ const make = Effect.gen(function* () {
       })
 
       if (decision._tag === "attach") {
-        const representation = yield* assetRepository.attachRepresentationToExistingAsset({
-          assetId: decision.assetKey,
-          blockchainName: decision.blockchain,
-          representation: {
-            contractAddress: decision.contractAddress,
-            mintAddress: decision.mintAddress,
-            decimals: decision.decimals,
-            type: decision.type,
-            logoUrl: null,
-            isSpam: false,
-            metadata: null,
-          },
-        })
+        return yield* syncEngineTransaction.run(
+          Effect.gen(function* () {
+            yield* providerAssetRepository.lockProviderAssetApprovalSnapshot({
+              providerAssetRowId,
+              expectedObservedRepresentations: observations,
+              expectedProviderAssetRetrievedAt: providerAsset.retrievedAt,
+            })
 
-        yield* recordDecision({
-          jobId,
-          record: {
-            ...decisionRecord,
-            assetId: decision.assetKey,
-            assetRepresentationId: representation.id,
-          },
-        })
+            const representation = yield* assetRepository.attachRepresentationToExistingAsset({
+              assetId: decision.assetKey,
+              blockchainName: decision.blockchain,
+              representation: {
+                contractAddress: decision.contractAddress,
+                mintAddress: decision.mintAddress,
+                decimals: decision.decimals,
+                type: decision.type,
+                logoUrl: null,
+                isSpam: false,
+                metadata: null,
+              },
+            })
 
-        yield* settleApprovedResolution({
-          jobId,
-          providerAssetRowId,
-          assetId: decision.assetKey,
-          assetRepresentationId: representation.id,
-          policyRevision: decision.policyRevision,
-          observations,
-          providerAssetRetrievedAt: providerAsset.retrievedAt,
-          sourceNotes: `Resolution policy ${decision.policyRevision} attached the exact representation and requested a replay of affected sources.`,
-        })
+            yield* recordDecision({
+              jobId,
+              record: {
+                ...decisionRecord,
+                assetId: decision.assetKey,
+                assetRepresentationId: representation.id,
+              },
+            })
 
-        return {
-          outcome: "attached",
-          providerAssetRowId,
-          evidenceRevision,
-        } satisfies AssetResolutionJobExecutionResult
+            yield* settleApprovedResolution({
+              jobId,
+              providerAssetRowId,
+              assetId: decision.assetKey,
+              assetRepresentationId: representation.id,
+              policyRevision: decision.policyRevision,
+              observations,
+              providerAssetRetrievedAt: providerAsset.retrievedAt,
+              sourceNotes: `Resolution policy ${decision.policyRevision} attached the exact representation and requested a replay of affected sources.`,
+            })
+
+            return {
+              outcome: "attached",
+              providerAssetRowId,
+              evidenceRevision,
+            } satisfies AssetResolutionJobExecutionResult
+          })
+        )
       }
 
       if (decision._tag === "create_standalone") {
-        // The repository records the create_standalone decision inside the
-        // creation transaction, so the audit can never show a created asset
-        // without the decision that created it.
-        const created = yield* assetRepository.createStandaloneAssetRepresentation({
-          blockchainName: decision.blockchain,
-          asset: {
-            name: decision.name,
-            symbol: decision.symbol,
-            coingeckoCoinId: decision.coingeckoCoinId,
-            logoUrl: null,
-            type: decision.type === "nft" ? "nft" : "fungible",
-          },
-          representation: {
-            contractAddress: decision.contractAddress,
-            mintAddress: decision.mintAddress,
-            decimals: decision.decimals,
-            type: decision.type,
-            logoUrl: null,
-            isSpam: false,
-            metadata: null,
-          },
-          decision: decisionRecord,
-        })
+        return yield* syncEngineTransaction.run(
+          Effect.gen(function* () {
+            yield* providerAssetRepository.lockProviderAssetApprovalSnapshot({
+              providerAssetRowId,
+              expectedObservedRepresentations: observations,
+              expectedProviderAssetRetrievedAt: providerAsset.retrievedAt,
+            })
 
-        yield* settleApprovedResolution({
-          jobId,
-          providerAssetRowId,
-          assetId: created.id,
-          assetRepresentationId: created.representationId,
-          policyRevision: decision.policyRevision,
-          observations,
-          providerAssetRetrievedAt: providerAsset.retrievedAt,
-          sourceNotes: `Resolution policy ${decision.policyRevision} created a standalone economic asset for the exact representation and requested a replay of affected sources.`,
-        })
+            // The repository records the create_standalone decision inside
+            // the same outer transaction as mapping approval and replay.
+            const created = yield* assetRepository.createStandaloneAssetRepresentation({
+              blockchainName: decision.blockchain,
+              asset: {
+                name: decision.name,
+                symbol: decision.symbol,
+                coingeckoCoinId: decision.coingeckoCoinId,
+                logoUrl: null,
+                type: decision.type === "nft" ? "nft" : "fungible",
+              },
+              representation: {
+                contractAddress: decision.contractAddress,
+                mintAddress: decision.mintAddress,
+                decimals: decision.decimals,
+                type: decision.type,
+                logoUrl: null,
+                isSpam: false,
+                metadata: null,
+              },
+              decision: decisionRecord,
+            })
 
-        return {
-          outcome: "created",
-          providerAssetRowId,
-          evidenceRevision,
-        } satisfies AssetResolutionJobExecutionResult
+            yield* settleApprovedResolution({
+              jobId,
+              providerAssetRowId,
+              assetId: created.id,
+              assetRepresentationId: created.representationId,
+              policyRevision: decision.policyRevision,
+              observations,
+              providerAssetRetrievedAt: providerAsset.retrievedAt,
+              sourceNotes: `Resolution policy ${decision.policyRevision} created a standalone economic asset for the exact representation and requested a replay of affected sources.`,
+            })
+
+            return {
+              outcome: "created",
+              providerAssetRowId,
+              evidenceRevision,
+            } satisfies AssetResolutionJobExecutionResult
+          })
+        )
       }
 
       if (decision._tag === "excluded") {

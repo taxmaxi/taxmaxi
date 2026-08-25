@@ -5,7 +5,7 @@
  */
 
 import type { PrincipalId } from "@my/core/ownership"
-import { parseCryptoAddress, SourceId, type ChainType } from "@my/core/source"
+import { parseAddressOrName, parseCryptoAddress, SourceId, type ChainType } from "@my/core/source"
 import {
   BillingRepository,
   PrincipalClaimRepository,
@@ -32,10 +32,12 @@ import {
   SourceCreationBadRequestError,
   SourceCreationCreditRequiredError,
   SourceCreationInternalError,
+  SourceCreationNameResolutionError,
   SourceCreationPaymentRequiredError,
   SourceCreationService,
   type SourceCreationServiceShape,
 } from "../services/SourceCreationService.ts"
+import { WalletNameResolutionService } from "../services/WalletNameResolutionService.ts"
 import {
   X402PaymentValidator,
   type X402PaymentSettlement,
@@ -83,6 +85,7 @@ export const SourceCreationServiceLive = Layer.effect(
     const sourceSyncService = yield* SourceSyncService
     const x402PaymentValidator = yield* X402PaymentValidator
     const principalResolutionService = yield* PrincipalResolutionService
+    const walletNameResolutionService = yield* WalletNameResolutionService
 
     const resolveCreatePrincipal = (currentUser: Option.Option<User>) =>
       Effect.gen(function* () {
@@ -133,6 +136,45 @@ export const SourceCreationServiceLive = Layer.effect(
         }
 
         return parsedAddress
+      })
+
+    /**
+     * Parse a raw wallet input into a canonical address, resolving wallet
+     * names on-chain. Returns the wallet name when one was used so it can
+     * become the default source name.
+     */
+    const resolveWalletInput = (walletAddress: string) =>
+      Effect.gen(function* () {
+        const parsed = parseAddressOrName(walletAddress)
+        if (parsed === null) {
+          return yield* toBadRequestError("Invalid crypto address or wallet name.")
+        }
+
+        if (parsed.type === "address") {
+          const parsedAddress = yield* parseWalletAddress(parsed.address)
+          return { parsedAddress, walletName: null }
+        }
+
+        const resolution = yield* walletNameResolutionService.resolve(parsed.name).pipe(
+          Effect.mapError((error) =>
+            error._tag === "WalletNameResolutionError"
+              ? new SourceCreationNameResolutionError({
+                  code: error.code,
+                  name: error.name,
+                  namespace: error.namespace,
+                  message: error.message,
+                })
+              : toInternalError("Failed to resolve wallet name.")
+          )
+        )
+
+        return {
+          parsedAddress: {
+            address: resolution.resolvedAddress,
+            chainType: resolution.chainType satisfies ChainType,
+          },
+          walletName: resolution.name,
+        }
       })
 
     const findExistingAnonymousPaidSource = ({
@@ -330,7 +372,7 @@ export const SourceCreationServiceLive = Layer.effect(
       payload,
     }) =>
       Effect.gen(function* () {
-        const parsedAddress = yield* parseWalletAddress(payload.walletAddress)
+        const { parsedAddress, walletName } = yield* resolveWalletInput(payload.walletAddress)
         const year = payload.year ?? new Date().getUTCFullYear()
         const jurisdiction = payload.jurisdiction ?? DEFAULT_CLAIM_JURISDICTION
         const maybeExistingAnonymousSource: Option.Option<AnonymousSourceEntitlement> =
@@ -378,7 +420,7 @@ export const SourceCreationServiceLive = Layer.effect(
         const created = yield* createOnchainSource({
           principalId: principal.id,
           parsedAddress,
-          name: payload.name,
+          name: payload.name ?? walletName ?? undefined,
         })
 
         const shouldStartSync = isAnonymous || payload.sync === true

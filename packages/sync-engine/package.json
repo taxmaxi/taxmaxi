@@ -81,10 +81,6 @@
       "types": "./dist/providers/helius-solana/services/index.d.ts",
       "default": "./dist/providers/helius-solana/services/index.js"
     },
-    "./providers/jupiter": {
-      "types": "./dist/providers/jupiter/index.d.ts",
-      "default": "./dist/providers/jupiter/index.js"
-    },
     "./providers/jupiter/layers": {
       "types": "./dist/providers/jupiter/layers/index.d.ts",
       "default": "./dist/providers/jupiter/layers/index.js"

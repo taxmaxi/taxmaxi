@@ -17,6 +17,7 @@ export type Account = {
   importedTransactions: number
   unresolvedItems: number
   lastSync: string
+  lastSyncedAt?: string
 }
 
 export type TaxYearAccountSummary = {

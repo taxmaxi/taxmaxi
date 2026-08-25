@@ -116,6 +116,15 @@
         "failed": "Couldn't sync {sourceNames}",
         "fallback": "Syncing"
       },
+      "replayHeadline": {
+        "running": "Replaying {sourceNames}",
+        "completed": "Replayed {sourceNames}",
+        "failed": "Couldn't replay {sourceNames}"
+      },
+      "replayStatus": {
+        "running": "Replaying",
+        "completed": "Replayed"
+      },
       "sourceNames": {
         "fallback": "source",
         "pair": "{first} and {second}",
@@ -139,6 +148,31 @@
         "hideDetails": "Hide sync details for {sourceName}",
         "dismiss": "Dismiss {sourceName} sync status"
       }
+    },
+    "sourceMenu": {
+      "label": "Source actions",
+      "replay": "Replay",
+      "replayDescription": "Rebuilds from already imported data."
+    },
+    "addWallet": {
+      "title": "Add wallet",
+      "subtitle": "Solana or Ethereum",
+      "detectedEvm": "Wallet · Ethereum",
+      "detectedSolana": "Wallet · Solana",
+      "previewNameEvm": "Ethereum wallet",
+      "previewNameSolana": "Solana wallet",
+      "inputLabel": "Crypto wallet address",
+      "placeholder": "0x24a9db9c9c6bcbba1a1ea88d9769cd48eb0efb1a",
+      "invalid": "Solana or Ethereum only.",
+      "nameUnsupported": "Domain not supported yet.",
+      "resolving": "Looking up address…",
+      "resolveError": "Couldn't resolve this name.",
+      "resolveErrorNameUnresolved": "No address found.",
+      "resolveErrorNetworkUnavailable": "Network problem. Try again.",
+      "resolveErrorRateLimited": "Too many tries. Wait a bit.",
+      "bitcoinUnsupported": "No Bitcoin support yet.",
+      "submit": "Add wallet",
+      "error": "Couldn't add this wallet."
     }
   },
   "assetCatalog": {

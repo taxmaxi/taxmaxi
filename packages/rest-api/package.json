@@ -34,7 +34,8 @@
     "@x402/extensions": "2.12.0",
     "@x402/svm": "2.12.0",
     "effect": "4.0.0-rc.109",
-    "stripe": "22.5.0"
+    "stripe": "22.5.0",
+    "viem": "2.47.6"
   },
   "devDependencies": {
     "@effect/vitest": "4.0.0-rc.109",

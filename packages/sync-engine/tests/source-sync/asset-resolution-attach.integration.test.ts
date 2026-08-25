@@ -681,7 +681,31 @@ const fetchAccountingState = () =>
       .from(schema.fifoLots)
       .where(eq(schema.fifoLots.sourceId, sourceId))
 
-    return { legs, fifoLots }
+    const rawRecords = yield* db
+      .select({ externalRecordId: schema.sourceRecordsRaw.externalRecordId })
+      .from(schema.sourceRecordsRaw)
+      .where(
+        and(
+          eq(schema.sourceRecordsRaw.sourceId, sourceId),
+          eq(schema.sourceRecordsRaw.externalRecordId, "tx-orb-buy-1")
+        )
+      )
+
+    const transactions = yield* db
+      .select({
+        id: schema.transactions.id,
+        externalId: schema.transactions.externalId,
+        sourceRawRecordId: schema.transactions.sourceRawRecordId,
+      })
+      .from(schema.transactions)
+      .where(
+        and(
+          eq(schema.transactions.sourceId, sourceId),
+          eq(schema.transactions.externalId, "tx-orb-buy-1")
+        )
+      )
+
+    return { legs, fifoLots, rawRecords, transactions }
   }).pipe(Effect.provide(TestPgClientLive))
 
 await Effect.runPromise(context.recreateTestDatabase())
@@ -1323,6 +1347,13 @@ describe("asset resolution attach and rebuild", () => {
         const accountingState = yield* fetchAccountingState()
         expect(accountingState.legs).toEqual([])
         expect(accountingState.fifoLots).toHaveLength(0)
+        expect(accountingState.rawRecords).toEqual([{ externalRecordId: "tx-orb-buy-1" }])
+        expect(accountingState.transactions).toEqual([
+          expect.objectContaining({
+            externalId: "tx-orb-buy-1",
+            sourceRawRecordId: expect.any(String),
+          }),
+        ])
 
         // The exclusion is a final answer: the calculation completes instead
         // of staying pending on the banned observation.
@@ -1418,7 +1449,7 @@ describe("asset resolution attach and rebuild", () => {
     )
   })
 
-  it("neither excludes nor creates on a suspicious signal but creates on unverified alone", async () => {
+  it("pauses on suspicious signals but creates when a later signal is unverified", async () => {
     await Effect.runPromise(
       Effect.gen(function* () {
         coinGeckoMode = "not_found"
@@ -1442,8 +1473,8 @@ describe("asset resolution attach and rebuild", () => {
         const blockedTax = yield* calculateTax().pipe(Effect.result)
         expect(blockedTax._tag).toBe("Failure")
 
-        // Unverified alone says nothing: the same observation at a new
-        // evidence revision creates the standalone asset.
+        // Unverified decides nothing: the same observation at a new evidence
+        // revision follows the normal standalone-create path.
         jupiterMode = "unverified"
         const secondJobId = "00000000-4000-4000-8000-000000000772"
         yield* Effect.gen(function* () {
@@ -1476,6 +1507,12 @@ describe("asset resolution attach and rebuild", () => {
 
         const unverified = yield* runResolutionJob({ jobId: secondJobId })
         expect(unverified.outcome).toBe("created")
+
+        const unverifiedState = yield* fetchAttachState()
+        expect(unverifiedState.mapping).toMatchObject({ mappingStatus: "approved" })
+        expect(unverifiedState.representations).toEqual([
+          expect.objectContaining({ type: "token", mintAddress: ORB_MINT, decimals: 8 }),
+        ])
       })
     )
   })

@@ -339,13 +339,17 @@ describe("AssetResolutionPolicy", () => {
       })
     })
 
-    it("maps verification, suspicion, and their absence to weaker verdicts", () => {
+    it("maps verification, suspicion, low activity, and their absence to typed verdicts", () => {
       const verified = decodeVerdict([jupiterToken({ isVerified: true, tags: ["verified"] })])
       const suspicious = decodeVerdict([jupiterToken({ audit: { isSus: true } })])
+      const lowActivity = decodeVerdict([
+        jupiterToken({ isVerified: true, organicScoreLabel: "low" }),
+      ])
       const unverified = decodeVerdict([jupiterToken({})])
 
       expect(verified).toMatchObject({ _tag: "legitimacy_claim", verdict: "verified" })
       expect(suspicious).toMatchObject({ _tag: "legitimacy_claim", verdict: "suspicious" })
+      expect(lowActivity).toMatchObject({ _tag: "legitimacy_claim", verdict: "low_activity" })
       expect(unverified).toMatchObject({ _tag: "legitimacy_claim", verdict: "unverified" })
     })
 
@@ -498,6 +502,55 @@ describe("AssetResolutionPolicy", () => {
         _tag: "excluded",
         reason: "authority_banned",
       })
+    })
+
+    it("lets a ban win when registry evidence cannot produce an exact attach", () => {
+      const bannedClaim = AssetLegitimacyClaim.make({ authority: "jupiter", verdict: "banned" })
+      const missingPlatform = decide({
+        chain: longTailChainClaim(),
+        registry: CoinGeckoClaim.make({
+          coinId: "orb-token",
+          name: "Orb Token",
+          symbol: "orb",
+          platforms: [
+            CoinGeckoPlatformMapping.make({
+              platformId: "ethereum",
+              contractAddress: ETHEREUM_USDC_CONTRACT,
+              decimals: 9,
+            }),
+          ],
+        }),
+        legitimacy: [bannedClaim],
+      })
+      const unownedDecimalConflict = decide({
+        chain: longTailChainClaim(),
+        registry: longTailCoinGeckoClaim({ decimals: 6 }),
+        legitimacy: [bannedClaim],
+      })
+      const ownedDecimalConflict = decide({
+        chain: ChainClaim.make({ ...solanaUsdcChainFact, decimals: 8 }),
+        registry: usdcCoinGeckoClaim(),
+        identity: { ...usdcIdentity(), representations: [] },
+        legitimacy: [bannedClaim],
+      })
+      const ownedTypeConflict = decide({
+        chain: ChainClaim.make({ ...solanaUsdcChainFact, type: "nft" }),
+        registry: usdcCoinGeckoClaim(),
+        identity: { ...usdcIdentity(), representations: [] },
+        legitimacy: [bannedClaim],
+      })
+
+      for (const decision of [
+        missingPlatform,
+        unownedDecimalConflict,
+        ownedDecimalConflict,
+        ownedTypeConflict,
+      ]) {
+        expect(decision).toMatchObject({
+          _tag: "excluded",
+          reason: "authority_banned",
+        })
+      }
     })
 
     it("fails closed for incompatible decimals or type against the registry owner", () => {
@@ -804,7 +857,7 @@ describe("AssetResolutionPolicy", () => {
       })
     })
 
-    it("stays pending on a suspicious signal but creates on unverified alone", () => {
+    it("pauses on suspicious signals but creates for non-decisive legitimacy signals", () => {
       const suspicious = decide({
         chain: longTailChainClaim(),
         legitimacy: [AssetLegitimacyClaim.make({ authority: "jupiter", verdict: "suspicious" })],
@@ -813,12 +866,17 @@ describe("AssetResolutionPolicy", () => {
         chain: longTailChainClaim(),
         legitimacy: [AssetLegitimacyClaim.make({ authority: "jupiter", verdict: "unverified" })],
       })
+      const lowActivity = decide({
+        chain: longTailChainClaim(),
+        legitimacy: [AssetLegitimacyClaim.make({ authority: "jupiter", verdict: "low_activity" })],
+      })
 
       expect(suspicious).toMatchObject({
         _tag: "pending",
         reason: "spam_evidence",
       })
       expect(unverified).toMatchObject({ _tag: "create_standalone" })
+      expect(lowActivity).toMatchObject({ _tag: "create_standalone" })
     })
 
     it("fails closed when banned evidence conflicts with exact attach evidence", () => {

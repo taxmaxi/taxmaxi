@@ -34,6 +34,10 @@ const normalizePendingAssetListInput = (
 
 export const queryKeys = {
   all: ["taxmaxi"] as const,
+  account: () => [...queryKeys.all, "account"] as const,
+  billing: () => [...queryKeys.all, "billing"] as const,
+  billingCatalog: () => [...queryKeys.billing(), "catalog"] as const,
+  billingStatus: () => [...queryKeys.billing(), "status"] as const,
   assets: () => [...queryKeys.all, "assets"] as const,
   assetList: (input: AssetCatalogPageInput = {}) =>
     [...queryKeys.assets(), "list", normalizeAssetCatalogListInput(input)] as const,
@@ -53,6 +57,28 @@ export const queryKeys = {
 }
 
 export const queries = {
+  // Auth and billing fail fast: a 401 should redirect immediately, not retry.
+  account: (taxmaxi: TaxMaxi) =>
+    queryOptions({
+      queryKey: queryKeys.account(),
+      queryFn: async () => taxmaxi.auth.account(),
+      retry: false,
+      staleTime: 5 * 60 * 1000,
+    }),
+  billingCatalog: (taxmaxi: TaxMaxi) =>
+    queryOptions({
+      queryKey: queryKeys.billingCatalog(),
+      queryFn: async () => taxmaxi.billing.catalog(),
+      retry: false,
+      staleTime: 5 * 60 * 1000,
+    }),
+  billingStatus: (taxmaxi: TaxMaxi) =>
+    queryOptions({
+      queryKey: queryKeys.billingStatus(),
+      queryFn: async () => taxmaxi.billing.status(),
+      retry: false,
+      staleTime: 30 * 1000,
+    }),
   assetList: (taxmaxi: TaxMaxi, input: AssetCatalogPageInput = {}) => {
     const normalizedInput = normalizeAssetCatalogListInput(input)
 

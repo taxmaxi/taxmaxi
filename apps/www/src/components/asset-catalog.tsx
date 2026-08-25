@@ -2,6 +2,7 @@ import { LibraryBig } from "lucide-react"
 import { useEffect } from "react"
 
 import { AppFocusSurface } from "#/components/app-focus-surface"
+import { AppOverlay } from "#/components/app-overlay"
 import {
   AssetCatalogProvider,
   type AssetExceptionActions,
@@ -15,22 +16,60 @@ import { m } from "#/paraglide/messages"
 
 export type { AssetCatalogFeeds }
 
+const focusCatalogSearch = () => document.getElementById(ASSET_CATALOG_SEARCH_ID)?.focus()
+
+/**
+ * The asset catalog renders on two surfaces: the standalone public /assets
+ * page, and an overlay above the dashboard for the in-app /app/assets route.
+ */
 export function AssetCatalog({
   exceptionActions,
   feeds,
   onClose,
   onQueryChange,
+  surface = "page",
 }: {
   readonly exceptionActions?: AssetExceptionActions
   readonly feeds: AssetCatalogFeeds
   readonly onClose: () => void
   readonly onQueryChange?: (query: string) => void
+  readonly surface?: "overlay" | "page"
 }) {
   useEffect(() => {
-    if (document.activeElement === document.body) {
-      document.getElementById(ASSET_CATALOG_SEARCH_ID)?.focus()
+    if (surface === "page" && document.activeElement === document.body) {
+      focusCatalogSearch()
     }
-  }, [])
+  }, [surface])
+
+  const catalog = (
+    <AssetCatalogProvider
+      exceptionActions={exceptionActions}
+      feeds={feeds}
+      onQueryChange={onQueryChange}
+    >
+      <AssetCatalogNavigator />
+    </AssetCatalogProvider>
+  )
+
+  if (surface === "overlay") {
+    return (
+      <AppOverlay
+        bodyClassName="min-h-0 flex-1 overflow-hidden"
+        closeLabel={m["assetCatalog.close"]()}
+        icon={<LibraryBig aria-hidden="true" className="size-4" />}
+        onClose={onClose}
+        onOpenAutoFocus={(event) => {
+          event.preventDefault()
+          focusCatalogSearch()
+        }}
+        subtitle={m["assetCatalog.subtitle"]()}
+        surfaceProps={{ "data-asset-catalog-surface": "" }}
+        title={m["assetCatalog.title"]()}
+      >
+        {catalog}
+      </AppOverlay>
+    )
+  }
 
   return (
     <AppFocusSurface
@@ -42,13 +81,7 @@ export function AssetCatalog({
       title={m["assetCatalog.title"]()}
       titleId="asset-catalog-title"
     >
-      <AssetCatalogProvider
-        exceptionActions={exceptionActions}
-        feeds={feeds}
-        onQueryChange={onQueryChange}
-      >
-        <AssetCatalogNavigator />
-      </AssetCatalogProvider>
+      {catalog}
     </AppFocusSurface>
   )
 }
