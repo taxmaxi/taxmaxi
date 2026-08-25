@@ -2689,7 +2689,7 @@ describe("SourcesApiLive", () => {
       expect(result._tag).toBe("Failure")
       if (result._tag === "Failure") {
         expect(result.failure._tag).toBe("SourceBadRequestError")
-        expect(result.failure.message).toBe("Invalid crypto address.")
+        expect(result.failure.message).toBe("Invalid crypto address or wallet name.")
       }
     }).pipe(Effect.provide(HttpLive), Effect.scoped)
   )
@@ -3144,5 +3144,52 @@ describe("SourcesApiLive", () => {
           }
         }
       }).pipe(Effect.provide(TaxCalculationHttpLive), Effect.scoped)
+  )
+
+  it.effect("resolves a cached wallet name through the resolve-name endpoint", () =>
+    Effect.gen(function* () {
+      const fixture = yield* seedSyncEngineRepositoryFixture(REPORT_TEST_FIXTURE)
+      const db = yield* drizzle
+      yield* db.insert(schema.walletNameCache).values({
+        namespace: "sns",
+        name: "bonfida.sol",
+        resolvedAddress: "HKKp49qGWXd639QsuH7JiLijfVW5UtCVY4s1n2HANwEA",
+        resolvedAt: new Date(),
+        expiresAt: new Date(Date.now() + 60 * 60 * 1000),
+      })
+
+      const client = yield* makeAuthenticatedClient({ userId: fixture.userId })
+      const resolution = yield* client.sources.resolveSourceName({
+        payload: { name: "bonfida.sol" },
+      })
+
+      expect(resolution).toEqual({
+        name: "bonfida.sol",
+        namespace: "sns",
+        resolvedAddress: "HKKp49qGWXd639QsuH7JiLijfVW5UtCVY4s1n2HANwEA",
+        chainType: "solana",
+      })
+    }).pipe(Effect.provide(HttpLive))
+  )
+
+  it.effect("returns a coded 400 when the resolve-name input is not a wallet name", () =>
+    Effect.gen(function* () {
+      const fixture = yield* seedSyncEngineRepositoryFixture(REPORT_TEST_FIXTURE)
+      const client = yield* makeAuthenticatedClient({ userId: fixture.userId })
+
+      const result = yield* client.sources
+        .resolveSourceName({ payload: { name: "not-a-name" } })
+        .pipe(Effect.result)
+
+      expect(result._tag).toBe("Failure")
+      if (result._tag === "Failure") {
+        const failure = result.failure
+        expect(failure._tag).toBe("SourceNameResolutionError")
+        if (failure._tag === "SourceNameResolutionError") {
+          expect(failure.code).toBe("invalid_name")
+          expect(failure.namespace).toBeNull()
+        }
+      }
+    }).pipe(Effect.provide(HttpLive))
   )
 })

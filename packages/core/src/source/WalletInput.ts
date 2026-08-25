@@ -18,6 +18,11 @@ import * as SchemaTransformation from "effect/SchemaTransformation"
 export const ENS_TLDS = [".eth", ".cb.id", ".xyz", ".id"] as const
 
 /**
+ * SNS TLD accepted as wallet-name input.
+ */
+export const SNS_TLD = ".sol"
+
+/**
  * ChainType - Supported blockchain families for wallet inputs.
  */
 export const ChainType = Schema.Literals(["evm", "solana", "bitcoin"]).annotate({
@@ -48,6 +53,14 @@ export const isValidEthereumAddress = (address: string): boolean =>
 export const isValidEnsName = (name: string): boolean => {
   const normalized = name.toLowerCase().trim()
   return ENS_TLDS.some((tld) => normalized.endsWith(tld) && normalized.length > tld.length)
+}
+
+/**
+ * Validates SNS name format without resolving it.
+ */
+export const isValidSnsName = (name: string): boolean => {
+  const normalized = name.toLowerCase().trim()
+  return normalized.endsWith(SNS_TLD) && normalized.length > SNS_TLD.length
 }
 
 /**
@@ -126,6 +139,21 @@ export type NameServiceNamespace = typeof NameServiceNamespace.Type
  * Type guard for NameServiceNamespace using Schema.is.
  */
 export const isNameServiceNamespace = Schema.is(NameServiceNamespace)
+
+/**
+ * Detects the name-service namespace a wallet name belongs to.
+ */
+export const detectNameServiceNamespace = (name: string): NameServiceNamespace | null => {
+  if (isValidSnsName(name)) return "sns"
+  if (isValidEnsName(name)) return "ens"
+  return null
+}
+
+/**
+ * Chain family the addresses of a name-service namespace belong to.
+ */
+export const chainTypeForNamespace = (namespace: NameServiceNamespace): ChainType =>
+  namespace === "ens" ? "evm" : "solana"
 
 /**
  * WalletAddressInput - Canonical wallet address input with chain typing.
@@ -251,39 +279,41 @@ export class SnsNameInput extends Schema.TaggedClass<SnsNameInput>()("SnsNameInp
 export const isSnsNameInput = Schema.is(SnsNameInput)
 
 /**
- * AddressOrEnsInput - Parsed address or ENS name input.
+ * AddressOrNameInput - Parsed address or wallet name input.
  */
-export type AddressOrEnsInput =
+export type AddressOrNameInput =
   | { readonly type: "address"; readonly address: string; readonly chainType: ChainType }
-  | { readonly type: "ens"; readonly ensName: string }
+  | { readonly type: "name"; readonly namespace: NameServiceNamespace; readonly name: string }
 
 /**
- * AddressOrEnsInputSchema - Object representation of parsed address or ENS input.
+ * AddressOrNameInputSchema - Object representation of parsed address or wallet name input.
  */
-export const AddressOrEnsInputSchema = Schema.Union([
+export const AddressOrNameInputSchema = Schema.Union([
   Schema.Struct({
     type: Schema.Literal("address"),
     address: Schema.Trimmed.check(Schema.isNonEmpty()),
     chainType: ChainType,
   }),
   Schema.Struct({
-    type: Schema.Literal("ens"),
-    ensName: EnsName,
+    type: Schema.Literal("name"),
+    namespace: NameServiceNamespace,
+    name: Schema.Trimmed.check(Schema.isNonEmpty()),
   }),
 ]).annotate({
-  identifier: "AddressOrEnsInput",
-  title: "Address Or ENS Input",
-  description: "Parsed wallet address or ENS name input",
-}) satisfies Schema.Schema<AddressOrEnsInput>
+  identifier: "AddressOrNameInput",
+  title: "Address Or Name Input",
+  description: "Parsed wallet address or wallet name input",
+}) satisfies Schema.Schema<AddressOrNameInput>
 
 /**
- * Parses a string into a wallet address or ENS name input.
+ * Parses a string into a wallet address or wallet name input.
  */
-export const parseAddressOrEns = (input: string): AddressOrEnsInput | null => {
+export const parseAddressOrName = (input: string): AddressOrNameInput | null => {
   const trimmed = input.trim()
 
-  if (isValidEnsName(trimmed)) {
-    return { type: "ens", ensName: trimmed.toLowerCase() }
+  const namespace = detectNameServiceNamespace(trimmed)
+  if (namespace !== null) {
+    return { type: "name", namespace, name: trimmed.toLowerCase() }
   }
 
   const parsedAddress = parseCryptoAddress(trimmed)
@@ -295,33 +325,33 @@ export const parseAddressOrEns = (input: string): AddressOrEnsInput | null => {
 }
 
 /**
- * AddressOrEns - Valid crypto address or ENS name string.
+ * AddressOrName - Valid crypto address or wallet name string.
  */
-export const AddressOrEns = Schema.Trimmed.check(Schema.isNonEmpty())
+export const AddressOrName = Schema.Trimmed.check(Schema.isNonEmpty())
   .pipe(
     Schema.check(
       Schema.makeFilter((input) =>
-        parseAddressOrEns(input) !== null
+        parseAddressOrName(input) !== null
           ? undefined
-          : "Invalid input. Must be a valid crypto address or ENS name."
+          : "Invalid input. Must be a valid crypto address or wallet name."
       )
     )
   )
   .annotate({
-    identifier: "AddressOrEns",
-    title: "Address Or ENS",
-    description: "Crypto address or ENS name string",
+    identifier: "AddressOrName",
+    title: "Address Or Name",
+    description: "Crypto address or wallet name string",
   })
 
 /**
- * ValidatedAddressOrEns - Effect Schema that validates and parses address or ENS input.
+ * ValidatedAddressOrName - Effect Schema that validates and parses address or wallet name input.
  */
-export const ValidatedAddressOrEns = AddressOrEns.pipe(
+export const ValidatedAddressOrName = AddressOrName.pipe(
   Schema.decodeTo(
-    AddressOrEnsInputSchema,
+    AddressOrNameInputSchema,
     SchemaTransformation.transformOrFail({
       decode: (input, options) => {
-        const parsed = parseAddressOrEns(input)
+        const parsed = parseAddressOrName(input)
         if (parsed === null) {
           return Effect.fail(
             new SchemaIssue.InvalidValue(
@@ -333,13 +363,13 @@ export const ValidatedAddressOrEns = AddressOrEns.pipe(
         }
         return Effect.succeed(parsed)
       },
-      encode: (input) => Effect.succeed(input.type === "address" ? input.address : input.ensName),
+      encode: (input) => Effect.succeed(input.type === "address" ? input.address : input.name),
     })
   )
 ).annotate({
-  identifier: "ValidatedAddressOrEns",
-  title: "Validated Address Or ENS",
-  description: "Address or ENS string decoded to a discriminated input",
+  identifier: "ValidatedAddressOrName",
+  title: "Validated Address Or Name",
+  description: "Address or wallet name string decoded to a discriminated input",
 })
 
 /**

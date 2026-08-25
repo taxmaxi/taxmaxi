@@ -378,6 +378,44 @@ const insertUnresolvedProviderAssetSourceUse = ({
     }
   }).pipe(Effect.provide(context.TestPgClientLive))
 
+const insertExcludedProviderAssetSourceUse = () =>
+  Effect.gen(function* () {
+    const db = yield* drizzle
+    const exclusionRecordedAt = new Date("2025-06-01T00:00:00.000Z")
+
+    const [providerAsset] = yield* db
+      .insert(schema.providerAssets)
+      .values({
+        provider: "helius-solana",
+        naturalKey: "helius-excluded-asset",
+        currencyCode: "SPAM",
+        retrievedAt: exclusionRecordedAt,
+      })
+      .returning({ id: schema.providerAssets.id })
+
+    if (providerAsset === undefined) {
+      return yield* Effect.die("Failed to create excluded provider asset fixture")
+    }
+
+    yield* db.insert(schema.providerAssetSourceUses).values({
+      providerAssetRowId: providerAsset.id,
+      sourceId,
+      createdAt: exclusionRecordedAt,
+      updatedAt: exclusionRecordedAt,
+    })
+    yield* db.insert(schema.providerAssetMappings).values({
+      providerAssetRowId: providerAsset.id,
+      mappingKind: "asset",
+      canonicalAssetId: null,
+      mappingStatus: "excluded",
+      sourceNotes: "Tax calculation exclusion replay fixture",
+      createdAt: exclusionRecordedAt,
+      updatedAt: exclusionRecordedAt,
+    })
+
+    return { exclusionRecordedAt, providerAssetRowId: providerAsset.id }
+  }).pipe(Effect.provide(context.TestPgClientLive))
+
 const insertRejectedOverrideFixture = ({
   observedContracts = [],
   observedRepresentationType = "token",
@@ -647,6 +685,137 @@ describe("TaxCalculationServiceLive", () => {
           ])
         }
       })
+    )
+  })
+
+  it("keeps an excluded observation pending until a post-exclusion replay succeeds", async () => {
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+
+        yield* db.insert(schema.processingJobs).values({
+          sourceId,
+          principalId,
+          mode: "replay",
+          status: "completed",
+          createdAt: new Date("2025-05-31T00:00:00.000Z"),
+          updatedAt: new Date("2025-05-31T00:01:00.000Z"),
+          completedAt: new Date("2025-05-31T00:01:00.000Z"),
+        })
+
+        const { exclusionRecordedAt, providerAssetRowId } =
+          yield* insertExcludedProviderAssetSourceUse()
+        const [replayJob] = yield* db
+          .insert(schema.processingJobs)
+          .values({
+            sourceId,
+            principalId,
+            mode: "replay",
+            status: "pending",
+            createdAt: exclusionRecordedAt,
+            updatedAt: exclusionRecordedAt,
+          })
+          .returning({ id: schema.processingJobs.id })
+
+        if (replayJob === undefined) {
+          return yield* Effect.die("Failed to create exclusion replay fixture")
+        }
+
+        const pendingReplay = yield* calculateTax().pipe(Effect.flip)
+        expect(pendingReplay._tag).toBe("TaxCalculationPendingObservationsError")
+
+        yield* db
+          .update(schema.processingJobs)
+          .set({
+            status: "failed",
+            completedAt: new Date("2025-06-01T00:02:00.000Z"),
+            updatedAt: new Date("2025-06-01T00:02:00.000Z"),
+          })
+          .where(eq(schema.processingJobs.id, replayJob.id))
+
+        const failedReplay = yield* calculateTax().pipe(Effect.flip)
+        expect(failedReplay._tag).toBe("TaxCalculationPendingObservationsError")
+
+        yield* db.insert(schema.processingJobs).values({
+          sourceId,
+          principalId,
+          mode: "replay",
+          status: "completed",
+          createdAt: new Date("2025-06-01T00:03:00.000Z"),
+          updatedAt: new Date("2025-06-01T00:04:00.000Z"),
+          completedAt: new Date("2025-06-01T00:04:00.000Z"),
+        })
+
+        yield* db
+          .update(schema.providerAssetSourceUses)
+          .set({ updatedAt: new Date("2025-06-01T00:05:00.000Z") })
+          .where(eq(schema.providerAssetSourceUses.sourceId, sourceId))
+
+        const lateSourceUse = yield* calculateTax().pipe(Effect.flip)
+        expect(lateSourceUse._tag).toBe("TaxCalculationPendingObservationsError")
+
+        yield* db.insert(schema.processingJobs).values({
+          sourceId,
+          principalId,
+          mode: "replay",
+          status: "completed",
+          createdAt: new Date("2025-06-01T00:06:00.000Z"),
+          updatedAt: new Date("2025-06-01T00:07:00.000Z"),
+          completedAt: new Date("2025-06-01T00:07:00.000Z"),
+        })
+
+        const tax = yield* calculateTax()
+        expect(tax.taxableGains).toBe(2000)
+
+        const [representation] = yield* db
+          .select({
+            id: schema.assetRepresentations.id,
+            assetId: schema.assetRepresentations.assetId,
+          })
+          .from(schema.assetRepresentations)
+          .limit(1)
+        if (representation === undefined) {
+          return yield* Effect.die("Missing asset representation fixture")
+        }
+
+        const approvalRecordedAt = new Date("2025-06-01T00:08:00.000Z")
+        yield* db
+          .update(schema.providerAssetMappings)
+          .set({
+            mappingStatus: "approved",
+            canonicalAssetId: representation.assetId,
+            assetRepresentationId: representation.id,
+            updatedAt: approvalRecordedAt,
+          })
+          .where(eq(schema.providerAssetMappings.providerAssetRowId, providerAssetRowId))
+        yield* db.insert(schema.assetResolutionDecisions).values({
+          providerAssetRowId,
+          evidenceRevision: 1,
+          policyRevision: "test-policy",
+          outcome: "attach",
+          assetId: representation.assetId,
+          assetRepresentationId: representation.id,
+          reason: "manual_exclusion_reversal",
+          actor: "test",
+          createdAt: approvalRecordedAt,
+        })
+
+        const pendingReversalReplay = yield* calculateTax().pipe(Effect.flip)
+        expect(pendingReversalReplay._tag).toBe("TaxCalculationPendingObservationsError")
+
+        yield* db.insert(schema.processingJobs).values({
+          sourceId,
+          principalId,
+          mode: "replay",
+          status: "completed",
+          createdAt: new Date("2025-06-01T00:09:00.000Z"),
+          updatedAt: new Date("2025-06-01T00:10:00.000Z"),
+          completedAt: new Date("2025-06-01T00:10:00.000Z"),
+        })
+
+        const taxAfterReversalReplay = yield* calculateTax()
+        expect(taxAfterReversalReplay.taxableGains).toBe(2000)
+      }).pipe(Effect.provide(context.TestPgClientLive))
     )
   })
 

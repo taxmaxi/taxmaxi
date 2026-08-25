@@ -12,6 +12,7 @@ import {
 import {
   getSourceSyncDisplayProgress,
   type SourceSyncIslandItem,
+  type SourceSyncMode,
   type SourceSyncStatus,
 } from "#/components/source-sync-island"
 import type { Account, AccountId } from "#/lib/dashboard-types"
@@ -27,6 +28,7 @@ type UseSourceSyncsOptions = {
   onCompleted?: (sourceId: AccountId) => void | Promise<void>
   onUnauthorized?: () => void | Promise<void>
   startSourceSync?: (sourceId: AccountId) => Promise<SourceSyncStart>
+  startSourceReplay?: (sourceId: AccountId) => Promise<SourceSyncStart>
 }
 
 const SOURCE_SYNC_POLL_INTERVAL_MS = 500
@@ -38,6 +40,7 @@ export function useSourceSyncs({
   getSourceSyncJob,
   onCompleted,
   onUnauthorized,
+  startSourceReplay,
   startSourceSync,
 }: UseSourceSyncsOptions) {
   const [activeSyncs, setActiveSyncs] = useState<ReadonlyArray<ActiveSourceSync>>([])
@@ -54,20 +57,28 @@ export function useSourceSyncs({
     [activeSyncs]
   )
 
-  const onSourceSync = useCallback(
-    async (source: Account) => {
-      if (!startSourceSync || syncingSourceIds.has(source.id)) {
+  // Sync and replay share one start flow: both return the same job shape and
+  // are polled identically afterwards. Only the request that starts them
+  // differs, so the mode is stamped here and carried through polling.
+  const startSyncJob = useCallback(
+    async (
+      source: Account,
+      start: (sourceId: AccountId) => Promise<SourceSyncStart>,
+      mode: SourceSyncMode
+    ) => {
+      if (syncingSourceIds.has(source.id)) {
         return
       }
 
-      setActiveSyncs((syncs) => upsertSourceSync(syncs, makePendingSourceSync(source)))
+      setActiveSyncs((syncs) => upsertSourceSync(syncs, makePendingSourceSync(source, mode)))
 
       try {
-        const started = await startSourceSync(source.id)
+        const started = await start(source.id)
         setActiveSyncs((syncs) =>
           upsertSourceSync(syncs, {
             id: source.id,
             jobId: started.jobId,
+            mode,
             progress: getProgressForStatus(started.status),
             sourceId: source.id,
             sourceName: source.name,
@@ -85,6 +96,7 @@ export function useSourceSyncs({
           setActiveSyncs((syncs) =>
             upsertSourceSync(syncs, {
               id: source.id,
+              mode,
               progress: 100,
               sourceId: source.id,
               sourceName: source.name,
@@ -108,6 +120,7 @@ export function useSourceSyncs({
             setActiveSyncs((syncs) =>
               upsertSourceSync(syncs, {
                 id: source.id,
+                mode,
                 progress: 100,
                 sourceId: source.id,
                 sourceName: source.name,
@@ -122,6 +135,7 @@ export function useSourceSyncs({
         setActiveSyncs((syncs) =>
           upsertSourceSync(syncs, {
             id: source.id,
+            mode,
             progress: 100,
             sourceId: source.id,
             sourceName: source.name,
@@ -131,7 +145,29 @@ export function useSourceSyncs({
         )
       }
     },
-    [onUnauthorized, startSourceSync, syncingSourceIds]
+    [onUnauthorized, syncingSourceIds]
+  )
+
+  const onSourceSync = useCallback(
+    async (source: Account) => {
+      if (!startSourceSync) {
+        return
+      }
+
+      await startSyncJob(source, startSourceSync, "sync")
+    },
+    [startSourceSync, startSyncJob]
+  )
+
+  const onSourceReplay = useCallback(
+    async (source: Account) => {
+      if (!startSourceReplay) {
+        return
+      }
+
+      await startSyncJob(source, startSourceReplay, "replay")
+    },
+    [startSourceReplay, startSyncJob]
   )
 
   useEffect(() => {
@@ -281,6 +317,7 @@ export function useSourceSyncs({
     setActiveSyncs((syncs) => syncs.filter((sync) => sync.id !== item.id))
   }, [])
 
+  // A failed replay retries as a replay, not as a fetching sync.
   const onRetrySync = useCallback(
     (item: SourceSyncIslandItem) => {
       const source = accountsById.get(item.id)
@@ -290,23 +327,25 @@ export function useSourceSyncs({
       }
 
       setActiveSyncs((syncs) => syncs.filter((sync) => sync.id !== item.id))
-      void onSourceSync(source)
+      void (item.mode === "replay" ? onSourceReplay(source) : onSourceSync(source))
     },
-    [accountsById, onSourceSync]
+    [accountsById, onSourceReplay, onSourceSync]
   )
 
   return {
     activeSyncs,
     onDismissSync,
     onRetrySync,
+    onSourceReplay,
     onSourceSync,
     syncingSourceIds,
   }
 }
 
-function makePendingSourceSync(source: Account): ActiveSourceSync {
+function makePendingSourceSync(source: Account, mode: SourceSyncMode): ActiveSourceSync {
   return {
     id: source.id,
+    mode,
     progress: 0,
     sourceId: source.id,
     sourceName: source.name,

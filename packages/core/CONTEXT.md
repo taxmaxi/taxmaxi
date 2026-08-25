@@ -12,6 +12,16 @@ _Avoid_: Fiat asset, canonical asset
 A fiat currency description received from a provider's dedicated fiat catalog. An exact supported currency code resolves without provider asset review; unknown or conflicting evidence fails closed.
 _Avoid_: Provider asset
 
+## Wallet input language
+
+**Wallet name**:
+A human-readable alias from a name service that resolves to one onchain wallet address, such as `vitalik.eth` or `maxi.sol`. A wallet name is input; the resolved address is what TaxMaxi stores and syncs.
+_Avoid_: ENS name (when the namespace is not specifically ENS), domain, handle
+
+**Name-service namespace**:
+The name service a wallet name belongs to, such as ENS or SNS. The namespace determines which chain the name resolves on and which chain family the resolved address belongs to.
+_Avoid_: Chain, TLD
+
 ## Account language
 
 **Account**:

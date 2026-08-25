@@ -36,7 +36,7 @@ export interface HeliusSolanaAssetReference {
  * HeliusSolanaResolvedAsset - Asset resolution result used by Solana normalization.
  */
 export interface HeliusSolanaResolvedAsset {
-  readonly kind: "canonical" | "review_required"
+  readonly kind: "canonical" | "excluded" | "review_required"
   readonly assetKind: "native" | "token" | "nft"
   /** True only when token-versus-NFT type is backed by exact metadata evidence. */
   readonly representationTypeObserved?: boolean

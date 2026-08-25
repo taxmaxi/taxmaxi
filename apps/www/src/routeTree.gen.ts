@@ -29,8 +29,9 @@ import { Route as DemoAiImageRouteImport } from './routes/demo/ai-image'
 import { Route as DemoAiChatRouteImport } from './routes/demo/ai-chat'
 import { Route as AssetsAssetIdRouteImport } from './routes/assets/$assetId'
 import { Route as ArticlesSlugRouteImport } from './routes/articles.$slug'
-import { Route as AppSettingsRouteImport } from './routes/app_.settings'
-import { Route as AppBillingRouteImport } from './routes/app_.billing'
+import { Route as AppSettingsRouteImport } from './routes/app.settings'
+import { Route as AppBillingRouteImport } from './routes/app.billing'
+import { Route as AppAssetsRouteImport } from './routes/app.assets'
 import { Route as DemoGuitarsIndexRouteImport } from './routes/demo/guitars/index'
 import { Route as DemoGuitarsGuitarIdRouteImport } from './routes/demo/guitars/$guitarId'
 import { Route as DemoFormSimpleRouteImport } from './routes/demo/form.simple'
@@ -142,14 +143,19 @@ const ArticlesSlugRoute = ArticlesSlugRouteImport.update({
   getParentRoute: () => rootRouteImport,
 } as any)
 const AppSettingsRoute = AppSettingsRouteImport.update({
-  id: '/app_/settings',
-  path: '/app/settings',
-  getParentRoute: () => rootRouteImport,
+  id: '/settings',
+  path: '/settings',
+  getParentRoute: () => AppRoute,
 } as any)
 const AppBillingRoute = AppBillingRouteImport.update({
-  id: '/app_/billing',
-  path: '/app/billing',
-  getParentRoute: () => rootRouteImport,
+  id: '/billing',
+  path: '/billing',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppAssetsRoute = AppAssetsRouteImport.update({
+  id: '/assets',
+  path: '/assets',
+  getParentRoute: () => AppRoute,
 } as any)
 const DemoGuitarsIndexRoute = DemoGuitarsIndexRouteImport.update({
   id: '/demo/guitars/',
@@ -201,13 +207,14 @@ export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/$slug': typeof SlugRoute
   '/about': typeof AboutRoute
-  '/app': typeof AppRoute
+  '/app': typeof AppRouteWithChildren
   '/coinbase-sign-in': typeof CoinbaseSignInRoute
   '/imprint': typeof ImprintRoute
   '/login': typeof LoginRoute
   '/privacy': typeof PrivacyRoute
   '/sign-up': typeof SignUpRoute
   '/terms': typeof TermsRoute
+  '/app/assets': typeof AppAssetsRoute
   '/app/billing': typeof AppBillingRoute
   '/app/settings': typeof AppSettingsRoute
   '/articles/$slug': typeof ArticlesSlugRoute
@@ -234,13 +241,14 @@ export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/$slug': typeof SlugRoute
   '/about': typeof AboutRoute
-  '/app': typeof AppRoute
+  '/app': typeof AppRouteWithChildren
   '/coinbase-sign-in': typeof CoinbaseSignInRoute
   '/imprint': typeof ImprintRoute
   '/login': typeof LoginRoute
   '/privacy': typeof PrivacyRoute
   '/sign-up': typeof SignUpRoute
   '/terms': typeof TermsRoute
+  '/app/assets': typeof AppAssetsRoute
   '/app/billing': typeof AppBillingRoute
   '/app/settings': typeof AppSettingsRoute
   '/articles/$slug': typeof ArticlesSlugRoute
@@ -268,15 +276,16 @@ export interface FileRoutesById {
   '/': typeof IndexRoute
   '/$slug': typeof SlugRoute
   '/about': typeof AboutRoute
-  '/app': typeof AppRoute
+  '/app': typeof AppRouteWithChildren
   '/coinbase-sign-in': typeof CoinbaseSignInRoute
   '/imprint': typeof ImprintRoute
   '/login': typeof LoginRoute
   '/privacy': typeof PrivacyRoute
   '/sign-up': typeof SignUpRoute
   '/terms': typeof TermsRoute
-  '/app_/billing': typeof AppBillingRoute
-  '/app_/settings': typeof AppSettingsRoute
+  '/app/assets': typeof AppAssetsRoute
+  '/app/billing': typeof AppBillingRoute
+  '/app/settings': typeof AppSettingsRoute
   '/articles/$slug': typeof ArticlesSlugRoute
   '/assets/$assetId': typeof AssetsAssetIdRoute
   '/demo/ai-chat': typeof DemoAiChatRoute
@@ -310,6 +319,7 @@ export interface FileRouteTypes {
     | '/privacy'
     | '/sign-up'
     | '/terms'
+    | '/app/assets'
     | '/app/billing'
     | '/app/settings'
     | '/articles/$slug'
@@ -343,6 +353,7 @@ export interface FileRouteTypes {
     | '/privacy'
     | '/sign-up'
     | '/terms'
+    | '/app/assets'
     | '/app/billing'
     | '/app/settings'
     | '/articles/$slug'
@@ -376,8 +387,9 @@ export interface FileRouteTypes {
     | '/privacy'
     | '/sign-up'
     | '/terms'
-    | '/app_/billing'
-    | '/app_/settings'
+    | '/app/assets'
+    | '/app/billing'
+    | '/app/settings'
     | '/articles/$slug'
     | '/assets/$assetId'
     | '/demo/ai-chat'
@@ -403,15 +415,13 @@ export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   SlugRoute: typeof SlugRoute
   AboutRoute: typeof AboutRoute
-  AppRoute: typeof AppRoute
+  AppRoute: typeof AppRouteWithChildren
   CoinbaseSignInRoute: typeof CoinbaseSignInRoute
   ImprintRoute: typeof ImprintRoute
   LoginRoute: typeof LoginRoute
   PrivacyRoute: typeof PrivacyRoute
   SignUpRoute: typeof SignUpRoute
   TermsRoute: typeof TermsRoute
-  AppBillingRoute: typeof AppBillingRoute
-  AppSettingsRoute: typeof AppSettingsRoute
   ArticlesSlugRoute: typeof ArticlesSlugRoute
   AssetsAssetIdRoute: typeof AssetsAssetIdRoute
   DemoAiChatRoute: typeof DemoAiChatRoute
@@ -575,19 +585,26 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ArticlesSlugRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/app_/settings': {
-      id: '/app_/settings'
-      path: '/app/settings'
+    '/app/settings': {
+      id: '/app/settings'
+      path: '/settings'
       fullPath: '/app/settings'
       preLoaderRoute: typeof AppSettingsRouteImport
-      parentRoute: typeof rootRouteImport
+      parentRoute: typeof AppRoute
     }
-    '/app_/billing': {
-      id: '/app_/billing'
-      path: '/app/billing'
+    '/app/billing': {
+      id: '/app/billing'
+      path: '/billing'
       fullPath: '/app/billing'
       preLoaderRoute: typeof AppBillingRouteImport
-      parentRoute: typeof rootRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/app/assets': {
+      id: '/app/assets'
+      path: '/assets'
+      fullPath: '/app/assets'
+      preLoaderRoute: typeof AppAssetsRouteImport
+      parentRoute: typeof AppRoute
     }
     '/demo/guitars/': {
       id: '/demo/guitars/'
@@ -655,19 +672,31 @@ declare module '@tanstack/react-router' {
   }
 }
 
+interface AppRouteChildren {
+  AppAssetsRoute: typeof AppAssetsRoute
+  AppBillingRoute: typeof AppBillingRoute
+  AppSettingsRoute: typeof AppSettingsRoute
+}
+
+const AppRouteChildren: AppRouteChildren = {
+  AppAssetsRoute: AppAssetsRoute,
+  AppBillingRoute: AppBillingRoute,
+  AppSettingsRoute: AppSettingsRoute,
+}
+
+const AppRouteWithChildren = AppRoute._addFileChildren(AppRouteChildren)
+
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   SlugRoute: SlugRoute,
   AboutRoute: AboutRoute,
-  AppRoute: AppRoute,
+  AppRoute: AppRouteWithChildren,
   CoinbaseSignInRoute: CoinbaseSignInRoute,
   ImprintRoute: ImprintRoute,
   LoginRoute: LoginRoute,
   PrivacyRoute: PrivacyRoute,
   SignUpRoute: SignUpRoute,
   TermsRoute: TermsRoute,
-  AppBillingRoute: AppBillingRoute,
-  AppSettingsRoute: AppSettingsRoute,
   ArticlesSlugRoute: ArticlesSlugRoute,
   AssetsAssetIdRoute: AssetsAssetIdRoute,
   DemoAiChatRoute: DemoAiChatRoute,

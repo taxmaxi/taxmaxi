@@ -226,6 +226,77 @@ const SOURCE_GRID_PATTERN = [
 const SOURCE_CHIP_PATTERN = [true, false, true, false, true, false, true, false, true] as const
 const integerFormatter = new Intl.NumberFormat("en-US", { maximumFractionDigits: 0 })
 
+/**
+ * Shared card chrome: size, rounding, padding, brand background, pattern,
+ * and gloss overlay. With a source it renders that source's brand styling;
+ * without one it renders a bare frame the caller styles via className.
+ */
+export function SourceCardShell({
+  children,
+  className,
+  height = "10.75rem",
+  onBlur,
+  onClick,
+  onMouseDown,
+  source,
+  style,
+  width = "17rem",
+}: {
+  children: React.ReactNode
+  className?: string
+  height?: number | string
+  onBlur?: React.FocusEventHandler<HTMLDivElement>
+  onClick?: React.MouseEventHandler<HTMLDivElement>
+  onMouseDown?: React.MouseEventHandler<HTMLDivElement>
+  source?: Source
+  style?: React.CSSProperties
+  width?: number | string
+}) {
+  const cardStyle = source === undefined ? undefined : getSourceCardStyle(source)
+
+  return (
+    <div
+      className={cn(
+        "relative flex flex-col justify-between overflow-hidden rounded-2xl p-5 text-left",
+        cardStyle ? "shadow-lg ring-1 ring-black/10" : undefined,
+        className
+      )}
+      onBlur={onBlur}
+      onClick={onClick}
+      onMouseDown={onMouseDown}
+      style={{
+        backgroundColor: cardStyle?.background,
+        color: cardStyle?.foreground,
+        height,
+        width,
+        ...style,
+      }}
+    >
+      {source ? <SourceCardPattern source={source} /> : null}
+      {cardStyle ? (
+        <span className="pointer-events-none absolute inset-0 bg-linear-to-br from-white/18 via-transparent to-black/18" />
+      ) : null}
+      {children}
+    </div>
+  )
+}
+
+/**
+ * The embossed chip block shared by all cards.
+ */
+export function SourceCardChip() {
+  return (
+    <span className="grid h-8 w-11 grid-cols-3 gap-0.5 rounded-md bg-white/45 p-1 shadow-inner ring-1 ring-black/10">
+      {SOURCE_CHIP_PATTERN.map((filled, chipIndex) => (
+        <span
+          className={cn("rounded-[1px]", filled ? "bg-black/35" : "bg-black/15")}
+          key={chipIndex}
+        />
+      ))}
+    </span>
+  )
+}
+
 export function SourceCard({
   action,
   className,
@@ -244,20 +315,7 @@ export function SourceCard({
   const style = getSourceCardStyle(source)
 
   return (
-    <span
-      className={cn(
-        "relative flex flex-col justify-between overflow-hidden rounded-2xl p-5 text-left shadow-lg ring-1 ring-black/10",
-        className
-      )}
-      style={{
-        backgroundColor: style.background,
-        color: style.foreground,
-        height,
-        width,
-      }}
-    >
-      <SourceCardPattern source={source} />
-      <span className="pointer-events-none absolute inset-0 bg-linear-to-br from-white/18 via-transparent to-black/18" />
+    <SourceCardShell className={className} height={height} source={source} width={width}>
       {isSyncing ? (
         <span
           aria-hidden="true"
@@ -280,14 +338,7 @@ export function SourceCard({
       </span>
 
       <span className="relative z-10 flex items-center justify-between">
-        <span className="grid h-8 w-11 grid-cols-3 gap-0.5 rounded-md bg-white/45 p-1 shadow-inner ring-1 ring-black/10">
-          {SOURCE_CHIP_PATTERN.map((filled, chipIndex) => (
-            <span
-              className={cn("rounded-[1px]", filled ? "bg-black/35" : "bg-black/15")}
-              key={chipIndex}
-            />
-          ))}
-        </span>
+        <SourceCardChip />
       </span>
 
       <span className="relative z-10 flex items-end justify-between gap-3">
@@ -304,11 +355,11 @@ export function SourceCard({
           {source.unresolvedItems > 0 ? `${source.unresolvedItems} open` : ""}
         </span> */}
       </span>
-    </span>
+    </SourceCardShell>
   )
 }
 
-function getSourceCardStyle(source: Source) {
+export function getSourceCardStyle(source: Source) {
   const knownStyle = getKnownSourceCardStyle(source)
 
   if (knownStyle) {
@@ -357,7 +408,7 @@ function hashString(value: string) {
   return hash
 }
 
-function SourceCardPattern({ source }: { source: Source }) {
+export function SourceCardPattern({ source }: { source: Source }) {
   const style = getSourceCardStyle(source)
 
   if (style.pattern === "grid") {

@@ -14,7 +14,12 @@ import * as Schema from "effect/Schema"
 import { AuthMiddleware } from "./AuthMiddleware.ts"
 import { ReportReviewReasonCode } from "@my/core/report"
 import { SyncCreditReasonCode } from "@my/core/billing"
-import { Source } from "@my/core/source"
+import {
+  ChainType,
+  NameServiceNamespace,
+  Source,
+  WalletNameResolutionErrorCode,
+} from "@my/core/source"
 import { InternalServerError, UnauthorizedError } from "./ApiErrors.ts"
 
 // =============================================================================
@@ -105,6 +110,44 @@ export class SourceCreateRequest extends Schema.Class<SourceCreateRequest>("Sour
   year: Schema.optional(Schema.Int.check(Schema.isGreaterThanOrEqualTo(2020))),
   jurisdiction: Schema.optional(Schema.Trimmed.check(Schema.isNonEmpty())),
 }) {}
+
+/**
+ * SourceNameResolveRequest - Request body for resolving a wallet name.
+ */
+export class SourceNameResolveRequest extends Schema.Class<SourceNameResolveRequest>(
+  "SourceNameResolveRequest"
+)({
+  name: Schema.Trimmed.check(Schema.isNonEmpty()),
+}) {}
+
+/**
+ * SourceNameResolveResponse - Resolved wallet name and address.
+ */
+export class SourceNameResolveResponse extends Schema.Class<SourceNameResolveResponse>(
+  "SourceNameResolveResponse"
+)({
+  name: Schema.String,
+  namespace: NameServiceNamespace,
+  resolvedAddress: Schema.String,
+  chainType: ChainType,
+}) {}
+
+/**
+ * SourceNameResolutionError - A wallet name could not be resolved.
+ *
+ * `code` is the stable contract for clients; `message` is developer-facing
+ * and not meant for display.
+ */
+export class SourceNameResolutionError extends Schema.TaggedError<SourceNameResolutionError>()(
+  "SourceNameResolutionError",
+  {
+    code: WalletNameResolutionErrorCode,
+    name: Schema.String,
+    namespace: Schema.NullOr(NameServiceNamespace),
+    message: Schema.String,
+  },
+  { httpApiStatus: 400 }
+) {}
 
 /**
  * SourceSyncCreditOutcomeResponse - Credit-required details for a resumable sync outcome.
@@ -499,6 +542,7 @@ const createSource = HttpApiEndpoint.post("createSource", "/sources", {
   success: SourceCreateResponse,
   error: [
     SourceBadRequestError,
+    SourceNameResolutionError,
     UnauthorizedError,
     SourcePaymentRequiredError,
     SourceCreditRequiredError,
@@ -685,6 +729,21 @@ const explainSourceDisposal = HttpApiEndpoint.get(
   })
 )
 
+/**
+ * POST /sources/resolve-name - Resolve a wallet name to an onchain address
+ */
+const resolveSourceName = HttpApiEndpoint.post("resolveSourceName", "/sources/resolve-name", {
+  payload: Schema.Struct(SourceNameResolveRequest.fields),
+  success: SourceNameResolveResponse,
+  error: [SourceNameResolutionError, InternalServerError],
+}).annotateMerge(
+  OpenApi.annotations({
+    summary: "Resolve wallet name",
+    description:
+      "Resolves a wallet name such as vitalik.eth or bonfida.sol to its onchain address, using a server-side cache. The name-service namespace is detected from the name itself.",
+  })
+)
+
 // =============================================================================
 // API Groups
 // =============================================================================
@@ -704,6 +763,7 @@ export class SourcesApi extends HttpApiGroup.make("sources")
   .add(listSourceTaxEvents)
   .add(listSourceFifoLots)
   .add(explainSourceDisposal)
+  .add(resolveSourceName)
   .middleware(AuthMiddleware)
   .add(createSource)
   .prefix("/v1")

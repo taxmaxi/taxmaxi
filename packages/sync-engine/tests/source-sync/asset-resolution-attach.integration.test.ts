@@ -25,6 +25,10 @@ import {
   AssetResolutionJobRepository,
   SourceSyncService,
 } from "@my/sync-engine/services"
+import {
+  AssetResolutionJupiterClient,
+  AssetResolutionJupiterRetryableError,
+} from "../../src/providers/jupiter/services/AssetResolutionJupiterClient.ts"
 import { AssetRepositoryLive } from "../../../persistence/src/layers/AssetRepositoryLive.ts"
 import { ProviderAssetRepositoryLive } from "../../../persistence/src/layers/ProviderAssetRepositoryLive.ts"
 import { ProviderReferenceRepositoryLive } from "../../../persistence/src/layers/ProviderReferenceRepositoryLive.ts"
@@ -204,6 +208,41 @@ const FakeAssetResolutionCoinGeckoClientLive = Layer.succeed(AssetResolutionCoin
   },
 })
 
+type FakeJupiterMode = "not_indexed" | "banned" | "suspicious" | "unverified" | "retryable"
+
+let jupiterMode: FakeJupiterMode = "not_indexed"
+
+const jupiterSearchPayload = (mode: FakeJupiterMode) => {
+  if (mode === "banned") {
+    return [{ id: ORB_MINT, name: "", symbol: "", tags: ["banned", "unknown"] }]
+  }
+  if (mode === "suspicious") {
+    return [{ id: ORB_MINT, name: "Orb Test Coin", symbol: "ORB", audit: { isSus: true } }]
+  }
+  if (mode === "unverified") {
+    return [{ id: ORB_MINT, name: "Orb Test Coin", symbol: "ORB" }]
+  }
+
+  return []
+}
+
+const FakeAssetResolutionJupiterClientLive = Layer.succeed(AssetResolutionJupiterClient, {
+  fetchTokenByMint: ({
+    mintAddress,
+  }): Effect.Effect<AssetResolutionRegistryEvidence, AssetResolutionJupiterRetryableError> => {
+    if (jupiterMode === "retryable") {
+      return Effect.fail(
+        new AssetResolutionJupiterRetryableError({ status: 429, cause: "rate limited" })
+      )
+    }
+
+    return Effect.succeed({
+      _tag: "payload" as const,
+      payload: mintAddress === ORB_MINT ? jupiterSearchPayload(jupiterMode) : [],
+    })
+  },
+})
+
 const CoinbaseReferenceMappingWithDepsLive = CoinbaseReferenceMappingServiceLive.pipe(
   Layer.provide(ProviderAssetRepositoryLive),
   Layer.provide(ProviderReferenceRepositoryLive),
@@ -245,7 +284,8 @@ const SourceSyncLayer = SourceSyncServiceLive.pipe(
 const AssetResolutionJobExecutorTestLive = AssetResolutionJobExecutorLive.pipe(
   Layer.provide(ProviderAssetRepositoryLive),
   Layer.provide(AssetRepositoryLive),
-  Layer.provide(FakeAssetResolutionCoinGeckoClientLive)
+  Layer.provide(FakeAssetResolutionCoinGeckoClientLive),
+  Layer.provide(FakeAssetResolutionJupiterClientLive)
 )
 
 const TestLayer = SourceSyncLayer.pipe(
@@ -641,7 +681,31 @@ const fetchAccountingState = () =>
       .from(schema.fifoLots)
       .where(eq(schema.fifoLots.sourceId, sourceId))
 
-    return { legs, fifoLots }
+    const rawRecords = yield* db
+      .select({ externalRecordId: schema.sourceRecordsRaw.externalRecordId })
+      .from(schema.sourceRecordsRaw)
+      .where(
+        and(
+          eq(schema.sourceRecordsRaw.sourceId, sourceId),
+          eq(schema.sourceRecordsRaw.externalRecordId, "tx-orb-buy-1")
+        )
+      )
+
+    const transactions = yield* db
+      .select({
+        id: schema.transactions.id,
+        externalId: schema.transactions.externalId,
+        sourceRawRecordId: schema.transactions.sourceRawRecordId,
+      })
+      .from(schema.transactions)
+      .where(
+        and(
+          eq(schema.transactions.sourceId, sourceId),
+          eq(schema.transactions.externalId, "tx-orb-buy-1")
+        )
+      )
+
+    return { legs, fifoLots, rawRecords, transactions }
   }).pipe(Effect.provide(TestPgClientLive))
 
 await Effect.runPromise(context.recreateTestDatabase())
@@ -651,6 +715,7 @@ describe("asset resolution attach and rebuild", () => {
     Effect.gen(function* () {
       providerFetchCount = 0
       coinGeckoMode = "success"
+      jupiterMode = "not_indexed"
       yield* context.recreateTestDatabase()
       yield* seedCoinbaseSource()
     }).pipe(Effect.runPromise)
@@ -707,6 +772,13 @@ describe("asset resolution attach and rebuild", () => {
             rawPayload: expect.objectContaining({
               payload: expect.objectContaining({ id: ORB_COINGECKO_ID }),
             }),
+          }),
+          expect.objectContaining({
+            authority: "jupiter",
+            claimKind: "legitimacy",
+            sourceLocator: `jupiter://tokens/v2/search?query=${ORB_MINT}`,
+            evidenceRevision: 1,
+            decodedClaim: null,
           }),
         ])
         expect(attachState.ownershipDecisions).toEqual([
@@ -801,6 +873,13 @@ describe("asset resolution attach and rebuild", () => {
             sourceLocator: `coingecko://coins/solana/contract/${ORB_MINT}`,
             evidenceRevision: 1,
             rawPayload: expect.objectContaining({ _tag: "registry_not_found" }),
+          }),
+          expect.objectContaining({
+            authority: "jupiter",
+            claimKind: "legitimacy",
+            sourceLocator: `jupiter://tokens/v2/search?query=${ORB_MINT}`,
+            evidenceRevision: 1,
+            decodedClaim: null,
           }),
         ])
         expect(state.ownershipDecisions).toEqual([
@@ -970,7 +1049,11 @@ describe("asset resolution attach and rebuild", () => {
         const failed = yield* runResolutionJob({ jobId }).pipe(Effect.result)
         expect(failed._tag).toBe("Failure")
         if (failed._tag === "Failure") {
-          expect(failed.failure).toBeInstanceOf(AssetResolutionCoinGeckoRetryableError)
+          expect(failed.failure).toMatchObject({
+            _tag: "AssetResolutionEvidenceRetryableError",
+            source: "coingecko",
+            status: 429,
+          })
         }
 
         const stateAfterFailure = yield* fetchAttachState()
@@ -1095,6 +1178,89 @@ describe("asset resolution attach and rebuild", () => {
     )
   })
 
+  it("fails closed and records Jupiter evidence when a settled representation is banned", async () => {
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        yield* runSync()
+        yield* insertOrbAsset()
+        yield* recordOrbSolanaObservation()
+        const firstJobId = yield* fetchPendingResolutionJobId()
+        const first = yield* runResolutionJob({ jobId: firstJobId })
+        expect(first.outcome).toBe("attached")
+
+        coinGeckoMode = "terminal"
+        jupiterMode = "banned"
+        yield* recordSecondProviderObservationOfOrbMint()
+        yield* scheduleSecondProviderResolutionJob()
+
+        const [secondJob] = yield* Effect.gen(function* () {
+          const db = yield* drizzle
+          return yield* db
+            .select({ id: schema.assetResolutionJobs.id })
+            .from(schema.assetResolutionJobs)
+            .where(eq(schema.assetResolutionJobs.providerAssetRowId, SECOND_PROVIDER_ASSET_ROW_ID))
+            .limit(1)
+        }).pipe(Effect.provide(TestPgClientLive))
+        if (secondJob === undefined) {
+          throw new Error("Expected a resolution job for the second provider asset")
+        }
+
+        const second = yield* runResolutionJob({ jobId: secondJob.id })
+        expect(second.outcome).toBe("fail_closed")
+
+        const result = yield* Effect.gen(function* () {
+          const db = yield* drizzle
+          const [mapping] = yield* db
+            .select({ mappingStatus: schema.providerAssetMappings.mappingStatus })
+            .from(schema.providerAssetMappings)
+            .where(
+              eq(schema.providerAssetMappings.providerAssetRowId, SECOND_PROVIDER_ASSET_ROW_ID)
+            )
+            .limit(1)
+          const [decision] = yield* db
+            .select({
+              id: schema.assetResolutionDecisions.id,
+              outcome: schema.assetResolutionDecisions.outcome,
+              reason: schema.assetResolutionDecisions.reason,
+            })
+            .from(schema.assetResolutionDecisions)
+            .where(
+              eq(schema.assetResolutionDecisions.providerAssetRowId, SECOND_PROVIDER_ASSET_ROW_ID)
+            )
+            .limit(1)
+          const evidence =
+            decision === undefined
+              ? []
+              : yield* db
+                  .select({
+                    authority: schema.assetResolutionEvidence.authority,
+                    decodedClaim: schema.assetResolutionEvidence.decodedClaim,
+                  })
+                  .from(schema.assetResolutionEvidence)
+                  .where(eq(schema.assetResolutionEvidence.decisionId, decision.id))
+
+          return { mapping, decision, evidence }
+        }).pipe(Effect.provide(TestPgClientLive))
+
+        expect(result.mapping).toMatchObject({ mappingStatus: "pending_review" })
+        expect(result.decision).toMatchObject({
+          outcome: "fail_closed",
+          reason: "conflicting_evidence",
+        })
+        expect(result.evidence).toHaveLength(2)
+        expect(result.evidence).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({ authority: "chain" }),
+            expect.objectContaining({
+              authority: "jupiter",
+              decodedClaim: expect.objectContaining({ verdict: "banned" }),
+            }),
+          ])
+        )
+      })
+    )
+  })
+
   it("records a fail_closed decision exactly once for a terminal CoinGecko failure", async () => {
     await Effect.runPromise(
       Effect.gen(function* () {
@@ -1121,6 +1287,276 @@ describe("asset resolution attach and rebuild", () => {
 
         const stateAfterDuplicate = yield* fetchAttachState()
         expect(stateAfterDuplicate.decisions).toHaveLength(1)
+      })
+    )
+  })
+
+  it("excludes a Jupiter-banned mint as a final answer and unblocks the calculation", async () => {
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        coinGeckoMode = "not_found"
+        jupiterMode = "banned"
+
+        yield* runSync()
+
+        const pendingTax = yield* calculateTax().pipe(Effect.result)
+        expect(pendingTax._tag).toBe("Failure")
+
+        yield* recordOrbSolanaObservation()
+        const jobId = yield* fetchPendingResolutionJobId()
+
+        const result = yield* runResolutionJob({ jobId })
+        expect(result.outcome).toBe("excluded")
+
+        const state = yield* fetchAttachState()
+        expect(state.mapping).toMatchObject({
+          mappingStatus: "excluded",
+          canonicalAssetId: null,
+          assetRepresentationId: null,
+        })
+        expect(state.decisions).toEqual([
+          expect.objectContaining({
+            outcome: "excluded",
+            reason: "authority_banned",
+            assetId: null,
+            actor: "system:asset-resolution-policy",
+          }),
+        ])
+        expect(state.evidence).toEqual([
+          expect.objectContaining({ authority: "chain", claimKind: "chain_fact" }),
+          expect.objectContaining({ authority: "coingecko" }),
+          expect.objectContaining({
+            authority: "jupiter",
+            claimKind: "legitimacy",
+            sourceLocator: `jupiter://tokens/v2/search?query=${ORB_MINT}`,
+            evidenceRevision: 1,
+            decodedClaim: expect.objectContaining({ verdict: "banned" }),
+            rawPayload: expect.objectContaining({
+              payload: [expect.objectContaining({ tags: ["banned", "unknown"] })],
+            }),
+          }),
+        ])
+        expect(state.representations).toEqual([])
+        expect(state.replayJobs).toContainEqual({ mode: "replay", status: "pending" })
+
+        const replay = yield* replaySource()
+        expect(replay.status).toBe("completed")
+
+        // The excluded observation's raw transaction stays stored, but it
+        // produces no derived accounting.
+        const accountingState = yield* fetchAccountingState()
+        expect(accountingState.legs).toEqual([])
+        expect(accountingState.fifoLots).toHaveLength(0)
+        expect(accountingState.rawRecords).toEqual([{ externalRecordId: "tx-orb-buy-1" }])
+        expect(accountingState.transactions).toEqual([
+          expect.objectContaining({
+            externalId: "tx-orb-buy-1",
+            sourceRawRecordId: expect.any(String),
+          }),
+        ])
+
+        // The exclusion is a final answer: the calculation completes instead
+        // of staying pending on the banned observation.
+        const taxAfterExclusion = yield* calculateTax()
+        expect(taxAfterExclusion.taxableGains).toBe(0)
+      })
+    )
+  })
+
+  it("keeps an exclusion settled when a later job runs at a new evidence revision", async () => {
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        coinGeckoMode = "not_found"
+        jupiterMode = "banned"
+
+        yield* runSync()
+        yield* recordOrbSolanaObservation()
+        const jobId = yield* fetchPendingResolutionJobId()
+
+        const first = yield* runResolutionJob({ jobId })
+        expect(first.outcome).toBe("excluded")
+
+        const duplicate = yield* runResolutionJob({ jobId })
+        expect(duplicate.outcome).toBe("already_claimed")
+
+        // Jupiter un-bans the mint and the observation's evidence changes:
+        // the new job completes without touching the recorded exclusion,
+        // because reversal requires a human-approved superseding decision.
+        jupiterMode = "unverified"
+        const secondJobId = "00000000-4000-4000-8000-000000000771"
+        yield* Effect.gen(function* () {
+          const db = yield* drizzle
+          const [providerAsset] = yield* db
+            .select({ id: schema.providerAssets.id })
+            .from(schema.providerAssets)
+            .where(
+              and(
+                eq(schema.providerAssets.provider, "coinbase"),
+                eq(schema.providerAssets.currencyCode, "ORB")
+              )
+            )
+            .limit(1)
+          if (providerAsset === undefined) {
+            return yield* Effect.die("Missing ORB provider asset fixture")
+          }
+
+          yield* db
+            .update(schema.providerAssets)
+            .set({ evidenceRevision: 2 })
+            .where(eq(schema.providerAssets.id, providerAsset.id))
+          yield* db.insert(schema.assetResolutionJobs).values({
+            id: secondJobId,
+            providerAssetRowId: providerAsset.id,
+            evidenceRevision: 2,
+            status: "pending",
+          })
+        }).pipe(Effect.provide(TestPgClientLive))
+
+        const second = yield* runResolutionJob({ jobId: secondJobId })
+        expect(second.outcome).toBe("excluded")
+
+        const state = yield* fetchAttachState()
+        expect(state.mapping).toMatchObject({ mappingStatus: "excluded" })
+        expect(state.decisions).toHaveLength(1)
+        expect(state.representations).toEqual([])
+
+        const secondJob = yield* fetchResolutionJobState({ jobId: secondJobId })
+        expect(secondJob.status).toBe("completed")
+      })
+    )
+  })
+
+  it("fails closed when Jupiter bans a mint that exact registry evidence would attach", async () => {
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        jupiterMode = "banned"
+
+        yield* runSync()
+        yield* insertOrbAsset()
+        yield* recordOrbSolanaObservation()
+        const jobId = yield* fetchPendingResolutionJobId()
+
+        const result = yield* runResolutionJob({ jobId })
+        expect(result.outcome).toBe("fail_closed")
+
+        const state = yield* fetchAttachState()
+        expect(state.mapping).toMatchObject({ mappingStatus: "pending_review" })
+        expect(state.decisions).toEqual([
+          expect.objectContaining({ outcome: "fail_closed", reason: "conflicting_evidence" }),
+        ])
+        expect(state.representations).toEqual([])
+      })
+    )
+  })
+
+  it("pauses on suspicious signals but creates when a later signal is unverified", async () => {
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        coinGeckoMode = "not_found"
+        jupiterMode = "suspicious"
+
+        yield* runSync()
+        yield* recordOrbSolanaObservation()
+        const jobId = yield* fetchPendingResolutionJobId()
+
+        const suspicious = yield* runResolutionJob({ jobId })
+        expect(suspicious.outcome).toBe("pending")
+
+        const state = yield* fetchAttachState()
+        expect(state.mapping).toMatchObject({ mappingStatus: "pending_review" })
+        expect(state.decisions).toEqual([
+          expect.objectContaining({ outcome: "pending", reason: "spam_evidence" }),
+        ])
+
+        // A suspicious-only observation keeps blocking the calculation: it
+        // is an open question, not a final exclusion.
+        const blockedTax = yield* calculateTax().pipe(Effect.result)
+        expect(blockedTax._tag).toBe("Failure")
+
+        // Unverified decides nothing: the same observation at a new evidence
+        // revision follows the normal standalone-create path.
+        jupiterMode = "unverified"
+        const secondJobId = "00000000-4000-4000-8000-000000000772"
+        yield* Effect.gen(function* () {
+          const db = yield* drizzle
+          const [providerAsset] = yield* db
+            .select({ id: schema.providerAssets.id })
+            .from(schema.providerAssets)
+            .where(
+              and(
+                eq(schema.providerAssets.provider, "coinbase"),
+                eq(schema.providerAssets.currencyCode, "ORB")
+              )
+            )
+            .limit(1)
+          if (providerAsset === undefined) {
+            return yield* Effect.die("Missing ORB provider asset fixture")
+          }
+
+          yield* db
+            .update(schema.providerAssets)
+            .set({ evidenceRevision: 2 })
+            .where(eq(schema.providerAssets.id, providerAsset.id))
+          yield* db.insert(schema.assetResolutionJobs).values({
+            id: secondJobId,
+            providerAssetRowId: providerAsset.id,
+            evidenceRevision: 2,
+            status: "pending",
+          })
+        }).pipe(Effect.provide(TestPgClientLive))
+
+        const unverified = yield* runResolutionJob({ jobId: secondJobId })
+        expect(unverified.outcome).toBe("created")
+
+        const unverifiedState = yield* fetchAttachState()
+        expect(unverifiedState.mapping).toMatchObject({ mappingStatus: "approved" })
+        expect(unverifiedState.representations).toEqual([
+          expect.objectContaining({ type: "token", mintAddress: ORB_MINT, decimals: 8 }),
+        ])
+      })
+    )
+  })
+
+  it("releases the job for retry on a transient Jupiter failure without recording a decision", async () => {
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        coinGeckoMode = "not_found"
+        jupiterMode = "retryable"
+
+        yield* runSync()
+        yield* recordOrbSolanaObservation()
+        const jobId = yield* fetchPendingResolutionJobId()
+
+        const failed = yield* runResolutionJob({ jobId }).pipe(Effect.result)
+        expect(failed._tag).toBe("Failure")
+        if (failed._tag === "Failure") {
+          expect(failed.failure).toMatchObject({
+            _tag: "AssetResolutionEvidenceRetryableError",
+            source: "jupiter",
+            status: 429,
+          })
+        }
+
+        const stateAfterFailure = yield* fetchAttachState()
+        expect(stateAfterFailure.decisions).toEqual([])
+
+        const jobAfterFailure = yield* fetchResolutionJobState({ jobId })
+        expect(jobAfterFailure.status).toBe("pending")
+        expect(jobAfterFailure.nextRetryAt).not.toBeNull()
+
+        // Once Jupiter recovers, the same job reaches the exclusion a
+        // first-attempt success would have.
+        jupiterMode = "banned"
+        yield* Effect.gen(function* () {
+          const db = yield* drizzle
+          yield* db
+            .update(schema.assetResolutionJobs)
+            .set({ nextRetryAt: new Date(Date.now() - 1000) })
+            .where(eq(schema.assetResolutionJobs.id, jobId))
+        }).pipe(Effect.provide(TestPgClientLive))
+
+        const retried = yield* runResolutionJob({ jobId })
+        expect(retried.outcome).toBe("excluded")
       })
     )
   })

@@ -51,6 +51,7 @@ import * as transactions from "./TransactionsTable.ts"
 import * as transferReconciliations from "./TransferReconciliationsTable.ts"
 import * as transfers from "./TransfersTable.ts"
 import * as users from "./UsersTable.ts"
+import * as walletNameCache from "./WalletNameCacheTable.ts"
 
 export const schema = {
   ...addresses,
@@ -106,6 +107,7 @@ export const schema = {
   ...transferReconciliations,
   ...transfers,
   ...users,
+  ...walletNameCache,
 }
 
 export type { Address } from "./AddressesTable.ts"
@@ -256,3 +258,4 @@ export type {
 } from "./TransferReconciliationsTable.ts"
 export type { Transfer, TransferInsert, TransferType } from "./TransfersTable.ts"
 export type { UserRow } from "./UsersTable.ts"
+export type { WalletNameCacheInsert, WalletNameCacheRow } from "./WalletNameCacheTable.ts"

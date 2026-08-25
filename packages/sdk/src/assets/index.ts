@@ -95,7 +95,7 @@ export type PendingAssetListInput = {
 
 export type ProviderAssetReviewListInput = {
   readonly provider?: string
-  readonly status?: "approved" | "pending_review" | "rejected"
+  readonly status?: "approved" | "excluded" | "pending_review" | "rejected"
   readonly cursor?: string | null
   readonly limit?: number
 }

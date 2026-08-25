@@ -16,7 +16,12 @@ export interface PersistSourceSyncProgressParams {
   readonly sourceId: string
   readonly jobId: string
   readonly state: SourceSyncExecutionState
-  readonly lastSyncedAt: Date | null
+  /**
+   * When the source last finished fetching from its provider. Omit to keep
+   * the stored value unchanged: replay runs process already imported data
+   * and must not look like a provider fetch.
+   */
+  readonly lastSyncedAt?: Date | null
   readonly lastErrorMessage: string | null
 }
 

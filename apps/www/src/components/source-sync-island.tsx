@@ -19,6 +19,12 @@ import { cn } from "#/lib/utils"
 export type SourceSyncStatus = SourceSyncJob["status"]
 export type SourceSyncPhase = NonNullable<SourceSyncJob["phase"]>
 
+/**
+ * How the job was started. The job status endpoint does not report this, so
+ * the client stamps it from the call it made and carries it through polling.
+ */
+export type SourceSyncMode = "sync" | "replay"
+
 export const SOURCE_SYNC_PROGRESS = {
   classificationStart: 50,
   completed: 100,
@@ -69,6 +75,7 @@ export type SourceSyncIslandItem = {
   sourceName: string
   status: SourceSyncStatus
   progress: number
+  mode?: SourceSyncMode
   phase?: SourceSyncPhase
   processedRecords?: number
   totalRecords?: number
@@ -251,15 +258,20 @@ const CONTENT_TRANSITION = {
 }
 
 // A function rather than a map so the localized labels follow the active
-// locale instead of freezing at module load.
-function getStatusLabel(status: SourceSyncStatus): string {
+// locale instead of freezing at module load. Replay jobs get their own
+// running/completed wording; the other states read the same for both modes.
+function getStatusLabel({ mode, status }: Pick<SourceSyncIslandItem, "mode" | "status">): string {
   switch (status) {
     case "queued":
       return m["app.syncIsland.status.queued"]()
     case "running":
-      return m["app.syncIsland.status.running"]()
+      return mode === "replay"
+        ? m["app.syncIsland.replayStatus.running"]()
+        : m["app.syncIsland.status.running"]()
     case "completed":
-      return m["app.syncIsland.status.completed"]()
+      return mode === "replay"
+        ? m["app.syncIsland.replayStatus.completed"]()
+        : m["app.syncIsland.status.completed"]()
     case "failed":
       return m["app.syncIsland.status.failed"]()
     case "credit_required":
@@ -681,9 +693,7 @@ function SyncQueue({ items }: { items: ReadonlyArray<SourceSyncIslandItem> }) {
         {visibleItems.map((item) => (
           <li className="flex items-center justify-between gap-3 text-xs" key={item.id}>
             <span className="truncate text-sync-island-foreground">{item.sourceName}</span>
-            <span className={cn("shrink-0", statusTone[item.status])}>
-              {getStatusLabel(item.status)}
-            </span>
+            <span className={cn("shrink-0", statusTone[item.status])}>{getStatusLabel(item)}</span>
           </li>
         ))}
       </ul>
@@ -701,16 +711,23 @@ function SyncQueue({ items }: { items: ReadonlyArray<SourceSyncIslandItem> }) {
 function getIslandHeadline(items: ReadonlyArray<SourceSyncIslandItem>): string {
   const primaryItem = items[0]
   const sourceNames = getSourceNames(items)
+  const isReplay = primaryItem?.mode === "replay"
 
   switch (primaryItem?.status) {
     case "queued":
       return m["app.syncIsland.headline.queued"]({ sourceNames })
     case "running":
-      return m["app.syncIsland.headline.running"]({ sourceNames })
+      return isReplay
+        ? m["app.syncIsland.replayHeadline.running"]({ sourceNames })
+        : m["app.syncIsland.headline.running"]({ sourceNames })
     case "completed":
-      return m["app.syncIsland.headline.completed"]({ sourceNames })
+      return isReplay
+        ? m["app.syncIsland.replayHeadline.completed"]({ sourceNames })
+        : m["app.syncIsland.headline.completed"]({ sourceNames })
     case "failed":
-      return m["app.syncIsland.headline.failed"]({ sourceNames })
+      return isReplay
+        ? m["app.syncIsland.replayHeadline.failed"]({ sourceNames })
+        : m["app.syncIsland.headline.failed"]({ sourceNames })
     case "credit_required":
       return m["app.syncIsland.creditRequired.headline"]({ sourceNames })
     default:
