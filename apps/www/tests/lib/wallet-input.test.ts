@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 
-import { parseWalletInput } from "#/lib/wallet-input"
+import { parseResolveErrorCode, parseWalletInput } from "#/lib/wallet-input"
 
 const EVM_ADDRESS = "0x24a9db9c9c6bcbba1a1ea88d9769cd48eb0efb1a"
 const SOLANA_ADDRESS = "9xQeWvG816bUx9EPjHmaT23yvVM2ZWbrrpZb9PusVFin"
@@ -78,5 +78,21 @@ describe("parseWalletInput", () => {
   it("rejects input that cannot become an address or name", () => {
     expect(parseWalletInput("not a wallet")).toEqual({ kind: "invalid" })
     expect(parseWalletInput("0xZZZZ")).toEqual({ kind: "invalid" })
+  })
+})
+
+describe("parseResolveErrorCode", () => {
+  it("reads a code from the error itself", () => {
+    expect(parseResolveErrorCode({ code: "name_unresolved" })).toBe("name_unresolved")
+  })
+
+  it("reads a code one cause level down", () => {
+    expect(parseResolveErrorCode({ cause: { code: "rate_limited" } })).toBe("rate_limited")
+  })
+
+  it("returns undefined for unknown shapes and codes", () => {
+    expect(parseResolveErrorCode(new Error("boom"))).toBeUndefined()
+    expect(parseResolveErrorCode({ code: "something_else" })).toBeUndefined()
+    expect(parseResolveErrorCode(undefined)).toBeUndefined()
   })
 })

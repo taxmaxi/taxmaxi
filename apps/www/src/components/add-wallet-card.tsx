@@ -4,7 +4,12 @@ import { ArrowRight, Loader2, Plus } from "lucide-react"
 
 import { m } from "#/paraglide/messages"
 import { cn } from "#/lib/utils"
-import { parseWalletInput, type WalletChain } from "#/lib/wallet-input"
+import {
+  parseResolveErrorCode,
+  parseWalletInput,
+  type ResolveErrorCode,
+  type WalletChain,
+} from "#/lib/wallet-input"
 
 import { getSourceCardStyle, SourceCardChip, SourceCardShell, type Source } from "./source-card"
 
@@ -13,11 +18,11 @@ import { getSourceCardStyle, SourceCardChip, SourceCardShell, type Source } from
  * types. It renders the same card chrome as real source cards; only the
  * bottom row differs, carrying the address form instead of the card number.
  * Chain detection drives the styling: a valid Solana or EVM address restyles
- * the card with that chain's brand colors before submit, and ENS names morph
- * to Ethereum styling while the address resolves.
+ * the card with that chain's brand colors before submit, and wallet names
+ * (ENS, SNS) morph to their chain's styling while the address resolves.
  */
 
-const ENS_RESOLVE_DEBOUNCE_MS = 400
+const NAME_RESOLVE_DEBOUNCE_MS = 400
 
 const PREVIEW_SOURCES: Record<WalletChain, Source> = {
   evm: {
@@ -40,8 +45,8 @@ const PREVIEW_SOURCES: Record<WalletChain, Source> = {
   },
 }
 
-export type EnsResolution = {
-  readonly ensName: string
+export type NameResolution = {
+  readonly name: string
   readonly resolvedAddress: string
 }
 
@@ -49,14 +54,14 @@ export function AddWalletCard({
   active = false,
   height = "10.75rem",
   onActiveChange,
-  onResolveEnsName,
+  onResolveName,
   onSubmit,
   width = "17rem",
 }: {
   active?: boolean
   height?: number | string
   onActiveChange?: (active: boolean) => void
-  onResolveEnsName?: (name: string) => Promise<EnsResolution>
+  onResolveName?: (name: string) => Promise<NameResolution>
   onSubmit: (walletAddress: string) => Promise<void>
   width?: number | string
 }) {
@@ -65,18 +70,16 @@ export function AddWalletCard({
   const [value, setValue] = useState("")
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [hasSubmitError, setHasSubmitError] = useState(false)
-  const [resolution, setResolution] = useState<EnsResolution | undefined>()
+  const [resolution, setResolution] = useState<NameResolution | undefined>()
   const [isResolving, setIsResolving] = useState(false)
-  const [hasResolveError, setHasResolveError] = useState(false)
+  const [resolveError, setResolveError] = useState<ResolveErrorCode | "unknown" | undefined>()
 
   const parse = parseWalletInput(value)
   const detectedChain = parse.kind === "address" ? parse.chain : undefined
-  const ensName =
-    parse.kind === "name" && parse.chain === "evm" && onResolveEnsName !== undefined
-      ? parse.name
-      : undefined
-  const resolvedForCurrentName = resolution?.ensName === ensName ? resolution : undefined
-  const previewChain = detectedChain ?? (ensName === undefined ? undefined : "evm")
+  const nameChain = parse.kind === "name" ? parse.chain : undefined
+  const walletName = parse.kind === "name" && onResolveName !== undefined ? parse.name : undefined
+  const resolvedForCurrentName = resolution?.name === walletName ? resolution : undefined
+  const previewChain = detectedChain ?? (walletName === undefined ? undefined : nameChain)
   const hintChain = previewChain ?? (parse.kind === "partial" ? parse.hint : undefined)
   const previewSource = previewChain === undefined ? undefined : PREVIEW_SOURCES[previewChain]
   const previewStyle = previewSource === undefined ? undefined : getSourceCardStyle(previewSource)
@@ -88,12 +91,12 @@ export function AddWalletCard({
       ? parse.address
       : resolvedForCurrentName === undefined
         ? undefined
-        : resolvedForCurrentName.ensName
+        : resolvedForCurrentName.name
   const canSubmit = submitValue !== undefined && !isSubmitting
 
   const title =
-    ensName !== undefined
-      ? ensName
+    walletName !== undefined
+      ? walletName
       : detectedChain === "evm"
         ? m["app.addWallet.previewNameEvm"]()
         : detectedChain === "solana"
@@ -102,47 +105,47 @@ export function AddWalletCard({
 
   const { isStatusError, statusText } = getStatusLine({
     detectedChain,
-    hasResolveError,
     hasSubmitError,
     isResolving,
     parse,
+    resolveError,
     resolvedAddress: resolvedForCurrentName?.resolvedAddress,
-    supportsEnsNames: onResolveEnsName !== undefined,
+    supportsNames: onResolveName !== undefined,
   })
 
   useEffect(() => {
-    if (ensName === undefined || onResolveEnsName === undefined) {
+    if (walletName === undefined || onResolveName === undefined) {
       setIsResolving(false)
-      setHasResolveError(false)
+      setResolveError(undefined)
       return
     }
 
     let cancelled = false
     setIsResolving(true)
-    setHasResolveError(false)
+    setResolveError(undefined)
 
     const handle = window.setTimeout(() => {
-      onResolveEnsName(ensName).then(
+      onResolveName(walletName).then(
         (result) => {
           if (!cancelled) {
             setResolution(result)
             setIsResolving(false)
           }
         },
-        () => {
+        (error: unknown) => {
           if (!cancelled) {
-            setHasResolveError(true)
+            setResolveError(parseResolveErrorCode(error) ?? "unknown")
             setIsResolving(false)
           }
         }
       )
-    }, ENS_RESOLVE_DEBOUNCE_MS)
+    }, NAME_RESOLVE_DEBOUNCE_MS)
 
     return () => {
       cancelled = true
       window.clearTimeout(handle)
     }
-  }, [ensName, onResolveEnsName])
+  }, [walletName, onResolveName])
 
   // Resting slots stay empty: a half-typed or morphed ghost card left in the
   // fan would read as an already-added wallet.
@@ -150,7 +153,7 @@ export function AddWalletCard({
     setValue("")
     setHasSubmitError(false)
     setResolution(undefined)
-    setHasResolveError(false)
+    setResolveError(undefined)
     onActiveChange?.(false)
   }
 
@@ -240,7 +243,7 @@ export function AddWalletCard({
           </span>
           <span
             className={cn(
-              "mt-1 line-clamp-2 text-xs leading-snug",
+              "mt-1 block truncate text-xs transition-colors duration-150",
               isStatusError ? "text-destructive" : undefined,
               resolvedForCurrentName === undefined ? undefined : "font-mono tabular-nums"
             )}
@@ -281,8 +284,13 @@ export function AddWalletCard({
           className={cn(
             "h-9 min-w-0 flex-1 rounded-lg border px-2.5 font-mono text-xs tabular-nums outline-none transition-colors",
             previewStyle
-              ? "border-white/24 bg-white/16 text-current placeholder:text-current/45 backdrop-blur-md focus-visible:ring-2 focus-visible:ring-white/35"
-              : "border-border bg-background/80 text-foreground placeholder:text-muted-foreground/70 focus-visible:ring-2 focus-visible:ring-ring/40"
+              ? "bg-white/16 text-current placeholder:text-current/45 backdrop-blur-md focus-visible:ring-2"
+              : "bg-background/80 text-foreground placeholder:text-muted-foreground/70 focus-visible:ring-2",
+            isStatusError
+              ? "border-destructive/70 focus-visible:ring-destructive/40"
+              : previewStyle
+                ? "border-white/24 focus-visible:ring-white/35"
+                : "border-border focus-visible:ring-ring/40"
           )}
           disabled={isSubmitting}
           onChange={(event) => {
@@ -330,29 +338,42 @@ function formatResolvedAddress(address: string): string {
   return address.length <= 14 ? address : `${address.slice(0, 6)}…${address.slice(-4)}`
 }
 
+function resolveErrorMessage(code: ResolveErrorCode | "unknown"): string {
+  switch (code) {
+    case "name_unresolved":
+      return m["app.addWallet.resolveErrorNameUnresolved"]()
+    case "network_unavailable":
+      return m["app.addWallet.resolveErrorNetworkUnavailable"]()
+    case "rate_limited":
+      return m["app.addWallet.resolveErrorRateLimited"]()
+    default:
+      return m["app.addWallet.resolveError"]()
+  }
+}
+
 function getStatusLine({
   detectedChain,
-  hasResolveError,
   hasSubmitError,
   isResolving,
   parse,
+  resolveError,
   resolvedAddress,
-  supportsEnsNames,
+  supportsNames,
 }: {
   detectedChain: WalletChain | undefined
-  hasResolveError: boolean
   hasSubmitError: boolean
   isResolving: boolean
   parse: ReturnType<typeof parseWalletInput>
+  resolveError: ResolveErrorCode | "unknown" | undefined
   resolvedAddress: string | undefined
-  supportsEnsNames: boolean
+  supportsNames: boolean
 }): { isStatusError: boolean; statusText: string } {
   if (hasSubmitError) {
     return { isStatusError: true, statusText: m["app.addWallet.error"]() }
   }
 
   if (parse.kind === "name") {
-    if (parse.chain === "solana" || !supportsEnsNames) {
+    if (!supportsNames) {
       return { isStatusError: false, statusText: m["app.addWallet.nameUnsupported"]() }
     }
 
@@ -360,8 +381,8 @@ function getStatusLine({
       return { isStatusError: false, statusText: m["app.addWallet.resolving"]() }
     }
 
-    if (hasResolveError) {
-      return { isStatusError: true, statusText: m["app.addWallet.resolveError"]() }
+    if (resolveError !== undefined) {
+      return { isStatusError: true, statusText: resolveErrorMessage(resolveError) }
     }
 
     if (resolvedAddress !== undefined) {

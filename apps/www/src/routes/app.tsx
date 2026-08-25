@@ -83,8 +83,8 @@ function RouteComponent() {
     [taxmaxi]
   )
 
-  const resolveEnsName = useCallback(
-    async (name: string) => taxmaxi().sources.resolveEns({ name }),
+  const resolveName = useCallback(
+    async (name: string) => taxmaxi().sources.resolveName({ name }),
     [taxmaxi]
   )
 
@@ -141,7 +141,7 @@ function RouteComponent() {
         onSourceSyncCompleted={onSourceSyncCompleted}
         onUnauthorized={onUnauthorized}
         replaySourceSync={replaySourceSync}
-        resolveEnsName={resolveEnsName}
+        resolveName={resolveName}
         startSourceSync={startSourceSync}
       />
       <Outlet />

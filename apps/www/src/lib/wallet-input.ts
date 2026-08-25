@@ -6,6 +6,8 @@
  * every input on create anyway.
  */
 
+import { z } from "zod"
+
 export type WalletChain = "evm" | "solana"
 
 export type WalletInputParse =
@@ -38,6 +40,40 @@ function detectNameChain(value: string): WalletChain | undefined {
   )
 
   return isEnsName ? "evm" : undefined
+}
+
+/**
+ * Stable resolution error codes sent by the backend. Mirrors
+ * WALLET_NAME_RESOLUTION_ERROR_CODES in @my/core without importing it:
+ * apps/www stays Effect-free.
+ */
+export const RESOLVE_ERROR_CODES = [
+  "invalid_name",
+  "name_unresolved",
+  "network_unavailable",
+  "rate_limited",
+  "resolution_failed",
+] as const
+
+export type ResolveErrorCode = (typeof RESOLVE_ERROR_CODES)[number]
+
+const resolveErrorSchema = z.object({ code: z.enum(RESOLVE_ERROR_CODES) })
+const resolveErrorCauseSchema = z.object({ cause: resolveErrorSchema })
+
+/**
+ * Pulls the stable resolution error code out of an unknown SDK rejection,
+ * looking at the error itself and one `cause` level down.
+ */
+export function parseResolveErrorCode(error: unknown): ResolveErrorCode | undefined {
+  const direct = resolveErrorSchema.safeParse(error)
+
+  if (direct.success) {
+    return direct.data.code
+  }
+
+  const nested = resolveErrorCauseSchema.safeParse(error)
+
+  return nested.success ? nested.data.cause.code : undefined
 }
 
 /**

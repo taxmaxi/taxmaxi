@@ -693,9 +693,7 @@ function SyncQueue({ items }: { items: ReadonlyArray<SourceSyncIslandItem> }) {
         {visibleItems.map((item) => (
           <li className="flex items-center justify-between gap-3 text-xs" key={item.id}>
             <span className="truncate text-sync-island-foreground">{item.sourceName}</span>
-            <span className={cn("shrink-0", statusTone[item.status])}>
-              {getStatusLabel(item)}
-            </span>
+            <span className={cn("shrink-0", statusTone[item.status])}>{getStatusLabel(item)}</span>
           </li>
         ))}
       </ul>

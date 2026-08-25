@@ -3,9 +3,9 @@ import * as Effect from "effect/Effect"
 import * as Schema from "effect/Schema"
 import {
   detectAddressChainType,
-  parseAddressOrEns,
+  parseAddressOrName,
   parseCryptoAddress,
-  ValidatedAddressOrEns,
+  ValidatedAddressOrName,
   ValidatedCryptoAddress,
 } from "../../src/source/index.ts"
 
@@ -34,22 +34,29 @@ describe("WalletInput", () => {
     ).rejects.toThrow("Invalid crypto address.")
   })
 
-  it("parses ENS separately from direct addresses", async () => {
+  it("parses wallet names separately from direct addresses", async () => {
     const parsed = await Effect.runPromise(
-      Schema.decodeUnknownEffect(ValidatedAddressOrEns)("Vitalik.eth")
+      Schema.decodeUnknownEffect(ValidatedAddressOrName)("Vitalik.eth")
     )
 
     expect(parsed).toEqual({
-      type: "ens",
-      ensName: "vitalik.eth",
+      type: "name",
+      namespace: "ens",
+      name: "vitalik.eth",
     })
-    expect(parseAddressOrEns("0x742d35Cc6634C0532925a3b844Bc454e4438f44e")).toEqual({
+    expect(parseAddressOrName("Bonfida.sol")).toEqual({
+      type: "name",
+      namespace: "sns",
+      name: "bonfida.sol",
+    })
+    expect(parseAddressOrName("0x742d35Cc6634C0532925a3b844Bc454e4438f44e")).toEqual({
       type: "address",
       address: "0x742d35Cc6634C0532925a3b844Bc454e4438f44e",
       chainType: "evm",
     })
+    expect(parseAddressOrName(".sol")).toBeNull()
     await expect(
-      Effect.runPromise(Schema.decodeUnknownEffect(ValidatedAddressOrEns)("not-an-address"))
-    ).rejects.toThrow("Invalid input. Must be a valid crypto address or ENS name.")
+      Effect.runPromise(Schema.decodeUnknownEffect(ValidatedAddressOrName)("not-an-address"))
+    ).rejects.toThrow("Invalid input. Must be a valid crypto address or wallet name.")
   })
 })

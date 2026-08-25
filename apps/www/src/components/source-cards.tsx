@@ -5,7 +5,7 @@ import { RefreshCw } from "lucide-react"
 
 import { cn } from "#/lib/utils"
 
-import { AddWalletCard, type EnsResolution } from "./add-wallet-card"
+import { AddWalletCard, type NameResolution } from "./add-wallet-card"
 import { SourceCard, type Source } from "./source-card"
 import { ContentContainer } from "./content-container"
 
@@ -144,7 +144,7 @@ export function SourceCards({
   className,
   contentClassName,
   onAddWallet,
-  onResolveEnsName,
+  onResolveName,
   onSelectedSourceIdChange,
   onSourceSync,
   selectedSourceId,
@@ -155,7 +155,7 @@ export function SourceCards({
   className?: string
   contentClassName?: string
   onAddWallet?: (walletAddress: string) => Promise<void>
-  onResolveEnsName?: (name: string) => Promise<EnsResolution>
+  onResolveName?: (name: string) => Promise<NameResolution>
   onSelectedSourceIdChange?: (sourceId: Source["id"] | undefined) => void
   onSourceSync?: (source: Source) => void | Promise<void>
   selectedSourceId?: Source["id"]
@@ -169,7 +169,7 @@ export function SourceCards({
     >
       <SourceCardRail
         onAddWallet={onAddWallet}
-        onResolveEnsName={onResolveEnsName}
+        onResolveName={onResolveName}
         onSelectedSourceIdChange={onSelectedSourceIdChange}
         onSourceSync={onSourceSync}
         selectedSourceId={selectedSourceId}
@@ -196,7 +196,7 @@ export function SourceCards({
 
 function SourceCardRail({
   onAddWallet,
-  onResolveEnsName,
+  onResolveName,
   onSelectedSourceIdChange,
   onSourceSync,
   selectedSourceId,
@@ -204,7 +204,7 @@ function SourceCardRail({
   sources,
 }: {
   onAddWallet?: (walletAddress: string) => Promise<void>
-  onResolveEnsName?: (name: string) => Promise<EnsResolution>
+  onResolveName?: (name: string) => Promise<NameResolution>
   onSelectedSourceIdChange?: (sourceId: Source["id"] | undefined) => void
   onSourceSync?: (source: Source) => void | Promise<void>
   selectedSourceId?: Source["id"]
@@ -271,7 +271,7 @@ function SourceCardRail({
               isAddingWallet={isAddingWallet}
               layout={stackLayout}
               onAddWallet={onAddWallet}
-              onResolveEnsName={onResolveEnsName}
+              onResolveName={onResolveName}
               onAddingWalletChange={setIsAddingWallet}
               onSelectedSourceIdChange={onSelectedSourceIdChange}
               onSourceSync={onSourceSync}
@@ -291,7 +291,7 @@ function SourceCardStack({
   layout,
   onAddWallet,
   onAddingWalletChange,
-  onResolveEnsName,
+  onResolveName,
   onSelectedSourceIdChange,
   onSourceSync,
   selectedSourceId,
@@ -301,7 +301,7 @@ function SourceCardStack({
   isAddingWallet: boolean
   layout: SourceStackLayout
   onAddWallet?: (walletAddress: string) => Promise<void>
-  onResolveEnsName?: (name: string) => Promise<EnsResolution>
+  onResolveName?: (name: string) => Promise<NameResolution>
   onAddingWalletChange: (isAddingWallet: boolean) => void
   onSelectedSourceIdChange?: (sourceId: Source["id"] | undefined) => void
   onSourceSync?: (source: Source) => void | Promise<void>
@@ -413,7 +413,7 @@ function SourceCardStack({
               active={isAddingWallet}
               height={SOURCE_STACK.cardHeight}
               onActiveChange={onAddingWalletChange}
-              onResolveEnsName={onResolveEnsName}
+              onResolveName={onResolveName}
               onSubmit={onAddWallet}
               width={SOURCE_STACK.cardWidth}
             />

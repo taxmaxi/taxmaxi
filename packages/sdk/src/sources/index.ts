@@ -1,6 +1,7 @@
 import {
   SourceCreateRequest,
   SourceCreateResponse,
+  SourceNameResolveResponse,
   SourceAssetPnlResponse,
   SourceDisposalExplanationResponse,
   SourceFifoLotsResponse,
@@ -21,6 +22,7 @@ export type Source = SourceList["sources"][number]
 export type SourceCreateInput = SourceCreateRequest
 export type SourceCreate = Schema.Codec.Encoded<typeof SourceCreateResponse>
 export type SourceList = Schema.Codec.Encoded<typeof SourceListResponse>
+export type SourceNameResolve = Schema.Codec.Encoded<typeof SourceNameResolveResponse>
 export type SourceSyncStart = Schema.Codec.Encoded<typeof SourceSyncStartResponse>
 export type SourceSyncJob = Schema.Codec.Encoded<typeof SourceSyncJobResponse>
 export type TaxCalculation = Schema.Codec.Encoded<typeof TaxCalculationResponse>
@@ -35,6 +37,10 @@ export type SourceDisposalExplanation = Schema.Codec.Encoded<
 
 export type SourceIdInput = {
   readonly sourceId: string
+}
+
+export type SourceNameResolveInput = {
+  readonly name: string
 }
 
 export type SourceReportPageInput = SourceIdInput & {
@@ -55,6 +61,9 @@ export type CalculateTaxInput = SourceIdInput & TaxCalculationRequest
 export type SourcesEffectResource = {
   readonly list: () => Effect.Effect<SourceList, unknown, never>
   readonly create: (input: SourceCreateInput) => Effect.Effect<SourceCreate, unknown, never>
+  readonly resolveName: (
+    input: SourceNameResolveInput
+  ) => Effect.Effect<SourceNameResolve, unknown, never>
   readonly startSync: (input: SourceIdInput) => Effect.Effect<SourceSyncStart, unknown, never>
   readonly replaySync: (input: SourceIdInput) => Effect.Effect<SourceSyncStart, unknown, never>
   readonly getSyncJob: (input: SourceSyncJobInput) => Effect.Effect<SourceSyncJob, unknown, never>
@@ -78,6 +87,7 @@ export type SourcesEffectResource = {
 export type SourcesPromiseResource = {
   readonly list: () => Promise<SourceList>
   readonly create: (input: SourceCreateInput) => Promise<SourceCreate>
+  readonly resolveName: (input: SourceNameResolveInput) => Promise<SourceNameResolve>
   readonly startSync: (input: SourceIdInput) => Promise<SourceSyncStart>
   readonly replaySync: (input: SourceIdInput) => Promise<SourceSyncStart>
   readonly getSyncJob: (input: SourceSyncJobInput) => Promise<SourceSyncJob>
@@ -94,6 +104,7 @@ export type SourcesPromiseResource = {
 
 const encodeSourceList = Schema.encodeSync(SourceListResponse)
 const encodeSourceCreate = Schema.encodeSync(SourceCreateResponse)
+const encodeSourceNameResolve = Schema.encodeSync(SourceNameResolveResponse)
 const encodeSourceSyncStart = Schema.encodeSync(SourceSyncStartResponse)
 const encodeSourceSyncJob = Schema.encodeSync(SourceSyncJobResponse)
 const encodeTaxCalculation = Schema.encodeSync(TaxCalculationResponse)
@@ -120,6 +131,17 @@ export const makeSourcesEffectResource = (
         })
       ),
       encodeSourceCreate
+    ),
+  resolveName: (input) =>
+    Effect.map(
+      Effect.flatMap(client, (resolved) =>
+        resolved.sources.resolveSourceName({
+          payload: {
+            name: input.name,
+          },
+        })
+      ),
+      encodeSourceNameResolve
     ),
   startSync: ({ sourceId }) =>
     Effect.map(
@@ -257,6 +279,7 @@ export const makeSourcesPromiseResource = (
 ): SourcesPromiseResource => ({
   list: () => run(effect.list()),
   create: (input) => run(effect.create(input)),
+  resolveName: (input) => run(effect.resolveName(input)),
   startSync: (input) => run(effect.startSync(input)),
   replaySync: (input) => run(effect.replaySync(input)),
   getSyncJob: (input) => run(effect.getSyncJob(input)),

@@ -92,16 +92,16 @@
       "creditRequired": {
         "statusLabel": "Guthaben nötig",
         "headline": "Guthaben nötig, um {sourceNames} weiter zu synchronisieren",
-        "pausedNoDetails": "Diese Synchronisierung pausiert, bis du Transaktionsguthaben hinzufügst.",
-        "pausedIntro": "Diese Synchronisierung pausiert: Dein Transaktionsguthaben ist aufgebraucht.",
+        "pausedNoDetails": "Sync pausiert, bis du Guthaben hinzufügst.",
+        "pausedIntro": "Sync pausiert: Dein Guthaben ist aufgebraucht.",
         "coveredOne": "{count} Transaktion ist bereits importiert und bleibt erhalten.",
         "coveredMany": "{count} Transaktionen sind bereits importiert und bleiben erhalten.",
-        "addUnknown": "Füge Guthaben hinzu, um die Synchronisierung abzuschließen.",
-        "addOne": "Füge bis zu {count} weiteres Guthaben hinzu, um die Synchronisierung abzuschließen.",
-        "addMany": "Füge bis zu {count} weitere Guthaben hinzu, um die Synchronisierung abzuschließen.",
+        "addUnknown": "Füge Guthaben hinzu, um dSync abzuschließen.",
+        "addOne": "Füge bis zu {count} weiteres Guthaben hinzu, um die Sync abzuschließen.",
+        "addMany": "Füge bis zu {count} weitere Guthaben hinzu, um die Sync abzuschließen.",
         "choosePlan": "Tarif wählen",
         "buyCredits": "Guthaben kaufen",
-        "notStarted": "Diese Synchronisierung braucht Transaktionsguthaben, bevor sie starten kann. Füge Guthaben hinzu und starte sie erneut."
+        "notStarted": "Sync braucht Guthaben, bevor sie starten kann. Füge Guthaben hinzu und starte sie erneut."
       },
       "status": {
         "queued": "Wartet",
@@ -113,8 +113,8 @@
         "queued": "Warten auf {sourceNames}",
         "running": "Synchronisiere {sourceNames}",
         "completed": "{sourceNames} synchronisiert",
-        "failed": "Synchronisierung von {sourceNames} fehlgeschlagen",
-        "fallback": "Synchronisierung läuft"
+        "failed": "Sync von {sourceNames} fehlgeschlagen",
+        "fallback": "Sync läuft"
       },
       "replayHeadline": {
         "running": "Verarbeite {sourceNames} neu",
@@ -151,25 +151,28 @@
     },
     "sourceMenu": {
       "label": "Quellen-Aktionen",
-      "replay": "Neu verarbeiten",
-      "replayDescription": "Aus bereits importierten Daten neu verarbeiten."
+      "replay": "Neu berechnen",
+      "replayDescription": "Mit bereits importierten Daten neu berechnen."
     },
     "addWallet": {
       "title": "Wallet hinzufügen",
       "subtitle": "Solana oder Ethereum",
       "detectedEvm": "Wallet · Ethereum",
       "detectedSolana": "Wallet · Solana",
-      "previewNameEvm": "Ethereum-Wallet",
-      "previewNameSolana": "Solana-Wallet",
+      "previewNameEvm": "Ethereum Wallet",
+      "previewNameSolana": "Solan Wallet",
       "inputLabel": "Crypto Wallet Adresse",
       "placeholder": "0x24a9db9c9c6bcbba1a1ea88d9769cd48eb0efb1a",
-      "invalid": "Keine Solana- oder Ethereum-Adresse.",
-      "nameUnsupported": "Dieser Wallet-Name wird noch nicht unterstützt.",
-      "resolving": "Name wird aufgelöst …",
-      "resolveError": "Dieser Name führt zu keiner Adresse.",
-      "bitcoinUnsupported": "Bitcoin-Wallets werden noch nicht unterstützt.",
+      "invalid": "Nur Solana oder Ethereum.",
+      "nameUnsupported": "Noch nicht unterstützt.",
+      "resolving": "Adresse wird gesucht…",
+      "resolveError": "Fehler beim Auflösen.",
+      "resolveErrorNameUnresolved": "Keine Adresse gefunden.",
+      "resolveErrorNetworkUnavailable": "Netzwerkfehler beim Suchen.",
+      "resolveErrorRateLimited": "Zu schnell. Warte kurz.",
+      "bitcoinUnsupported": "Bitcoin geht noch nicht.",
       "submit": "Wallet hinzufügen",
-      "error": "Wallet konnte nicht hinzugefügt werden. Versuch es noch mal."
+      "error": "Fehler beim Hinzufügen."
     }
   },
   "assetCatalog": {

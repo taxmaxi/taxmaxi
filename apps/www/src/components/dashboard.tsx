@@ -58,7 +58,7 @@ export function Dashboard({
   onSourceSyncCompleted,
   onUnauthorized,
   replaySourceSync,
-  resolveEnsName,
+  resolveName,
   startSourceSync,
 }: {
   accounts?: ReadonlyArray<Account>
@@ -67,7 +67,7 @@ export function Dashboard({
   onSourceSyncCompleted?: (sourceId: AccountId) => void | Promise<void>
   onUnauthorized?: () => void | Promise<void>
   replaySourceSync?: (sourceId: AccountId) => Promise<SourceSyncStart>
-  resolveEnsName?: (name: string) => Promise<{ ensName: string; resolvedAddress: string }>
+  resolveName?: (name: string) => Promise<{ name: string; resolvedAddress: string }>
   startSourceSync?: (sourceId: AccountId) => Promise<SourceSyncStart>
 }) {
   const taxmaxi = useRouteContext({
@@ -190,15 +190,21 @@ export function Dashboard({
     setAccountScope(scope)
   }
 
-  const { activeSyncs, onDismissSync, onRetrySync, onSourceReplay, onSourceSync, syncingSourceIds } =
-    useSourceSyncs({
-      accountsById,
-      getSourceSyncJob,
-      onCompleted: handleSourceSyncCompleted,
-      onUnauthorized,
-      startSourceReplay: replaySourceSync,
-      startSourceSync,
-    })
+  const {
+    activeSyncs,
+    onDismissSync,
+    onRetrySync,
+    onSourceReplay,
+    onSourceSync,
+    syncingSourceIds,
+  } = useSourceSyncs({
+    accountsById,
+    getSourceSyncJob,
+    onCompleted: handleSourceSyncCompleted,
+    onUnauthorized,
+    startSourceReplay: replaySourceSync,
+    startSourceSync,
+  })
 
   // The replay block only makes sense for a selected source that has synced
   // at least once; before that there is no cached raw data to replay.
@@ -229,7 +235,7 @@ export function Dashboard({
       <SourceCards
         contentClassName={appSurfaceClassName}
         onAddWallet={createWalletSource === undefined ? undefined : handleAddWallet}
-        onResolveEnsName={resolveEnsName}
+        onResolveName={resolveName}
         onSelectedSourceIdChange={(sourceId) => onAccountScopeChange(sourceId ?? ALL_ACCOUNTS)}
         onSourceSync={onSourceSync}
         selectedSourceId={accountScope === ALL_ACCOUNTS ? undefined : accountScope}
@@ -241,9 +247,7 @@ export function Dashboard({
             <PortfolioOverview summary={summary} />
             <SelectedSourceMenu
               account={replayAccount}
-              isSyncing={
-                replayAccount !== undefined && syncingSourceIds.has(replayAccount.id)
-              }
+              isSyncing={replayAccount !== undefined && syncingSourceIds.has(replayAccount.id)}
               onReplay={onSourceReplay}
             />
           </div>
@@ -310,9 +314,7 @@ function SelectedSourceMenu({
           exit={{ opacity: 0, y: -8 }}
           initial={{ opacity: 0, y: -8 }}
           key={account.id}
-          transition={
-            reduceMotion ? { duration: 0 } : { duration: 0.2, ease: [0.22, 1, 0.36, 1] }
-          }
+          transition={reduceMotion ? { duration: 0 } : { duration: 0.2, ease: [0.22, 1, 0.36, 1] }}
         >
           <DropdownMenu>
             <DropdownMenuTrigger asChild>

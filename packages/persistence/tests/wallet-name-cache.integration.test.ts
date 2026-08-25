@@ -1,0 +1,137 @@
+import * as Effect from "effect/Effect"
+import { beforeEach, describe, expect, it } from "vitest"
+
+import { WalletNameCacheRepositoryLive } from "../src/layers/WalletNameCacheRepositoryLive.ts"
+import { drizzle } from "../src/layers/PgClientLive.ts"
+import { schema } from "../src/schema/index.ts"
+import { WalletNameCacheRepository } from "../src/services/WalletNameCacheRepository.ts"
+import { makeIntegrationTestDatabaseContext } from "./support/integration-test-kit.ts"
+
+const ENS_NAME = "vitalik.eth"
+const ENS_ADDRESS = "0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045"
+const SNS_NAME = "bonfida.sol"
+const SNS_ADDRESS = "HKKp49qGWXd639QsuH7JiLijfVW5UtCVY4s1n2HANwEA"
+
+const context = makeIntegrationTestDatabaseContext({
+  databaseNamePrefix: "taxmaxi_wallet_name_cache",
+})
+
+await Effect.runPromise(context.recreateTestDatabase())
+
+const runRepository = <A, E>(effect: Effect.Effect<A, E, WalletNameCacheRepository>) =>
+  Effect.runPromise(context.runWithLayer({ effect, layer: WalletNameCacheRepositoryLive }))
+
+const clearCache = () =>
+  context.runPg(
+    Effect.gen(function* () {
+      const db = yield* drizzle
+      yield* db.delete(schema.walletNameCache)
+    })
+  )
+
+const inOneHour = () => new Date(Date.now() + 60 * 60 * 1000)
+const oneHourAgo = () => new Date(Date.now() - 60 * 60 * 1000)
+
+describe("WalletNameCacheRepository integration", () => {
+  beforeEach(async () => {
+    await clearCache()
+  })
+
+  it("returns null for a missing entry", async () => {
+    const result = await runRepository(
+      Effect.gen(function* () {
+        const repository = yield* WalletNameCacheRepository
+        return yield* repository.get({ namespace: "ens", name: ENS_NAME })
+      })
+    )
+
+    expect(result).toBeNull()
+  })
+
+  it("stores and reads back a resolution", async () => {
+    const result = await runRepository(
+      Effect.gen(function* () {
+        const repository = yield* WalletNameCacheRepository
+        yield* repository.upsert({
+          namespace: "ens",
+          name: ENS_NAME,
+          resolvedAddress: ENS_ADDRESS,
+          expiresAt: inOneHour(),
+        })
+        return yield* repository.get({ namespace: "ens", name: ENS_NAME })
+      })
+    )
+
+    expect(result).toBe(ENS_ADDRESS)
+  })
+
+  it("returns null for an expired entry", async () => {
+    const result = await runRepository(
+      Effect.gen(function* () {
+        const repository = yield* WalletNameCacheRepository
+        yield* repository.upsert({
+          namespace: "sns",
+          name: SNS_NAME,
+          resolvedAddress: SNS_ADDRESS,
+          expiresAt: oneHourAgo(),
+        })
+        return yield* repository.get({ namespace: "sns", name: SNS_NAME })
+      })
+    )
+
+    expect(result).toBeNull()
+  })
+
+  it("refreshes an existing entry on conflict", async () => {
+    const updatedAddress = "0x0000000000000000000000000000000000000001"
+
+    const result = await runRepository(
+      Effect.gen(function* () {
+        const repository = yield* WalletNameCacheRepository
+        yield* repository.upsert({
+          namespace: "ens",
+          name: ENS_NAME,
+          resolvedAddress: ENS_ADDRESS,
+          expiresAt: oneHourAgo(),
+        })
+        yield* repository.upsert({
+          namespace: "ens",
+          name: ENS_NAME,
+          resolvedAddress: updatedAddress,
+          expiresAt: inOneHour(),
+        })
+        return yield* repository.get({ namespace: "ens", name: ENS_NAME })
+      })
+    )
+
+    expect(result).toBe(updatedAddress)
+  })
+
+  it("keeps the same name independent across namespaces", async () => {
+    const sharedName = "same-name.example"
+
+    const result = await runRepository(
+      Effect.gen(function* () {
+        const repository = yield* WalletNameCacheRepository
+        yield* repository.upsert({
+          namespace: "ens",
+          name: sharedName,
+          resolvedAddress: ENS_ADDRESS,
+          expiresAt: inOneHour(),
+        })
+        yield* repository.upsert({
+          namespace: "sns",
+          name: sharedName,
+          resolvedAddress: SNS_ADDRESS,
+          expiresAt: inOneHour(),
+        })
+
+        const ens = yield* repository.get({ namespace: "ens", name: sharedName })
+        const sns = yield* repository.get({ namespace: "sns", name: sharedName })
+        return { ens, sns }
+      })
+    )
+
+    expect(result).toEqual({ ens: ENS_ADDRESS, sns: SNS_ADDRESS })
+  })
+})

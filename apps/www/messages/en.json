@@ -163,13 +163,16 @@
       "previewNameSolana": "Solana wallet",
       "inputLabel": "Crypto wallet address",
       "placeholder": "0x24a9db9c9c6bcbba1a1ea88d9769cd48eb0efb1a",
-      "invalid": "Not a Solana or Ethereum address.",
-      "nameUnsupported": "This wallet name isn't supported yet.",
-      "resolving": "Resolving name…",
-      "resolveError": "This name doesn't resolve to an address.",
-      "bitcoinUnsupported": "Bitcoin wallets aren't supported yet.",
+      "invalid": "Solana or Ethereum only.",
+      "nameUnsupported": "Domain not supported yet.",
+      "resolving": "Looking up address…",
+      "resolveError": "Couldn't resolve this name.",
+      "resolveErrorNameUnresolved": "No address found.",
+      "resolveErrorNetworkUnavailable": "Network problem. Try again.",
+      "resolveErrorRateLimited": "Too many tries. Wait a bit.",
+      "bitcoinUnsupported": "No Bitcoin support yet.",
       "submit": "Add wallet",
-      "error": "Couldn't add this wallet. Try again."
+      "error": "Couldn't add this wallet."
     }
   },
   "assetCatalog": {

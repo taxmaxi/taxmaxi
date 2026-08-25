@@ -41,6 +41,8 @@ import {
   SourceListResponse,
   SourceCreateResponse,
   SourceCreateClaimMetadata,
+  SourceNameResolutionError,
+  SourceNameResolveResponse,
   SourcePaymentRequiredError,
   SourceAssetPnlResponse,
   SourceAssetPnlRow,
@@ -74,7 +76,9 @@ import {
   NoUsableCreditsError,
   SYNC_CREDIT_REQUIRED_MESSAGE,
 } from "../helpers/SyncCreditAdmission.ts"
+import { WalletNameResolutionService } from "../services/WalletNameResolutionService.ts"
 import { SourceCreationServiceLive } from "./SourceCreationServiceLive.ts"
+import { WalletNameResolutionServiceLive } from "./WalletNameResolutionServiceLive.ts"
 import { ANON_SESSION_COOKIE_MAX_AGE, ANON_SESSION_COOKIE_NAME } from "./AnonApiLive.ts"
 
 const toBadRequestError = (message: string) => new SourceBadRequestError({ message })
@@ -108,6 +112,7 @@ export const SourcesApiLive = HttpApiBuilder.group(TaxMaxiApi, "sources", (handl
     const sourceCreationService = yield* SourceCreationService
     const anonSessionService = yield* AnonSessionService
     const principalResolutionService = yield* PrincipalResolutionService
+    const walletNameResolutionService = yield* WalletNameResolutionService
     const environment = yield* Config.string("ENVIRONMENT").pipe(Config.withDefault("development"))
     const anonSessionCookieOptions = cookieOptionsForEnv(environment)
 
@@ -284,6 +289,13 @@ export const SourcesApiLive = HttpApiBuilder.group(TaxMaxiApi, "sources", (handl
             switch (creationResult.failure._tag) {
               case "SourceCreationBadRequestError":
                 return yield* toBadRequestError(creationResult.failure.message)
+              case "SourceCreationNameResolutionError":
+                return yield* new SourceNameResolutionError({
+                  code: creationResult.failure.code,
+                  name: creationResult.failure.name,
+                  namespace: creationResult.failure.namespace,
+                  message: creationResult.failure.message,
+                })
               case "SourceCreationInternalError":
                 return yield* toInternalServerError(creationResult.failure.message)
               case "SourceCreationCreditRequiredError":
@@ -610,5 +622,28 @@ export const SourcesApiLive = HttpApiBuilder.group(TaxMaxiApi, "sources", (handl
           })
         })
       )
+      .handle("resolveSourceName", ({ payload }) =>
+        Effect.gen(function* () {
+          const resolution = yield* walletNameResolutionService.resolve(payload.name).pipe(
+            Effect.mapError((error) =>
+              error._tag === "WalletNameResolutionError"
+                ? new SourceNameResolutionError({
+                    code: error.code,
+                    name: error.name,
+                    namespace: error.namespace,
+                    message: error.message,
+                  })
+                : toInternalServerError("Failed to resolve wallet name.")
+            )
+          )
+
+          return SourceNameResolveResponse.make({
+            name: resolution.name,
+            namespace: resolution.namespace,
+            resolvedAddress: resolution.resolvedAddress,
+            chainType: resolution.chainType,
+          })
+        })
+      )
   })
-).pipe(Layer.provide(SourceCreationServiceLive))
+).pipe(Layer.provide(SourceCreationServiceLive), Layer.provide(WalletNameResolutionServiceLive))

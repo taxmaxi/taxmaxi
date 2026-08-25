@@ -5,7 +5,7 @@
  */
 
 import { SyncCreditReasonCode } from "@my/core/billing"
-import type { Source } from "@my/core/source"
+import { NameServiceNamespace, WalletNameResolutionErrorCode, type Source } from "@my/core/source"
 import type { AnonPayerSessionSubject } from "./AnonSessionService.ts"
 import type { SourceSyncJobSummary } from "@my/sync-engine/services"
 import * as Context from "effect/Context"
@@ -21,6 +21,21 @@ import type { SourceCreateRequest } from "../definitions/SourcesApi.ts"
 export class SourceCreationBadRequestError extends Schema.TaggedError<SourceCreationBadRequestError>()(
   "SourceCreationBadRequestError",
   {
+    message: Schema.String,
+  }
+) {}
+
+/**
+ * SourceCreationNameResolutionError - The wallet name in the request could not be resolved.
+ *
+ * `code` is the stable contract for clients; `message` is developer-facing.
+ */
+export class SourceCreationNameResolutionError extends Schema.TaggedError<SourceCreationNameResolutionError>()(
+  "SourceCreationNameResolutionError",
+  {
+    code: WalletNameResolutionErrorCode,
+    name: Schema.String,
+    namespace: Schema.NullOr(NameServiceNamespace),
     message: Schema.String,
   }
 ) {}
@@ -95,6 +110,7 @@ export interface CreateSourceParams {
  */
 export type SourceCreationError =
   | SourceCreationBadRequestError
+  | SourceCreationNameResolutionError
   | SourceCreationInternalError
   | SourceCreationPaymentRequiredError
   | SourceCreationCreditRequiredError
