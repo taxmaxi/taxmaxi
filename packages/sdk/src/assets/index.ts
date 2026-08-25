@@ -91,6 +91,7 @@ export type AssetExceptionDecisionConfirmationInput = {
 } & AssetExceptionDecisionConfirmationRequest
 
 export type AssetExceptionListInput = {
+  readonly query?: string | null
   readonly cursor?: string | null
   readonly limit?: number
 }
@@ -320,6 +321,7 @@ export const makeAssetsEffectResource = (
     Effect.flatMap(client, (resolved) =>
       resolved.assets.listAssetExceptions({
         query: {
+          q: input?.query ?? undefined,
           cursor: input?.cursor ?? undefined,
           limit: input?.limit,
         },

@@ -2,7 +2,7 @@ import { useInfiniteQuery } from "@tanstack/react-query"
 import type { QueryClient } from "@tanstack/react-query"
 import { createFileRoute, useRouter } from "@tanstack/react-router"
 import { useCallback, useMemo } from "react"
-import type { TaxMaxi } from "taxmaxi"
+import { isTaxMaxiUnauthorizedError, type TaxMaxi } from "taxmaxi"
 
 import { AssetCatalog, type AssetCatalogFeeds } from "#/components/asset-catalog"
 import {
@@ -52,7 +52,12 @@ export const Route = createFileRoute("/assets/")({
     const taxmaxi = context.taxmaxi()
     assetCatalogLoader({ abortController, context })
 
-    const account = await taxmaxi.auth.account().catch(() => null)
+    const account = await taxmaxi.auth.account().catch((error: unknown) => {
+      if (isTaxMaxiUnauthorizedError(error)) {
+        return null
+      }
+      throw error
+    })
     const isAdmin = account?.account.role === "admin"
     if (isAdmin) {
       loadAssetExceptionFeed(() =>
@@ -78,10 +83,18 @@ function AssetsIndexRoute() {
   const { isAdmin } = Route.useLoaderData()
   const navigate = Route.useNavigate()
   const router = useRouter()
-  const { feeds: baseFeeds, onQueryChange } = useAssetCatalogFeeds(taxmaxi())
+  const { debouncedCatalogQuery, feeds: baseFeeds, onQueryChange } = useAssetCatalogFeeds(taxmaxi())
+
+  const searchedExceptionListInput = useMemo(
+    () => ({
+      ...assetExceptionListInput,
+      ...(debouncedCatalogQuery.length > 0 ? { query: debouncedCatalogQuery } : {}),
+    }),
+    [debouncedCatalogQuery]
+  )
 
   const assetExceptionQuery = useInfiniteQuery({
-    ...queries.assetExceptionList(taxmaxi(), assetExceptionListInput),
+    ...queries.assetExceptionList(taxmaxi(), searchedExceptionListInput),
     enabled: isAdmin,
   })
 

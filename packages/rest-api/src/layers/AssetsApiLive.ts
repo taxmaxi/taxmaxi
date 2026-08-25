@@ -420,7 +420,7 @@ export const AssetsApiLive = HttpApiBuilder.group(TaxMaxiApi, "assets", (handler
           const limit = urlParams.limit ?? defaultLimit
           const cursor = yield* decodeAssetExceptionCursor(urlParams.cursor)
           const exceptions = yield* assetExceptionRepository
-            .listExceptions({ cursor, limit: limit + 1 })
+            .listExceptions({ cursor, query: urlParams.q ?? null, limit: limit + 1 })
             .pipe(Effect.mapError(() => toInternalServerError("Failed to list asset exceptions.")))
           const visibleExceptions = exceptions.slice(0, limit)
           const lastException = visibleExceptions.at(-1)

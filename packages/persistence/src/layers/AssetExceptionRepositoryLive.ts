@@ -26,13 +26,14 @@ import {
   type AssetExceptionRepositoryShape,
   SyncEngineStorageError,
 } from "@my/sync-engine/services"
-import { and, asc, desc, eq, inArray, isNull, or, sql } from "drizzle-orm"
+import { and, asc, desc, eq, ilike, inArray, isNull, or, sql } from "drizzle-orm"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import * as Option from "effect/Option"
 import * as Schema from "effect/Schema"
 import { drizzle } from "./PgClientLive.ts"
 import { nowDate } from "./SyncEngineRepositorySupport.ts"
+import { getAssetCatalogSearchPatterns } from "../query/AssetCatalogSearch.ts"
 import { schema } from "../schema/index.ts"
 
 const ACTIONABLE_REASONS = [
@@ -374,8 +375,23 @@ const make = Effect.gen(function* () {
     ${cursor.providerAssetRowId}::uuid
   )`
 
-  const listExceptions: AssetExceptionRepositoryShape["listExceptions"] = ({ cursor, limit }) =>
-    db
+  const listExceptions: AssetExceptionRepositoryShape["listExceptions"] = ({
+    cursor,
+    limit,
+    query,
+  }) => {
+    const searchFilters = getAssetCatalogSearchPatterns(query ?? "").map((pattern) =>
+      or(
+        ilike(schema.providerAssets.provider, pattern),
+        ilike(schema.providerAssets.providerAssetId, pattern),
+        ilike(schema.providerAssets.naturalKey, pattern),
+        ilike(schema.providerAssets.currencyCode, pattern),
+        ilike(schema.providerAssets.name, pattern),
+        ilike(schema.assetResolutionDecisions.reason, pattern)
+      )
+    )
+
+    return db
       .select({
         providerAssetRowId: schema.providerAssets.id,
         provider: schema.providerAssets.provider,
@@ -418,7 +434,7 @@ const make = Effect.gen(function* () {
           inArray(schema.assetResolutionDecisions.reason, [...ACTIONABLE_REASONS])
         )
       )
-      .where(cursor === null ? undefined : rankAfterCursor(cursor))
+      .where(and(...searchFilters, cursor === null ? undefined : rankAfterCursor(cursor)))
       .orderBy(
         desc(blockedReportsSql),
         desc(affectedPrincipalsSql),
@@ -459,6 +475,7 @@ const make = Effect.gen(function* () {
         ),
         Effect.mapError((cause) => toStorageError("assetExceptionRepository.listExceptions", cause))
       )
+  }
 
   const findProviderAsset = (client: QueryClient, lookup: AssetExceptionLookup) => {
     const condition = (() => {

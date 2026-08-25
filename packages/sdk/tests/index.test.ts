@@ -907,6 +907,7 @@ describe("TaxMaxi Promise client", () => {
       limit: 10,
     })
     const exceptionList = await taxmaxi.assets.listExceptions({
+      query: "spam",
       cursor: "opaque-start",
       limit: 5,
     })
@@ -947,7 +948,7 @@ describe("TaxMaxi Promise client", () => {
         url: "https://sdk.example.test/v1/assets/pending?q=btc&provider=coinbase&limit=10",
       }),
       expect.objectContaining({
-        url: "https://sdk.example.test/v1/assets/exceptions?cursor=opaque-start&limit=5",
+        url: "https://sdk.example.test/v1/assets/exceptions?q=spam&cursor=opaque-start&limit=5",
       }),
     ])
   })

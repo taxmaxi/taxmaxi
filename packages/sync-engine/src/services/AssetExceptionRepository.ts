@@ -176,6 +176,7 @@ export interface AssetExceptionRepositoryShape {
   readonly listExceptions: (params: {
     readonly cursor: AssetExceptionRankCursor | null
     readonly limit: number
+    readonly query: string | null
   }) => Effect.Effect<ReadonlyArray<AssetExceptionListRow>, SyncEngineStorageError>
 
   readonly findDetail: (

@@ -32,6 +32,13 @@ const normalizePendingAssetListInput = (
   ...(input.limit !== undefined ? { limit: input.limit } : {}),
 })
 
+const normalizeAssetExceptionListInput = (
+  input: AssetExceptionPageInput = {}
+): AssetExceptionPageInput => ({
+  ...(input.query !== undefined ? { query: input.query } : {}),
+  ...(input.limit !== undefined ? { limit: input.limit } : {}),
+})
+
 export const queryKeys = {
   all: ["taxmaxi"] as const,
   account: () => [...queryKeys.all, "account"] as const,
@@ -45,7 +52,7 @@ export const queryKeys = {
   pendingAssetList: (input: PendingAssetPageInput = {}) =>
     [...queryKeys.assets(), "pending", normalizePendingAssetListInput(input)] as const,
   assetExceptionList: (input: AssetExceptionPageInput = {}) =>
-    [...queryKeys.assets(), "exceptions", input] as const,
+    [...queryKeys.assets(), "exceptions", normalizeAssetExceptionListInput(input)] as const,
   sources: () => [...queryKeys.all, "sources"] as const,
   sourceList: () => [...queryKeys.sources(), "list"] as const,
   sourceOverview: (sourceId: string) => [...queryKeys.sources(), sourceId, "overview"] as const,
@@ -111,15 +118,19 @@ export const queries = {
       staleTime: 60 * 1000,
     })
   },
-  assetExceptionList: (taxmaxi: TaxMaxi, input: AssetExceptionPageInput = {}) =>
-    infiniteQueryOptions({
-      queryKey: queryKeys.assetExceptionList(input),
+  assetExceptionList: (taxmaxi: TaxMaxi, input: AssetExceptionPageInput = {}) => {
+    const normalizedInput = normalizeAssetExceptionListInput(input)
+
+    return infiniteQueryOptions({
+      queryKey: queryKeys.assetExceptionList(normalizedInput),
       queryFn: ({ pageParam, signal }) =>
-        taxmaxi.assets.listExceptions({ ...input, cursor: pageParam }, { signal }),
+        taxmaxi.assets.listExceptions({ ...normalizedInput, cursor: pageParam }, { signal }),
       initialPageParam: getInitialPageCursor(),
       getNextPageParam: (lastPage) => lastPage.page.nextCursor ?? undefined,
+      placeholderData: keepPreviousData,
       staleTime: 30 * 1000,
-    }),
+    })
+  },
   sourceList: (taxmaxi: TaxMaxi) =>
     queryOptions({
       queryKey: queryKeys.sourceList(),

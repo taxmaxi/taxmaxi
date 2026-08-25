@@ -137,7 +137,7 @@ describe("AssetExceptionRepositoryLive", () => {
     const rows = await runRepository(
       Effect.gen(function* () {
         const repository = yield* AssetExceptionRepository
-        return yield* repository.listExceptions({ cursor: null, limit: 10 })
+        return yield* repository.listExceptions({ cursor: null, limit: 10, query: null })
       })
     )
 
@@ -153,6 +153,40 @@ describe("AssetExceptionRepositoryLive", () => {
         affectedTransactionValueEur: "1250.50",
       }),
     ])
+  })
+
+  it("filters exceptions by a search query across provider keys and names", async () => {
+    const fixture = await seedException()
+
+    const { matchingName, matchingNaturalKey, noMatch } = await runRepository(
+      Effect.gen(function* () {
+        const repository = yield* AssetExceptionRepository
+        const matchingName = yield* repository.listExceptions({
+          cursor: null,
+          limit: 10,
+          query: "exception token",
+        })
+        const matchingNaturalKey = yield* repository.listExceptions({
+          cursor: null,
+          limit: 10,
+          query: "currency_code:EXC",
+        })
+        const noMatch = yield* repository.listExceptions({
+          cursor: null,
+          limit: 10,
+          query: "unrelated-asset",
+        })
+        return { matchingName, matchingNaturalKey, noMatch }
+      })
+    )
+
+    expect(matchingName).toEqual([
+      expect.objectContaining({ providerAssetRowId: fixture.providerAssetRowId }),
+    ])
+    expect(matchingNaturalKey).toEqual([
+      expect.objectContaining({ providerAssetRowId: fixture.providerAssetRowId }),
+    ])
+    expect(noMatch).toEqual([])
   })
 
   it("previews and atomically accepts a typed exclusion", async () => {

@@ -432,6 +432,7 @@ const AssetCatalogListQuery = Schema.Struct({
 })
 
 const AssetExceptionListQuery = Schema.Struct({
+  q: Schema.optional(AssetCatalogSearchQuery),
   cursor: Schema.optional(Schema.String),
   limit: Schema.optional(
     Schema.NumberFromString.check(
