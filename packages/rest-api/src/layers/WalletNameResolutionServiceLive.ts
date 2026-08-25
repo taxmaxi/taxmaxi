@@ -3,6 +3,8 @@
  *
  * Resolves ENS names against the Ethereum mainnet registry using viem's
  * getEnsAddress, and SNS names through the Helius wallet identity API.
+ * viem is imported lazily on the first on-chain ENS lookup; keep it out of
+ * static imports so modules that import the API graph stay cheap to load.
  * Results are cached through the persistence wallet name cache with a TTL,
  * because name records can change over time.
  *
@@ -22,15 +24,13 @@
  */
 
 import * as Config from "effect/Config"
+import * as Data from "effect/Data"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import * as Option from "effect/Option"
 import * as Redacted from "effect/Redacted"
 import * as Schema from "effect/Schema"
 import { FetchHttpClient, HttpClient, HttpClientRequest } from "effect/unstable/http"
-import { createPublicClient, http } from "viem"
-import { mainnet } from "viem/chains"
-import { normalize } from "viem/ens"
 import {
   chainTypeForNamespace,
   detectNameServiceNamespace,
@@ -112,6 +112,10 @@ const snsError = ({
     cause,
   })
 
+class EnsRuntimeLoadError extends Data.TaggedError("EnsRuntimeLoadError")<{
+  readonly cause: unknown
+}> {}
+
 const make = Effect.gen(function* () {
   const cache = yield* WalletNameCacheRepository
   const httpClient = yield* HttpClient.HttpClient
@@ -120,18 +124,48 @@ const make = Effect.gen(function* () {
   )
   const heliusApiKey = yield* Config.option(Config.redacted("HELIUS_API_KEY"))
 
-  const ethereumClient = createPublicClient({
-    chain: mainnet,
-    transport: http(ethereumRpcUrl),
-  })
+  // viem is loaded on first ENS resolution instead of at module load. A
+  // static import pulls viem and every chain definition into each module
+  // that imports the API graph, which slows every test worker down.
+  const ensRuntime = yield* Effect.cached(
+    Effect.tryPromise({
+      try: async () => {
+        const [viem, chains, ens] = await Promise.all([
+          import("viem"),
+          import("viem/chains"),
+          import("viem/ens"),
+        ])
+
+        const client = viem.createPublicClient({
+          chain: chains.mainnet,
+          transport: viem.http(ethereumRpcUrl),
+        })
+
+        return { client, normalize: ens.normalize }
+      },
+      catch: (cause) => new EnsRuntimeLoadError({ cause }),
+    })
+  )
 
   /**
    * Resolve a name against the ENS registry on Ethereum mainnet.
    */
   const resolveEnsOnChain = (name: string) =>
     Effect.gen(function* () {
+      const { client, normalize } = yield* ensRuntime.pipe(
+        Effect.mapError(
+          (error) =>
+            new WalletNameResolutionError({
+              code: "resolution_failed",
+              name,
+              namespace: "ens",
+              message: ERROR_MESSAGES.resolution_failed,
+              cause: error.cause,
+            })
+        )
+      )
       const address = yield* Effect.tryPromise({
-        try: () => ethereumClient.getEnsAddress({ name: normalize(name) }),
+        try: () => client.getEnsAddress({ name: normalize(name) }),
         catch: (cause) => classifyEnsError(cause, name),
       })
 
