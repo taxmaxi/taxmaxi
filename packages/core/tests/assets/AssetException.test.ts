@@ -15,6 +15,7 @@ describe("AssetException", () => {
     ["non_exact_platform_match", "medium"],
     ["spam_evidence", "low"],
     ["unsupported_representation_type", "low"],
+    ["unverified_asset", "low"],
   ] as const)("maps %s to %s", (reason, severity) => {
     expect(assetExceptionSeverityForReason(reason)).toBe(severity)
   })

@@ -884,6 +884,8 @@ function reasonLabel(reason: string | null): string {
       return m["assetCatalog.exceptions.labels.reason.spamEvidence"]()
     case "unsupported_representation_type":
       return m["assetCatalog.exceptions.labels.reason.unsupportedRepresentationType"]()
+    case "unverified_asset":
+      return m["assetCatalog.exceptions.labels.reason.unverifiedAsset"]()
     case "authority_banned":
       return m["assetCatalog.exceptions.exclusion.authorityBanned"]()
     case "confirmed_spam":

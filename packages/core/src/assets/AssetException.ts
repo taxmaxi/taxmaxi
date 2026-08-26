@@ -23,6 +23,7 @@ export const AssetExceptionReason = Schema.Literals([
   "non_exact_platform_match",
   "spam_evidence",
   "unsupported_representation_type",
+  "unverified_asset",
 ])
 
 export type AssetExceptionReason = typeof AssetExceptionReason.Type
@@ -41,6 +42,7 @@ const ASSET_EXCEPTION_SEVERITY_BY_REASON = {
   non_exact_platform_match: "medium",
   spam_evidence: "low",
   unsupported_representation_type: "low",
+  unverified_asset: "low",
 } as const satisfies Readonly<Record<AssetExceptionReason, AssetExceptionSeverity>>
 
 /** Return the versioned severity for one actionable resolver reason. */

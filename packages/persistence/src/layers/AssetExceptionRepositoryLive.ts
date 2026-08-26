@@ -45,6 +45,7 @@ const ACTIONABLE_REASONS = [
   "non_exact_platform_match",
   "spam_evidence",
   "unsupported_representation_type",
+  "unverified_asset",
 ] as const
 
 const HUMAN_POLICY_REVISION = "2026-08-21.human-asset-exception.1"
@@ -345,6 +346,7 @@ const make = Effect.gen(function* () {
     when 'non_exact_platform_match' then 2
     when 'spam_evidence' then 3
     when 'unsupported_representation_type' then 3
+    when 'unverified_asset' then 3
     else 4 end`
 
   const oldestAtSql =

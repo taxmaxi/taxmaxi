@@ -300,6 +300,7 @@
           "nonExactPlatformMatch": "Non-exact platform match",
           "spamEvidence": "Spam evidence",
           "unsupportedRepresentationType": "Unsupported representation type",
+          "unverifiedAsset": "No registry vouches for this token",
           "manualExclusionReversal": "Manual exclusion reversal"
         },
         "preview": {
