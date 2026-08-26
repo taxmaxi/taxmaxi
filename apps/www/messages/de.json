@@ -173,6 +173,58 @@
       "bitcoinUnsupported": "Bitcoin geht noch nicht.",
       "submit": "Wallet hinzufügen",
       "error": "Fehler beim Hinzufügen."
+    },
+    "dashboard": {
+      "tabs": {
+        "assets": "Assets",
+        "transactions": "Transaktionen",
+        "taxes": "Steuern"
+      },
+      "neverSynced": "Noch nie synchronisiert",
+      "sources": {
+        "sync": "Sync",
+        "syncSource": "{sourceName} synchronisieren",
+        "showAllSources": "Alle Quellen anzeigen",
+        "showSource": "{sourceName} anzeigen",
+        "kindExchange": "Börse",
+        "kindWallet": "Wallet"
+      },
+      "assets": {
+        "headerAsset": "Asset",
+        "headerAmount": "Menge",
+        "headerPrice": "Preis",
+        "headerTotalValue": "Gesamtwert",
+        "headerUnrealizedProfitLoss": "Unrealisierter G/V",
+        "loadError": "Asset-Werte konnten nicht geladen werden. Versuche es gleich noch einmal.",
+        "empty": "Noch keine Assets mit offenem Bestand.",
+        "logoAlt": "{name} Logo"
+      },
+      "transactions": {
+        "eyebrow": "Transaktionsaktivität",
+        "title": "Transaktionen",
+        "description": "Importierte Buchungstransaktionen aus allen verbundenen Quellen.",
+        "totalOne": "{count} Transaktion",
+        "totalMany": "{count} Transaktionen",
+        "loading": "Transaktionen werden geladen…",
+        "loadErrorTitle": "Transaktionen konnten nicht geladen werden.",
+        "loadErrorHint": "Versuche es noch einmal.",
+        "retry": "Erneut versuchen",
+        "empty": "Noch keine Transaktionen.",
+        "unclassified": "Nicht klassifiziert",
+        "movementsPending": "Buchungsdetails ausstehend",
+        "movementsMore": "+{count} weitere",
+        "needsReview": "Prüfung nötig",
+        "realizedGainLoss": "Realisierter Gewinn/Verlust",
+        "gainLossPending": "Ausstehend",
+        "gainLossNotApplicable": "Nicht anwendbar",
+        "pageUnavailable": "Seite nicht verfügbar",
+        "pageRange": "{start}–{end} von {total}",
+        "pagesLabel": "Transaktionsseiten",
+        "previousPage": "Vorherige Seite",
+        "previous": "Zurück",
+        "nextPage": "Nächste Seite",
+        "next": "Weiter"
+      }
     }
   },
   "assetCatalog": {

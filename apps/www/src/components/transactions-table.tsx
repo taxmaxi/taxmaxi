@@ -3,22 +3,26 @@ import type { TransactionListItem } from "taxmaxi"
 
 import { Badge } from "#/components/ui/badge"
 import { Button } from "#/components/ui/button"
+import { m } from "#/paraglide/messages"
+import { getLocale } from "#/paraglide/runtime"
 
 export const TRANSACTION_PAGE_SIZE = 7
 
-const dateFormatter = new Intl.DateTimeFormat("en-GB", {
-  day: "2-digit",
-  month: "short",
-  year: "numeric",
-})
+const formatDate = (timestamp: string): string =>
+  new Intl.DateTimeFormat(getLocale(), {
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
+  }).format(new Date(timestamp))
 
-const timeFormatter = new Intl.DateTimeFormat("en-GB", {
-  hour: "2-digit",
-  minute: "2-digit",
-})
+const formatTime = (timestamp: string): string =>
+  new Intl.DateTimeFormat(getLocale(), {
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(new Date(timestamp))
 
 const gainLossFormatter = (currency: string) =>
-  new Intl.NumberFormat("en-GB", {
+  new Intl.NumberFormat(getLocale(), {
     currency,
     maximumFractionDigits: 2,
     style: "currency",
@@ -30,33 +34,39 @@ const isDecimalString = (value: string): value is `${number}` =>
 const isZeroDecimal = (value: `${number}`): boolean => /^-?0(?:\.0+)?$/.test(value)
 
 const typeLabel = (value: string | null): string => {
-  if (value === null) return "Unclassified"
+  if (value === null) return m["app.dashboard.transactions.unclassified"]()
   const words = value.replaceAll("_", " ").replaceAll("-", " ")
   return words.charAt(0).toUpperCase() + words.slice(1)
 }
 
 const movementLabel = (transaction: TransactionListItem): string => {
-  if (transaction.movements.length === 0) return "Accounting details pending"
+  if (transaction.movements.length === 0) {
+    return m["app.dashboard.transactions.movementsPending"]()
+  }
 
   const visible = transaction.movements
     .slice(0, 2)
     .map((movement) => `${movement.amount} ${movement.assetSymbol}`)
     .join(" · ")
   const remaining = transaction.movements.length - 2
-  return remaining > 0 ? `${visible} · +${remaining} more` : visible
+  return remaining > 0
+    ? `${visible} · ${m["app.dashboard.transactions.movementsMore"]({ count: remaining })}`
+    : visible
 }
 
 const realizedGainLossLabel = (transaction: TransactionListItem): string => {
-  if (transaction.calculationState === "partial") return "Pending"
+  if (transaction.calculationState === "partial") {
+    return m["app.dashboard.transactions.gainLossPending"]()
+  }
   if (transaction.realizedGainLoss === null || transaction.fiatCurrency === null) {
-    return "Not applicable"
+    return m["app.dashboard.transactions.gainLossNotApplicable"]()
   }
 
   const value = transaction.realizedGainLoss
-  if (!isDecimalString(value)) return "Pending"
+  if (!isDecimalString(value)) return m["app.dashboard.transactions.gainLossPending"]()
 
   const absoluteValue = value.startsWith("-") ? value.slice(1) : value
-  if (!isDecimalString(absoluteValue)) return "Pending"
+  if (!isDecimalString(absoluteValue)) return m["app.dashboard.transactions.gainLossPending"]()
 
   const formatted = gainLossFormatter(transaction.fiatCurrency).format(absoluteValue)
   const sign = isZeroDecimal(value) ? "" : value.startsWith("-") ? "−" : "+"
@@ -86,22 +96,31 @@ export function TransactionsTable({
 }) {
   const visibleStart = transactions.length === 0 ? 0 : pageIndex * TRANSACTION_PAGE_SIZE + 1
   const visibleEnd = Math.min(pageIndex * TRANSACTION_PAGE_SIZE + transactions.length, totalCount)
-  const totalLabel = `${totalCount} ${totalCount === 1 ? "transaction" : "transactions"}`
+  const totalLabel =
+    totalCount === 1
+      ? m["app.dashboard.transactions.totalOne"]({ count: totalCount })
+      : m["app.dashboard.transactions.totalMany"]({ count: totalCount })
   const pageLabel =
     error && totalCount === 0
-      ? "Page unavailable"
-      : `${visibleStart}–${visibleEnd} of ${totalCount}`
+      ? m["app.dashboard.transactions.pageUnavailable"]()
+      : m["app.dashboard.transactions.pageRange"]({
+          end: visibleEnd,
+          start: visibleStart,
+          total: totalCount,
+        })
 
   return (
     <section aria-busy={loading} className="flex min-w-0 flex-col gap-5">
       <header className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
         <div>
           <p className="text-xs font-semibold uppercase tracking-[0.16em] text-muted-foreground">
-            Transaction activity
+            {m["app.dashboard.transactions.eyebrow"]()}
           </p>
-          <h2 className="mt-2 text-xl font-semibold tracking-tight">Transactions</h2>
+          <h2 className="mt-2 text-xl font-semibold tracking-tight">
+            {m["app.dashboard.transactions.title"]()}
+          </h2>
           <p className="mt-1 max-w-2xl text-sm text-muted-foreground">
-            Imported accounting transactions from all connected sources.
+            {m["app.dashboard.transactions.description"]()}
           </p>
         </div>
         <Badge className="w-fit" variant="secondary">
@@ -115,21 +134,23 @@ export function TransactionsTable({
             className="flex min-h-48 items-center justify-center px-4 text-sm text-muted-foreground"
             role="status"
           >
-            Loading transactions…
+            {m["app.dashboard.transactions.loading"]()}
           </div>
         ) : error ? (
           <div className="flex min-h-48 flex-col items-center justify-center gap-3 px-4 text-center">
             <div>
-              <p className="font-medium">Transactions could not be loaded.</p>
-              <p className="mt-1 text-sm text-muted-foreground">Try the request again.</p>
+              <p className="font-medium">{m["app.dashboard.transactions.loadErrorTitle"]()}</p>
+              <p className="mt-1 text-sm text-muted-foreground">
+                {m["app.dashboard.transactions.loadErrorHint"]()}
+              </p>
             </div>
             <Button onClick={onRetry} size="sm" variant="outline">
-              Retry
+              {m["app.dashboard.transactions.retry"]()}
             </Button>
           </div>
         ) : transactions.length === 0 ? (
           <div className="flex min-h-48 items-center justify-center px-4 text-sm text-muted-foreground">
-            No transactions yet.
+            {m["app.dashboard.transactions.empty"]()}
           </div>
         ) : (
           <div className="divide-y">
@@ -140,10 +161,10 @@ export function TransactionsTable({
               >
                 <div>
                   <div className="text-sm font-medium tabular-nums">
-                    {dateFormatter.format(new Date(transaction.timestamp))}
+                    {formatDate(transaction.timestamp)}
                   </div>
                   <div className="text-xs tabular-nums text-muted-foreground">
-                    {timeFormatter.format(new Date(transaction.timestamp))}
+                    {formatTime(transaction.timestamp)}
                   </div>
                 </div>
 
@@ -157,7 +178,7 @@ export function TransactionsTable({
                     </span>
                     {transaction.needsReview ? (
                       <CircleAlert
-                        aria-label="Needs review"
+                        aria-label={m["app.dashboard.transactions.needsReview"]()}
                         className="size-4 shrink-0 text-amber-600 dark:text-amber-300"
                       />
                     ) : null}
@@ -174,14 +195,18 @@ export function TransactionsTable({
                     {transaction.source.name}
                   </p>
                   <p className="mt-2 text-sm font-semibold tabular-nums sm:hidden">
-                    <span className="sr-only">Realized gain/loss: </span>
+                    <span className="sr-only">
+                      {m["app.dashboard.transactions.realizedGainLoss"]()}:{" "}
+                    </span>
                     {realizedGainLossLabel(transaction)}
                   </p>
                 </div>
 
                 <div className="hidden text-right sm:block">
                   <p className="font-semibold tabular-nums">{realizedGainLossLabel(transaction)}</p>
-                  <p className="text-xs text-muted-foreground">Realized gain/loss</p>
+                  <p className="text-xs text-muted-foreground">
+                    {m["app.dashboard.transactions.realizedGainLoss"]()}
+                  </p>
                 </div>
               </article>
             ))}
@@ -190,29 +215,29 @@ export function TransactionsTable({
 
         {totalCount > 0 || pageIndex > 0 ? (
           <nav
-            aria-label="Transaction pages"
+            aria-label={m["app.dashboard.transactions.pagesLabel"]()}
             className="flex items-center justify-between gap-3 border-t bg-muted/20 px-3 py-3 sm:px-4"
           >
             <p className="text-xs tabular-nums text-muted-foreground">{pageLabel}</p>
             <div className="flex items-center gap-2">
               <Button
-                aria-label="Previous page"
+                aria-label={m["app.dashboard.transactions.previousPage"]()}
                 disabled={loading || pageIndex === 0}
                 onClick={onPreviousPage}
                 size="sm"
                 variant="outline"
               >
                 <ChevronLeft data-icon="inline-start" />
-                Previous
+                {m["app.dashboard.transactions.previous"]()}
               </Button>
               <Button
-                aria-label="Next page"
+                aria-label={m["app.dashboard.transactions.nextPage"]()}
                 disabled={loading || !hasNextPage}
                 onClick={onNextPage}
                 size="sm"
                 variant="outline"
               >
-                Next
+                {m["app.dashboard.transactions.next"]()}
                 <ChevronRight data-icon="inline-end" />
               </Button>
             </div>

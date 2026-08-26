@@ -11,6 +11,7 @@ import {
   formatTokenPrice,
 } from "#/lib/dashboard-format"
 import { cn } from "#/lib/utils"
+import { m } from "#/paraglide/messages"
 
 type PortfolioAsset = PortfolioAssets["assets"][number]
 
@@ -35,11 +36,13 @@ export function AssetsTable({
           <table className="w-full min-w-[42rem] border-separate border-spacing-0 text-sm">
             <thead>
               <tr className="text-left text-xs text-muted-foreground">
-                <TableHead>Asset</TableHead>
-                <TableHead align="right">Amount</TableHead>
-                <TableHead align="right">Price</TableHead>
-                <TableHead align="right">Total value</TableHead>
-                <TableHead align="right">Unrealized P/L</TableHead>
+                <TableHead>{m["app.dashboard.assets.headerAsset"]()}</TableHead>
+                <TableHead align="right">{m["app.dashboard.assets.headerAmount"]()}</TableHead>
+                <TableHead align="right">{m["app.dashboard.assets.headerPrice"]()}</TableHead>
+                <TableHead align="right">{m["app.dashboard.assets.headerTotalValue"]()}</TableHead>
+                <TableHead align="right">
+                  {m["app.dashboard.assets.headerUnrealizedProfitLoss"]()}
+                </TableHead>
               </tr>
             </thead>
             <tbody>
@@ -48,13 +51,13 @@ export function AssetsTable({
               ) : error ? (
                 <tr>
                   <td className="h-28 text-center text-muted-foreground" colSpan={5}>
-                    Asset values could not be loaded. Try again in a moment.
+                    {m["app.dashboard.assets.loadError"]()}
                   </td>
                 </tr>
               ) : holdings.length === 0 ? (
                 <tr>
                   <td className="h-28 text-center text-muted-foreground" colSpan={5}>
-                    No assets with an open balance yet.
+                    {m["app.dashboard.assets.empty"]()}
                   </td>
                 </tr>
               ) : (
@@ -159,7 +162,7 @@ function AssetMark({
   return (
     <span className="relative size-8">
       <img
-        alt={`${name} logo`}
+        alt={m["app.dashboard.assets.logoAlt"]({ name })}
         className="absolute inset-0 size-full object-cover"
         loading="lazy"
         onError={() => setFailedLogoUrl(usableLogoUrl)}
