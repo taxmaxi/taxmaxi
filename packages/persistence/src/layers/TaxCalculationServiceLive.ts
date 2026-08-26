@@ -611,11 +611,12 @@ const make = Effect.gen(function* () {
         or exists (
           select 1
           from ${schema.principalAssetOverrides} affecting_override
-          where not exists (
-            select 1
-            from ${schema.principalAssetOverrides} superseding_override
-            where superseding_override.supersedes_override_id = affecting_override.id
-          )
+          where affecting_override.principal_id = ${schema.sources.principalId}
+            and not exists (
+              select 1
+              from ${schema.principalAssetOverrides} superseding_override
+              where superseding_override.supersedes_override_id = affecting_override.id
+            )
             and not exists (
               select 1
               from ${schema.principalAssetOverrideApplications} existing_application

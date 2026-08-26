@@ -166,6 +166,7 @@ const makeProviderLayer = ({
           findProviderAssetByProviderAssetId: () => Effect.succeed(Option.none()),
           findProviderAssetByNaturalKey: () => Effect.succeed(Option.none()),
           findProviderAssetByCurrencyCode: () => Effect.succeed(Option.none()),
+          findPrincipalIdentityOverrideAssetId: () => Effect.succeed(Option.none()),
           listProviderAssetObservedRepresentations: () => Effect.succeed([]),
           findProviderAssetReviewById: () => Effect.succeed(Option.none()),
           listProviderAssetReviews: () => Effect.succeed([]),

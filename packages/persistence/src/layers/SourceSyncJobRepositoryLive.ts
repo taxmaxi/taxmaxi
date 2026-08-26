@@ -223,11 +223,16 @@ const make = Effect.gen(function* () {
           false,
           ${completedAt}
         from ${schema.principalAssetOverrides} asset_override
-        where not exists (
-          select 1
-          from ${schema.principalAssetOverrides} superseding_override
-          where superseding_override.supersedes_override_id = asset_override.id
-        )
+        where asset_override.principal_id = (
+            select ${schema.sources.principalId}
+            from ${schema.sources}
+            where ${schema.sources.id} = ${sourceId}::uuid
+          )
+          and not exists (
+            select 1
+            from ${schema.principalAssetOverrides} superseding_override
+            where superseding_override.supersedes_override_id = asset_override.id
+          )
           and (
             (
               asset_override.target_kind = 'provider_asset'
@@ -272,6 +277,13 @@ const make = Effect.gen(function* () {
                 and successful_replay.mode = 'replay'
                 and successful_replay.status = 'completed'
                 and successful_replay.progress_details ->> 'failedRecords' = '0'
+                -- Only a replay requested at or after the override was written can
+                -- have applied it; an older replay ran without the override.
+                and successful_replay.created_at >= (
+                  select applied_override.created_at
+                  from ${schema.principalAssetOverrides} applied_override
+                  where applied_override.id = excluded.override_id
+                )
             )
           )
       `)

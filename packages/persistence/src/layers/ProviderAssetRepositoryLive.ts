@@ -1129,6 +1129,43 @@ const make = Effect.gen(function* () {
         return Option.fromNullishOr(row)
       })
 
+  const findPrincipalIdentityOverrideAssetId: ProviderAssetRepositoryShape["findPrincipalIdentityOverrideAssetId"] =
+    ({ principalId, providerAssetRowId }) =>
+      Effect.gen(function* () {
+        const overrides = yield* db
+          .select({
+            kind: schema.principalAssetOverrides.kind,
+            action: schema.principalAssetOverrides.action,
+            replacementAssetId: schema.principalAssetOverrides.replacementAssetId,
+            replacementInclusionState: schema.principalAssetOverrides.replacementInclusionState,
+          })
+          .from(schema.principalAssetOverrides)
+          .where(
+            and(
+              eq(schema.principalAssetOverrides.principalId, principalId),
+              eq(schema.principalAssetOverrides.targetKind, "provider_asset"),
+              eq(schema.principalAssetOverrides.providerAssetRowId, providerAssetRowId)
+            )
+          )
+          .orderBy(
+            desc(schema.principalAssetOverrides.createdAt),
+            desc(schema.principalAssetOverrides.id)
+          )
+          .pipe(
+            wrapSyncEngineSqlError("providerAssetRepository.findPrincipalIdentityOverrideAssetId")
+          )
+
+        const latestIdentity = overrides.find((override) => override.kind === "identity")
+        const latestInclusion = overrides.find((override) => override.kind === "inclusion")
+        const excludedByOverride =
+          latestInclusion?.action === "set" &&
+          latestInclusion.replacementInclusionState === "excluded"
+
+        return latestIdentity?.action === "set" && !excludedByOverride
+          ? Option.fromNullishOr(latestIdentity.replacementAssetId)
+          : Option.none()
+      })
+
   const providerAssetReviewProjection = {
     providerAsset: {
       id: schema.providerAssets.id,
@@ -1409,6 +1446,7 @@ const make = Effect.gen(function* () {
     findProviderAssetByProviderAssetId,
     findProviderAssetByNaturalKey,
     findProviderAssetByCurrencyCode,
+    findPrincipalIdentityOverrideAssetId,
     findProviderAssetReviewById,
     listProviderAssetReviews,
     listProviderAssetObservedRepresentations,

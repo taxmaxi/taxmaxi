@@ -657,6 +657,7 @@ const makeExecutorLayer = ({
       Effect.die("findProviderAssetByNaturalKey should not be called"),
     findProviderAssetByCurrencyCode: () =>
       Effect.die("findProviderAssetByCurrencyCode should not be called"),
+    findPrincipalIdentityOverrideAssetId: () => Effect.succeed(Option.none()),
     findProviderAssetReviewById: () =>
       Effect.die("findProviderAssetReviewById should not be called"),
     listProviderAssetReviews: () => Effect.die("listProviderAssetReviews should not be called"),

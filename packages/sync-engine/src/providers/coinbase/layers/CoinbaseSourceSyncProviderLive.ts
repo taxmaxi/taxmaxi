@@ -975,11 +975,36 @@ const make = Effect.gen(function* () {
     }
   }
 
+  /**
+   * When the shared mapping leaves a currency unresolved, the principal's
+   * active identity override still names the asset. Falling back to it lets an
+   * override replay rebuild fee transfers instead of silently dropping them.
+   */
+  const resolvePrincipalOverrideAsset = ({
+    currencyCode,
+    principalId,
+  }: {
+    readonly currencyCode: string
+    readonly principalId: string
+  }) =>
+    loadProviderAssetIdentity({ currencyCode: currencyCode.toUpperCase() }).pipe(
+      Effect.flatMap((providerAssetRowId) =>
+        providerAssetRowId === null
+          ? Effect.succeed(Option.none<string>())
+          : providerAssetRepository.findPrincipalIdentityOverrideAssetId({
+              principalId,
+              providerAssetRowId,
+            })
+      )
+    )
+
   const resolveOptionalAssetForReviewableNormalization = ({
     currencyCode,
+    principalId,
     rawSourcePayload,
   }: {
     readonly currencyCode: string
+    readonly principalId: string
     readonly rawSourcePayload: unknown
   }) =>
     coinbaseReferenceMappingService
@@ -994,15 +1019,26 @@ const make = Effect.gen(function* () {
         })),
         Effect.catchTag("CoinbaseProviderAssetMappingNotFoundError", () =>
           Effect.succeed({
-            assetId: Option.none(),
+            assetId: Option.none<string>(),
             requiresReview: true,
           })
         ),
         Effect.catchTag("CoinbasePendingProviderAssetMappingError", () =>
           Effect.succeed({
-            assetId: Option.none(),
+            assetId: Option.none<string>(),
             requiresReview: true,
           })
+        ),
+        Effect.flatMap((resolution) =>
+          Option.isSome(resolution.assetId)
+            ? Effect.succeed(resolution)
+            : resolvePrincipalOverrideAsset({ currencyCode, principalId }).pipe(
+                Effect.map((overrideAssetId) =>
+                  Option.isSome(overrideAssetId)
+                    ? { assetId: overrideAssetId, requiresReview: false }
+                    : resolution
+                )
+              )
         )
       )
 
@@ -1031,6 +1067,7 @@ const make = Effect.gen(function* () {
         resolveAssetId: (currencyCode) =>
           resolveOptionalAssetForReviewableNormalization({
             currencyCode,
+            principalId: source.principalId,
             rawSourcePayload: sourceRecord.payload,
           }).pipe(
             Effect.map((resolution) => resolution.assetId),
@@ -1087,6 +1124,7 @@ const make = Effect.gen(function* () {
 
       const primaryAssetResolution = yield* resolveOptionalAssetForReviewableNormalization({
         currencyCode: normalized.primaryAssetCurrency,
+        principalId: source.principalId,
         rawSourcePayload: sourceRecord.payload,
       })
       const maybePrimaryAsset = yield* Option.match(primaryAssetResolution.assetId, {

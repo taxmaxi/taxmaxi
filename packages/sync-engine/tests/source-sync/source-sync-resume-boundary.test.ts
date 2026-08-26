@@ -1,5 +1,6 @@
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
+import * as Option from "effect/Option"
 import { describe, expect, it } from "vitest"
 import {
   CoinbaseLegDerivationService,
@@ -145,6 +146,7 @@ const runWithProvider = <A, E>(
               Effect.die("findProviderAssetByNaturalKey should not be called"),
             findProviderAssetByCurrencyCode: () =>
               Effect.die("findProviderAssetByCurrencyCode should not be called"),
+            findPrincipalIdentityOverrideAssetId: () => Effect.succeed(Option.none()),
             findProviderAssetReviewById: () =>
               Effect.die("findProviderAssetReviewById should not be called"),
             listProviderAssetReviews: () =>

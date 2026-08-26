@@ -2260,7 +2260,7 @@ const make = Effect.gen(function* () {
       })
 
   const applyDeterministicInternalTransferCanonicalization: TransferReconciliationRepositoryShape["applyDeterministicInternalTransferCanonicalization"] =
-    ({ principalId, sourceId, reconciliationId }) =>
+    ({ principalId, sourceId, reconciliationId, currentJobId }) =>
       db
         .transaction((tx) =>
           Effect.gen(function* () {
@@ -2521,6 +2521,11 @@ const make = Effect.gen(function* () {
                     requestedRows: reconciliationsBeforeLock,
                   })
                 : reconciliationsBeforeLock
+            if (connectedReconciliationsBeforeLock.length === 0) {
+              return {
+                canonicalizedPairs: 0,
+              } satisfies DeterministicTransferCanonicalizationSummary
+            }
             yield* lockNetworkMovements({
               executor: tx,
               principalId,
@@ -2573,6 +2578,11 @@ const make = Effect.gen(function* () {
               })
             }
 
+            // Canonicalization must not read inventory that still waits for an
+            // override replay. Applications owned by the job running this pass
+            // are exempt: that replay is the job applying them. A pending
+            // application skips this pass instead of failing the job; a later
+            // pass canonicalizes once the replay has completed.
             const [pendingOverrideApplication] = yield* tx
               .select({ id: schema.principalAssetOverrideApplications.id })
               .from(schema.principalAssetOverrideApplications)
@@ -2584,6 +2594,9 @@ const make = Effect.gen(function* () {
                 and(
                   inArray(schema.principalAssetOverrideApplications.sourceId, inventorySourceIds),
                   isNull(schema.principalAssetOverrideApplications.supersededAt),
+                  currentJobId === undefined
+                    ? undefined
+                    : sql`${schema.principalAssetOverrideApplications.replayJobId} is distinct from ${currentJobId}::uuid`,
                   or(
                     isNull(schema.principalAssetOverrideApplications.replayJobId),
                     ne(schema.processingJobs.status, "completed"),
@@ -2593,11 +2606,13 @@ const make = Effect.gen(function* () {
               )
               .limit(1)
             if (pendingOverrideApplication !== undefined) {
-              return yield* new SyncEngineStorageError({
-                operation:
-                  "transferReconciliationRepository.applyDeterministicInternalTransferCanonicalization.lockSourceInventory",
-                cause: "Source inventory is waiting for a principal asset override replay.",
-              })
+              yield* Effect.logInfo(
+                { principalId, sourceId, currentJobId: currentJobId ?? null },
+                "transfer-reconciliation:canonicalization-skipped-pending-override-replay"
+              )
+              return {
+                canonicalizedPairs: 0,
+              } satisfies DeterministicTransferCanonicalizationSummary
             }
 
             // The initial read only discovers which source rows must be locked. Replay or

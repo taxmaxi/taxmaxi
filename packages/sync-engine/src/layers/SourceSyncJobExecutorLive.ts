@@ -700,6 +700,7 @@ const make = Effect.gen(function* () {
               .applyDeterministicInternalTransferCanonicalization({
                 principalId,
                 sourceId: candidateSource.id,
+                currentJobId: jobId,
               })
               .pipe(
                 sourceSyncSpan({

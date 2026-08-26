@@ -21,9 +21,14 @@ export interface ReconcileTransferCandidatesParams {
 /**
  * ApplyDeterministicInternalTransferCanonicalizationParams - Scope canonicalization
  * to a source, optionally narrowed to one reviewed reconciliation.
+ *
+ * `currentJobId` names the processing job running this pass. Override
+ * applications whose replay job is that exact job do not block
+ * canonicalization: the running replay is the job applying them.
  */
 export interface ApplyDeterministicInternalTransferCanonicalizationParams extends ReconcileTransferCandidatesParams {
   readonly reconciliationId?: string
+  readonly currentJobId?: string
 }
 
 /**

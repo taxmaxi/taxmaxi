@@ -317,6 +317,18 @@ export interface ProviderAssetRepositoryShape {
   }) => Effect.Effect<Option.Option<ProviderAssetRecord>, SyncEngineStorageError>
 
   /**
+   * Load the asset chosen by the principal's active identity override for one
+   * provider asset row. Returns none when there is no active identity
+   * override, or when the principal's active inclusion override excludes the
+   * asset. Providers use this during normalization so an override replay can
+   * rebuild movements whose system mapping is still unresolved.
+   */
+  readonly findPrincipalIdentityOverrideAssetId: (params: {
+    readonly principalId: string
+    readonly providerAssetRowId: string
+  }) => Effect.Effect<Option.Option<string>, SyncEngineStorageError>
+
+  /**
    * Load one provider asset row with its mapping review state.
    */
   readonly findProviderAssetReviewById: (params: {

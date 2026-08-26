@@ -334,10 +334,12 @@ const make = Effect.gen(function* () {
           mappingUpdatedAt: row.mappingUpdatedAt?.toISOString() ?? null,
         })
         if (kind === "identity") {
+          // "excluded" is a final answer while "rejected" stays an open question,
+          // so only "excluded" ends the identity search.
           const conclusion: AssetOverrideSystemConclusion =
             row.mappingStatus === "approved" && row.assetId !== null
               ? { _tag: "identity", state: "resolved", assetId: row.assetId }
-              : row.mappingStatus === "rejected"
+              : row.mappingStatus === "excluded"
                 ? { _tag: "identity", state: "excluded", assetId: null }
                 : { _tag: "identity", state: "unresolved", assetId: null }
           return { revision, conclusion }
@@ -354,7 +356,7 @@ const make = Effect.gen(function* () {
             ? { _tag: "inclusion", state: "blocked", reason: technicalBlocker }
             : row.mappingStatus === "approved"
               ? { _tag: "inclusion", state: "included", reason: null }
-              : row.mappingStatus === "rejected"
+              : row.mappingStatus === "excluded"
                 ? { _tag: "inclusion", state: "excluded", reason: "taxmaxi_policy" }
                 : { _tag: "inclusion", state: "blocked", reason: "asset_identity_unresolved" }
         return { revision, conclusion }
@@ -420,7 +422,9 @@ const make = Effect.gen(function* () {
       const approved = mappings.find(
         (mapping) => mapping.mappingStatus === "approved" && mapping.assetId !== null
       )
-      const rejected = mappings.some((mapping) => mapping.mappingStatus === "rejected")
+      // "excluded" is a final mapping answer; "rejected" stays an open question
+      // and therefore never counts as a settled exclusion.
+      const excluded = mappings.some((mapping) => mapping.mappingStatus === "excluded")
 
       if (kind === "identity") {
         const conclusion: AssetOverrideSystemConclusion =
@@ -428,7 +432,7 @@ const make = Effect.gen(function* () {
             ? { _tag: "identity", state: "resolved", assetId: representation.assetId }
             : approved?.assetId !== null && approved?.assetId !== undefined
               ? { _tag: "identity", state: "resolved", assetId: approved.assetId }
-              : rejected
+              : excluded
                 ? { _tag: "identity", state: "excluded", assetId: null }
                 : { _tag: "identity", state: "unresolved", assetId: null }
         return { revision, conclusion }
@@ -439,7 +443,7 @@ const make = Effect.gen(function* () {
         (representation === undefined && mappings.some((mapping) => mapping.decimals === null))
       const conclusion: AssetOverrideSystemConclusion = missingDecimals
         ? { _tag: "inclusion", state: "blocked", reason: "missing_decimals" }
-        : representation?.isSpam === true || rejected
+        : representation?.isSpam === true || excluded
           ? { _tag: "inclusion", state: "excluded", reason: "taxmaxi_policy" }
           : representation !== undefined || approved !== undefined
             ? { _tag: "inclusion", state: "included", reason: null }

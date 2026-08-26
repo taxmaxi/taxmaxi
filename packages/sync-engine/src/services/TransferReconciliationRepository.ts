@@ -210,11 +210,16 @@ export interface TransferReconciliationRepositoryShape {
   /**
    * Replace false provider/onchain tax-visible state with canonical internal-transfer
    * legs and review rows for deterministic reconciliations belonging to one source.
+   *
+   * The pass is skipped (zero pairs) while an affected source still waits for a
+   * principal asset override replay. `currentJobId` exempts applications whose
+   * replay job is the job running this pass, since that replay is applying them.
    */
   readonly applyDeterministicInternalTransferCanonicalization: (params: {
     readonly principalId: string
     readonly sourceId: string
     readonly reconciliationId?: string
+    readonly currentJobId?: string
   }) => Effect.Effect<DeterministicTransferCanonicalizationSummary, SyncEngineStorageError>
 }
 

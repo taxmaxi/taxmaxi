@@ -932,9 +932,9 @@ describe("AssetOverrideRepository", () => {
         yield* db
           .update(schema.providerAssetMappings)
           .set({
-            mappingStatus: "rejected",
+            mappingStatus: "excluded",
             canonicalAssetId: TEST_BTC_ASSET_ID,
-            reviewerNotes: "Rejected by TaxMaxi policy.",
+            reviewerNotes: "Excluded by TaxMaxi policy.",
           })
           .where(eq(schema.providerAssetMappings.providerAssetRowId, providerAssetRowId))
       })

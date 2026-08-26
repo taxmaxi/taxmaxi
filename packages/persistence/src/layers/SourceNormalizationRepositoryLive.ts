@@ -400,18 +400,24 @@ const make = Effect.gen(function* () {
     readonly providerTransfer: PersistedSourceProviderTransfer
   }) =>
     Effect.gen(function* () {
-      const targetCondition =
+      // A provider-asset target stays valid for every transfer of its provider
+      // asset row, so it is consulted as a fallback even when the transfer
+      // carries an observed representation identity. The representation target
+      // is the primary evidence identity and wins when both exist.
+      const providerAssetCondition =
+        providerTransfer.providerAssetId === null
+          ? null
+          : and(
+              eq(schema.principalAssetOverrides.targetKind, "provider_asset"),
+              eq(
+                schema.principalAssetOverrides.providerAssetRowId,
+                providerTransfer.providerAssetId
+              )
+            )
+      const representationCondition =
         providerTransfer.observedBlockchainId === null ||
         providerTransfer.observedRepresentationType === null
-          ? providerTransfer.providerAssetId === null
-            ? null
-            : and(
-                eq(schema.principalAssetOverrides.targetKind, "provider_asset"),
-                eq(
-                  schema.principalAssetOverrides.providerAssetRowId,
-                  providerTransfer.providerAssetId
-                )
-              )
+          ? null
           : and(
               eq(schema.principalAssetOverrides.targetKind, "representation"),
               eq(
@@ -432,12 +438,17 @@ const make = Effect.gen(function* () {
                     providerTransfer.observedMintAddress
                   )
             )
+      const targetCondition =
+        representationCondition !== null && providerAssetCondition !== null
+          ? or(representationCondition, providerAssetCondition)
+          : (representationCondition ?? providerAssetCondition)
       if (targetCondition === null) return null
 
       const overrides = yield* executor
         .select({
           id: schema.principalAssetOverrides.id,
           kind: schema.principalAssetOverrides.kind,
+          targetKind: schema.principalAssetOverrides.targetKind,
           action: schema.principalAssetOverrides.action,
           replacementAssetId: schema.principalAssetOverrides.replacementAssetId,
           replacementInclusionState: schema.principalAssetOverrides.replacementInclusionState,
@@ -448,8 +459,22 @@ const make = Effect.gen(function* () {
           desc(schema.principalAssetOverrides.createdAt),
           desc(schema.principalAssetOverrides.id)
         )
-      const latestIdentity = overrides.find((override) => override.kind === "identity")
-      const latestInclusion = overrides.find((override) => override.kind === "inclusion")
+      // Each target keeps its own history; the newest entry per target decides.
+      // A representation-targeted "set" wins, a withdrawn representation history
+      // falls back to the provider-asset history.
+      const latestForKind = (kind: "identity" | "inclusion") => {
+        const representationLatest = overrides.find(
+          (override) => override.kind === kind && override.targetKind === "representation"
+        )
+        const providerAssetLatest = overrides.find(
+          (override) => override.kind === kind && override.targetKind === "provider_asset"
+        )
+        if (representationLatest?.action === "set") return representationLatest
+        if (providerAssetLatest?.action === "set") return providerAssetLatest
+        return representationLatest ?? providerAssetLatest
+      }
+      const latestIdentity = latestForKind("identity")
+      const latestInclusion = latestForKind("inclusion")
       if (providerTransfer.providerAssetId === null) return null
 
       const [mapping] = yield* executor
@@ -516,12 +541,14 @@ const make = Effect.gen(function* () {
           ? mapping?.exponent === null || mapping?.providerType === "unsupported"
           : representation?.decimals === null ||
             (representation === undefined && providerTransfer.observedDecimals === null)
+      // Mapping status "excluded" is a final exclusion; "rejected" stays an
+      // open question and keeps the observation blocked.
       const systemInclusion = technicallyBlocked
         ? "blocked"
-        : representation?.isSpam === true
+        : representation?.isSpam === true || mapping?.status === "excluded"
           ? "excluded"
           : mapping?.status === "rejected"
-            ? "excluded"
+            ? "blocked"
             : representation !== undefined || mapping?.status === "approved"
               ? "included"
               : "blocked"
@@ -599,12 +626,14 @@ const make = Effect.gen(function* () {
         )
       const identity = overrides.find((override) => override.kind === "identity")
       const inclusion = overrides.find((override) => override.kind === "inclusion")
+      // Mapping status "excluded" is a final exclusion; "rejected" stays an
+      // open question and keeps the observation blocked.
       const systemInclusion =
         system.exponent === null || system.providerType === "unsupported"
           ? "blocked"
           : system.mappingStatus === "approved"
             ? "included"
-            : system.mappingStatus === "rejected"
+            : system.mappingStatus === "excluded"
               ? "excluded"
               : "blocked"
       const decision = resolveEffectiveAssetOverrideDecision({
@@ -732,27 +761,51 @@ const make = Effect.gen(function* () {
               .where(eq(schema.sources.id, providerTransfers[0].sourceId))
               .limit(1)
       const sourceAddressId = source?.addressId ?? null
+      // Materialized legs stay all-or-nothing per transaction: they are only
+      // built when every accounting movement is settled (excluded, or resolved
+      // to an asset by the system or an override) and at least one movement is
+      // overridden. A partly settled transaction produces no materialized legs,
+      // and a fully settled one rebuilds every movement, not just the
+      // overridden ones, so replay cannot drop the system-resolved legs.
+      const hasDerivedLeg = (canonicalTransferExternalId: string | null) =>
+        legs.some((leg) =>
+          providerTransferOwnsLeg({
+            canonicalTransferExternalId,
+            legSourceTransferId: leg.sourceTransferId,
+            canonicalTransfers,
+          })
+        )
+      const accountingDecisions = decisions.filter(
+        (decision) =>
+          decision.providerTransfer.processingMode !== "evidence_only" &&
+          decision.providerTransfer.processingMode !== "stale"
+      )
+      const anyOverridden = accountingDecisions.some(
+        (decision) => decision.effective?.overridden === true
+      )
+      const everyAccountingMovementSettled = accountingDecisions.every(
+        (decision) =>
+          hasDerivedLeg(decision.canonicalTransferExternalId) ||
+          (decision.metadata.overrideAccountingPlan !== null &&
+            decision.effective !== null &&
+            (decision.effective.excluded || decision.effective.assetId !== null))
+      )
+      const materializeSettledLegs =
+        allowOverrideMaterialization && anyOverridden && everyAccountingMovementSettled
       const materializedOverrideLegs = decisions.flatMap(
         ({ canonicalTransferExternalId, effective, metadata, providerTransfer }) => {
           if (
-            !allowOverrideMaterialization ||
+            !materializeSettledLegs ||
             metadata.overrideAccountingPlan === null ||
             providerTransfer.processingMode === "evidence_only" ||
             providerTransfer.processingMode === "stale" ||
-            effective?.overridden !== true ||
+            effective === null ||
             effective.excluded ||
             effective.assetId === null
           ) {
             return []
           }
-          const alreadyDerived = legs.some((leg) =>
-            providerTransferOwnsLeg({
-              canonicalTransferExternalId,
-              legSourceTransferId: leg.sourceTransferId,
-              canonicalTransfers,
-            })
-          )
-          if (alreadyDerived) return []
+          if (hasDerivedLeg(canonicalTransferExternalId)) return []
 
           const canonicalTransfer = canonicalTransfers.find(
             (transfer) => transfer.externalId === canonicalTransferExternalId

@@ -22,6 +22,13 @@ export interface AssetOverrideDecisionInput {
   readonly inclusionOverrideState: "included" | "excluded" | null
 }
 
+/**
+ * The combined identity and inclusion answer after overrides are applied.
+ *
+ * `assetId` is only set when the result is `included`; an excluded or blocked
+ * result clears it so no accounting can accidentally use the identity. An
+ * included result that still has no asset is reported as `blocked`.
+ */
 export interface EffectiveAssetOverrideDecision {
   readonly assetId: string | null
   readonly inclusionState: AssetInclusionState
