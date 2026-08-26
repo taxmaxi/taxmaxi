@@ -12,6 +12,36 @@ _Avoid_: Fiat asset, canonical asset
 A fiat currency description received from a provider's dedicated fiat catalog. An exact supported currency code resolves without provider asset review; unknown or conflicting evidence fails closed.
 _Avoid_: Provider asset
 
+## Tax assessment language
+
+**Tax assessment**:
+The rule-applied tax outcome for one account, jurisdiction, and assessment year: the §23 and §22 Nr. 3 buckets, the applied legal rules with their citations, and the ruleset version used.
+_Avoid_: Tax calculation, tax summary
+
+**Assessment year**:
+The calendar year a tax assessment covers (Veranlagungszeitraum). Rule parameters take their values from it.
+_Avoid_: Tax year, fiscal year
+
+**Legal rule**:
+A citable statement of tax law, keyed by rule key and always linked to at least one official source citation. A rule without a citation is not a valid rule.
+_Avoid_: Business rule, config rule
+
+**Rule parameter**:
+A value set by law, such as a Freigrenze amount or the holding period, attached to a legal rule with an assessment-year validity window.
+_Avoid_: Constant, config value, setting
+
+**Official source**:
+A legal source published by a federal authority, such as the EStG or a BMF-Schreiben, with URL and publication date.
+_Avoid_: Reference, documentation
+
+**Freigrenze**:
+An all-or-nothing threshold: when the yearly total reaches it, the whole amount becomes taxable, not just the part above it.
+_Avoid_: Allowance, exemption, Freibetrag
+
+**Ruleset**:
+The versioned catalog of legal rules active for a jurisdiction. A new BMF letter becomes a new ruleset version; past versions stay queryable.
+_Avoid_: Rule engine, rule config
+
 ## Wallet input language
 
 **Wallet name**:
