@@ -3734,7 +3734,7 @@ describe("SourceNormalizationRepositoryLive", () => {
         networkHash: "tx-send-provider-transfer-hash-1",
       })
     )
-    expect(result.providerTransfers[0]?.amount).toContain("0.10000000")
+    expect(result.providerTransfers[0]?.amount).toContain("0.09990000")
 
     const counts = await runPg(
       Effect.gen(function* () {
@@ -3760,7 +3760,7 @@ describe("SourceNormalizationRepositoryLive", () => {
     expect(counts.lots).toEqual([
       expect.objectContaining({
         sourceId: TEST_SOURCE_ID,
-        remainingAmount: expect.stringContaining("0.89990000"),
+        remainingAmount: expect.stringContaining("0.90000000"),
       }),
     ])
     expect(counts.inventoryMovements).toEqual(
@@ -3789,7 +3789,7 @@ describe("SourceNormalizationRepositoryLive", () => {
     const feeRolePayload = {
       ...payload,
       id: "tx-provider-fee-role-1",
-      amount: { amount: "-0.00010000", currency: "BTC" },
+      amount: { amount: "-0.00020000", currency: "BTC" },
       native_amount: { amount: "-150.00", currency: "EUR" },
       created_at: feeRoleAt.toISOString(),
       resource_path: "/v2/accounts/coinbase-account-1/transactions/tx-provider-fee-role-1",
@@ -3863,7 +3863,7 @@ describe("SourceNormalizationRepositoryLive", () => {
         transactionLegId: expect.any(String),
       }),
     ])
-    expect(feeRoleState.lot?.remainingAmount).toContain("0.89980000")
+    expect(feeRoleState.lot?.remainingAmount).toContain("0.89990000")
   })
 
   it("does not allocate an internal-transfer outflow after its disposal leg consumed inventory", async () => {
@@ -4094,12 +4094,12 @@ describe("SourceNormalizationRepositoryLive", () => {
       })
     )
 
-    expect(changedState.lot?.remainingAmount).toContain("0.78000000")
+    expect(changedState.lot?.remainingAmount).toContain("0.80000000")
     expect(changedState.movements).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
           purpose: "principal",
-          amount: expect.stringContaining("0.2"),
+          amount: expect.stringContaining("0.18"),
           taxTreatment: "pending_review",
           reconciliationStatus: "unmatched",
         }),
@@ -4108,7 +4108,7 @@ describe("SourceNormalizationRepositoryLive", () => {
     )
     expect(changedState.allocations).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ matchedAmount: expect.stringContaining("0.2") }),
+        expect.objectContaining({ matchedAmount: expect.stringContaining("0.18") }),
         expect.objectContaining({ matchedAmount: expect.stringContaining("0.02") }),
       ])
     )
@@ -4131,7 +4131,7 @@ describe("SourceNormalizationRepositoryLive", () => {
       })
     )
 
-    expect(succeededState.lot?.remainingAmount).toContain("0.78000000")
+    expect(succeededState.lot?.remainingAmount).toContain("0.80000000")
     expect(succeededState.movements).toHaveLength(2)
     expect(succeededState.allocations).toHaveLength(2)
 
@@ -4627,7 +4627,7 @@ describe("SourceNormalizationRepositoryLive", () => {
     )
   })
 
-  it("allocates a completed Coinbase send network fee separately from its principal", async () => {
+  it("drops the principal movement when the network fee covers the whole send debit", async () => {
     const acquisitionRawRecordId = "00000000-0000-0000-0000-000000000720"
     const sendRawRecordId = "00000000-0000-0000-0000-000000000721"
     const acquiredAt = new Date("2025-04-01T10:00:00.000Z")
@@ -4720,17 +4720,13 @@ describe("SourceNormalizationRepositoryLive", () => {
       })
     )
 
-    expect(state.movements).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ purpose: "principal", amount: expect.stringContaining("0.1") }),
-        expect.objectContaining({ purpose: "fee", amount: expect.stringContaining("0.1") }),
-      ])
-    )
+    expect(state.movements).toEqual([
+      expect.objectContaining({ purpose: "fee", amount: expect.stringContaining("0.1") }),
+    ])
     expect(state.allocations).toEqual([
       expect.objectContaining({ matchedAmount: expect.stringContaining("0.1") }),
-      expect.objectContaining({ matchedAmount: expect.stringContaining("0.1") }),
     ])
-    expect(state.lot?.remainingAmount).toContain("0.05000000")
+    expect(state.lot?.remainingAmount).toContain("0.15000000")
     expect(state.review).toEqual(
       expect.objectContaining({
         reviewStatus: "needs_review",
@@ -4738,6 +4734,240 @@ describe("SourceNormalizationRepositoryLive", () => {
         needsReview: true,
       })
     )
+  })
+
+  it("allocates a whole-balance Coinbase send whose amount includes the network fee", async () => {
+    const acquisitionRawRecordId = "00000000-0000-0000-0000-000000000725"
+    const sendRawRecordId = "00000000-0000-0000-0000-000000000726"
+    const acquiredAt = new Date("2025-04-01T10:00:00.000Z")
+    const sentAt = new Date("2025-04-02T10:00:00.000Z")
+    const acquisitionPayload = {
+      id: "tx-whole-balance-opening-inventory",
+      type: "buy",
+      status: "completed",
+      amount: { amount: "0.10010000", currency: "BTC" },
+      native_amount: { amount: "1001.00", currency: "EUR" },
+      created_at: acquiredAt.toISOString(),
+      resource_path:
+        "/v2/accounts/coinbase-account-1/transactions/tx-whole-balance-opening-inventory",
+    }
+    const sendPayload = {
+      id: "tx-whole-balance-send",
+      type: "send",
+      status: "completed",
+      amount: { amount: "-0.10010000", currency: "BTC" },
+      native_amount: { amount: "-1001.00", currency: "EUR" },
+      created_at: sentAt.toISOString(),
+      resource_path: "/v2/accounts/coinbase-account-1/transactions/tx-whole-balance-send",
+      network: {
+        status: "confirmed",
+        hash: "tx-whole-balance-send-hash",
+        network_name: "base",
+        transaction_fee: { amount: "0.00010000", currency: "BTC" },
+      },
+      to: {
+        address: "bc1qwholebalancedestination",
+        resource: "address",
+      },
+    }
+
+    await runPg(
+      Effect.all([
+        seedRawRecord({
+          rawRecordId: acquisitionRawRecordId,
+          externalRecordId: "raw-whole-balance-opening-inventory",
+          occurredAt: acquiredAt,
+          payload: acquisitionPayload,
+        }),
+        seedRawRecord({
+          rawRecordId: sendRawRecordId,
+          externalRecordId: "raw-whole-balance-send",
+          occurredAt: sentAt,
+          payload: sendPayload,
+        }),
+      ])
+    )
+
+    const source = buildCoinbaseSource({ cexAccountId: fixture.cexAccountId })
+    await runCoinbaseNormalization(
+      persistCoinbaseNormalization({
+        source,
+        sourceRecord: buildSeededRawRecord({
+          rawRecordId: acquisitionRawRecordId,
+          externalRecordId: "raw-whole-balance-opening-inventory",
+          occurredAt: acquiredAt,
+          payload: acquisitionPayload,
+        }),
+      })
+    )
+    const result = await runCoinbaseNormalization(
+      persistCoinbaseNormalization({
+        source,
+        sourceRecord: buildSeededRawRecord({
+          rawRecordId: sendRawRecordId,
+          externalRecordId: "raw-whole-balance-send",
+          occurredAt: sentAt,
+          payload: sendPayload,
+        }),
+      })
+    )
+
+    expect(result.providerTransfers).toEqual([
+      expect.objectContaining({
+        externalId: "tx-whole-balance-send:principal",
+        direction: "outbound",
+        amount: expect.stringContaining("0.10000000"),
+      }),
+    ])
+    expect(result.legs).toEqual([expect.objectContaining({ kind: "fee" })])
+
+    const state = await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const [lot] = yield* db.select().from(schema.fifoLots).limit(1)
+        const movements = yield* db
+          .select()
+          .from(schema.inventoryMovements)
+          .where(eq(schema.inventoryMovements.transactionId, result.transaction.id))
+        const [review] = yield* db
+          .select()
+          .from(schema.transactionReviews)
+          .where(eq(schema.transactionReviews.transactionId, result.transaction.id))
+        return { lot, movements, review }
+      })
+    )
+
+    expect(state.movements).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          purpose: "principal",
+          amount: expect.stringContaining("0.10000000"),
+        }),
+        expect.objectContaining({
+          purpose: "fee",
+          amount: expect.stringContaining("0.00010000"),
+        }),
+      ])
+    )
+    expect(state.lot?.remainingAmount).toContain("0.00000000")
+    expect(state.review?.matchedLayer ?? "").not.toContain("fifo_inventory")
+  })
+
+  it("carves a same-currency network fee out of an internal-transfer disposal leg", async () => {
+    const acquisitionRawRecordId = "00000000-0000-0000-0000-000000000727"
+    const withdrawalRawRecordId = "00000000-0000-0000-0000-000000000728"
+    const acquiredAt = new Date("2025-04-01T10:00:00.000Z")
+    const withdrawnAt = new Date("2025-04-02T10:00:00.000Z")
+    const acquisitionPayload = {
+      id: "tx-carved-withdrawal-opening-inventory",
+      type: "buy",
+      status: "completed",
+      amount: { amount: "1.00000000", currency: "BTC" },
+      native_amount: { amount: "10000.00", currency: "EUR" },
+      created_at: acquiredAt.toISOString(),
+      resource_path:
+        "/v2/accounts/coinbase-account-1/transactions/tx-carved-withdrawal-opening-inventory",
+    }
+    const withdrawalPayload = {
+      id: "tx-carved-withdrawal",
+      type: "intx_withdrawal",
+      status: "completed",
+      amount: { amount: "-0.10000000", currency: "BTC" },
+      native_amount: { amount: "-1500.00", currency: "EUR" },
+      created_at: withdrawnAt.toISOString(),
+      resource_path: "/v2/accounts/coinbase-account-1/transactions/tx-carved-withdrawal",
+      network: {
+        status: "confirmed",
+        hash: "tx-carved-withdrawal-hash",
+        network_name: "base",
+        transaction_fee: { amount: "0.01000000", currency: "BTC" },
+      },
+    }
+
+    await runPg(
+      Effect.all([
+        seedRawRecord({
+          rawRecordId: acquisitionRawRecordId,
+          externalRecordId: "raw-carved-withdrawal-opening-inventory",
+          occurredAt: acquiredAt,
+          payload: acquisitionPayload,
+        }),
+        seedRawRecord({
+          rawRecordId: withdrawalRawRecordId,
+          externalRecordId: "raw-carved-withdrawal",
+          occurredAt: withdrawnAt,
+          payload: withdrawalPayload,
+        }),
+      ])
+    )
+
+    const source = buildCoinbaseSource({ cexAccountId: fixture.cexAccountId })
+    await runCoinbaseNormalization(
+      persistCoinbaseNormalization({
+        source,
+        sourceRecord: buildSeededRawRecord({
+          rawRecordId: acquisitionRawRecordId,
+          externalRecordId: "raw-carved-withdrawal-opening-inventory",
+          occurredAt: acquiredAt,
+          payload: acquisitionPayload,
+        }),
+      })
+    )
+    const result = await runCoinbaseNormalization(
+      persistCoinbaseNormalization({
+        source,
+        sourceRecord: buildSeededRawRecord({
+          rawRecordId: withdrawalRawRecordId,
+          externalRecordId: "raw-carved-withdrawal",
+          occurredAt: withdrawnAt,
+          payload: withdrawalPayload,
+        }),
+      })
+    )
+
+    expect(result.legs).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: "disposal",
+          amount: expect.stringContaining("0.09000000"),
+          fiatAmount: expect.stringContaining("1350.00000000"),
+        }),
+        expect.objectContaining({
+          kind: "fee",
+          amount: expect.stringContaining("0.01000000"),
+        }),
+      ])
+    )
+
+    const state = await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const [lot] = yield* db.select().from(schema.fifoLots).limit(1)
+        const movements = yield* db
+          .select()
+          .from(schema.inventoryMovements)
+          .where(eq(schema.inventoryMovements.transactionId, result.transaction.id))
+        const disposalMatches = yield* db.select().from(schema.disposalMatches)
+        return { lot, movements, disposalMatches }
+      })
+    )
+
+    expect(state.movements).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          purpose: "principal",
+          amount: expect.stringContaining("0.09000000"),
+        }),
+        expect.objectContaining({
+          purpose: "fee",
+          amount: expect.stringContaining("0.01000000"),
+        }),
+      ])
+    )
+    expect(state.disposalMatches).toEqual([
+      expect.objectContaining({ matchedAmount: expect.stringContaining("0.09000000") }),
+    ])
+    expect(state.lot?.remainingAmount).toContain("0.90000000")
   })
 
   it("allocates a completed Coinbase send network fee paid in another asset", async () => {
@@ -5371,7 +5601,7 @@ describe("SourceNormalizationRepositoryLive", () => {
       expect.objectContaining({
         assetId: TEST_SOL_ASSET_ID,
         symbol: "SOL",
-        amount: "45.029406853",
+        amount: "45.029506853",
       }),
     ])
     expect(state.movements).toEqual(
@@ -5382,7 +5612,7 @@ describe("SourceNormalizationRepositoryLive", () => {
         }),
         expect.objectContaining({
           purpose: "principal",
-          amount: expect.stringContaining("0.956937799"),
+          amount: expect.stringContaining("0.956837799"),
           taxTreatment: "pending_review",
         }),
       ])

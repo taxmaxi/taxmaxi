@@ -1228,7 +1228,7 @@ describe("coinbase normalization persistence", () => {
         yield* seedMatchedOnchainReceipt({
           walletAddress: "bc1qexampledestination",
           txHash: "tx-send-hash-1",
-          amount: "0.10000000",
+          amount: "0.09990000",
         })
 
         yield* runSync()
@@ -1892,7 +1892,7 @@ describe("coinbase normalization persistence", () => {
         const [firstRemainingAmount, secondRemainingAmount] = remainingAmounts
         if (firstRemainingAmount !== undefined && secondRemainingAmount !== undefined) {
           expectDecimalAmount(firstRemainingAmount, "0.020123619236")
-          expectDecimalAmount(secondRemainingAmount, "0.4999")
+          expectDecimalAmount(secondRemainingAmount, "0.5")
         }
         expect(counts.disposalMatches.map((row) => String(row.gainLoss)).sort()).toEqual([
           "2000.00000000",

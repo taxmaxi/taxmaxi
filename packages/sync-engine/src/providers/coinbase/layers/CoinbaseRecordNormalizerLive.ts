@@ -8,6 +8,7 @@ import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import * as Option from "effect/Option"
 import * as Schema from "effect/Schema"
+import { isZeroAmount, subtractFeeFromDebit } from "../shared/CoinbaseDecimal.ts"
 import {
   type CoinbaseRecordNormalizationResult,
   CoinbaseRecordNormalizationError,
@@ -226,16 +227,53 @@ const providerTransferMetadata = ({
   providerTransactionType: transaction.type,
 })
 
+/**
+ * Coinbase reports an outbound `amount` as the full wallet debit including a
+ * same-currency network fee. The principal transfer only covers what leaves
+ * toward the recipient, so the fee is subtracted here; the fee transfer covers
+ * the rest and together they equal the debit. Fees in another currency or in
+ * the native fiat currency leave the amount untouched.
+ */
+const deriveOutboundPrincipalAmount = (
+  transaction: CoinbaseTransaction
+): Effect.Effect<string, CoinbaseRecordNormalizationError> => {
+  const fee = transaction.network?.transaction_fee
+  const feeCurrency = fee?.currency.toUpperCase()
+
+  if (
+    fee === undefined ||
+    feeCurrency !== transaction.amount.currency.toUpperCase() ||
+    feeCurrency === transaction.native_amount.currency.toUpperCase()
+  ) {
+    return Effect.succeed(normalizeUnsignedAmount(transaction.amount.amount))
+  }
+
+  return subtractFeeFromDebit({
+    debitAmount: transaction.amount.amount,
+    feeAmount: fee.amount,
+    onFeeAboveDebit: () =>
+      new CoinbaseRecordNormalizationError({
+        message: `Network fee ${fee.amount} ${fee.currency} exceeds the debited amount ${transaction.amount.amount} ${transaction.amount.currency}`,
+      }),
+    onInvalid: (value) =>
+      new CoinbaseRecordNormalizationError({
+        message: `Invalid decimal amount: ${value}`,
+      }),
+  })
+}
+
 const buildPrincipalProviderTransfer = ({
   normalizeParams,
   transaction,
   timestamp,
   direction,
+  amount,
 }: {
   readonly normalizeParams: NormalizeCoinbaseRecordParams
   readonly transaction: CoinbaseTransaction
   readonly timestamp: Date
   readonly direction: "inbound" | "outbound"
+  readonly amount: string
 }): CoinbaseRecordNormalizationResult["providerTransfers"][number] => {
   const ownAccountFallback = normalizeParams.sourceRecord.externalAccountId ?? "coinbase:account"
   const fromAccountRef =
@@ -274,7 +312,7 @@ const buildPrincipalProviderTransfer = ({
     toAddress: partyAddress(transaction.to),
     networkName: transaction.network?.network_name ?? transaction.network?.name ?? null,
     networkHash: transaction.network?.hash ?? null,
-    amount: normalizeUnsignedAmount(transaction.amount.amount),
+    amount,
     metadata: providerTransferMetadata({
       normalizeParams,
       transaction,
@@ -286,44 +324,44 @@ const buildPrincipalProviderTransfers = ({
   normalizeParams,
   transaction,
   timestamp,
+  outboundPrincipalAmount,
 }: {
   readonly normalizeParams: NormalizeCoinbaseRecordParams
   readonly transaction: CoinbaseTransaction
   readonly timestamp: Date
+  readonly outboundPrincipalAmount: string
 }): ReadonlyArray<CoinbaseRecordNormalizationResult["providerTransfers"][number]> => {
+  // A debit fully covered by its network fee leaves no principal to move, so
+  // the fee transfer alone accounts for the row.
+  const buildForDirection = (direction: "inbound" | "outbound") => {
+    const amount =
+      direction === "outbound"
+        ? outboundPrincipalAmount
+        : normalizeUnsignedAmount(transaction.amount.amount)
+
+    return isZeroAmount(amount)
+      ? []
+      : [
+          buildPrincipalProviderTransfer({
+            normalizeParams,
+            transaction,
+            timestamp,
+            direction,
+            amount,
+          }),
+        ]
+  }
+
   switch (transaction.type) {
     case "send":
-      return [
-        buildPrincipalProviderTransfer({
-          normalizeParams,
-          transaction,
-          timestamp,
-          direction: "outbound",
-        }),
-      ]
+      return buildForDirection("outbound")
     case "receive":
-      return [
-        buildPrincipalProviderTransfer({
-          normalizeParams,
-          transaction,
-          timestamp,
-          direction: "inbound",
-        }),
-      ]
+      return buildForDirection("inbound")
     case "intx_deposit":
     case "intx_withdrawal":
     case "transfer": {
       const direction = movementDirectionFromSignedAmount(transaction.amount.amount)
-      return direction === null
-        ? []
-        : [
-            buildPrincipalProviderTransfer({
-              normalizeParams,
-              transaction,
-              timestamp,
-              direction,
-            }),
-          ]
+      return direction === null ? [] : buildForDirection(direction)
     }
     default:
       return []
@@ -469,10 +507,12 @@ const normalizeCoinbaseRecord = (params: NormalizeCoinbaseRecordParams) =>
     const canonicalTransfers = feeTransferResults.flatMap((result) =>
       result.transfer === null ? [] : [result.transfer]
     )
+    const outboundPrincipalAmount = yield* deriveOutboundPrincipalAmount(transactionPayload)
     const providerTransfers = buildPrincipalProviderTransfers({
       normalizeParams: params,
       transaction: transactionPayload,
       timestamp: createdAt,
+      outboundPrincipalAmount,
     })
     const unresolvedAssetCurrencies = Array.from(
       new Set(
