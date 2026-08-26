@@ -1021,6 +1021,14 @@ const make = Effect.gen(function* () {
         return { _tag: "invalid_claim" as const }
       }
 
+      // A representation that already belongs to an asset contradicts a
+      // claim that the identity does not exist yet. The reviewer must pick
+      // the owning asset explicitly instead of having their new-asset claim
+      // silently rewritten into a reuse of it.
+      if (representationRows.length > 0) {
+        return { _tag: "ambiguous_identity" as const }
+      }
+
       // Same canonical form as the automatic resolver's duplicate brake, so
       // NFKC lookalikes collide here too instead of creating a second asset.
       const displayMatches = yield* client
@@ -1040,11 +1048,10 @@ const make = Effect.gen(function* () {
           )
         )
         .limit(2)
-      if (representationRows.length === 0 && displayMatches.length > 0) {
+      if (displayMatches.length > 0) {
         return { _tag: "ambiguous_identity" as const }
       }
 
-      const existingAssetId = representationRows[0]?.assetId ?? null
       if (
         representation !== null &&
         !isRepresentationCompatibleWithAssetType({
@@ -1056,15 +1063,10 @@ const make = Effect.gen(function* () {
       }
       return {
         _tag: "resolved" as const,
-        assetId: existingAssetId,
-        assetOutcome: existingAssetId === null ? ("create" as const) : ("reuse" as const),
-        representationId: representationRows[0]?.id ?? null,
-        representationOutcome:
-          representation === null
-            ? ("none" as const)
-            : representationRows.length === 1
-              ? ("reuse" as const)
-              : ("create" as const),
+        assetId: null,
+        assetOutcome: "create" as const,
+        representationId: null,
+        representationOutcome: representation === null ? ("none" as const) : ("create" as const),
         blockchainId,
       }
     })

@@ -1,5 +1,5 @@
 import { SOLANA_USDC_MINT } from "@my/core/assets"
-import { eq } from "drizzle-orm"
+import { and, eq } from "drizzle-orm"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import { beforeEach, describe, expect, it } from "vitest"
@@ -794,6 +794,58 @@ describe("coinbase reference mappings", () => {
       assetRepresentationId: null,
     })
     expect(jobsAfter).toHaveLength(jobsBefore.length)
+  })
+
+  it("reopens an approved mapping when the provider reclassifies the currency type", async () => {
+    await Effect.runPromise(
+      seedCanonicalAsset({
+        id: BTC_ASSET_ID,
+        symbol: "BTC",
+        coingeckoCoinId: "bitcoin",
+        contractAddress: "coinbase-default-legacy-btc",
+      })
+    )
+    await runReferenceMapping(
+      Effect.flatMap(CoinbaseReferenceMappingService, (service) => service.ensureDefaultMappings())
+    )
+
+    // A later catalog refresh reclassifies BTC as fiat. The approved asset
+    // mapping was reviewed under the old type and must not decide accounting.
+    await context.runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        yield* db
+          .update(schema.providerAssets)
+          .set({ providerType: "fiat" })
+          .where(
+            and(
+              eq(schema.providerAssets.provider, "coinbase"),
+              eq(schema.providerAssets.currencyCode, "BTC")
+            )
+          )
+      })
+    )
+
+    const failure = await runReferenceMapping(
+      Effect.flatMap(CoinbaseReferenceMappingService, (service) =>
+        service.resolveCurrency({ currencyCode: "BTC" }).pipe(Effect.flip)
+      )
+    )
+
+    expect(failure).toMatchObject({
+      _tag: "CoinbasePendingProviderAssetMappingError",
+      currencyCode: "BTC",
+    })
+
+    const btcMapping = (await Effect.runPromise(fetchProviderAssetMappingRows())).find(
+      (mapping) => mapping.currencyCode === "BTC"
+    )
+    expect(btcMapping).toMatchObject({
+      mappingKind: "fiat",
+      mappingStatus: "pending_review",
+      canonicalAssetId: null,
+      assetRepresentationId: null,
+    })
   })
 
   it("resolves EUR as fiat without requiring a canonical asset row", async () => {

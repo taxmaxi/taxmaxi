@@ -197,9 +197,11 @@ const make = Effect.gen(function* () {
   const ensurePendingProviderAssetMapping = ({
     providerAssetRowId,
     providerType,
+    sourceNotes = "Observed Coinbase provider asset without an approved TaxMaxi mapping. Review required.",
   }: {
     readonly providerAssetRowId: string
     readonly providerType: string | null
+    readonly sourceNotes?: string
   }) => {
     const mappingKind = toProviderAssetMappingKind({ providerType })
 
@@ -214,8 +216,7 @@ const make = Effect.gen(function* () {
             canonicalFiatCurrency: null,
             mappingStatus: "pending_review",
             reviewerNotes: null,
-            sourceNotes:
-              "Observed Coinbase provider asset without an approved TaxMaxi mapping. Review required.",
+            sourceNotes,
           },
         ],
       })
@@ -292,6 +293,30 @@ const make = Effect.gen(function* () {
         currencyCode,
         providerAssetRowId,
         message: `Coinbase provider asset mapping for ${currencyCode} is pending review. Approve the mapping row before replaying normalization.`,
+      })
+    })
+
+  const failReclassifiedProviderAssetMapping = ({
+    currencyCode,
+    providerAssetRowId,
+    providerType,
+  }: {
+    readonly currencyCode: string
+    readonly providerAssetRowId: string
+    readonly providerType: string | null
+  }) =>
+    Effect.gen(function* () {
+      yield* ensurePendingProviderAssetMapping({
+        providerAssetRowId,
+        providerType,
+        sourceNotes:
+          "Coinbase reclassified this currency between crypto and fiat after the mapping was approved. Review required.",
+      })
+
+      return yield* new CoinbasePendingProviderAssetMappingError({
+        currencyCode,
+        providerAssetRowId,
+        message: `Coinbase provider asset ${currencyCode} changed type since its mapping was approved. The mapping was reopened for review.`,
       })
     })
 
@@ -515,6 +540,25 @@ const make = Effect.gen(function* () {
         return yield* failPendingProviderAssetMapping({
           currencyCode: upperCurrencyCode,
           providerAssetRowId: providerAssetRecord.id,
+        })
+      }
+
+      // An approval is tied to the provider type it was reviewed under. When
+      // a catalog refresh reclassifies the currency between crypto and fiat,
+      // the old mapping must not decide accounting; reopen it for review. A
+      // null provider type is no report at all (default mappings are seeded
+      // without one), and an exclusion stays settled: it keeps the
+      // observation out of accounting under either type.
+      if (
+        persistedMapping.mappingStatus === "approved" &&
+        providerAssetRecord.providerType !== null &&
+        persistedMapping.mappingKind !==
+          toProviderAssetMappingKind({ providerType: providerAssetRecord.providerType })
+      ) {
+        return yield* failReclassifiedProviderAssetMapping({
+          currencyCode: upperCurrencyCode,
+          providerAssetRowId: providerAssetRecord.id,
+          providerType: providerAssetRecord.providerType,
         })
       }
 

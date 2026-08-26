@@ -909,6 +909,110 @@ describe("AssetExceptionRepositoryLive", () => {
     expect(result).toMatchObject({ _tag: "ambiguous_identity" })
   })
 
+  it("treats an already-owned representation as a conflict for a new-asset claim", async () => {
+    const [first, second] = await Promise.all([
+      seedException("-owned-a"),
+      seedException("-owned-b"),
+    ])
+    const sharedAddress = "0x-owned-representation"
+
+    await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const [blockchain] = yield* db
+          .select({ id: schema.blockchains.id })
+          .from(schema.blockchains)
+          .where(eq(schema.blockchains.name, "base"))
+        if (blockchain === undefined) {
+          return yield* Effect.die("Failed to seed Base blockchain observation")
+        }
+        yield* Effect.all([
+          db
+            .update(schema.providerTransfers)
+            .set({
+              observedBlockchainId: blockchain.id,
+              observedRepresentationType: "token",
+              observedContractAddress: sharedAddress,
+              observedDecimals: 6,
+            })
+            .where(eq(schema.providerTransfers.providerAssetId, first.providerAssetRowId)),
+          db
+            .update(schema.providerTransfers)
+            .set({
+              observedBlockchainId: blockchain.id,
+              observedRepresentationType: "token",
+              observedContractAddress: sharedAddress,
+              observedDecimals: 6,
+            })
+            .where(eq(schema.providerTransfers.providerAssetId, second.providerAssetRowId)),
+        ])
+      })
+    )
+
+    const firstInput = {
+      providerAssetRowId: first.providerAssetRowId,
+      claim: {
+        _tag: "identity",
+        assetId: null,
+        newAsset: { name: "Owned Token", symbol: "OWN", type: "fungible" },
+        representation: {
+          blockchain: "base",
+          type: "token",
+          contractAddress: sharedAddress,
+          mintAddress: null,
+          decimals: 6,
+        },
+      } as const,
+      evidenceRevision: 2,
+      activeDecisionRevision: first.decisionId,
+      evidenceSnapshotIds: [first.evidenceId],
+      rationale: "The first observation creates the economic asset.",
+      expectedResultingAssetId: null,
+      expectedAssetOutcome: "create" as const,
+      expectedRepresentationOutcome: "create" as const,
+    }
+
+    const firstSubmitted = await runRepository(
+      Effect.gen(function* () {
+        const repository = yield* AssetExceptionRepository
+        return yield* repository.submitDecision({ input: firstInput, actorId: TEST_USER_ID })
+      })
+    )
+    expect(firstSubmitted).toMatchObject({ _tag: "accepted" })
+
+    // A different display name, so only the owned representation can raise
+    // the conflict; the claim must not be rewritten into a silent reuse.
+    const secondInput = {
+      providerAssetRowId: second.providerAssetRowId,
+      claim: {
+        ...firstInput.claim,
+        newAsset: { name: "Other Owned Token", symbol: "OWN2", type: "fungible" },
+      } as const,
+      evidenceRevision: 2,
+      activeDecisionRevision: second.decisionId,
+      evidenceSnapshotIds: [second.evidenceId],
+      rationale: "The representation already belongs to the first asset.",
+      expectedResultingAssetId: null,
+      expectedAssetOutcome: "create" as const,
+      expectedRepresentationOutcome: "create" as const,
+    }
+
+    const secondResults = await runRepository(
+      Effect.gen(function* () {
+        const repository = yield* AssetExceptionRepository
+        const preview = yield* repository.previewDecision(secondInput)
+        const submitted = yield* repository.submitDecision({
+          input: secondInput,
+          actorId: TEST_USER_ID,
+        })
+        return { preview, submitted }
+      })
+    )
+
+    expect(secondResults.preview).toMatchObject({ _tag: "ambiguous_identity" })
+    expect(secondResults.submitted).toMatchObject({ _tag: "ambiguous_identity" })
+  })
+
   it("reports directly owned evidence in the decision history", async () => {
     const fixture = await seedException()
 
