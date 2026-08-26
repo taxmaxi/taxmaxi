@@ -840,16 +840,60 @@ describe("AssetRepositoryLive", () => {
       })
     })
 
+    it("serializes concurrent root ownership decisions across policy revisions", async () => {
+      const record = (policyRevision: string) =>
+        runRepository(
+          Effect.flatMap(AssetRepository, (repository) =>
+            repository.recordRepresentationOwnershipDecision({
+              assetRepresentationId: TEST_BTC_REPRESENTATION_ID,
+              assetId: TEST_BTC_ASSET_ID,
+              policyRevision,
+              actor: `system:${policyRevision}`,
+            })
+          )
+        )
+
+      const results = await Promise.all([
+        record("2026-08-19.attach-only.1"),
+        record("2026-08-26.attach-only.2"),
+      ])
+      const roots = await runPg(
+        Effect.gen(function* () {
+          const db = yield* drizzle
+          return yield* db
+            .select({ id: schema.assetRepresentationOwnershipDecisions.id })
+            .from(schema.assetRepresentationOwnershipDecisions)
+            .where(
+              eq(
+                schema.assetRepresentationOwnershipDecisions.assetRepresentationId,
+                TEST_BTC_REPRESENTATION_ID
+              )
+            )
+        })
+      )
+
+      expect(
+        results.map(({ recorded }) => recorded).sort((left, right) => Number(left) - Number(right))
+      ).toEqual([false, true])
+      expect(roots).toHaveLength(1)
+    })
+
     it("keeps ownership history when a representation is reassigned", async () => {
       await runPg(
         Effect.gen(function* () {
           const db = yield* drizzle
-          yield* db.insert(schema.assetRepresentationOwnershipDecisions).values({
-            assetRepresentationId: TEST_BTC_REPRESENTATION_ID,
-            assetId: TEST_BTC_ASSET_ID,
-            policyRevision: "2026-08-19.attach-only.1",
-            actor: "test:direct-insert",
-          })
+          const [original] = yield* db
+            .insert(schema.assetRepresentationOwnershipDecisions)
+            .values({
+              assetRepresentationId: TEST_BTC_REPRESENTATION_ID,
+              assetId: TEST_BTC_ASSET_ID,
+              policyRevision: "2026-08-19.attach-only.1",
+              actor: "test:direct-insert",
+            })
+            .returning({ id: schema.assetRepresentationOwnershipDecisions.id })
+          if (original === undefined) {
+            return yield* Effect.die("Expected original ownership decision")
+          }
           yield* db
             .update(schema.assetRepresentations)
             .set({ assetId: TEST_EUR_ASSET_ID })
@@ -857,6 +901,7 @@ describe("AssetRepositoryLive", () => {
           yield* db.insert(schema.assetRepresentationOwnershipDecisions).values({
             assetRepresentationId: TEST_BTC_REPRESENTATION_ID,
             assetId: TEST_EUR_ASSET_ID,
+            supersedesDecisionId: original.id,
             policyRevision: "2026-08-26.human-supersession.1",
             actor: "human:admin",
           })

@@ -634,7 +634,11 @@ const make = Effect.gen(function* () {
             }
 
             const [replayDecision] = yield* tx
-              .select({ id: schema.assetResolutionCurrentState.currentConclusionId })
+              .select({
+                currentConclusionId: schema.assetResolutionCurrentState.currentConclusionId,
+                currentPolicyEvaluationId:
+                  schema.assetResolutionCurrentState.currentPolicyEvaluationId,
+              })
               .from(schema.assetResolutionCurrentState)
               .where(
                 eq(
@@ -650,7 +654,10 @@ const make = Effect.gen(function* () {
               now,
               reason: "asset_mapping_approved",
               operation: "providerAssetRepository.approveProviderAssetMappingAndRequestReplay",
-              decisionId: replayDecision?.id ?? null,
+              decisionId:
+                replayDecision?.currentConclusionId ??
+                replayDecision?.currentPolicyEvaluationId ??
+                null,
             })
 
             return { mappingChanged: true }
@@ -941,20 +948,18 @@ const make = Effect.gen(function* () {
             if (settledProviderAssetRowIds.length > 0) {
               const activeDecisions = yield* tx
                 .select({ id: schema.assetResolutionDecisions.id })
-                .from(schema.assetResolutionDecisions)
+                .from(schema.assetResolutionCurrentState)
                 .innerJoin(
-                  schema.assetResolutionCurrentState,
-                  eq(
-                    schema.assetResolutionCurrentState.currentConclusionId,
-                    schema.assetResolutionDecisions.id
-                  )
+                  schema.assetResolutionDecisions,
+                  sql`${schema.assetResolutionDecisions.id} = coalesce(
+                    ${schema.assetResolutionCurrentState.currentConclusionId},
+                    ${schema.assetResolutionCurrentState.currentPolicyEvaluationId}
+                  )`
                 )
                 .where(
-                  and(
-                    inArray(
-                      schema.assetResolutionDecisions.providerAssetRowId,
-                      settledProviderAssetRowIds
-                    )
+                  inArray(
+                    schema.assetResolutionCurrentState.providerAssetRowId,
+                    settledProviderAssetRowIds
                   )
                 )
                 .orderBy(asc(schema.assetResolutionDecisions.id))

@@ -236,7 +236,7 @@ export const insertAssetResolutionDecision = ({
             schema.assetResolutionDecisions.evidenceRevision,
             schema.assetResolutionDecisions.policyRevision,
           ],
-          where: sql`${schema.assetResolutionDecisions.humanClaim} is null`,
+          where: sql`${schema.assetResolutionDecisions.humanClaim} is null and ${schema.assetResolutionDecisions.supersedesDecisionId} is null`,
         })
       : insert
 

@@ -283,7 +283,14 @@ const make = Effect.gen(function* () {
           on decision.id = rematerialization.decision_id
         inner join ${schema.assetResolutionCurrentState} current_state
           on current_state.provider_asset_row_id = decision.provider_asset_row_id
-         and current_state.current_conclusion_id = decision.id
+         and (
+           current_state.current_conclusion_id = decision.id
+           or (
+             current_state.current_conclusion_id is null
+             and decision.human_claim is null
+             and decision.outcome in ('pending', 'fail_closed')
+           )
+         )
         where rematerialization.source_id = affected_sources.source_id
           and decision.provider_asset_row_id = ${schema.providerAssets.id}
           and rematerialization.status <> 'complete'
@@ -769,31 +776,41 @@ const make = Effect.gen(function* () {
 
   const loadRematerialization = (
     client: QueryClient,
-    currentConclusionId: string | null
-  ): Effect.Effect<AssetExceptionRematerializationSummary, unknown> => {
-    if (currentConclusionId === null) {
-      return Effect.succeed({
-        status: "complete",
-        affectedSourceCount: 0,
-        failedSourceCount: 0,
-        lastFailureAt: null,
-        failureCode: null,
-      })
+    {
+      providerAssetRowId,
+      currentConclusionId,
+    }: {
+      readonly providerAssetRowId: string
+      readonly currentConclusionId: string | null
     }
+  ): Effect.Effect<AssetExceptionRematerializationSummary, unknown> => {
+    const decisionCondition =
+      currentConclusionId === null
+        ? and(
+            eq(schema.assetResolutionDecisions.providerAssetRowId, providerAssetRowId),
+            isNull(schema.assetResolutionDecisions.humanClaim),
+            inArray(schema.assetResolutionDecisions.outcome, ["pending", "fail_closed"])
+          )
+        : eq(schema.assetResolutionDecisions.id, currentConclusionId)
 
     return client
       .select({
+        sourceId: schema.assetDecisionRematerializations.sourceId,
         storedStatus: schema.assetDecisionRematerializations.status,
         failureCode: schema.assetDecisionRematerializations.failureCode,
         lastFailureAt: schema.assetDecisionRematerializations.lastFailureAt,
         jobStatus: schema.processingJobs.status,
       })
       .from(schema.assetDecisionRematerializations)
+      .innerJoin(
+        schema.assetResolutionDecisions,
+        eq(schema.assetResolutionDecisions.id, schema.assetDecisionRematerializations.decisionId)
+      )
       .leftJoin(
         schema.processingJobs,
         eq(schema.processingJobs.id, schema.assetDecisionRematerializations.processingJobId)
       )
-      .where(eq(schema.assetDecisionRematerializations.decisionId, currentConclusionId))
+      .where(decisionCondition)
       .pipe(
         Effect.map((rows): AssetExceptionRematerializationSummary => {
           if (rows.length === 0) {
@@ -814,6 +831,8 @@ const make = Effect.gen(function* () {
               ? ("running" as const)
               : row.storedStatus
           const failed = rows.filter((row) => effectiveStatus(row) === "operator_attention")
+          const affectedSourceCount = new Set(rows.map((row) => row.sourceId)).size
+          const failedSourceCount = new Set(failed.map((row) => row.sourceId)).size
           const running = rows.some((row) => effectiveStatus(row) === "running")
           const pending = rows.some((row) => effectiveStatus(row) === "pending")
           const lastFailureAt =
@@ -830,8 +849,8 @@ const make = Effect.gen(function* () {
                   : pending
                     ? "pending"
                     : "complete",
-            affectedSourceCount: rows.length,
-            failedSourceCount: failed.length,
+            affectedSourceCount,
+            failedSourceCount,
             lastFailureAt,
             failureCode:
               failed[0]?.failureCode ?? (failed.length > 0 ? "rematerialization_failed" : null),
@@ -881,13 +900,17 @@ const make = Effect.gen(function* () {
               !["pending", "fail_closed"].includes(decision.outcome)
           ) ?? null
       const currentPolicyEvaluation =
-        history.find(
-          (decision) => decision.id === persistedCurrentState?.currentPolicyEvaluationId
-        ) ?? derivedPolicyEvaluation
+        persistedCurrentState === undefined
+          ? derivedPolicyEvaluation
+          : (history.find(
+              (decision) => decision.id === persistedCurrentState.currentPolicyEvaluationId
+            ) ?? null)
       const currentConclusion =
-        history.find((decision) => decision.id === persistedCurrentState?.currentConclusionId) ??
-        legacyHumanConclusion ??
-        derivedAutomaticConclusion
+        persistedCurrentState === undefined
+          ? (legacyHumanConclusion ?? derivedAutomaticConclusion)
+          : (history.find(
+              (decision) => decision.id === persistedCurrentState.currentConclusionId
+            ) ?? null)
       const publicHistory = history.map(
         ({ legacyStatus: _, ...decision }): AssetExceptionDecisionHistory => ({
           ...decision,
@@ -936,7 +959,10 @@ const make = Effect.gen(function* () {
                 asc(schema.assetResolutionEvidence.claimKind)
               )
       const impact = yield* loadImpact(client, providerAsset.id)
-      const rematerialization = yield* loadRematerialization(client, currentConclusion?.id ?? null)
+      const rematerialization = yield* loadRematerialization(client, {
+        providerAssetRowId: providerAsset.id,
+        currentConclusionId: currentConclusion?.id ?? null,
+      })
 
       const reviewStatus = (() => {
         if (currentConclusion?.outcome === "excluded") {
@@ -1300,9 +1326,10 @@ const make = Effect.gen(function* () {
       }
       const detail = maybeDetail.value
       const decisionAction =
-        detail.currentConclusion === null || detail.currentConclusion.claim === null
+        detail.currentConclusion === null
           ? ("initial" as const)
-          : detail.currentConclusion.claim._tag === input.claim._tag
+          : detail.currentConclusion.claim === null ||
+              detail.currentConclusion.claim._tag === input.claim._tag
             ? ("supersession" as const)
             : ("reversal" as const)
       const validation = yield* validateInput({ client: db, detail, input })
@@ -1682,14 +1709,34 @@ const make = Effect.gen(function* () {
                 .limit(1)
 
               yield* tx
-                .update(schema.assetRepresentations)
+                .update(schema.transfers)
                 .set({ assetId, updatedAt: now })
-                .where(eq(schema.assetRepresentations.id, representationId))
+                .where(eq(schema.transfers.assetRepresentationId, representationId))
+
+              yield* tx
+                .update(schema.transactionLegs)
+                .set({ assetId, updatedAt: now })
+                .where(eq(schema.transactionLegs.assetRepresentationId, representationId))
+
+              yield* tx
+                .update(schema.inventoryMovements)
+                .set({ assetId, updatedAt: now })
+                .where(eq(schema.inventoryMovements.assetRepresentationId, representationId))
+
+              yield* tx
+                .update(schema.fifoLots)
+                .set({ assetId, updatedAt: now })
+                .where(eq(schema.fifoLots.assetRepresentationId, representationId))
 
               yield* tx
                 .update(schema.providerAssetMappings)
                 .set({ canonicalAssetId: assetId, updatedAt: now })
                 .where(eq(schema.providerAssetMappings.assetRepresentationId, representationId))
+
+              yield* tx
+                .update(schema.assetRepresentations)
+                .set({ assetId, updatedAt: now })
+                .where(eq(schema.assetRepresentations.id, representationId))
 
               yield* tx.insert(schema.assetRepresentationOwnershipDecisions).values({
                 assetRepresentationId: representationId,

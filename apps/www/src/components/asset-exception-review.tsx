@@ -202,7 +202,7 @@ export function AssetExceptionReview({
                   : `${when} · ${actorText(decision.actorId)}`
               }
               tone={
-                reviewRequest ? "warning" : decision.status === "active" ? "success" : "neutral"
+                reviewRequest ? "warning" : decision.isCurrentConclusion ? "success" : "neutral"
               }
               title={
                 reviewRequest

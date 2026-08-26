@@ -28,7 +28,7 @@ export const assetRepresentationOwnershipDecisions = pgTable(
   },
   (table) => [
     uniqueIndex("asset_representation_ownership_record_unique")
-      .on(table.assetRepresentationId, table.assetId, table.policyRevision)
+      .on(table.assetRepresentationId)
       .where(sql`${table.supersedesDecisionId} is null`),
     uniqueIndex("asset_representation_ownership_supersedes_unique")
       .on(table.supersedesDecisionId)

@@ -10035,20 +10035,6 @@
           "asc": true,
           "nullsFirst": false,
           "opclass": null
-        },
-        {
-          "value": "asset_id",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": null
-        },
-        {
-          "value": "policy_revision",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": null
         }
       ],
       "isUnique": true,
@@ -10276,7 +10262,7 @@
         }
       ],
       "isUnique": true,
-      "where": "\"human_claim\" is null",
+      "where": "\"human_claim\" is null and \"supersedes_decision_id\" is null",
       "with": "",
       "method": "btree",
       "concurrently": false,

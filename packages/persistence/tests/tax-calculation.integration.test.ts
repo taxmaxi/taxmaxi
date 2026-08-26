@@ -660,6 +660,67 @@ describe("TaxCalculationServiceLive", () => {
 
         const approvedReplayError = yield* calculateTax().pipe(Effect.flip)
         expect(approvedReplayError._tag).toBe("TaxCalculationPendingObservationsError")
+
+        yield* db
+          .update(schema.assetDecisionRematerializations)
+          .set({ status: "complete" })
+          .where(eq(schema.assetDecisionRematerializations.decisionId, approvedConclusion.id))
+        const [pendingPolicyEvaluation] = yield* db
+          .insert(schema.assetResolutionDecisions)
+          .values({
+            providerAssetRowId: fixture.providerAssetRowId,
+            evidenceRevision: 2,
+            policyRevision: "test-policy.pending-approval",
+            outcome: "pending",
+            reason: "missing_existing_economic_asset",
+            actor: "system:asset-resolution-policy",
+          })
+          .returning({ id: schema.assetResolutionDecisions.id })
+        if (pendingPolicyEvaluation === undefined) {
+          return yield* Effect.die("Failed to create the pending policy evaluation")
+        }
+        yield* db
+          .update(schema.assetResolutionCurrentState)
+          .set({
+            currentConclusionId: null,
+            currentPolicyEvaluationId: pendingPolicyEvaluation.id,
+          })
+          .where(
+            eq(schema.assetResolutionCurrentState.providerAssetRowId, fixture.providerAssetRowId)
+          )
+        yield* db.insert(schema.assetDecisionRematerializations).values({
+          decisionId: pendingPolicyEvaluation.id,
+          sourceId,
+          processingJobId: completedJob.id,
+          status: "pending",
+        })
+
+        const pendingPolicyReplayError = yield* calculateTax().pipe(Effect.flip)
+        expect(pendingPolicyReplayError._tag).toBe("TaxCalculationPendingObservationsError")
+
+        const [newerPolicyEvaluation] = yield* db
+          .insert(schema.assetResolutionDecisions)
+          .values({
+            providerAssetRowId: fixture.providerAssetRowId,
+            evidenceRevision: 2,
+            policyRevision: "test-policy.pending-approval-advanced",
+            outcome: "fail_closed",
+            reason: "ownership_conflict",
+            actor: "system:asset-resolution-policy",
+          })
+          .returning({ id: schema.assetResolutionDecisions.id })
+        if (newerPolicyEvaluation === undefined) {
+          return yield* Effect.die("Failed to advance the pending policy evaluation")
+        }
+        yield* db
+          .update(schema.assetResolutionCurrentState)
+          .set({ currentPolicyEvaluationId: newerPolicyEvaluation.id })
+          .where(
+            eq(schema.assetResolutionCurrentState.providerAssetRowId, fixture.providerAssetRowId)
+          )
+
+        const advancedPolicyReplayError = yield* calculateTax().pipe(Effect.flip)
+        expect(advancedPolicyReplayError._tag).toBe("TaxCalculationPendingObservationsError")
       }).pipe(Effect.provide(context.TestPgClientLive))
     )
   })

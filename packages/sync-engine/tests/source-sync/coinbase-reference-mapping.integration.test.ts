@@ -796,7 +796,7 @@ describe("coinbase reference mappings", () => {
     expect(jobsAfter).toHaveLength(jobsBefore.length)
   })
 
-  it("reopens an approved mapping when the provider reclassifies the currency type", async () => {
+  it("keeps an approved mapping in force when the provider reclassifies the currency type", async () => {
     await Effect.runPromise(
       seedCanonicalAsset({
         id: BTC_ASSET_ID,
@@ -809,8 +809,8 @@ describe("coinbase reference mappings", () => {
       Effect.flatMap(CoinbaseReferenceMappingService, (service) => service.ensureDefaultMappings())
     )
 
-    // A later catalog refresh reclassifies BTC as fiat. The approved asset
-    // mapping was reviewed under the old type and must not decide accounting.
+    // A later catalog refresh can reopen policy evaluation, but it must not
+    // replace the approved mapping until a human supersedes the conclusion.
     await context.runPg(
       Effect.gen(function* () {
         const db = yield* drizzle
@@ -826,24 +826,27 @@ describe("coinbase reference mappings", () => {
       })
     )
 
-    const failure = await runReferenceMapping(
+    const resolution = await runReferenceMapping(
       Effect.flatMap(CoinbaseReferenceMappingService, (service) =>
-        service.resolveCurrency({ currencyCode: "BTC" }).pipe(Effect.flip)
+        service.resolveCurrency({ currencyCode: "BTC" })
       )
     )
 
-    expect(failure).toMatchObject({
-      _tag: "CoinbasePendingProviderAssetMappingError",
+    expect(resolution).toMatchObject({
+      kind: "canonical",
       currencyCode: "BTC",
+      mappingKind: "asset",
+      mappingStatus: "approved",
+      canonicalAssetId: BTC_ASSET_ID,
     })
 
     const btcMapping = (await Effect.runPromise(fetchProviderAssetMappingRows())).find(
       (mapping) => mapping.currencyCode === "BTC"
     )
     expect(btcMapping).toMatchObject({
-      mappingKind: "fiat",
-      mappingStatus: "pending_review",
-      canonicalAssetId: null,
+      mappingKind: "asset",
+      mappingStatus: "approved",
+      canonicalAssetId: BTC_ASSET_ID,
       assetRepresentationId: null,
     })
   })

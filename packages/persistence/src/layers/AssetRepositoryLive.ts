@@ -1007,7 +1007,7 @@ const make = Effect.gen(function* () {
               .select({ assetId: schema.assetRepresentations.assetId })
               .from(schema.assetRepresentations)
               .where(eq(schema.assetRepresentations.id, assetRepresentationId))
-              .for("share")
+              .for("update")
               .limit(1)
             if (representation?.assetId !== assetId) {
               return yield* new SyncEngineStorageError({
@@ -1047,11 +1047,7 @@ const make = Effect.gen(function* () {
                 actor,
               })
               .onConflictDoNothing({
-                target: [
-                  schema.assetRepresentationOwnershipDecisions.assetRepresentationId,
-                  schema.assetRepresentationOwnershipDecisions.assetId,
-                  schema.assetRepresentationOwnershipDecisions.policyRevision,
-                ],
+                target: schema.assetRepresentationOwnershipDecisions.assetRepresentationId,
                 where: sql`${schema.assetRepresentationOwnershipDecisions.supersedesDecisionId} is null`,
               })
               .returning({ id: schema.assetRepresentationOwnershipDecisions.id })

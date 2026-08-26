@@ -262,7 +262,14 @@ const make = Effect.gen(function* () {
               on decision.id = rematerialization.decision_id
             inner join ${schema.assetResolutionCurrentState} current_state
               on current_state.provider_asset_row_id = decision.provider_asset_row_id
-             and current_state.current_conclusion_id = decision.id
+             and (
+               current_state.current_conclusion_id = decision.id
+               or (
+                 current_state.current_conclusion_id is null
+                 and decision.human_claim is null
+                 and decision.outcome in ('pending', 'fail_closed')
+               )
+             )
             where rematerialization.source_id = ${schema.providerAssetSourceUses.sourceId}
               and decision.provider_asset_row_id = ${schema.providerAssetMappings.providerAssetRowId}
               and rematerialization.status <> 'complete'

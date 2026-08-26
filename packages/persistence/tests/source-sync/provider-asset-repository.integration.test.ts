@@ -473,7 +473,7 @@ describe("ProviderAssetRepositoryLive", () => {
         })
       )
 
-      await runPg(
+      const pendingPolicyEvaluationId = await runPg(
         Effect.gen(function* () {
           const db = yield* drizzle
           const timestamp = new Date("2025-04-20T12:00:00.000Z")
@@ -514,6 +514,27 @@ describe("ProviderAssetRepositoryLive", () => {
             maxAttempts: 3,
             progressDetails: { mode: "sync" },
           })
+
+          const [pendingPolicyEvaluation] = yield* db
+            .insert(schema.assetResolutionDecisions)
+            .values({
+              providerAssetRowId: providerAsset.id,
+              evidenceRevision: 1,
+              policyRevision: "test-policy.pending-approval",
+              outcome: "pending",
+              reason: "missing_existing_economic_asset",
+              actor: "system:asset-resolution-policy",
+            })
+            .returning({ id: schema.assetResolutionDecisions.id })
+          if (pendingPolicyEvaluation === undefined) {
+            return yield* Effect.die("Expected pending approval policy evaluation")
+          }
+          yield* db.insert(schema.assetResolutionCurrentState).values({
+            providerAssetRowId: providerAsset.id,
+            currentConclusionId: null,
+            currentPolicyEvaluationId: pendingPolicyEvaluation.id,
+          })
+          return pendingPolicyEvaluation.id
         })
       )
 
@@ -556,8 +577,15 @@ describe("ProviderAssetRepositoryLive", () => {
             })
             .from(schema.processingJobs)
             .where(eq(schema.processingJobs.sourceId, TEST_SOURCE_ID))
+          const rematerializations = yield* db
+            .select({
+              decisionId: schema.assetDecisionRematerializations.decisionId,
+              status: schema.assetDecisionRematerializations.status,
+            })
+            .from(schema.assetDecisionRematerializations)
+            .where(eq(schema.assetDecisionRematerializations.sourceId, TEST_SOURCE_ID))
 
-          return { jobs, mapping }
+          return { jobs, mapping, rematerializations }
         })
       )
 
@@ -571,6 +599,9 @@ describe("ProviderAssetRepositoryLive", () => {
         canonicalAssetId: TEST_BTC_ASSET_ID,
       })
       expect(state.jobs).toEqual([{ mode: "sync", status: "pending", followUpMode: "replay" }])
+      expect(state.rematerializations).toEqual([
+        { decisionId: pendingPolicyEvaluationId, status: "pending" },
+      ])
     })
 
     it("creates a replay job when approval has no active owner", async () => {
@@ -802,10 +833,35 @@ describe("ProviderAssetRepositoryLive", () => {
       expect(jobs).toEqual([{ mode: "replay", status: "pending" }])
     })
 
-    it("requests replay when a source use is recorded after approval", async () => {
+    it("tracks policy-backed replay when a source use is recorded after approval", async () => {
       const providerAsset = await seedPendingApprovalAsset("approval-before-source-use", {
         withProviderTransfer: false,
       })
+      const pendingPolicyEvaluationId = await runPg(
+        Effect.gen(function* () {
+          const db = yield* drizzle
+          const [evaluation] = yield* db
+            .insert(schema.assetResolutionDecisions)
+            .values({
+              providerAssetRowId: providerAsset.id,
+              evidenceRevision: 1,
+              policyRevision: "test-policy.approval-before-source-use",
+              outcome: "pending",
+              reason: "missing_existing_economic_asset",
+              actor: "system:asset-resolution-policy",
+            })
+            .returning({ id: schema.assetResolutionDecisions.id })
+          if (evaluation === undefined) {
+            return yield* Effect.die("Expected pending policy evaluation")
+          }
+          yield* db.insert(schema.assetResolutionCurrentState).values({
+            providerAssetRowId: providerAsset.id,
+            currentConclusionId: null,
+            currentPolicyEvaluationId: evaluation.id,
+          })
+          return evaluation.id
+        })
+      )
 
       await runRepository(
         Effect.flatMap(ProviderAssetRepository, (repository) =>
@@ -844,20 +900,36 @@ describe("ProviderAssetRepositoryLive", () => {
           })
         )
       )
-      const jobs = await runPg(
+      const state = await runPg(
         Effect.gen(function* () {
           const db = yield* drizzle
-          return yield* db
+          const jobs = yield* db
             .select({ id: schema.processingJobs.id, mode: schema.processingJobs.mode })
             .from(schema.processingJobs)
             .where(eq(schema.processingJobs.sourceId, TEST_SOURCE_ID))
+          const rematerializations = yield* db
+            .select({
+              decisionId: schema.assetDecisionRematerializations.decisionId,
+              processingJobId: schema.assetDecisionRematerializations.processingJobId,
+              status: schema.assetDecisionRematerializations.status,
+            })
+            .from(schema.assetDecisionRematerializations)
+            .where(eq(schema.assetDecisionRematerializations.sourceId, TEST_SOURCE_ID))
+          return { jobs, rematerializations }
         })
       )
 
       expect(recorded).toBe(1)
       expect(recordedAgain).toBe(0)
-      expect(jobs).toHaveLength(1)
-      expect(jobs[0]?.mode).toBe("replay")
+      expect(state.jobs).toHaveLength(1)
+      expect(state.jobs[0]?.mode).toBe("replay")
+      expect(state.rematerializations).toEqual([
+        {
+          decisionId: pendingPolicyEvaluationId,
+          processingJobId: state.jobs[0]?.id,
+          status: "pending",
+        },
+      ])
     })
 
     it("requests replay when a source use is recorded after exclusion", async () => {
@@ -2837,6 +2909,46 @@ describe("ProviderAssetRepositoryLive", () => {
         isCurrentPolicyEvaluation: true,
         reason: "missing_existing_economic_asset",
       })
+    })
+
+    it("preserves legacy automatic supersession rows with the same evaluation key", async () => {
+      const { providerAssetRowId } = await scheduleResolutionJob("history-legacy-supersession")
+
+      const history = await runPg(
+        Effect.gen(function* () {
+          const db = yield* drizzle
+          const [original] = yield* db
+            .insert(schema.assetResolutionDecisions)
+            .values({
+              providerAssetRowId,
+              evidenceRevision: 1,
+              policyRevision: "2026-08-19.attach-only.1",
+              outcome: "pending",
+              reason: "missing_existing_economic_asset",
+              actor: "system:attach-only-policy",
+            })
+            .returning({ id: schema.assetResolutionDecisions.id })
+          if (original === undefined) {
+            return yield* Effect.die("Expected original legacy evaluation")
+          }
+          yield* db.insert(schema.assetResolutionDecisions).values({
+            providerAssetRowId,
+            evidenceRevision: 1,
+            policyRevision: "2026-08-19.attach-only.1",
+            outcome: "pending",
+            status: "active",
+            supersedesDecisionId: original.id,
+            reason: "non_exact_platform_match",
+            actor: "system:attach-only-policy",
+          })
+          return yield* db
+            .select({ id: schema.assetResolutionDecisions.id })
+            .from(schema.assetResolutionDecisions)
+            .where(eq(schema.assetResolutionDecisions.providerAssetRowId, providerAssetRowId))
+        })
+      )
+
+      expect(history).toHaveLength(2)
     })
 
     it("establishes the first settled policy result as the conclusion without replacing one later", async () => {

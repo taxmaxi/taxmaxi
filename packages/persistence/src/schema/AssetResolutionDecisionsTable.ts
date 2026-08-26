@@ -74,7 +74,7 @@ export const assetResolutionDecisions = pgTable(
   (table) => [
     uniqueIndex("asset_resolution_decisions_policy_evaluation_unique")
       .on(table.providerAssetRowId, table.evidenceRevision, table.policyRevision)
-      .where(sql`${table.humanClaim} is null`),
+      .where(sql`${table.humanClaim} is null and ${table.supersedesDecisionId} is null`),
     uniqueIndex("asset_resolution_decisions_supersedes_unique")
       .on(table.supersedesDecisionId)
       .where(sql`${table.supersedesDecisionId} is not null`),

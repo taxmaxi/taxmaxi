@@ -91,6 +91,8 @@ export class AssetExceptionListRowResponse extends Schema.Class<AssetExceptionLi
   affectedPrincipals: Schema.Number,
   affectedTransactions: Schema.Number,
   affectedSources: Schema.Number,
+  affectedCalculations: Schema.Number,
+  existingGeneratedReportSnapshots: Schema.Number,
   affectedTransactionValueEur: Schema.NullOr(Schema.String),
   oldestAt: Schema.DateTimeUtcFromString,
 }) {}
