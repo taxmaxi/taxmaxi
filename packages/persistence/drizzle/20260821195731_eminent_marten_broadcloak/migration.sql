@@ -1,1 +1,0 @@
-ALTER TABLE "principal_asset_overrides" ADD CONSTRAINT "principal_asset_overrides_supersedes_fk" FOREIGN KEY ("supersedes_override_id") REFERENCES "principal_asset_overrides"("id");

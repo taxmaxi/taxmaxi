@@ -1,2 +1,0 @@
-DROP INDEX "asset_representations_contract_unique_idx";--> statement-breakpoint
-CREATE UNIQUE INDEX "asset_representations_contract_unique_idx" ON "asset_representations" ("blockchain_id","contract_address") WHERE "contract_address" is not null;

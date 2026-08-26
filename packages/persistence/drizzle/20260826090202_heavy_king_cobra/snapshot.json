@@ -1,8 +1,8 @@
 {
   "version": "8",
   "dialect": "postgres",
-  "id": "b63a06c2-9a12-4489-8d54-b876a192fcb7",
-  "prevIds": ["bd89f95d-d62d-49bb-b5c8-e7e3f0efb816"],
+  "id": "d0c8745f-2f9c-4af9-b934-938564059cbd",
+  "prevIds": ["00000000-0000-0000-0000-000000000000"],
   "ddl": [
     {
       "values": ["evm", "solana", "bitcoin"],
@@ -23,7 +23,7 @@
       "schema": "public"
     },
     {
-      "values": ["attach", "create_standalone", "pending", "fail_closed"],
+      "values": ["attach", "create_standalone", "excluded", "pending", "fail_closed"],
       "name": "asset_resolution_outcome",
       "entityType": "enums",
       "schema": "public"
@@ -178,6 +178,12 @@
     {
       "values": ["asset", "fiat"],
       "name": "provider_asset_mapping_kind",
+      "entityType": "enums",
+      "schema": "public"
+    },
+    {
+      "values": ["approved", "pending_review", "rejected", "excluded"],
+      "name": "provider_asset_mapping_status",
       "entityType": "enums",
       "schema": "public"
     },
@@ -673,6 +679,12 @@
     {
       "isRlsEnabled": false,
       "name": "users",
+      "entityType": "tables",
+      "schema": "public"
+    },
+    {
+      "isRlsEnabled": false,
+      "name": "wallet_name_cache",
       "entityType": "tables",
       "schema": "public"
     },
@@ -6215,7 +6227,7 @@
       "table": "provider_asset_mappings"
     },
     {
-      "type": "provider_mapping_status",
+      "type": "provider_asset_mapping_status",
       "typeSchema": "public",
       "notNull": true,
       "dimensions": 0,
@@ -9970,6 +9982,110 @@
       "entityType": "columns",
       "schema": "public",
       "table": "users"
+    },
+    {
+      "type": "uuid",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": "gen_random_uuid()",
+      "generated": null,
+      "identity": null,
+      "name": "id",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "wallet_name_cache"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "namespace",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "wallet_name_cache"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "name",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "wallet_name_cache"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "resolved_address",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "wallet_name_cache"
+    },
+    {
+      "type": "timestamp with time zone",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": "now()",
+      "generated": null,
+      "identity": null,
+      "name": "resolved_at",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "wallet_name_cache"
+    },
+    {
+      "type": "timestamp with time zone",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "expires_at",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "wallet_name_cache"
+    },
+    {
+      "type": "timestamp",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": "now()",
+      "generated": null,
+      "identity": null,
+      "name": "created_at",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "wallet_name_cache"
+    },
+    {
+      "type": "timestamp",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": "now()",
+      "generated": null,
+      "identity": null,
+      "name": "updated_at",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "wallet_name_cache"
     },
     {
       "nameExplicit": true,
@@ -13934,6 +14050,34 @@
       "table": "transfers"
     },
     {
+      "nameExplicit": true,
+      "columns": [
+        {
+          "value": "namespace",
+          "isExpression": false,
+          "asc": true,
+          "nullsFirst": false,
+          "opclass": null
+        },
+        {
+          "value": "name",
+          "isExpression": false,
+          "asc": true,
+          "nullsFirst": false,
+          "opclass": null
+        }
+      ],
+      "isUnique": true,
+      "where": null,
+      "with": "",
+      "method": "btree",
+      "concurrently": false,
+      "name": "wallet_name_cache_namespace_name_idx",
+      "entityType": "indexes",
+      "schema": "public",
+      "table": "wallet_name_cache"
+    },
+    {
       "nameExplicit": false,
       "columns": ["principal_id"],
       "schemaTo": "public",
@@ -16089,6 +16233,14 @@
       "entityType": "pks"
     },
     {
+      "columns": ["id"],
+      "nameExplicit": false,
+      "name": "wallet_name_cache_pkey",
+      "schema": "public",
+      "table": "wallet_name_cache",
+      "entityType": "pks"
+    },
+    {
       "nameExplicit": true,
       "columns": ["address", "principal_id"],
       "nullsNotDistinct": false,
@@ -16376,7 +16528,7 @@
       "table": "protocol_transaction_type_mappings"
     },
     {
-      "value": "(\n        \"mapping_kind\" = 'asset'\n        and \"canonical_asset_id\" is not null\n      ) or (\n        \"mapping_kind\" = 'fiat'\n        and \"canonical_fiat_currency\" is not null\n      ) or \"mapping_status\" in ('pending_review', 'rejected')",
+      "value": "(\n        \"mapping_kind\" = 'asset'\n        and \"canonical_asset_id\" is not null\n      ) or (\n        \"mapping_kind\" = 'fiat'\n        and \"canonical_fiat_currency\" is not null\n      ) or \"mapping_status\" in ('pending_review', 'rejected', 'excluded')",
       "name": "provider_asset_mappings_kind_requires_target",
       "entityType": "checks",
       "schema": "public",
