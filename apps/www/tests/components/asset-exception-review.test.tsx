@@ -279,15 +279,17 @@ describe("AssetExceptionReview", () => {
   })
 
   it("refreshes the detail and clears the preview after a stale decision conflict", async () => {
-    const actions = makeActions()
-    actions.submit = vi.fn(async () => {
-      throw {
-        _tag: "AssetStaleRevisionError",
-        code: "stale_revision",
-        evidenceRevision: 2,
-        activeDecisionRevision: POLICY_DECISION_ID,
-      }
-    })
+    const actions: AssetExceptionActions = {
+      ...makeActions(),
+      submit: vi.fn(async () => {
+        throw {
+          _tag: "AssetStaleRevisionError",
+          code: "stale_revision",
+          evidenceRevision: 2,
+          activeDecisionRevision: POLICY_DECISION_ID,
+        }
+      }),
+    }
     const { onDetailChange } = renderReview(actions)
 
     fireEvent.click(screen.getByRole("radio", { name: /Exclude from reports/ }))
