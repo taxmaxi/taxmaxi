@@ -848,7 +848,11 @@ const make = Effect.gen(function* () {
         }
       }
 
-      if (input.rationale.trim().length === 0 || input.evidenceSnapshotIds.length === 0) {
+      const rationale = input.rationale?.trim() ?? ""
+      if (
+        (input.claim._tag === "identity" && rationale.length === 0) ||
+        input.evidenceSnapshotIds.length === 0
+      ) {
         return { _tag: "invalid_evidence" as const }
       }
 
@@ -1474,7 +1478,7 @@ const make = Effect.gen(function* () {
                   : null,
               reason: persistedClaim._tag === "exclusion" ? persistedClaim.reason : null,
               humanClaim: persistedClaim,
-              rationale: input.rationale.trim(),
+              rationale: input.rationale?.trim() || null,
               actor: actorId,
               createdAt: now,
             })
@@ -1503,7 +1507,7 @@ const make = Effect.gen(function* () {
               assetRepresentationId: representationId,
               canonicalFiatCurrency: null,
               mappingStatus: input.claim._tag === "identity" ? "approved" : "excluded",
-              reviewerNotes: input.rationale.trim(),
+              reviewerNotes: input.rationale?.trim() || null,
               sourceNotes: `Human asset exception decision ${decision.id}.`,
               createdAt: now,
               updatedAt: now,
@@ -1516,7 +1520,7 @@ const make = Effect.gen(function* () {
                 assetRepresentationId: representationId,
                 canonicalFiatCurrency: null,
                 mappingStatus: input.claim._tag === "identity" ? "approved" : "excluded",
-                reviewerNotes: input.rationale.trim(),
+                reviewerNotes: input.rationale?.trim() || null,
                 sourceNotes: `Human asset exception decision ${decision.id}.`,
                 updatedAt: now,
               },

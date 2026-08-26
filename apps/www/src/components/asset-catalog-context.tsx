@@ -16,10 +16,10 @@ import {
   type TaxMaxiPendingAsset,
 } from "#/lib/assets"
 import type {
+  AssetCatalogList,
   AssetExceptionDecisionInput,
   AssetExceptionDecisionConfirmationInput,
   AssetExceptionDetail,
-  AssetExceptionLookupInput,
   AssetExceptionPreview,
 } from "taxmaxi"
 
@@ -40,9 +40,9 @@ export type AssetCatalogFeeds = {
 
 export type AssetExceptionActions = {
   readonly get: (id: string) => Promise<AssetExceptionDetail>
-  readonly lookup: (input: AssetExceptionLookupInput) => Promise<AssetExceptionDetail>
   readonly preview: (input: AssetExceptionDecisionInput) => Promise<AssetExceptionPreview>
   readonly submit: (input: AssetExceptionDecisionConfirmationInput) => Promise<AssetExceptionDetail>
+  readonly searchAssets: (query: string) => Promise<AssetCatalogList>
 }
 
 const doNothing = () => undefined
@@ -162,14 +162,12 @@ function useAssetCatalogController({
       hasMoreItems: paging.hasMoreItems,
       isLoading: paging.isLoadingVisibleFeed,
       mobileBackButtonRef: selection.mobileBackButtonRef,
-      mobileDetailOpenerRef: selection.mobileDetailOpenerRef,
       mobileDetailOpen: selection.mobileDetailOpen,
       onLoadMore: paging.loadMore,
       onQueryChange: changeQuery,
       onRetry: paging.retryLoad,
       onScopeChange: changeScope,
       onSelect: selection.selectItem,
-      onShowMobileDetail: selection.showMobileDetail,
       onShowMobileList: selection.showMobileList,
       pendingAssetsUnavailable: feeds.pending.unavailable ?? false,
       exceptionsAvailable: feeds.exceptions !== undefined,
@@ -201,10 +199,8 @@ function useAssetCatalogController({
       query,
       scope,
       selection.mobileBackButtonRef,
-      selection.mobileDetailOpenerRef,
       selection.mobileDetailOpen,
       selection.selectItem,
-      selection.showMobileDetail,
       selection.selectedItem,
       selection.selectedItemKey,
       selection.showMobileList,

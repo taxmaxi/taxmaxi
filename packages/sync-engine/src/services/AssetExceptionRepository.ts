@@ -124,7 +124,8 @@ export interface AssetExceptionDecisionInput {
   readonly evidenceRevision: number
   readonly activeDecisionRevision: string
   readonly evidenceSnapshotIds: ReadonlyArray<string>
-  readonly rationale: string
+  /** Optional for exclusions whose structured reason already explains the decision. */
+  readonly rationale: string | null
 }
 
 export interface AssetExceptionDecisionPreview {

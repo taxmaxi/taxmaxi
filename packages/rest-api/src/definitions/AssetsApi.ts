@@ -459,7 +459,7 @@ export class AssetExceptionDecisionRequest extends Schema.Class<AssetExceptionDe
   ),
   activeDecisionRevision: Schema.String,
   evidenceSnapshotIds: Schema.Array(Schema.String.check(Schema.isUUID())),
-  rationale: Schema.String.check(Schema.isNonEmpty()),
+  rationale: Schema.NullOr(Schema.String.check(Schema.isNonEmpty())),
 }) {}
 
 export class AssetExceptionDecisionConfirmationRequest extends Schema.Class<AssetExceptionDecisionConfirmationRequest>(

@@ -18,6 +18,7 @@ export type TaxMaxiAssetException = Pick<
   | "name"
   | "reason"
   | "severity"
+  | "oldestAt"
 >
 
 export type CatalogItem =

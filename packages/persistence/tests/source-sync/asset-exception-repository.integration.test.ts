@@ -189,7 +189,7 @@ describe("AssetExceptionRepositoryLive", () => {
     expect(noMatch).toEqual([])
   })
 
-  it("previews and atomically accepts a typed exclusion", async () => {
+  it("previews and atomically accepts a typed exclusion without a free-text rationale", async () => {
     const fixture = await seedException()
     const input = {
       providerAssetRowId: fixture.providerAssetRowId,
@@ -197,7 +197,7 @@ describe("AssetExceptionRepositoryLive", () => {
       evidenceRevision: 2,
       activeDecisionRevision: fixture.decisionId,
       evidenceSnapshotIds: [fixture.evidenceId],
-      rationale: "The stored chain evidence confirms the provider observation is spam.",
+      rationale: null,
       expectedResultingAssetId: null,
       expectedAssetOutcome: "none" as const,
       expectedRepresentationOutcome: "none" as const,
@@ -236,6 +236,7 @@ describe("AssetExceptionRepositoryLive", () => {
           .select({
             status: schema.assetResolutionDecisions.status,
             outcome: schema.assetResolutionDecisions.outcome,
+            rationale: schema.assetResolutionDecisions.rationale,
           })
           .from(schema.assetResolutionDecisions)
         const mappings = yield* db
@@ -253,8 +254,8 @@ describe("AssetExceptionRepositoryLive", () => {
 
     expect(state.decisions).toEqual(
       expect.arrayContaining([
-        { status: "superseded", outcome: "pending" },
-        { status: "active", outcome: "excluded" },
+        { status: "superseded", outcome: "pending", rationale: null },
+        { status: "active", outcome: "excluded", rationale: null },
       ])
     )
     expect(state.mappings).toEqual([{ status: "excluded" }])
@@ -402,6 +403,30 @@ describe("AssetExceptionRepositoryLive", () => {
         failureCode: "rematerialization_failed",
       },
     })
+  })
+
+  it("still requires a rationale for an identity decision", async () => {
+    const fixture = await seedException()
+    const result = await runRepository(
+      Effect.gen(function* () {
+        const repository = yield* AssetExceptionRepository
+        return yield* repository.previewDecision({
+          providerAssetRowId: fixture.providerAssetRowId,
+          claim: {
+            _tag: "identity",
+            assetId: null,
+            newAsset: { name: "Exception Token", symbol: "EXC", type: "fungible" },
+            representation: null,
+          },
+          evidenceRevision: 2,
+          activeDecisionRevision: fixture.decisionId,
+          evidenceSnapshotIds: [fixture.evidenceId],
+          rationale: null,
+        })
+      })
+    )
+
+    expect(result).toEqual({ _tag: "invalid_evidence" })
   })
 
   it("returns a stale revision without adding another decision or work item", async () => {

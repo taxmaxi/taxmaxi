@@ -11,11 +11,7 @@ import {
   useAssetCatalogFeeds,
 } from "#/hooks/use-asset-catalog-feeds"
 import { queries } from "#/integrations/taxmaxi/queries"
-import {
-  closeAssetCatalog,
-  loadAssetCatalogFeeds,
-  loadAssetExceptionFeed,
-} from "#/lib/asset-catalog-route"
+import { closeAssetCatalog, loadAssetCatalogFeeds } from "#/lib/asset-catalog-route"
 import { seo } from "#/lib/seo"
 import { m } from "#/paraglide/messages"
 
@@ -59,13 +55,6 @@ export const Route = createFileRoute("/assets/")({
       throw error
     })
     const isAdmin = account?.account.role === "admin"
-    if (isAdmin) {
-      loadAssetExceptionFeed(() =>
-        context.queryClient.ensureInfiniteQueryData(
-          queries.assetExceptionList(taxmaxi, assetExceptionListInput)
-        )
-      )
-    }
 
     return { isAdmin }
   },
@@ -146,9 +135,6 @@ function AssetsIndexRoute() {
       isAdmin
         ? {
             get: (id: string) => taxmaxi().assets.getException({ id }),
-            lookup: (
-              input: Parameters<ReturnType<typeof taxmaxi>["assets"]["lookupException"]>[0]
-            ) => taxmaxi().assets.lookupException(input),
             preview: (
               input: Parameters<ReturnType<typeof taxmaxi>["assets"]["previewExceptionDecision"]>[0]
             ) => taxmaxi().assets.previewExceptionDecision(input),
@@ -159,6 +145,7 @@ function AssetsIndexRoute() {
               void assetExceptionQuery.refetch()
               return detail
             },
+            searchAssets: (query: string) => taxmaxi().assets.list({ limit: 6, query }),
           }
         : undefined,
     [assetExceptionQuery.refetch, isAdmin, taxmaxi]

@@ -90,7 +90,3 @@ export function loadAssetCatalogFeeds({
     signal.removeEventListener("abort", cancelLoads)
   })
 }
-
-export function loadAssetExceptionFeed(load: () => Promise<unknown>): void {
-  void load().catch(() => undefined)
-}
