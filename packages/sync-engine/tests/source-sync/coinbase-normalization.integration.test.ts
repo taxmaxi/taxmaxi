@@ -1915,4 +1915,190 @@ describe("coinbase normalization persistence", () => {
       })
     )
   })
+
+  it("creates inventory from a positive Coinbase tx record so a full-balance sale allocates completely", async () => {
+    activeSyncRecords = [
+      makeCoinbaseRecord({
+        recordType: "coinbase_account",
+        externalRecordId: "coinbase-account-1",
+        occurredAt: new Date("2025-01-01T00:00:00.000Z"),
+        payload: {
+          id: "coinbase-account-1",
+          created_at: "2025-01-01T00:00:00.000Z",
+          updated_at: "2025-01-01T00:00:00.000Z",
+        },
+      }),
+      makeCoinbaseRecord({
+        externalRecordId: "tx-buy-1",
+        occurredAt: new Date("2025-01-01T10:00:00.000Z"),
+        payload: {
+          id: "tx-buy-1",
+          type: "buy",
+          status: "completed",
+          amount: { amount: "1.00000000", currency: "BTC" },
+          native_amount: { amount: "10000.00", currency: "EUR" },
+          created_at: "2025-01-01T10:00:00.000Z",
+          resource_path: "/v2/accounts/coinbase-account-1/transactions/tx-buy-1",
+          description: "Seed buy",
+        },
+      }),
+      makeCoinbaseRecord({
+        externalRecordId: "tx-uncategorized-inflow-1",
+        occurredAt: new Date("2025-01-05T10:00:00.000Z"),
+        payload: {
+          id: "tx-uncategorized-inflow-1",
+          type: "tx",
+          status: "completed",
+          amount: { amount: "0.41000000", currency: "BTC" },
+          native_amount: { amount: "4100.00", currency: "EUR" },
+          created_at: "2025-01-05T10:00:00.000Z",
+          resource_path: "/v2/accounts/coinbase-account-1/transactions/tx-uncategorized-inflow-1",
+          description: "Uncategorized credit",
+        },
+      }),
+      makeCoinbaseRecord({
+        externalRecordId: "tx-full-balance-sell-1",
+        occurredAt: new Date("2025-02-01T10:00:00.000Z"),
+        payload: {
+          id: "tx-full-balance-sell-1",
+          type: "sell",
+          status: "completed",
+          amount: { amount: "-1.41000000", currency: "BTC" },
+          native_amount: { amount: "-21150.00", currency: "EUR" },
+          created_at: "2025-02-01T10:00:00.000Z",
+          resource_path: "/v2/accounts/coinbase-account-1/transactions/tx-full-balance-sell-1",
+          description: "Full balance sell",
+        },
+      }),
+    ]
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        yield* runSync()
+        const firstRun = yield* fetchCounts()
+
+        expect(firstRun.rawRows.every((row) => row.normalizationError === null)).toBe(true)
+        expect(firstRun.legs.map((row) => `${row.kind}:${row.derivationRule}`).sort()).toEqual([
+          "acquisition:coinbase_buy",
+          "acquisition:coinbase_tx_inflow",
+          "disposal:coinbase_sell",
+        ])
+
+        const remainingAmounts = firstRun.fifoLots.map((row) => String(row.remainingAmount))
+        expect(remainingAmounts).toHaveLength(2)
+        for (const remainingAmount of remainingAmounts) {
+          expectDecimalAmount(remainingAmount, "0")
+        }
+
+        const matchedAmounts = firstRun.disposalMatches
+          .map((row) => String(row.matchedAmount))
+          .sort()
+        expect(matchedAmounts).toHaveLength(2)
+        const [firstMatched, secondMatched] = matchedAmounts
+        if (firstMatched !== undefined && secondMatched !== undefined) {
+          expectDecimalAmount(firstMatched, "0.41")
+          expectDecimalAmount(secondMatched, "1")
+        }
+
+        expect(firstRun.transactionReviews).toEqual([
+          expect.objectContaining({
+            reviewStatus: "needs_review",
+            needsReview: true,
+            originalTypeKey: "uncategorized",
+            currentTypeKey: "uncategorized",
+            matchedLayer: "coinbase_reference_mapping",
+          }),
+        ])
+
+        // Lot 1: proceeds 15000 - cost 10000; lot 2: proceeds 6150 - cost 4100.
+        const taxAfterSync = yield* calculateTax()
+        expect(taxAfterSync.taxableGains).toBe(7050)
+
+        const replay = yield* replaySource()
+        expect(replay.status).toBe("completed")
+
+        const secondRun = yield* fetchCounts()
+        expect(secondRun.legs).toHaveLength(firstRun.legs.length)
+        expect(secondRun.fifoLots).toHaveLength(firstRun.fifoLots.length)
+        expect(secondRun.disposalMatches).toHaveLength(firstRun.disposalMatches.length)
+
+        const taxAfterReplay = yield* calculateTax()
+        expect(taxAfterReplay.taxableGains).toBe(7050)
+      })
+    )
+  })
+
+  it("deducts inventory from a negative Coinbase tx record as a reviewable disposal", async () => {
+    activeSyncRecords = [
+      makeCoinbaseRecord({
+        recordType: "coinbase_account",
+        externalRecordId: "coinbase-account-1",
+        occurredAt: new Date("2025-01-01T00:00:00.000Z"),
+        payload: {
+          id: "coinbase-account-1",
+          created_at: "2025-01-01T00:00:00.000Z",
+          updated_at: "2025-01-01T00:00:00.000Z",
+        },
+      }),
+      makeCoinbaseRecord({
+        externalRecordId: "tx-buy-1",
+        occurredAt: new Date("2025-01-01T10:00:00.000Z"),
+        payload: {
+          id: "tx-buy-1",
+          type: "buy",
+          status: "completed",
+          amount: { amount: "1.00000000", currency: "BTC" },
+          native_amount: { amount: "10000.00", currency: "EUR" },
+          created_at: "2025-01-01T10:00:00.000Z",
+          resource_path: "/v2/accounts/coinbase-account-1/transactions/tx-buy-1",
+          description: "Seed buy",
+        },
+      }),
+      makeCoinbaseRecord({
+        externalRecordId: "tx-uncategorized-outflow-1",
+        occurredAt: new Date("2025-02-01T10:00:00.000Z"),
+        payload: {
+          id: "tx-uncategorized-outflow-1",
+          type: "tx",
+          status: "completed",
+          amount: { amount: "-0.40000000", currency: "BTC" },
+          native_amount: { amount: "-4000.00", currency: "EUR" },
+          created_at: "2025-02-01T10:00:00.000Z",
+          resource_path: "/v2/accounts/coinbase-account-1/transactions/tx-uncategorized-outflow-1",
+          description: "Uncategorized debit",
+        },
+      }),
+    ]
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        yield* runSync()
+        const state = yield* fetchCounts()
+
+        expect(state.rawRows.every((row) => row.normalizationError === null)).toBe(true)
+        expect(state.legs.map((row) => `${row.kind}:${row.derivationRule}`).sort()).toEqual([
+          "acquisition:coinbase_buy",
+          "disposal:coinbase_tx_outflow",
+        ])
+
+        const remainingAmounts = state.fifoLots.map((row) => String(row.remainingAmount))
+        expect(remainingAmounts).toHaveLength(1)
+        const [remainingAmount] = remainingAmounts
+        if (remainingAmount !== undefined) {
+          expectDecimalAmount(remainingAmount, "0.6")
+        }
+
+        expect(state.disposalMatches).toHaveLength(1)
+        expect(state.transactionReviews).toEqual([
+          expect.objectContaining({
+            reviewStatus: "needs_review",
+            needsReview: true,
+            originalTypeKey: "uncategorized",
+            currentTypeKey: "uncategorized",
+            matchedLayer: "coinbase_reference_mapping",
+          }),
+        ])
+      })
+    )
+  })
 })

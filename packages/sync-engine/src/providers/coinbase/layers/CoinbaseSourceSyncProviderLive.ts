@@ -875,25 +875,44 @@ const make = Effect.gen(function* () {
     readonly resolvedTransactionType: CoinbaseResolvedTransactionTypeMapping
     readonly principalId: string
   }) => {
-    if (
-      providerTransactionType === "send" &&
-      resolvedTransactionType.transactionType === "internal_transfer" &&
-      resolvedTransactionType.taxTreatment === "requires_additional_rule_logic"
-    ) {
-      return {
+    const makeNeedsReviewEntry = ({
+      categorizationReason,
+    }: {
+      readonly categorizationReason: string
+    }) =>
+      ({
         principalId,
         reviewStatus: "needs_review",
         originalTypeKey: resolvedTransactionType.transactionType,
         originalConfidence: null,
         currentTypeKey: resolvedTransactionType.transactionType,
         legalRuleSetVersion: null,
-        categorizationReason:
-          "Coinbase send requires user review to determine whether it was a self-transfer, gift, or payment before it can affect tax.",
+        categorizationReason,
         matchedLayer: "coinbase_reference_mapping",
         needsReview: true,
         userNotes: null,
         reviewedAt: null,
-      } as const
+      }) as const
+
+    if (
+      providerTransactionType === "send" &&
+      resolvedTransactionType.transactionType === "internal_transfer" &&
+      resolvedTransactionType.taxTreatment === "requires_additional_rule_logic"
+    ) {
+      return makeNeedsReviewEntry({
+        categorizationReason:
+          "Coinbase send requires user review to determine whether it was a self-transfer, gift, or payment before it can affect tax.",
+      })
+    }
+
+    if (
+      providerTransactionType === "tx" &&
+      resolvedTransactionType.taxTreatment === "requires_additional_rule_logic"
+    ) {
+      return makeNeedsReviewEntry({
+        categorizationReason:
+          "Coinbase tx is an uncategorized ledger entry. Inventory is tracked from the amount sign, but the tax classification needs user review.",
+      })
     }
 
     return null

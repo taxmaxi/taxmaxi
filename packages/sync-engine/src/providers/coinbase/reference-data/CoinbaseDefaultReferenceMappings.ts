@@ -276,10 +276,11 @@ export const coinbaseDefaultTransactionTypeMappings: ReadonlyArray<CoinbaseDefau
       transactionTypeKey: "uncategorized",
       inventoryEffect: "unknown",
       taxTreatment: "requires_additional_rule_logic",
-      resolutionStrategy: "no_leg",
+      resolutionStrategy: "amount_sign",
       pairedRecordRequired: false,
       mappingStatus: "approved",
-      sourceNotes: "Default Coinbase catch-all remains uncategorized until reviewed.",
+      sourceNotes:
+        "Coinbase catch-all rows move real funds: positive amounts add inventory as acquisitions, negative amounts deduct it as disposals. Each row is flagged for user review because the provider gives no category.",
     },
     {
       providerTransactionType: "unstaking_transfer",
