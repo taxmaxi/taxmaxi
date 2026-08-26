@@ -139,6 +139,13 @@ export interface AssetExceptionDecisionInput {
   readonly rationale: string | null
 }
 
+export interface AssetExceptionObservationRevision {
+  readonly providerAssetRowId: string
+  readonly evidenceRevision: number
+  readonly currentConclusionRevision: string
+  readonly currentPolicyEvaluationRevision: string
+}
+
 export interface AssetExceptionDecisionPreview {
   readonly claim: AssetExceptionClaim
   readonly decisionAction: "initial" | "supersession" | "reversal"
@@ -151,12 +158,15 @@ export interface AssetExceptionDecisionPreview {
   readonly evidenceRevision: number
   readonly currentConclusionRevision: string
   readonly currentPolicyEvaluationRevision: string
+  readonly affectedObservationRevisions: ReadonlyArray<AssetExceptionObservationRevision>
 }
 
 export interface AssetExceptionDecisionConfirmationInput extends AssetExceptionDecisionInput {
   readonly expectedResultingAssetId: string | null
   readonly expectedAssetOutcome: "none" | "reuse" | "create"
   readonly expectedRepresentationOutcome: "none" | "reuse" | "create" | "reassign"
+  /** Required when one decision can update more than the focal observation. */
+  readonly expectedAffectedObservationRevisions?: ReadonlyArray<AssetExceptionObservationRevision>
 }
 
 export type AssetExceptionPreviewResult =

@@ -29,7 +29,6 @@ import {
   AssetResolutionJobRepository,
   ProviderAssetRepository,
   SourceSyncService,
-  SyncEngineTransaction,
 } from "@my/sync-engine/services"
 import {
   AssetResolutionJupiterClient,
@@ -57,7 +56,7 @@ const TestPgClientLive = context.TestPgClientLive
 const userId = "00000000-0000-0000-0000-000000000161"
 const principalId = "00000000-0000-0000-0000-000000000162"
 const sourceId = "00000000-0000-0000-0000-000000000261"
-const ORB_ASSET_ID = "00000000-0000-0000-0000-000000000561"
+const ORB_ASSET_ID = "00000000-0000-4000-8000-000000000561"
 const ORB_CORRECTION_ASSET_ID = "00000000-0000-4000-8000-000000000562"
 const ORB_MINT = "OrbTestMint1111111111111111111111111111111"
 const ORB_COINGECKO_ID = "orb-test-coin"
@@ -234,6 +233,10 @@ type FakeJupiterMode =
   | "retryable"
 
 let jupiterMode: FakeJupiterMode = "not_indexed"
+let jupiterFetchGate: {
+  readonly started: Deferred.Deferred<void>
+  readonly release: Deferred.Deferred<void>
+} | null = null
 
 const jupiterSearchPayload = (mode: FakeJupiterMode) => {
   if (mode === "banned") {
@@ -255,18 +258,24 @@ const jupiterSearchPayload = (mode: FakeJupiterMode) => {
 const FakeAssetResolutionJupiterClientLive = Layer.succeed(AssetResolutionJupiterClient, {
   fetchTokenByMint: ({
     mintAddress,
-  }): Effect.Effect<AssetResolutionRegistryEvidence, AssetResolutionJupiterRetryableError> => {
-    if (jupiterMode === "retryable") {
-      return Effect.fail(
-        new AssetResolutionJupiterRetryableError({ status: 429, cause: "rate limited" })
-      )
-    }
+  }): Effect.Effect<AssetResolutionRegistryEvidence, AssetResolutionJupiterRetryableError> =>
+    Effect.gen(function* () {
+      if (jupiterFetchGate !== null) {
+        yield* Deferred.succeed(jupiterFetchGate.started, undefined)
+        yield* Deferred.await(jupiterFetchGate.release)
+      }
+      if (jupiterMode === "retryable") {
+        return yield* new AssetResolutionJupiterRetryableError({
+          status: 429,
+          cause: "rate limited",
+        })
+      }
 
-    return Effect.succeed({
-      _tag: "payload" as const,
-      payload: mintAddress === ORB_MINT ? jupiterSearchPayload(jupiterMode) : [],
-    })
-  },
+      return {
+        _tag: "payload" as const,
+        payload: mintAddress === ORB_MINT ? jupiterSearchPayload(jupiterMode) : [],
+      }
+    }),
 })
 
 const CoinbaseReferenceMappingWithDepsLive = CoinbaseReferenceMappingServiceLive.pipe(
@@ -750,6 +759,7 @@ describe("asset resolution attach and rebuild", () => {
       coinGeckoMode = "success"
       coinGeckoFetchGate = null
       jupiterMode = "not_indexed"
+      jupiterFetchGate = null
       yield* context.recreateTestDatabase()
       yield* seedCoinbaseSource()
     }).pipe(Effect.runPromise)
@@ -933,7 +943,6 @@ describe("asset resolution attach and rebuild", () => {
         yield* Deferred.await(researchStarted)
 
         const providerAssetRepository = yield* ProviderAssetRepository
-        const transaction = yield* SyncEngineTransaction
         const review = yield* providerAssetRepository.findProviderAssetReviewById({
           providerAssetRowId: yield* Effect.gen(function* () {
             const db = yield* drizzle
@@ -961,67 +970,48 @@ describe("asset resolution attach and rebuild", () => {
           yield* providerAssetRepository.listProviderAssetObservedRepresentations({
             providerAssetRowId,
           })
-        const manualConclusionRecorded = yield* Deferred.make<void>()
-        const finishManualApproval = yield* Deferred.make<void>()
+        yield* providerAssetRepository.approveProviderAssetMappingAndRequestReplay({
+          mapping: {
+            providerAssetRowId,
+            mappingKind: "asset",
+            canonicalAssetId: ORB_ASSET_ID,
+            assetRepresentationId: null,
+            canonicalFiatCurrency: null,
+            mappingStatus: "approved",
+            reviewerNotes: "Approved while policy research was in flight.",
+            sourceNotes: "Manual approval race regression.",
+          },
+          conclusion: {
+            providerAssetRowId,
+            evidenceRevision: review.value.providerAsset.evidenceRevision,
+            policyRevision: "2026-08-26.manual-canonicalization.1",
+            claim: {
+              _tag: "identity",
+              assetId: ORB_ASSET_ID,
+              newAsset: null,
+              representation: null,
+            },
+            assetId: ORB_ASSET_ID,
+            assetRepresentationId: null,
+            rationale: "Approved while policy research was in flight.",
+            evidence: [
+              {
+                authority: "human_admin",
+                claimKind: "canonical_asset_selection",
+                sourceLocator: `taxmaxi://provider-assets/${providerAssetRowId}/manual-canonicalization`,
+                retrievedAt: review.value.providerAsset.retrievedAt,
+                evidenceRevision: review.value.providerAsset.evidenceRevision,
+                decodedClaim: { canonicalAssetId: ORB_ASSET_ID },
+                rawPayload: review.value.providerAsset.rawProviderPayload,
+              },
+            ],
+            actor: "system:manual-asset-canonicalization",
+          },
+          expectedObservedRepresentations: observations,
+          expectedProviderAssetRetrievedAt: review.value.providerAsset.retrievedAt,
+        })
 
-        const approval = yield* Effect.forkChild(
-          transaction.run(
-            Effect.gen(function* () {
-              yield* providerAssetRepository.recordAssetResolutionPolicyEvaluation({
-                decision: {
-                  providerAssetRowId,
-                  evidenceRevision: review.value.providerAsset.evidenceRevision,
-                  policyRevision: "2026-08-26.manual-canonicalization.1",
-                  outcome: "attach",
-                  assetId: ORB_ASSET_ID,
-                  assetRepresentationId: null,
-                  blockchain: null,
-                  representationType: null,
-                  contractAddress: null,
-                  mintAddress: null,
-                  decimals: null,
-                  reason: null,
-                  evidence: [
-                    {
-                      authority: "human_admin",
-                      claimKind: "canonical_asset_selection",
-                      sourceLocator: `taxmaxi://provider-assets/${providerAssetRowId}/manual-canonicalization`,
-                      retrievedAt: review.value.providerAsset.retrievedAt,
-                      evidenceRevision: review.value.providerAsset.evidenceRevision,
-                      decodedClaim: { canonicalAssetId: ORB_ASSET_ID },
-                      rawPayload: review.value.providerAsset.rawProviderPayload,
-                    },
-                  ],
-                  actor: "system:manual-asset-canonicalization",
-                },
-              })
-              yield* Deferred.succeed(manualConclusionRecorded, undefined)
-              yield* Deferred.await(finishManualApproval)
-              yield* providerAssetRepository.approveProviderAssetMappingAndRequestReplay({
-                mapping: {
-                  providerAssetRowId,
-                  mappingKind: "asset",
-                  canonicalAssetId: ORB_ASSET_ID,
-                  assetRepresentationId: null,
-                  canonicalFiatCurrency: null,
-                  mappingStatus: "approved",
-                  reviewerNotes: "Approved while policy research was in flight.",
-                  sourceNotes: "Manual approval race regression.",
-                },
-                expectedObservedRepresentations: observations,
-                expectedProviderAssetRetrievedAt: review.value.providerAsset.retrievedAt,
-              })
-            })
-          )
-        )
-
-        yield* Deferred.await(manualConclusionRecorded)
         yield* Deferred.succeed(releaseResearch, undefined)
-        yield* Effect.promise(() =>
-          context.waitForQueryBlockedOnLock({ queryIncludes: "provider_assets" })
-        )
-        yield* Deferred.succeed(finishManualApproval, undefined)
-        yield* Fiber.join(approval)
         expect((yield* Fiber.join(worker)).outcome).toBe("fail_closed")
 
         const state = yield* fetchAttachState()
@@ -1036,9 +1026,9 @@ describe("asset resolution attach and rebuild", () => {
         expect(manualConclusion).toMatchObject({
           assetId: ORB_ASSET_ID,
           id: manualConclusion?.currentConclusionId,
-          currentPolicyEvaluationId: manualConclusion?.id,
+          currentPolicyEvaluationId: staleEvaluation?.id,
         })
-        expect(staleEvaluation?.id).not.toBe(staleEvaluation?.currentPolicyEvaluationId)
+        expect(staleEvaluation?.id).toBe(staleEvaluation?.currentPolicyEvaluationId)
 
         const repository = yield* AssetExceptionRepository
         const detail = yield* repository.findDetail({
@@ -1048,7 +1038,7 @@ describe("asset resolution attach and rebuild", () => {
         expect(Option.getOrNull(detail)).toMatchObject({
           reviewStatus: "approved",
           currentConclusion: { id: manualConclusion?.id, outcome: "attach" },
-          currentPolicyEvaluation: { id: manualConclusion?.id, outcome: "attach" },
+          currentPolicyEvaluation: { id: staleEvaluation?.id, outcome: "fail_closed" },
         })
       }).pipe(Effect.provide(TestLayer))
     )
@@ -1311,6 +1301,215 @@ describe("asset resolution attach and rebuild", () => {
       })
     )
   })
+
+  it.each([
+    {
+      expectedDecision: "pending" as const,
+      registryMode: "not_found" as const,
+      legitimacyMode: "not_indexed" as const,
+      seedTargetAsset: false,
+    },
+    {
+      expectedDecision: "fail_closed" as const,
+      registryMode: "success" as const,
+      legitimacyMode: "banned" as const,
+      seedTargetAsset: true,
+    },
+  ])(
+    "does not persist an in-flight stale $expectedDecision evaluation",
+    async ({ registryMode, legitimacyMode, seedTargetAsset }) => {
+      await Effect.runPromise(
+        Effect.gen(function* () {
+          yield* runSync()
+          if (seedTargetAsset) {
+            yield* insertOrbAsset()
+          }
+          yield* recordOrbSolanaObservation()
+          const jobId = yield* fetchPendingResolutionJobId()
+
+          coinGeckoMode = registryMode
+          jupiterMode = legitimacyMode
+          const researchStarted = yield* Deferred.make<void>()
+          const releaseResearch = yield* Deferred.make<void>()
+          jupiterFetchGate = { started: researchStarted, release: releaseResearch }
+          const worker = yield* Effect.forkChild(runResolutionJob({ jobId }))
+          yield* Deferred.await(researchStarted)
+
+          yield* Effect.gen(function* () {
+            const db = yield* drizzle
+            yield* db
+              .update(schema.providerAssets)
+              .set({ evidenceRevision: 2 })
+              .where(
+                and(
+                  eq(schema.providerAssets.provider, "coinbase"),
+                  eq(schema.providerAssets.currencyCode, "ORB")
+                )
+              )
+          }).pipe(Effect.provide(TestPgClientLive))
+          yield* Deferred.succeed(releaseResearch, undefined)
+
+          expect((yield* Fiber.join(worker)).outcome).toBe("stale")
+          const state = yield* fetchAttachState()
+          expect(state.decisions).toEqual([])
+          expect(state.evidence).toEqual([])
+          expect(state.mapping).toMatchObject({ mappingStatus: "pending_review" })
+          expect((yield* fetchResolutionJobState({ jobId })).status).toBe("completed")
+        }).pipe(Effect.provide(TestLayer))
+      )
+    },
+    15_000
+  )
+
+  it.each([
+    {
+      expectedDecision: "attach" as const,
+      registryMode: "success" as const,
+      legitimacyMode: "not_indexed" as const,
+      seedTargetAsset: true,
+    },
+    {
+      expectedDecision: "create_standalone" as const,
+      registryMode: "not_found" as const,
+      legitimacyMode: "verified" as const,
+      seedTargetAsset: false,
+    },
+    {
+      expectedDecision: "excluded" as const,
+      registryMode: "not_found" as const,
+      legitimacyMode: "banned" as const,
+      seedTargetAsset: false,
+    },
+  ])(
+    "does not apply an in-flight stale $expectedDecision decision",
+    async ({ registryMode, legitimacyMode, seedTargetAsset }) => {
+      await Effect.runPromise(
+        Effect.gen(function* () {
+          yield* runSync()
+          if (seedTargetAsset) {
+            yield* insertOrbAsset()
+          }
+          yield* recordOrbSolanaObservation()
+          const jobId = yield* fetchPendingResolutionJobId()
+          const before = yield* fetchAttachState()
+
+          coinGeckoMode = registryMode
+          jupiterMode = legitimacyMode
+          const researchStarted = yield* Deferred.make<void>()
+          const releaseResearch = yield* Deferred.make<void>()
+          jupiterFetchGate = { started: researchStarted, release: releaseResearch }
+          const worker = yield* Effect.forkChild(runResolutionJob({ jobId }))
+          yield* Deferred.await(researchStarted)
+
+          yield* Effect.gen(function* () {
+            const db = yield* drizzle
+            yield* db
+              .update(schema.providerAssets)
+              .set({ evidenceRevision: 2 })
+              .where(
+                and(
+                  eq(schema.providerAssets.provider, "coinbase"),
+                  eq(schema.providerAssets.currencyCode, "ORB")
+                )
+              )
+          }).pipe(Effect.provide(TestPgClientLive))
+          yield* Deferred.succeed(releaseResearch, undefined)
+
+          expect((yield* Fiber.join(worker)).outcome).toBe("stale")
+          const after = yield* fetchAttachState()
+          expect(after.decisions).toEqual(before.decisions)
+          expect(after.evidence).toEqual(before.evidence)
+          expect(after.mapping).toEqual(before.mapping)
+          expect(after.ownershipDecisions).toEqual(before.ownershipDecisions)
+          expect(after.owningAssets).toEqual(before.owningAssets)
+          expect(after.representations).toEqual(before.representations)
+          expect(after.replayJobs).toEqual(before.replayJobs)
+          expect((yield* fetchResolutionJobState({ jobId })).status).toBe("completed")
+        }).pipe(Effect.provide(TestLayer))
+      )
+    },
+    15_000
+  )
+
+  it.each(["approved", "excluded"] as const)(
+    "does not append stale history for an already %s mapping",
+    async (settledStatus) => {
+      await Effect.runPromise(
+        Effect.gen(function* () {
+          yield* runSync()
+          if (settledStatus === "approved") {
+            yield* insertOrbAsset()
+          } else {
+            coinGeckoMode = "not_found"
+            jupiterMode = "banned"
+          }
+          yield* recordOrbSolanaObservation()
+          const firstJobId = yield* fetchPendingResolutionJobId()
+          expect((yield* runResolutionJob({ jobId: firstJobId })).outcome).toBe(
+            settledStatus === "approved" ? "attached" : "excluded"
+          )
+          const before = yield* fetchAttachState()
+
+          const staleJobId =
+            settledStatus === "approved"
+              ? "00000000-4000-4000-8000-000000000774"
+              : "00000000-4000-4000-8000-000000000775"
+          yield* Effect.gen(function* () {
+            const db = yield* drizzle
+            const [providerAsset] = yield* db
+              .update(schema.providerAssets)
+              .set({ evidenceRevision: 2 })
+              .where(
+                and(
+                  eq(schema.providerAssets.provider, "coinbase"),
+                  eq(schema.providerAssets.currencyCode, "ORB")
+                )
+              )
+              .returning({ id: schema.providerAssets.id })
+            if (providerAsset === undefined) {
+              return yield* Effect.die("Missing settled ORB observation")
+            }
+            yield* db.insert(schema.assetResolutionJobs).values({
+              id: staleJobId,
+              providerAssetRowId: providerAsset.id,
+              evidenceRevision: 2,
+              status: "pending",
+            })
+          }).pipe(Effect.provide(TestPgClientLive))
+
+          coinGeckoMode = settledStatus === "approved" ? "success" : "not_found"
+          jupiterMode = settledStatus === "approved" ? "not_indexed" : "unverified"
+          const researchStarted = yield* Deferred.make<void>()
+          const releaseResearch = yield* Deferred.make<void>()
+          jupiterFetchGate = { started: researchStarted, release: releaseResearch }
+          const worker = yield* Effect.forkChild(runResolutionJob({ jobId: staleJobId }))
+          yield* Deferred.await(researchStarted)
+
+          yield* Effect.gen(function* () {
+            const db = yield* drizzle
+            yield* db
+              .update(schema.providerAssets)
+              .set({ evidenceRevision: 3 })
+              .where(
+                and(
+                  eq(schema.providerAssets.provider, "coinbase"),
+                  eq(schema.providerAssets.currencyCode, "ORB")
+                )
+              )
+          }).pipe(Effect.provide(TestPgClientLive))
+          yield* Deferred.succeed(releaseResearch, undefined)
+
+          expect((yield* Fiber.join(worker)).outcome).toBe("stale")
+          const after = yield* fetchAttachState()
+          expect(after.decisions).toEqual(before.decisions)
+          expect(after.evidence).toEqual(before.evidence)
+          expect(after.mapping).toEqual(before.mapping)
+          expect((yield* fetchResolutionJobState({ jobId: staleJobId })).status).toBe("completed")
+        }).pipe(Effect.provide(TestLayer))
+      )
+    },
+    15_000
+  )
 
   it("releases the job for retry on a transient CoinGecko failure without recording a decision", async () => {
     await Effect.runPromise(

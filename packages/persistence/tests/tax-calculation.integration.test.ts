@@ -361,7 +361,6 @@ const insertExcludedProviderAssetSourceUseWithRematerialization = () =>
         evidenceRevision: 1,
         policyRevision: "human:test",
         outcome: "excluded",
-        status: "active",
         reason: "not_economic_activity",
         actor: userId,
       })
@@ -572,7 +571,6 @@ describe("TaxCalculationServiceLive", () => {
             evidenceRevision: 1,
             policyRevision: "human:test:latest",
             outcome: "excluded",
-            status: "active",
             supersedesDecisionId: fixture.decisionId,
             reason: "not_economic_activity",
             humanClaim: { _tag: "exclusion", reason: "provider_artifact" },
@@ -629,7 +627,6 @@ describe("TaxCalculationServiceLive", () => {
             evidenceRevision: 1,
             policyRevision: "human:test:approved",
             outcome: "identity",
-            status: "active",
             supersedesDecisionId: replacementConclusion.id,
             assetId: approvedAsset.id,
             humanClaim: {

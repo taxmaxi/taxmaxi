@@ -20,6 +20,7 @@ import {
   CATALOG_REVIEWABLE_STATUSES,
   OBSERVED_UNRESOLVED_STATUSES,
   insertAssetResolutionDecision,
+  insertCurrentAssetResolutionDecision,
   insertResolutionJobsForMappings,
   nowDate,
   wrapSyncEngineSqlError,
@@ -348,6 +349,30 @@ const make = Effect.gen(function* () {
             mappingStatuses: CATALOG_REVIEWABLE_STATUSES,
           })
 
+          const upsertedProviderAssetRowIds = upserted.flatMap((rows) => rows.map((row) => row.id))
+          yield* tx
+            .update(schema.assetResolutionCurrentState)
+            .set({ currentPolicyEvaluationId: null, updatedAt: now })
+            .where(
+              and(
+                inArray(
+                  schema.assetResolutionCurrentState.providerAssetRowId,
+                  upsertedProviderAssetRowIds
+                ),
+                sql<boolean>`exists (
+                  select 1
+                  from ${schema.assetResolutionDecisions} current_policy
+                  inner join ${schema.providerAssets} current_observation
+                    on current_observation.id = ${schema.assetResolutionCurrentState.providerAssetRowId}
+                  where current_policy.id = ${schema.assetResolutionCurrentState.currentPolicyEvaluationId}
+                    and current_policy.evidence_revision < current_observation.evidence_revision
+                )`
+              )
+            )
+            .pipe(
+              wrapSyncEngineSqlError("providerAssetRepository.upsertProviderAssets.currentState")
+            )
+
           return entries.length
         })
       )
@@ -675,7 +700,7 @@ const make = Effect.gen(function* () {
         )
 
   const approveProviderAssetMappingAndRequestReplay: ProviderAssetRepositoryShape["approveProviderAssetMappingAndRequestReplay"] =
-    ({ mapping, expectedObservedRepresentations, expectedProviderAssetRetrievedAt }) =>
+    ({ mapping, conclusion, expectedObservedRepresentations, expectedProviderAssetRetrievedAt }) =>
       db
         .transaction((tx) =>
           Effect.gen(function* () {
@@ -707,6 +732,137 @@ const make = Effect.gen(function* () {
             }
 
             const now = nowDate()
+            let replayDecisionId: string | null = null
+            if (conclusion !== undefined) {
+              const representation = conclusion.claim.representation
+              const conclusionMatchesApproval =
+                conclusion.providerAssetRowId === mapping.providerAssetRowId &&
+                conclusion.evidenceRevision === approvalSnapshot.providerAsset.evidenceRevision &&
+                conclusion.assetId === mapping.canonicalAssetId &&
+                conclusion.assetRepresentationId === mapping.assetRepresentationId &&
+                conclusion.claim.assetId === mapping.canonicalAssetId &&
+                conclusion.claim.newAsset === null &&
+                (representation === null) === (mapping.assetRepresentationId === null) &&
+                conclusion.evidence.every(
+                  ({ evidenceRevision }) => evidenceRevision === conclusion.evidenceRevision
+                )
+              if (!conclusionMatchesApproval) {
+                return yield* new SyncEngineStorageError({
+                  operation:
+                    "providerAssetRepository.approveProviderAssetMappingAndRequestReplay.conclusion",
+                  cause: "The human conclusion does not match the current mapping approval.",
+                })
+              }
+
+              const [currentState] = yield* tx
+                .select({
+                  currentConclusionId: schema.assetResolutionCurrentState.currentConclusionId,
+                })
+                .from(schema.assetResolutionCurrentState)
+                .where(
+                  eq(
+                    schema.assetResolutionCurrentState.providerAssetRowId,
+                    mapping.providerAssetRowId
+                  )
+                )
+                .limit(1)
+
+              const [insertedConclusion] = yield* tx
+                .insert(schema.assetResolutionDecisions)
+                .values({
+                  providerAssetRowId: conclusion.providerAssetRowId,
+                  evidenceRevision: conclusion.evidenceRevision,
+                  policyRevision: conclusion.policyRevision,
+                  outcome: "attach",
+                  supersedesDecisionId: currentState?.currentConclusionId ?? null,
+                  assetId: conclusion.assetId,
+                  assetRepresentationId: conclusion.assetRepresentationId,
+                  blockchain: representation?.blockchain ?? null,
+                  representationType: representation?.type ?? null,
+                  contractAddress: representation?.contractAddress ?? null,
+                  mintAddress: representation?.mintAddress ?? null,
+                  decimals: representation?.decimals ?? null,
+                  humanClaim: conclusion.claim,
+                  rationale: conclusion.rationale,
+                  actor: conclusion.actor,
+                  createdAt: now,
+                })
+                .returning({ id: schema.assetResolutionDecisions.id })
+              if (insertedConclusion === undefined) {
+                return yield* new SyncEngineStorageError({
+                  operation:
+                    "providerAssetRepository.approveProviderAssetMappingAndRequestReplay.recordConclusion",
+                  cause: "The human mapping conclusion was not recorded.",
+                })
+              }
+
+              if (conclusion.evidence.length > 0) {
+                yield* tx.insert(schema.assetResolutionEvidence).values(
+                  conclusion.evidence.map((entry) => ({
+                    decisionId: insertedConclusion.id,
+                    authority: entry.authority,
+                    claimKind: entry.claimKind,
+                    sourceLocator: entry.sourceLocator,
+                    retrievedAt: entry.retrievedAt,
+                    evidenceRevision: entry.evidenceRevision,
+                    decodedClaim: entry.decodedClaim,
+                    rawPayload: entry.rawPayload,
+                  }))
+                )
+              }
+
+              yield* tx
+                .insert(schema.assetResolutionCurrentState)
+                .values({
+                  providerAssetRowId: mapping.providerAssetRowId,
+                  currentConclusionId: insertedConclusion.id,
+                  currentPolicyEvaluationId: null,
+                  updatedAt: now,
+                })
+                .onConflictDoUpdate({
+                  target: schema.assetResolutionCurrentState.providerAssetRowId,
+                  set: { currentConclusionId: insertedConclusion.id, updatedAt: now },
+                })
+
+              replayDecisionId = insertedConclusion.id
+            }
+
+            const [currentConclusion] = yield* tx
+              .select({
+                id: schema.assetResolutionDecisions.id,
+                outcome: schema.assetResolutionDecisions.outcome,
+                assetId: schema.assetResolutionDecisions.assetId,
+                assetRepresentationId: schema.assetResolutionDecisions.assetRepresentationId,
+              })
+              .from(schema.assetResolutionCurrentState)
+              .innerJoin(
+                schema.assetResolutionDecisions,
+                eq(
+                  schema.assetResolutionDecisions.id,
+                  schema.assetResolutionCurrentState.currentConclusionId
+                )
+              )
+              .where(
+                eq(
+                  schema.assetResolutionCurrentState.providerAssetRowId,
+                  mapping.providerAssetRowId
+                )
+              )
+              .limit(1)
+            const conclusionOwnsApprovedTarget =
+              currentConclusion !== undefined &&
+              ["attach", "create_standalone", "identity"].includes(currentConclusion.outcome) &&
+              currentConclusion.assetId === mapping.canonicalAssetId &&
+              currentConclusion.assetRepresentationId === mapping.assetRepresentationId
+            if (!conclusionOwnsApprovedTarget) {
+              return yield* new SyncEngineStorageError({
+                operation:
+                  "providerAssetRepository.approveProviderAssetMappingAndRequestReplay.currentConclusion",
+                cause: "An approved asset mapping requires a matching current conclusion.",
+              })
+            }
+            replayDecisionId = currentConclusion.id
+
             const [approved] = yield* tx
               .update(schema.providerAssetMappings)
               .set({
@@ -735,31 +891,13 @@ const make = Effect.gen(function* () {
               })
             }
 
-            const [replayDecision] = yield* tx
-              .select({
-                currentConclusionId: schema.assetResolutionCurrentState.currentConclusionId,
-                currentPolicyEvaluationId:
-                  schema.assetResolutionCurrentState.currentPolicyEvaluationId,
-              })
-              .from(schema.assetResolutionCurrentState)
-              .where(
-                eq(
-                  schema.assetResolutionCurrentState.providerAssetRowId,
-                  mapping.providerAssetRowId
-                )
-              )
-              .limit(1)
-
             yield* requestReplayForProviderAssetSources({
               tx,
               providerAssetRowId: mapping.providerAssetRowId,
               now,
               reason: "asset_mapping_approved",
               operation: "providerAssetRepository.approveProviderAssetMappingAndRequestReplay",
-              decisionId:
-                replayDecision?.currentConclusionId ??
-                replayDecision?.currentPolicyEvaluationId ??
-                null,
+              decisionId: replayDecisionId,
             })
 
             return { mappingChanged: true }
@@ -802,24 +940,21 @@ const make = Effect.gen(function* () {
               })
             }
 
-            const now = nowDate()
-            const [providerAssetRevision] = yield* tx
-              .select({ evidenceRevision: schema.providerAssets.evidenceRevision })
-              .from(schema.providerAssets)
-              .where(eq(schema.providerAssets.id, providerAssetRowId))
-              .limit(1)
             if (
-              providerAssetRevision === undefined ||
               decision.providerAssetRowId !== providerAssetRowId ||
-              decision.evidenceRevision !== providerAssetRevision.evidenceRevision ||
               decision.outcome !== "excluded"
             ) {
               return yield* new SyncEngineStorageError({
                 operation:
                   "providerAssetRepository.excludeProviderAssetMappingAndRequestReplay.decision",
-                cause: "The exclusion decision does not match the current provider asset evidence.",
+                cause: "The exclusion decision does not match the provider asset.",
               })
             }
+            if (decision.evidenceRevision !== snapshot.providerAsset.evidenceRevision) {
+              return { mappingChanged: false, decisionRecorded: false, stale: true as const }
+            }
+
+            const now = nowDate()
 
             const insertedDecision = yield* insertAssetResolutionDecision({
               tx,
@@ -1363,10 +1498,22 @@ const make = Effect.gen(function* () {
   }
 
   const recordAssetResolutionPolicyEvaluation: ProviderAssetRepositoryShape["recordAssetResolutionPolicyEvaluation"] =
-    ({ decision }) =>
+    ({ decision, requireCurrentEvidenceRevision }) =>
       db
         .transaction((tx) =>
           Effect.gen(function* () {
+            if (requireCurrentEvidenceRevision === true) {
+              const result = yield* insertCurrentAssetResolutionDecision({
+                tx,
+                decision,
+                operation: "providerAssetRepository.recordAssetResolutionPolicyEvaluation",
+              })
+
+              return result._tag === "stale"
+                ? { recorded: false, stale: true as const }
+                : { recorded: result._tag === "inserted" }
+            }
+
             const inserted = yield* insertAssetResolutionDecision({
               tx,
               decision,

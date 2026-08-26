@@ -14,6 +14,7 @@ export function useAssetCatalogSelection({
 }: {
   readonly visibleItems: ReadonlyArray<CatalogItem>
 }) {
+  const [exactLookupOpen, setExactLookupOpen] = useState(false)
   const [mobileDetailOpen, setMobileDetailOpen] = useState(false)
   const mobileBackButtonRef = useRef<HTMLButtonElement>(null)
   const [selectedKey, setSelectedKey] = useState(() => getCatalogItemKey(visibleItems[0]))
@@ -23,6 +24,10 @@ export function useAssetCatalogSelection({
   const selectedItemKey = getCatalogItemKey(selectedItem)
 
   useEffect(() => {
+    if (exactLookupOpen) {
+      return
+    }
+
     if (selectedKey.length === 0) {
       if (selectedItemKey.length > 0) {
         setSelectedKey(selectedItemKey)
@@ -46,7 +51,7 @@ export function useAssetCatalogSelection({
         document.getElementById(focusTargetId)?.focus()
       })
     }
-  }, [mobileDetailOpen, selectedItem, selectedItemKey, selectedKey, visibleItems])
+  }, [exactLookupOpen, mobileDetailOpen, selectedItem, selectedItemKey, selectedKey, visibleItems])
 
   useEffect(() => {
     if (mobileDetailOpen) {
@@ -55,6 +60,7 @@ export function useAssetCatalogSelection({
   }, [mobileDetailOpen])
 
   const selectItem = useCallback((item: CatalogItem) => {
+    setExactLookupOpen(false)
     setSelectedKey(getCatalogItemKey(item))
 
     if (!window.matchMedia(ASSET_CATALOG_DESKTOP_MEDIA_QUERY).matches) {
@@ -63,6 +69,7 @@ export function useAssetCatalogSelection({
   }, [])
 
   const showMobileList = useCallback(() => {
+    setExactLookupOpen(false)
     setMobileDetailOpen(false)
 
     if (selectedItem === undefined) {
@@ -76,6 +83,11 @@ export function useAssetCatalogSelection({
       document.getElementById(getCatalogItemDomId(selectedItem))?.focus()
     })
   }, [selectedItem])
+
+  const openExactLookup = useCallback(() => {
+    setExactLookupOpen(true)
+    setMobileDetailOpen(true)
+  }, [])
 
   useEffect(() => {
     const desktopQuery = window.matchMedia(ASSET_CATALOG_DESKTOP_MEDIA_QUERY)
@@ -170,8 +182,10 @@ export function useAssetCatalogSelection({
   }, [mobileDetailOpen, selectItem, selectedItem, selectedItemKey, visibleItems])
 
   return {
+    exactLookupOpen,
     mobileBackButtonRef,
     mobileDetailOpen,
+    openExactLookup,
     selectedItem,
     selectedItemKey,
     selectItem,

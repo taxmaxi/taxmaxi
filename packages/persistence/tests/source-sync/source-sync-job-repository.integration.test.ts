@@ -1100,7 +1100,6 @@ describe("SourceSyncJobRepositoryLive", () => {
             evidenceRevision: 1,
             policyRevision: "test:rebuild-tracking",
             outcome: "excluded",
-            status: "active",
             actor: TEST_USER_ID,
           })
           .returning({ id: schema.assetResolutionDecisions.id })

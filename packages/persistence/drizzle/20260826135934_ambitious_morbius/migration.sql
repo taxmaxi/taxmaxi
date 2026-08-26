@@ -21,7 +21,6 @@ INSERT INTO "asset_resolution_decisions" (
   "evidence_revision",
   "policy_revision",
   "outcome",
-  "status",
   "asset_id",
   "asset_representation_id",
   "reason",
@@ -35,7 +34,6 @@ SELECT
     WHEN mapping.mapping_status = 'excluded' THEN 'excluded'::asset_resolution_outcome
     ELSE 'attach'::asset_resolution_outcome
   END,
-  'active'::asset_resolution_decision_status,
   mapping.canonical_asset_id,
   mapping.asset_representation_id,
   CASE
@@ -55,7 +53,6 @@ WHERE mapping.mapping_kind = 'asset'
     SELECT 1
     FROM "asset_resolution_decisions" decision
     WHERE decision.provider_asset_row_id = mapping.provider_asset_row_id
-      AND decision.status = 'active'
       AND decision.outcome NOT IN ('pending', 'fail_closed')
   );--> statement-breakpoint
 INSERT INTO "asset_resolution_evidence" (
@@ -109,7 +106,6 @@ LEFT JOIN LATERAL (
   SELECT decision.id
   FROM "asset_resolution_decisions" decision
   WHERE decision.provider_asset_row_id = provider_asset.id
-    AND decision.status = 'active'
     AND decision.human_claim IS NOT NULL
   ORDER BY decision.created_at DESC, decision.id DESC
   LIMIT 1
@@ -118,7 +114,6 @@ LEFT JOIN LATERAL (
   SELECT decision.id
   FROM "asset_resolution_decisions" decision
   WHERE decision.provider_asset_row_id = provider_asset.id
-    AND decision.status = 'active'
     AND decision.human_claim IS NULL
     AND decision.outcome NOT IN ('pending', 'fail_closed')
   ORDER BY decision.evidence_revision DESC, decision.created_at DESC, decision.id DESC
@@ -129,6 +124,7 @@ LEFT JOIN LATERAL (
   FROM "asset_resolution_decisions" decision
   WHERE decision.provider_asset_row_id = provider_asset.id
     AND decision.human_claim IS NULL
+    AND decision.supersedes_decision_id IS NULL
     AND decision.evidence_revision = provider_asset.evidence_revision
   ORDER BY
     CASE WHEN decision.policy_revision = 'legacy.trusted-provider-mapping.1' THEN 1 ELSE 0 END,

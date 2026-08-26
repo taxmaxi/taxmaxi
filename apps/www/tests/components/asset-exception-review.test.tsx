@@ -2,7 +2,7 @@
 
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react"
 import * as DateTime from "effect/DateTime"
-import { afterEach, describe, expect, it, vi } from "vitest"
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest"
 import type {
   AssetCatalogAsset,
   AssetExceptionDecisionInput,
@@ -12,6 +12,7 @@ import type {
 
 import type { AssetExceptionActions } from "#/components/asset-catalog-context"
 import type { TaxMaxiAssetException } from "#/components/asset-catalog-model"
+import { AssetCatalog } from "#/components/asset-catalog"
 import { AssetExceptionDetailPane } from "#/components/asset-exception-detail"
 import { AssetExceptionReview } from "#/components/asset-exception-review"
 
@@ -158,6 +159,18 @@ const conflictingAsset = {
   ],
 } satisfies AssetCatalogAsset
 
+const compatibleAsset = {
+  ...conflictingAsset,
+  id: "00000000-0000-4000-8000-000000000808",
+  representations: [
+    {
+      ...conflictingAsset.representations[0],
+      id: "00000000-0000-4000-8000-000000000809",
+      mintAddress: OBSERVED_MINT,
+    },
+  ],
+} satisfies AssetCatalogAsset
+
 const makePreview = (input: AssetExceptionDecisionInput): AssetExceptionPreview => ({
   claim: input.claim,
   decisionAction: "initial",
@@ -170,6 +183,14 @@ const makePreview = (input: AssetExceptionDecisionInput): AssetExceptionPreview 
   evidenceRevision: detail.evidenceRevision,
   currentConclusionRevision: detail.currentConclusionRevision,
   currentPolicyEvaluationRevision: detail.currentPolicyEvaluationRevision,
+  affectedObservationRevisions: [
+    {
+      providerAssetRowId: detail.providerAssetRowId,
+      evidenceRevision: detail.evidenceRevision,
+      currentConclusionRevision: detail.currentConclusionRevision,
+      currentPolicyEvaluationRevision: detail.currentPolicyEvaluationRevision,
+    },
+  ],
 })
 
 const makeActions = (): AssetExceptionActions => ({
@@ -197,6 +218,45 @@ const renderReview = (actions: AssetExceptionActions = makeActions()) => {
   return { actions, onDetailChange }
 }
 
+const renderCatalog = ({
+  actions,
+  exceptions,
+}: {
+  readonly actions: AssetExceptionActions
+  readonly exceptions: ReadonlyArray<TaxMaxiAssetException>
+}) =>
+  render(
+    <AssetCatalog
+      exceptionActions={actions}
+      feeds={{
+        approved: { items: [] },
+        exceptions: { items: exceptions },
+        pending: { items: [] },
+      }}
+      onClose={vi.fn()}
+    />
+  )
+
+beforeAll(() => {
+  Object.defineProperty(window, "matchMedia", {
+    configurable: true,
+    value: (query: string): MediaQueryList => ({
+      matches: false,
+      media: query,
+      onchange: null,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      dispatchEvent: vi.fn(() => true),
+    }),
+  })
+  Object.defineProperty(Element.prototype, "scrollIntoView", {
+    configurable: true,
+    value: vi.fn(),
+  })
+})
+
 afterEach(cleanup)
 
 describe("AssetExceptionReview", () => {
@@ -213,7 +273,7 @@ describe("AssetExceptionReview", () => {
     await waitFor(() =>
       expect(actions.lookup).toHaveBeenCalledWith({ provider: "coinbase", providerAssetId: "btc" })
     )
-    expect(await screen.findByText("Melea Initiative · helius-solana")).toBeTruthy()
+    expect(await screen.findByRole("heading", { name: "MLDAO" })).toBeTruthy()
   })
 
   it("opens a settled observation by its provider natural key", async () => {
@@ -232,6 +292,20 @@ describe("AssetExceptionReview", () => {
         naturalKey: "currency_code:BTC",
       })
     )
+  })
+
+  it("clears the prior review when the selected exception disappears", async () => {
+    const actions = makeActions()
+    const { rerender } = render(
+      <AssetExceptionDetailPane actions={actions} exception={exception} />
+    )
+
+    expect(await screen.findByRole("heading", { name: "MLDAO" })).toBeTruthy()
+
+    rerender(<AssetExceptionDetailPane actions={actions} />)
+
+    expect(await screen.findByRole("heading", { name: "Exact observation lookup" })).toBeTruthy()
+    expect(screen.queryByRole("heading", { name: "MLDAO" })).toBeNull()
   })
 
   it("requires a provider and exactly one lookup identifier", () => {
@@ -275,6 +349,39 @@ describe("AssetExceptionReview", () => {
     expect(await screen.findByText("The reviewed observation could not be opened.")).toBeTruthy()
     expect(screen.getByRole("button", { name: "Look up" })).toBeTruthy()
     expect(screen.getByLabelText("Provider observation ID")).toHaveProperty("value", "missing")
+  })
+
+  it("opens exact lookup from the mobile catalog when the exception queue is empty", () => {
+    const { container } = renderCatalog({ actions: makeActions(), exceptions: [] })
+
+    fireEvent.click(screen.getByRole("button", { name: "Exceptions" }))
+    expect(container.querySelector("[data-mobile-view]")?.getAttribute("data-mobile-view")).toBe(
+      "list"
+    )
+
+    fireEvent.click(screen.getByRole("button", { name: "Open exact lookup" }))
+
+    expect(container.querySelector("[data-mobile-view]")?.getAttribute("data-mobile-view")).toBe(
+      "detail"
+    )
+    expect(screen.getByRole("heading", { name: "Exact observation lookup" })).toBeTruthy()
+    expect(screen.getByRole("button", { name: "Back to asset list" })).toBeTruthy()
+  })
+
+  it("opens exact lookup from the mobile catalog without selecting a queued exception", async () => {
+    const actions = makeActions()
+    const { container } = renderCatalog({ actions, exceptions: [exception] })
+
+    fireEvent.click(screen.getByRole("button", { name: "Exceptions" }))
+    expect(await screen.findByText("Needs decision")).toBeTruthy()
+    expect(screen.queryByRole("heading", { name: "Exact observation lookup" })).toBeNull()
+
+    fireEvent.click(screen.getByRole("button", { name: "Open exact lookup" }))
+
+    expect(container.querySelector("[data-mobile-view]")?.getAttribute("data-mobile-view")).toBe(
+      "detail"
+    )
+    expect(screen.getByRole("heading", { name: "Exact observation lookup" })).toBeTruthy()
   })
 
   it("renders one review request and hides empty lookup and rebuild states", () => {
@@ -344,6 +451,76 @@ describe("AssetExceptionReview", () => {
     expect(
       screen.getByText("3 remaining · 2 complete · 1 running · 1 queued · 1 retrying · 1 failed")
     ).toBeTruthy()
+  })
+
+  it("prefers a newer exclusion policy while retaining the conclusion asset as an alternative", async () => {
+    const conclusionId = "00000000-0000-4000-8000-000000000810"
+    const currentConclusion = {
+      id: conclusionId,
+      supersedesConclusionId: null,
+      isCurrentConclusion: true,
+      isCurrentPolicyEvaluation: false,
+      outcome: "attach" as const,
+      claim: {
+        _tag: "identity" as const,
+        assetId: compatibleAsset.id,
+        newAsset: null,
+        representation: {
+          blockchain: "solana",
+          type: "token" as const,
+          contractAddress: null,
+          mintAddress: OBSERVED_MINT,
+          decimals: 0,
+        },
+      },
+      rationale: "Confirmed by an administrator.",
+      reason: "manual_identity",
+      assetId: compatibleAsset.id,
+      assetRepresentationId: compatibleAsset.representations[0].id,
+      actorId: "admin:test",
+      policyRevision: "human.1",
+      evidenceRevision: 1,
+      evidenceSnapshotIds: [EVIDENCE_ID],
+      createdAt: DateTime.makeUnsafe("2026-08-24T10:00:00.000Z"),
+    }
+    const currentPolicyEvaluation = {
+      ...detail.currentPolicyEvaluation,
+      reason: "spam_evidence",
+    }
+    const mixedDetail = {
+      ...detail,
+      currentConclusionRevision: conclusionId,
+      currentConclusion,
+      currentPolicyEvaluation,
+      decisionHistory: [currentConclusion, currentPolicyEvaluation],
+    } satisfies AssetExceptionDetail
+    const actions: AssetExceptionActions = {
+      ...makeActions(),
+      searchAssets: vi.fn(async () => ({
+        assets: [compatibleAsset],
+        page: { nextCursor: null, hasMore: false },
+      })),
+    }
+
+    render(
+      <AssetExceptionReview
+        actions={actions}
+        detail={mixedDetail}
+        exception={exception}
+        onDetailChange={vi.fn()}
+        stale={false}
+      />
+    )
+
+    expect(
+      screen.getByRole("radio", { name: /Exclude from reports/ }).getAttribute("aria-checked")
+    ).toBe("true")
+    expect(screen.getByText("Spam or impersonation")).toBeTruthy()
+
+    fireEvent.click(screen.getByRole("radio", { name: /Attach to existing asset/ }))
+
+    const alternative = await screen.findByRole("radio", { name: /Melea Initiative/ })
+    expect(alternative.getAttribute("aria-checked")).toBe("true")
   })
 
   it("keeps settled detail visible after its exception leaves the queue", async () => {
@@ -471,6 +648,14 @@ describe("AssetExceptionReview", () => {
       expectedResultingAssetId: null,
       expectedAssetOutcome: "none",
       expectedRepresentationOutcome: "none",
+      expectedAffectedObservationRevisions: [
+        {
+          providerAssetRowId: OBSERVATION_ID,
+          evidenceRevision: 1,
+          currentConclusionRevision: "no_current_conclusion",
+          currentPolicyEvaluationRevision: POLICY_DECISION_ID,
+        },
+      ],
     })
     expect(onDetailChange).toHaveBeenCalledWith(detail)
     expect(

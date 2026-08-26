@@ -91,6 +91,7 @@ export function useAssetExceptionDetail(
   useEffect(() => {
     requestId.current += 1
     if (exceptionRowId === undefined) {
+      setDetail((current) => (current?.reviewStatus === "unresolved" ? null : current))
       setLoading(false)
       setLoadError(null)
       return
@@ -284,7 +285,8 @@ export function useDecisionDraft({
   const policyReason = detail.currentPolicyEvaluation?.reason ?? null
   const activeAssetId = detail.currentConclusion?.assetId ?? ""
   const observed = observedRepresentation(detail)
-  const suggestedMode = activeAssetId.length > 0 ? "existing" : suggestedModeForReason(policyReason)
+  const suggestedMode =
+    suggestedModeForReason(policyReason) ?? (activeAssetId.length > 0 ? "existing" : null)
 
   const [mode, setModeState] = useState<DraftMode | null>(suggestedMode)
   const [assetId, setAssetId] = useState(activeAssetId)
@@ -494,6 +496,7 @@ export function useDecisionDraft({
         expectedResultingAssetId: preview.response.resultingAssetId,
         expectedAssetOutcome: preview.response.assetOutcome,
         expectedRepresentationOutcome: preview.response.representationOutcome,
+        expectedAffectedObservationRevisions: preview.response.affectedObservationRevisions,
       })
       onDetailChange(nextDetail)
       setPreview(null)

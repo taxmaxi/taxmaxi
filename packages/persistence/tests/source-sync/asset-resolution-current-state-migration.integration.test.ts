@@ -59,10 +59,10 @@ describe("asset resolution current-state migration", () => {
           decimals: 8,
         })
         const observedAt = new Date("2026-08-25T12:00:00.000Z")
-        const [trusted, automatic, human] = yield* db
+        const [trusted, automatic, human, legacyReversal] = yield* db
           .insert(schema.providerAssets)
           .values(
-            ["trusted", "automatic", "human"].map((suffix) => ({
+            ["trusted", "automatic", "human", "legacy-reversal"].map((suffix) => ({
               provider: "coinbase",
               providerAssetId: `migration-${suffix}`,
               currencyCode: "BTC",
@@ -74,12 +74,17 @@ describe("asset resolution current-state migration", () => {
             }))
           )
           .returning({ id: schema.providerAssets.id })
-        if (trusted === undefined || automatic === undefined || human === undefined) {
+        if (
+          trusted === undefined ||
+          automatic === undefined ||
+          human === undefined ||
+          legacyReversal === undefined
+        ) {
           return yield* Effect.die("Failed to seed migration observations")
         }
 
         yield* db.insert(schema.providerAssetMappings).values(
-          [trusted.id, automatic.id, human.id].map((providerAssetRowId) => ({
+          [trusted.id, automatic.id, human.id, legacyReversal.id].map((providerAssetRowId) => ({
             providerAssetRowId,
             mappingKind: "asset" as const,
             canonicalAssetId: MIGRATION_ASSET_ID,
@@ -114,6 +119,34 @@ describe("asset resolution current-state migration", () => {
             actor: "admin:migration-test",
           })
           .returning({ id: schema.assetResolutionDecisions.id })
+        const [supersededExclusion] = yield* db
+          .insert(schema.assetResolutionDecisions)
+          .values({
+            providerAssetRowId: legacyReversal.id,
+            evidenceRevision: 2,
+            policyRevision: "automatic.1",
+            outcome: "excluded",
+            reason: "provider_artifact",
+            actor: "system:asset-resolution-policy",
+          })
+          .returning({ id: schema.assetResolutionDecisions.id })
+        if (supersededExclusion === undefined) {
+          return yield* Effect.die("Failed to seed legacy exclusion")
+        }
+        const [legacyReversalConclusion] = yield* db
+          .insert(schema.assetResolutionDecisions)
+          .values({
+            providerAssetRowId: legacyReversal.id,
+            evidenceRevision: 2,
+            policyRevision: "manual.legacy-reversal.1",
+            outcome: "attach",
+            assetId: MIGRATION_ASSET_ID,
+            assetRepresentationId: MIGRATION_REPRESENTATION_ID,
+            supersedesDecisionId: supersededExclusion.id,
+            reason: "manual_exclusion_reversal",
+            actor: "admin:migration-test",
+          })
+          .returning({ id: schema.assetResolutionDecisions.id })
         const laterEvaluations = yield* db
           .insert(schema.assetResolutionDecisions)
           .values(
@@ -130,7 +163,11 @@ describe("asset resolution current-state migration", () => {
             id: schema.assetResolutionDecisions.id,
             providerAssetRowId: schema.assetResolutionDecisions.providerAssetRowId,
           })
-        if (automaticConclusion === undefined || humanConclusion === undefined) {
+        if (
+          automaticConclusion === undefined ||
+          humanConclusion === undefined ||
+          legacyReversalConclusion === undefined
+        ) {
           return yield* Effect.die("Failed to seed migration decisions")
         }
 
@@ -183,6 +220,13 @@ describe("asset resolution current-state migration", () => {
           currentPolicyEvaluationId: laterEvaluations.find(
             ({ providerAssetRowId }) => providerAssetRowId === human.id
           )?.id,
+        })
+        expect(
+          states.find(({ providerAssetRowId }) => providerAssetRowId === legacyReversal.id)
+        ).toEqual({
+          providerAssetRowId: legacyReversal.id,
+          currentConclusionId: legacyReversalConclusion.id,
+          currentPolicyEvaluationId: supersededExclusion.id,
         })
       })
     )

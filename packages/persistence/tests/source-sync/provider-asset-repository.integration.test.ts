@@ -1,4 +1,4 @@
-import { and, eq, sql } from "drizzle-orm"
+import { eq, sql } from "drizzle-orm"
 import * as Deferred from "effect/Deferred"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
@@ -22,7 +22,9 @@ import {
 } from "../support/integration-test-kit.ts"
 import {
   AssetResolutionJobRepository,
+  type AssetResolutionHumanConclusionRecord,
   ProviderAssetRepository,
+  type ProviderAssetRecord,
   SourceNormalizationRepository,
   SyncEngineStorageError,
   SyncEngineTransaction,
@@ -180,6 +182,38 @@ const makeExcludedDecision = (providerAssetRowId: string) => ({
   reason: "explicit_banned_verdict",
   evidence: [],
   actor: "system:asset-resolution-policy",
+})
+
+const makeApprovalConclusion = ({
+  providerAsset,
+  assetRepresentationId,
+}: {
+  readonly providerAsset: ProviderAssetRecord
+  readonly assetRepresentationId: string | null
+}): AssetResolutionHumanConclusionRecord => ({
+  providerAssetRowId: providerAsset.id,
+  evidenceRevision: providerAsset.evidenceRevision,
+  policyRevision: "test.manual-approval.1",
+  claim: {
+    _tag: "identity",
+    assetId: TEST_BTC_ASSET_ID,
+    newAsset: null,
+    representation:
+      assetRepresentationId === null
+        ? null
+        : {
+            blockchain: "bitcoin",
+            type: "token",
+            contractAddress: "sync-engine-btc-fixture",
+            mintAddress: null,
+            decimals: 8,
+          },
+  },
+  assetId: TEST_BTC_ASSET_ID,
+  assetRepresentationId,
+  rationale: "Approved by the repository integration test.",
+  evidence: [],
+  actor: "admin:repository-integration-test",
 })
 
 const scheduleResolutionJob = async (suffix: string) => {
@@ -390,6 +424,38 @@ describe("ProviderAssetRepositoryLive", () => {
         name: "Bitcoin",
         payload: { code: "BTC", asset_id: "btc-provider-asset" },
       })
+      const policyEvaluationId = await runPg(
+        Effect.gen(function* () {
+          const db = yield* drizzle
+          const [providerAsset] = yield* db
+            .select({ id: schema.providerAssets.id })
+            .from(schema.providerAssets)
+            .where(eq(schema.providerAssets.providerAssetId, "btc-provider-asset"))
+          if (providerAsset === undefined) {
+            return yield* Effect.die("Expected provider asset for policy pointer fixture")
+          }
+          const [policyEvaluation] = yield* db
+            .insert(schema.assetResolutionDecisions)
+            .values({
+              providerAssetRowId: providerAsset.id,
+              evidenceRevision: 1,
+              policyRevision: "test-policy.unchanged-upsert.1",
+              outcome: "pending",
+              reason: "display_collision",
+              actor: "policy:test-policy.unchanged-upsert.1",
+            })
+            .returning({ id: schema.assetResolutionDecisions.id })
+          if (policyEvaluation === undefined) {
+            return yield* Effect.die("Expected policy evaluation fixture")
+          }
+          yield* db.insert(schema.assetResolutionCurrentState).values({
+            providerAssetRowId: providerAsset.id,
+            currentConclusionId: null,
+            currentPolicyEvaluationId: policyEvaluation.id,
+          })
+          return policyEvaluation.id
+        })
+      )
       await upsertBtc({
         name: "Bitcoin",
         payload: { code: "BTC", asset_id: "btc-provider-asset" },
@@ -399,8 +465,16 @@ describe("ProviderAssetRepositoryLive", () => {
         Effect.gen(function* () {
           const db = yield* drizzle
           const [row] = yield* db
-            .select({ evidenceRevision: schema.providerAssets.evidenceRevision })
+            .select({
+              evidenceRevision: schema.providerAssets.evidenceRevision,
+              currentPolicyEvaluationId:
+                schema.assetResolutionCurrentState.currentPolicyEvaluationId,
+            })
             .from(schema.providerAssets)
+            .leftJoin(
+              schema.assetResolutionCurrentState,
+              eq(schema.assetResolutionCurrentState.providerAssetRowId, schema.providerAssets.id)
+            )
             .where(eq(schema.providerAssets.providerAssetId, "btc-provider-asset"))
             .limit(1)
           return row ?? null
@@ -424,7 +498,10 @@ describe("ProviderAssetRepositoryLive", () => {
         })
       )
 
-      expect(afterUnchanged).toEqual({ evidenceRevision: 1 })
+      expect(afterUnchanged).toEqual({
+        evidenceRevision: 1,
+        currentPolicyEvaluationId: policyEvaluationId,
+      })
       expect(afterChanged).toEqual({ evidenceRevision: 2 })
     })
 
@@ -668,7 +745,10 @@ describe("ProviderAssetRepositoryLive", () => {
       expect(before?.currentConclusionId).not.toBeNull()
       expect(before?.currentPolicyEvaluationId).toBe(before?.currentConclusionId)
       expect(state.jobs).toEqual([{ evidenceRevision: 2 }])
-      expect(state.current).toEqual(before)
+      expect(state.current).toEqual({
+        currentConclusionId: before?.currentConclusionId,
+        currentPolicyEvaluationId: null,
+      })
       expect(state.evidence).toEqual([
         {
           authority: "trusted_provider_mapping",
@@ -802,6 +882,7 @@ describe("ProviderAssetRepositoryLive", () => {
                 reviewerNotes: "Approved",
                 sourceNotes: "Approved from transfer evidence",
               },
+              conclusion: makeApprovalConclusion({ providerAsset, assetRepresentationId: null }),
               expectedObservedRepresentations: [],
               expectedProviderAssetRetrievedAt: providerAsset.retrievedAt,
             })
@@ -849,12 +930,12 @@ describe("ProviderAssetRepositoryLive", () => {
         canonicalAssetId: TEST_BTC_ASSET_ID,
       })
       expect(state.jobs).toEqual([{ mode: "sync", status: "pending", followUpMode: "replay" }])
-      expect(state.rematerializations).toEqual([
-        { decisionId: pendingPolicyEvaluationId, status: "pending" },
-      ])
+      expect(state.rematerializations).toHaveLength(1)
+      expect(state.rematerializations[0]?.status).toBe("pending")
+      expect(state.rematerializations[0]?.decisionId).not.toBe(pendingPolicyEvaluationId)
     })
 
-    it("creates a replay job when approval has no active owner", async () => {
+    it("rejects approval when no current conclusion owns the target", async () => {
       const providerAsset = await seedPendingApprovalAsset("no-active-owner")
 
       const result = await runRepository(
@@ -873,12 +954,12 @@ describe("ProviderAssetRepositoryLive", () => {
             expectedObservedRepresentations: [],
             expectedProviderAssetRetrievedAt: providerAsset.retrievedAt,
           })
-        )
+        ).pipe(Effect.result)
       )
-      const jobs = await runPg(
+      const state = await runPg(
         Effect.gen(function* () {
           const db = yield* drizzle
-          return yield* db
+          const jobs = yield* db
             .select({
               mode: schema.processingJobs.mode,
               status: schema.processingJobs.status,
@@ -886,11 +967,312 @@ describe("ProviderAssetRepositoryLive", () => {
             })
             .from(schema.processingJobs)
             .where(eq(schema.processingJobs.sourceId, TEST_SOURCE_ID))
+          const [mapping] = yield* db
+            .select({ status: schema.providerAssetMappings.mappingStatus })
+            .from(schema.providerAssetMappings)
+            .where(eq(schema.providerAssetMappings.providerAssetRowId, providerAsset.id))
+          const currentState = yield* db
+            .select({ providerAssetRowId: schema.assetResolutionCurrentState.providerAssetRowId })
+            .from(schema.assetResolutionCurrentState)
+            .where(eq(schema.assetResolutionCurrentState.providerAssetRowId, providerAsset.id))
+          return { currentState, jobs, mapping }
         })
       )
 
-      expect(result.mappingChanged).toBe(true)
-      expect(jobs).toEqual([{ mode: "replay", status: "pending", followUpMode: null }])
+      expect(result).toMatchObject({
+        _tag: "Failure",
+        failure: {
+          operation:
+            "providerAssetRepository.approveProviderAssetMappingAndRequestReplay.currentConclusion",
+        },
+      })
+      expect(state.mapping?.status).toBe("pending_review")
+      expect(state.currentState).toEqual([])
+      expect(state.jobs).toEqual([])
+    })
+
+    it("rejects inconsistent human conclusions without writing approval state", async () => {
+      const providerAsset = await seedPendingApprovalAsset("invalid-human-conclusion")
+      const validConclusion = makeApprovalConclusion({
+        providerAsset,
+        assetRepresentationId: null,
+      })
+      const invalidConclusions: ReadonlyArray<AssetResolutionHumanConclusionRecord> = [
+        {
+          ...validConclusion,
+          claim: {
+            ...validConclusion.claim,
+            assetId: "00000000-0000-4000-8000-000000000299",
+          },
+        },
+        {
+          ...validConclusion,
+          claim: {
+            ...validConclusion.claim,
+            representation: {
+              blockchain: "bitcoin",
+              type: "token",
+              contractAddress: "different-representation",
+              mintAddress: null,
+              decimals: 8,
+            },
+          },
+        },
+        { ...validConclusion, evidenceRevision: providerAsset.evidenceRevision + 1 },
+      ]
+
+      const results = await Promise.all(
+        invalidConclusions.map((conclusion) =>
+          runRepository(
+            Effect.flatMap(ProviderAssetRepository, (repository) =>
+              repository.approveProviderAssetMappingAndRequestReplay({
+                mapping: {
+                  providerAssetRowId: providerAsset.id,
+                  mappingKind: "asset",
+                  canonicalAssetId: TEST_BTC_ASSET_ID,
+                  assetRepresentationId: null,
+                  canonicalFiatCurrency: null,
+                  mappingStatus: "approved",
+                  reviewerNotes: "Approved",
+                  sourceNotes: "Approved from transfer evidence",
+                },
+                conclusion,
+                expectedObservedRepresentations: [],
+                expectedProviderAssetRetrievedAt: providerAsset.retrievedAt,
+              })
+            ).pipe(Effect.result)
+          )
+        )
+      )
+      const state = await runPg(
+        Effect.gen(function* () {
+          const db = yield* drizzle
+          const [mapping] = yield* db
+            .select({ status: schema.providerAssetMappings.mappingStatus })
+            .from(schema.providerAssetMappings)
+            .where(eq(schema.providerAssetMappings.providerAssetRowId, providerAsset.id))
+          const decisions = yield* db
+            .select({ id: schema.assetResolutionDecisions.id })
+            .from(schema.assetResolutionDecisions)
+            .where(eq(schema.assetResolutionDecisions.providerAssetRowId, providerAsset.id))
+          const currentState = yield* db
+            .select({ id: schema.assetResolutionCurrentState.providerAssetRowId })
+            .from(schema.assetResolutionCurrentState)
+            .where(eq(schema.assetResolutionCurrentState.providerAssetRowId, providerAsset.id))
+          const jobs = yield* db
+            .select({ id: schema.processingJobs.id })
+            .from(schema.processingJobs)
+            .where(eq(schema.processingJobs.sourceId, TEST_SOURCE_ID))
+          return { currentState, decisions, jobs, mapping }
+        })
+      )
+
+      expect(results).toHaveLength(3)
+      expect(
+        results.every(
+          (result) =>
+            result._tag === "Failure" &&
+            result.failure.operation ===
+              "providerAssetRepository.approveProviderAssetMappingAndRequestReplay.conclusion"
+        )
+      ).toBe(true)
+      expect(state.mapping?.status).toBe("pending_review")
+      expect(state.decisions).toEqual([])
+      expect(state.currentState).toEqual([])
+      expect(state.jobs).toEqual([])
+    })
+
+    it("rejects approval when the current conclusion owns a different target", async () => {
+      const providerAsset = await seedPendingApprovalAsset("different-active-owner")
+      const currentConclusionId = await runPg(
+        Effect.gen(function* () {
+          const db = yield* drizzle
+          const [currentConclusion] = yield* db
+            .insert(schema.assetResolutionDecisions)
+            .values({
+              providerAssetRowId: providerAsset.id,
+              evidenceRevision: providerAsset.evidenceRevision,
+              policyRevision: "test.different-current-conclusion.1",
+              outcome: "identity",
+              assetId: TEST_BTC_ASSET_ID,
+              assetRepresentationId: TEST_BTC_REPRESENTATION_ID,
+              humanClaim: {
+                _tag: "identity",
+                assetId: TEST_BTC_ASSET_ID,
+                representation: { assetRepresentationId: TEST_BTC_REPRESENTATION_ID },
+              },
+              rationale: "Seed a conclusion for a different approved target.",
+              actor: "admin:repository-integration-test",
+            })
+            .returning({ id: schema.assetResolutionDecisions.id })
+          if (currentConclusion === undefined) {
+            return yield* Effect.die("Expected current conclusion fixture")
+          }
+          yield* db.insert(schema.assetResolutionCurrentState).values({
+            providerAssetRowId: providerAsset.id,
+            currentConclusionId: currentConclusion.id,
+            currentPolicyEvaluationId: null,
+          })
+          return currentConclusion.id
+        })
+      )
+
+      const result = await runRepository(
+        Effect.flatMap(ProviderAssetRepository, (repository) =>
+          repository.approveProviderAssetMappingAndRequestReplay({
+            mapping: {
+              providerAssetRowId: providerAsset.id,
+              mappingKind: "asset",
+              canonicalAssetId: TEST_BTC_ASSET_ID,
+              assetRepresentationId: null,
+              canonicalFiatCurrency: null,
+              mappingStatus: "approved",
+              reviewerNotes: "Approved",
+              sourceNotes: "Approved from transfer evidence",
+            },
+            expectedObservedRepresentations: [],
+            expectedProviderAssetRetrievedAt: providerAsset.retrievedAt,
+          })
+        ).pipe(Effect.result)
+      )
+      const state = await runPg(
+        Effect.gen(function* () {
+          const db = yield* drizzle
+          const [mapping] = yield* db
+            .select({ status: schema.providerAssetMappings.mappingStatus })
+            .from(schema.providerAssetMappings)
+            .where(eq(schema.providerAssetMappings.providerAssetRowId, providerAsset.id))
+          const [currentState] = yield* db
+            .select({
+              currentConclusionId: schema.assetResolutionCurrentState.currentConclusionId,
+              currentPolicyEvaluationId:
+                schema.assetResolutionCurrentState.currentPolicyEvaluationId,
+            })
+            .from(schema.assetResolutionCurrentState)
+            .where(eq(schema.assetResolutionCurrentState.providerAssetRowId, providerAsset.id))
+          const decisions = yield* db
+            .select({ id: schema.assetResolutionDecisions.id })
+            .from(schema.assetResolutionDecisions)
+            .where(eq(schema.assetResolutionDecisions.providerAssetRowId, providerAsset.id))
+          const rematerializations = yield* db
+            .select({ id: schema.assetDecisionRematerializations.decisionId })
+            .from(schema.assetDecisionRematerializations)
+            .where(eq(schema.assetDecisionRematerializations.sourceId, TEST_SOURCE_ID))
+          const jobs = yield* db
+            .select({ id: schema.processingJobs.id })
+            .from(schema.processingJobs)
+            .where(eq(schema.processingJobs.sourceId, TEST_SOURCE_ID))
+          return { currentState, decisions, jobs, mapping, rematerializations }
+        })
+      )
+
+      expect(result).toMatchObject({
+        _tag: "Failure",
+        failure: {
+          operation:
+            "providerAssetRepository.approveProviderAssetMappingAndRequestReplay.currentConclusion",
+        },
+      })
+      expect(state.mapping?.status).toBe("pending_review")
+      expect(state.currentState).toEqual({
+        currentConclusionId,
+        currentPolicyEvaluationId: null,
+      })
+      expect(state.decisions).toEqual([{ id: currentConclusionId }])
+      expect(state.rematerializations).toEqual([])
+      expect(state.jobs).toEqual([])
+    })
+
+    it("rejects chainless approval when the current conclusion owns a different asset", async () => {
+      const providerAsset = await seedPendingApprovalAsset("different-chainless-asset")
+      const currentConclusionId = await runPg(
+        Effect.gen(function* () {
+          const db = yield* drizzle
+          const [otherAsset] = yield* db
+            .insert(schema.assets)
+            .values({ name: "Different Chainless Asset", symbol: "DCA", type: "fungible" })
+            .returning({ id: schema.assets.id })
+          if (otherAsset === undefined) {
+            return yield* Effect.die("Expected alternate asset fixture")
+          }
+          const [currentConclusion] = yield* db
+            .insert(schema.assetResolutionDecisions)
+            .values({
+              providerAssetRowId: providerAsset.id,
+              evidenceRevision: providerAsset.evidenceRevision,
+              policyRevision: "test.different-chainless-asset.1",
+              outcome: "identity",
+              assetId: otherAsset.id,
+              assetRepresentationId: null,
+              humanClaim: {
+                _tag: "identity",
+                assetId: otherAsset.id,
+                newAsset: null,
+                representation: null,
+              },
+              rationale: "Seed a conclusion for another chainless asset.",
+              actor: "admin:repository-integration-test",
+            })
+            .returning({ id: schema.assetResolutionDecisions.id })
+          if (currentConclusion === undefined) {
+            return yield* Effect.die("Expected chainless conclusion fixture")
+          }
+          yield* db.insert(schema.assetResolutionCurrentState).values({
+            providerAssetRowId: providerAsset.id,
+            currentConclusionId: currentConclusion.id,
+            currentPolicyEvaluationId: null,
+          })
+          return currentConclusion.id
+        })
+      )
+
+      const result = await runRepository(
+        Effect.flatMap(ProviderAssetRepository, (repository) =>
+          repository.approveProviderAssetMappingAndRequestReplay({
+            mapping: {
+              providerAssetRowId: providerAsset.id,
+              mappingKind: "asset",
+              canonicalAssetId: TEST_BTC_ASSET_ID,
+              assetRepresentationId: null,
+              canonicalFiatCurrency: null,
+              mappingStatus: "approved",
+              reviewerNotes: "Approved",
+              sourceNotes: "Approved from transfer evidence",
+            },
+            expectedObservedRepresentations: [],
+            expectedProviderAssetRetrievedAt: providerAsset.retrievedAt,
+          })
+        ).pipe(Effect.result)
+      )
+      const state = await runPg(
+        Effect.gen(function* () {
+          const db = yield* drizzle
+          const [mapping] = yield* db
+            .select({ status: schema.providerAssetMappings.mappingStatus })
+            .from(schema.providerAssetMappings)
+            .where(eq(schema.providerAssetMappings.providerAssetRowId, providerAsset.id))
+          const decisions = yield* db
+            .select({ id: schema.assetResolutionDecisions.id })
+            .from(schema.assetResolutionDecisions)
+            .where(eq(schema.assetResolutionDecisions.providerAssetRowId, providerAsset.id))
+          const jobs = yield* db
+            .select({ id: schema.processingJobs.id })
+            .from(schema.processingJobs)
+            .where(eq(schema.processingJobs.sourceId, TEST_SOURCE_ID))
+          return { decisions, jobs, mapping }
+        })
+      )
+
+      expect(result).toMatchObject({
+        _tag: "Failure",
+        failure: {
+          operation:
+            "providerAssetRepository.approveProviderAssetMappingAndRequestReplay.currentConclusion",
+        },
+      })
+      expect(state.mapping?.status).toBe("pending_review")
+      expect(state.decisions).toEqual([{ id: currentConclusionId }])
+      expect(state.jobs).toEqual([])
     })
 
     it("replays provider sources even when the asset has no provider-transfer row", async () => {
@@ -957,6 +1339,7 @@ describe("ProviderAssetRepositoryLive", () => {
               reviewerNotes: "Approved",
               sourceNotes: "Approved for a non-transfer transaction",
             },
+            conclusion: makeApprovalConclusion({ providerAsset, assetRepresentationId: null }),
             expectedObservedRepresentations: [],
             expectedProviderAssetRetrievedAt: providerAsset.retrievedAt,
           })
@@ -1065,6 +1448,7 @@ describe("ProviderAssetRepositoryLive", () => {
               reviewerNotes: "Approved legacy reviewed asset",
               sourceNotes: "Approved legacy reviewed asset",
             },
+            conclusion: makeApprovalConclusion({ providerAsset, assetRepresentationId: null }),
             expectedObservedRepresentations: [],
             expectedProviderAssetRetrievedAt: providerAsset.retrievedAt,
           })
@@ -1126,6 +1510,7 @@ describe("ProviderAssetRepositoryLive", () => {
               reviewerNotes: "Approved before source use was recorded",
               sourceNotes: "Approved before source use was recorded",
             },
+            conclusion: makeApprovalConclusion({ providerAsset, assetRepresentationId: null }),
             expectedObservedRepresentations: [],
             expectedProviderAssetRetrievedAt: providerAsset.retrievedAt,
           })
@@ -1173,13 +1558,12 @@ describe("ProviderAssetRepositoryLive", () => {
       expect(recordedAgain).toBe(0)
       expect(state.jobs).toHaveLength(1)
       expect(state.jobs[0]?.mode).toBe("replay")
-      expect(state.rematerializations).toEqual([
-        {
-          decisionId: pendingPolicyEvaluationId,
-          processingJobId: state.jobs[0]?.id,
-          status: "pending",
-        },
-      ])
+      expect(state.rematerializations).toHaveLength(1)
+      expect(state.rematerializations[0]).toMatchObject({
+        processingJobId: state.jobs[0]?.id,
+        status: "pending",
+      })
+      expect(state.rematerializations[0]?.decisionId).not.toBe(pendingPolicyEvaluationId)
     })
 
     it("requests replay when a source use is recorded after exclusion", async () => {
@@ -1232,7 +1616,6 @@ describe("ProviderAssetRepositoryLive", () => {
           const rematerializations = yield* db
             .select({
               decisionOutcome: schema.assetResolutionDecisions.outcome,
-              decisionStatus: schema.assetResolutionDecisions.status,
               processingJobId: schema.assetDecisionRematerializations.processingJobId,
               sourceId: schema.assetDecisionRematerializations.sourceId,
             })
@@ -1259,7 +1642,6 @@ describe("ProviderAssetRepositoryLive", () => {
       expect(jobs.rematerializations).toEqual([
         {
           decisionOutcome: "excluded",
-          decisionStatus: "active",
           processingJobId: jobs.replayJobs[0]?.id,
           sourceId: TEST_SOURCE_ID,
         },
@@ -1286,7 +1668,6 @@ describe("ProviderAssetRepositoryLive", () => {
           const db = yield* drizzle
           return yield* db
             .select({
-              decisionStatus: schema.assetResolutionDecisions.status,
               decisionOutcome: schema.assetResolutionDecisions.outcome,
               sourceId: schema.assetDecisionRematerializations.sourceId,
               jobStatus: schema.processingJobs.status,
@@ -1308,7 +1689,6 @@ describe("ProviderAssetRepositoryLive", () => {
 
       expect(work).toEqual([
         {
-          decisionStatus: "active",
           decisionOutcome: "excluded",
           sourceId: TEST_SOURCE_ID,
           jobStatus: "pending",
@@ -1403,12 +1783,7 @@ describe("ProviderAssetRepositoryLive", () => {
           const [exclusionDecision] = yield* db
             .select({ id: schema.assetResolutionDecisions.id })
             .from(schema.assetResolutionDecisions)
-            .where(
-              and(
-                eq(schema.assetResolutionDecisions.providerAssetRowId, providerAsset.id),
-                eq(schema.assetResolutionDecisions.status, "active")
-              )
-            )
+            .where(eq(schema.assetResolutionDecisions.providerAssetRowId, providerAsset.id))
             .limit(1)
           const [linkedEvidenceOwner] = yield* db
             .insert(schema.providerAssets)
@@ -1783,6 +2158,10 @@ describe("ProviderAssetRepositoryLive", () => {
               reviewerNotes: "Approved Bitcoin representation",
               sourceNotes: "Exact evidence regression fixture",
             },
+            conclusion: makeApprovalConclusion({
+              providerAsset,
+              assetRepresentationId: TEST_BTC_REPRESENTATION_ID,
+            }),
             expectedObservedRepresentations: [],
             expectedProviderAssetRetrievedAt: providerAsset.retrievedAt,
           })
@@ -1820,6 +2199,10 @@ describe("ProviderAssetRepositoryLive", () => {
               reviewerNotes: "Approved Bitcoin representation",
               sourceNotes: "Partial evidence regression fixture",
             },
+            conclusion: makeApprovalConclusion({
+              providerAsset,
+              assetRepresentationId: TEST_BTC_REPRESENTATION_ID,
+            }),
             expectedObservedRepresentations: [],
             expectedProviderAssetRetrievedAt: providerAsset.retrievedAt,
           })
@@ -1872,6 +2255,10 @@ describe("ProviderAssetRepositoryLive", () => {
               reviewerNotes: "Approved Bitcoin representation",
               sourceNotes: "Mismatched evidence regression fixture",
             },
+            conclusion: makeApprovalConclusion({
+              providerAsset,
+              assetRepresentationId: TEST_BTC_REPRESENTATION_ID,
+            }),
             expectedObservedRepresentations: [],
             expectedProviderAssetRetrievedAt: providerAsset.retrievedAt,
           })
@@ -1910,6 +2297,10 @@ describe("ProviderAssetRepositoryLive", () => {
               reviewerNotes: "Approved Bitcoin representation",
               sourceNotes: "Approved before conflicting source evidence persisted",
             },
+            conclusion: makeApprovalConclusion({
+              providerAsset,
+              assetRepresentationId: TEST_BTC_REPRESENTATION_ID,
+            }),
             expectedObservedRepresentations: [],
             expectedProviderAssetRetrievedAt: providerAsset.retrievedAt,
           })
@@ -1976,6 +2367,10 @@ describe("ProviderAssetRepositoryLive", () => {
               reviewerNotes: "Approval won before persistence",
               sourceNotes: "Concurrency regression fixture",
             },
+            conclusion: makeApprovalConclusion({
+              providerAsset,
+              assetRepresentationId: TEST_BTC_REPRESENTATION_ID,
+            }),
             expectedObservedRepresentations: [],
             expectedProviderAssetRetrievedAt: providerAsset.retrievedAt,
           })
@@ -2247,6 +2642,10 @@ describe("ProviderAssetRepositoryLive", () => {
                 reviewerNotes: "Conflicting approval must not win",
                 sourceNotes: "Normalization-first race fixture",
               },
+              conclusion: makeApprovalConclusion({
+                providerAsset,
+                assetRepresentationId: TEST_BTC_REPRESENTATION_ID,
+              }),
               expectedObservedRepresentations: [],
               expectedProviderAssetRetrievedAt: providerAsset.retrievedAt,
             })
@@ -2299,6 +2698,7 @@ describe("ProviderAssetRepositoryLive", () => {
                 reviewerNotes: "Approved before active source use",
                 sourceNotes: "Approved before active source use",
               },
+              conclusion: makeApprovalConclusion({ providerAsset, assetRepresentationId: null }),
               expectedObservedRepresentations: [],
               expectedProviderAssetRetrievedAt: providerAsset.retrievedAt,
             })
@@ -2396,6 +2796,7 @@ describe("ProviderAssetRepositoryLive", () => {
               reviewerNotes: "Source-first lock ordering",
               sourceNotes: "Source-first lock ordering",
             },
+            conclusion: makeApprovalConclusion({ providerAsset, assetRepresentationId: null }),
             expectedObservedRepresentations: [],
             expectedProviderAssetRetrievedAt: providerAsset.retrievedAt,
           })
@@ -2532,6 +2933,7 @@ describe("ProviderAssetRepositoryLive", () => {
               reviewerNotes: "Approved",
               sourceNotes: "Approved from transfer evidence",
             },
+            conclusion: makeApprovalConclusion({ providerAsset, assetRepresentationId: null }),
             expectedObservedRepresentations: [],
             expectedProviderAssetRetrievedAt: providerAsset.retrievedAt,
           })
@@ -2571,6 +2973,7 @@ describe("ProviderAssetRepositoryLive", () => {
               reviewerNotes: "Approved before source use",
               sourceNotes: "Approved before source use",
             },
+            conclusion: makeApprovalConclusion({ providerAsset, assetRepresentationId: null }),
             expectedObservedRepresentations: [],
             expectedProviderAssetRetrievedAt: providerAsset.retrievedAt,
           })
@@ -3132,6 +3535,7 @@ describe("ProviderAssetRepositoryLive", () => {
         Effect.flatMap(ProviderAssetRepository, (repository) =>
           repository.recordAssetResolutionPolicyEvaluation({
             decision: makePendingDecision({ providerAssetRowId }),
+            requireCurrentEvidenceRevision: true,
           })
         )
       )
@@ -3144,6 +3548,7 @@ describe("ProviderAssetRepositoryLive", () => {
               providerAssetRowId,
               reason: "non_exact_platform_match",
             }),
+            requireCurrentEvidenceRevision: true,
           })
         )
       )
@@ -3159,6 +3564,57 @@ describe("ProviderAssetRepositoryLive", () => {
         isCurrentPolicyEvaluation: true,
         reason: "missing_existing_economic_asset",
       })
+    })
+
+    it("rejects stale job evaluations without persisting decision or evidence history", async () => {
+      const { providerAssetRowId } = await scheduleResolutionJob("history-stale-job")
+      await runPg(
+        Effect.gen(function* () {
+          const db = yield* drizzle
+          yield* db
+            .update(schema.providerAssets)
+            .set({ evidenceRevision: 2 })
+            .where(eq(schema.providerAssets.id, providerAssetRowId))
+        })
+      )
+
+      const result = await runRepository(
+        Effect.flatMap(ProviderAssetRepository, (repository) =>
+          repository.recordAssetResolutionPolicyEvaluation({
+            decision: {
+              ...makePendingDecision({ providerAssetRowId }),
+              evidence: [
+                {
+                  authority: "registry",
+                  claimKind: "stale_job_fixture",
+                  sourceLocator: "test://stale-job",
+                  retrievedAt: new Date("2026-08-26T20:00:00.000Z"),
+                  evidenceRevision: 1,
+                  decodedClaim: { revision: 1 },
+                  rawPayload: { revision: 1 },
+                },
+              ],
+            },
+            requireCurrentEvidenceRevision: true,
+          })
+        )
+      )
+      const persisted = await runPg(
+        Effect.gen(function* () {
+          const db = yield* drizzle
+          const decisions = yield* db
+            .select({ id: schema.assetResolutionDecisions.id })
+            .from(schema.assetResolutionDecisions)
+            .where(eq(schema.assetResolutionDecisions.providerAssetRowId, providerAssetRowId))
+          const evidence = yield* db
+            .select({ id: schema.assetResolutionEvidence.id })
+            .from(schema.assetResolutionEvidence)
+          return { decisions, evidence }
+        })
+      )
+
+      expect(result).toEqual({ recorded: false, stale: true })
+      expect(persisted).toEqual({ decisions: [], evidence: [] })
     })
 
     it("preserves legacy automatic supersession rows with the same evaluation key", async () => {
@@ -3186,7 +3642,6 @@ describe("ProviderAssetRepositoryLive", () => {
             evidenceRevision: 1,
             policyRevision: "2026-08-19.attach-only.1",
             outcome: "pending",
-            status: "active",
             supersedesDecisionId: original.id,
             reason: "non_exact_platform_match",
             actor: "system:attach-only-policy",
@@ -3594,7 +4049,6 @@ describe("ProviderAssetRepositoryLive", () => {
             evidenceRevision: 1,
             policyRevision: "2026-08-19.attach-only.1",
             outcome: "pending",
-            status: "active",
             reason: "missing_existing_economic_asset",
             actor: "test:direct-insert",
           })

@@ -43,13 +43,13 @@ import {
   AssetResolutionJobRepository,
   ProviderAssetRepository,
   SyncEngineTransaction,
+  SyncEngineStorageError,
   type AssetResolutionPolicyEvaluationRecord,
   type AssetResolutionEvidenceRecord,
   type AssetResolutionJobExecutionResult,
   type AssetResolutionJobExecutorError,
   type AssetResolutionJobExecutorShape,
   type ProviderAssetObservedRepresentationRecord,
-  type SyncEngineStorageError,
 } from "../services/index.ts"
 import {
   AssetResolutionJupiterClient,
@@ -494,11 +494,16 @@ const make = Effect.gen(function* () {
   }: {
     readonly jobId: string
     readonly record: AssetResolutionPolicyEvaluationRecord
-  }): Effect.Effect<boolean, SyncEngineStorageError> =>
+  }): Effect.Effect<"recorded" | "replayed" | "stale", SyncEngineStorageError> =>
     Effect.gen(function* () {
-      const { recorded } = yield* providerAssetRepository.recordAssetResolutionPolicyEvaluation({
-        decision: record,
-      })
+      const { recorded, stale } =
+        yield* providerAssetRepository.recordAssetResolutionPolicyEvaluation({
+          decision: record,
+          requireCurrentEvidenceRevision: true,
+        })
+      if (stale === true) {
+        return "stale"
+      }
       if (!recorded) {
         yield* Effect.logInfo(
           {
@@ -510,7 +515,7 @@ const make = Effect.gen(function* () {
           "asset-resolution:decision-replay-detected"
         )
       }
-      return recorded
+      return recorded ? "recorded" : "replayed"
     })
 
   const settleApprovedResolution = ({
@@ -614,15 +619,22 @@ const make = Effect.gen(function* () {
         // New evidence can reopen review, but automatic policy work must not
         // replace a settled global conclusion. Record the policy evaluation
         // and leave the mapping projection untouched for human supersession.
-        const recorded = yield* recordDecision({ jobId, record: decisionRecord })
+        const recordOutcome = yield* recordDecision({ jobId, record: decisionRecord })
         yield* assetResolutionJobRepository.finishResolutionJob({ jobId, status: "completed" })
+        if (recordOutcome === "stale") {
+          return {
+            outcome: "stale",
+            providerAssetRowId,
+            evidenceRevision,
+          } satisfies AssetResolutionJobExecutionResult
+        }
         return {
           outcome:
-            !recorded && decision._tag === "attach"
+            recordOutcome === "replayed" && decision._tag === "attach"
               ? "attached"
-              : !recorded && decision._tag === "create_standalone"
+              : recordOutcome === "replayed" && decision._tag === "create_standalone"
                 ? "created"
-                : !recorded && decision._tag === "excluded"
+                : recordOutcome === "replayed" && decision._tag === "excluded"
                   ? "excluded"
                   : decision._tag === "pending" || decision._tag === "fail_closed"
                     ? decision._tag
@@ -635,11 +647,23 @@ const make = Effect.gen(function* () {
       if (decision._tag === "attach") {
         return yield* syncEngineTransaction.run(
           Effect.gen(function* () {
-            yield* providerAssetRepository.lockProviderAssetApprovalSnapshot({
-              providerAssetRowId,
-              expectedObservedRepresentations: observations,
-              expectedProviderAssetRetrievedAt: providerAsset.retrievedAt,
-            })
+            const approvalSnapshot =
+              yield* providerAssetRepository.lockProviderAssetApprovalSnapshot({
+                providerAssetRowId,
+                expectedObservedRepresentations: observations,
+                expectedProviderAssetRetrievedAt: providerAsset.retrievedAt,
+              })
+            if (approvalSnapshot.providerAsset.evidenceRevision !== evidenceRevision) {
+              yield* assetResolutionJobRepository.finishResolutionJob({
+                jobId,
+                status: "completed",
+              })
+              return {
+                outcome: "stale",
+                providerAssetRowId,
+                evidenceRevision,
+              } satisfies AssetResolutionJobExecutionResult
+            }
 
             const representation = yield* assetRepository.attachRepresentationToExistingAsset({
               assetId: decision.assetKey,
@@ -655,7 +679,7 @@ const make = Effect.gen(function* () {
               },
             })
 
-            yield* recordDecision({
+            const recordOutcome = yield* recordDecision({
               jobId,
               record: {
                 ...decisionRecord,
@@ -663,6 +687,12 @@ const make = Effect.gen(function* () {
                 assetRepresentationId: representation.id,
               },
             })
+            if (recordOutcome === "stale") {
+              return yield* new SyncEngineStorageError({
+                operation: "assetResolutionJobExecutor.recordAttachDecision",
+                cause: "Provider asset evidence changed while the approval lock was held.",
+              })
+            }
 
             yield* settleApprovedResolution({
               jobId,
@@ -687,11 +717,23 @@ const make = Effect.gen(function* () {
       if (decision._tag === "create_standalone") {
         return yield* syncEngineTransaction.run(
           Effect.gen(function* () {
-            yield* providerAssetRepository.lockProviderAssetApprovalSnapshot({
-              providerAssetRowId,
-              expectedObservedRepresentations: observations,
-              expectedProviderAssetRetrievedAt: providerAsset.retrievedAt,
-            })
+            const approvalSnapshot =
+              yield* providerAssetRepository.lockProviderAssetApprovalSnapshot({
+                providerAssetRowId,
+                expectedObservedRepresentations: observations,
+                expectedProviderAssetRetrievedAt: providerAsset.retrievedAt,
+              })
+            if (approvalSnapshot.providerAsset.evidenceRevision !== evidenceRevision) {
+              yield* assetResolutionJobRepository.finishResolutionJob({
+                jobId,
+                status: "completed",
+              })
+              return {
+                outcome: "stale",
+                providerAssetRowId,
+                evidenceRevision,
+              } satisfies AssetResolutionJobExecutionResult
+            }
 
             // The repository records the create_standalone decision inside
             // the same outer transaction as mapping approval and replay.
@@ -740,7 +782,7 @@ const make = Effect.gen(function* () {
         // The exclusion is a final answer. Its immutable decision, mapping
         // projection, and replay request commit together so approval cannot
         // win between separate writes.
-        const { decisionRecorded } =
+        const { decisionRecorded, stale } =
           yield* providerAssetRepository.excludeProviderAssetMappingAndRequestReplay({
             providerAssetRowId,
             decision: decisionRecord,
@@ -748,6 +790,17 @@ const make = Effect.gen(function* () {
             expectedObservedRepresentations: observations,
             expectedProviderAssetRetrievedAt: providerAsset.retrievedAt,
           })
+        if (stale === true) {
+          yield* assetResolutionJobRepository.finishResolutionJob({
+            jobId,
+            status: "completed",
+          })
+          return {
+            outcome: "stale",
+            providerAssetRowId,
+            evidenceRevision,
+          } satisfies AssetResolutionJobExecutionResult
+        }
         if (!decisionRecorded) {
           yield* Effect.logInfo(
             { jobId, providerAssetRowId, evidenceRevision, outcome: decisionRecord.outcome },
@@ -762,10 +815,10 @@ const make = Effect.gen(function* () {
         } satisfies AssetResolutionJobExecutionResult
       }
 
-      yield* recordDecision({ jobId, record: decisionRecord })
+      const recordOutcome = yield* recordDecision({ jobId, record: decisionRecord })
       yield* assetResolutionJobRepository.finishResolutionJob({ jobId, status: "completed" })
       return {
-        outcome: decision._tag,
+        outcome: recordOutcome === "stale" ? "stale" : decision._tag,
         providerAssetRowId,
         evidenceRevision,
       } satisfies AssetResolutionJobExecutionResult

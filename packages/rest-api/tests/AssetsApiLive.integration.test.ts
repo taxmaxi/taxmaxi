@@ -1319,24 +1319,37 @@ describe("AssetsApiLive", () => {
           { providerAssetRowId: firstId, evidenceRevision: 1, status: "completed" },
           { providerAssetRowId: secondId, evidenceRevision: 1, status: "completed" },
         ])
-        yield* db.insert(schema.assetResolutionDecisions).values([
-          {
-            providerAssetRowId: firstId,
-            evidenceRevision: 1,
-            policyRevision: "cursor-precision.1",
-            outcome: "fail_closed",
-            reason: "ownership_conflict",
-            actor: "policy:cursor-precision.1",
-          },
-          {
-            providerAssetRowId: secondId,
-            evidenceRevision: 1,
-            policyRevision: "cursor-precision.1",
-            outcome: "fail_closed",
-            reason: "ownership_conflict",
-            actor: "policy:cursor-precision.1",
-          },
-        ])
+        const decisions = yield* db
+          .insert(schema.assetResolutionDecisions)
+          .values([
+            {
+              providerAssetRowId: firstId,
+              evidenceRevision: 1,
+              policyRevision: "cursor-precision.1",
+              outcome: "fail_closed",
+              reason: "ownership_conflict",
+              actor: "policy:cursor-precision.1",
+            },
+            {
+              providerAssetRowId: secondId,
+              evidenceRevision: 1,
+              policyRevision: "cursor-precision.1",
+              outcome: "fail_closed",
+              reason: "ownership_conflict",
+              actor: "policy:cursor-precision.1",
+            },
+          ])
+          .returning({
+            id: schema.assetResolutionDecisions.id,
+            providerAssetRowId: schema.assetResolutionDecisions.providerAssetRowId,
+          })
+        yield* db.insert(schema.assetResolutionCurrentState).values(
+          decisions.map((decision) => ({
+            providerAssetRowId: decision.providerAssetRowId,
+            currentConclusionId: null,
+            currentPolicyEvaluationId: decision.id,
+          }))
+        )
         yield* db.execute(sql`
           update ${schema.assetResolutionDecisions}
           set created_at = case
@@ -1422,6 +1435,11 @@ describe("AssetsApiLive", () => {
         if (decision === undefined) {
           return yield* Effect.die("Failed to seed API decision")
         }
+        yield* db.insert(schema.assetResolutionCurrentState).values({
+          providerAssetRowId: providerAsset.id,
+          currentConclusionId: null,
+          currentPolicyEvaluationId: decision.id,
+        })
         const [evidence] = yield* db
           .insert(schema.assetResolutionEvidence)
           .values({
@@ -1490,6 +1508,7 @@ describe("AssetsApiLive", () => {
       expectedResultingAssetId: preview.body.resultingAssetId,
       expectedAssetOutcome: preview.body.assetOutcome,
       expectedRepresentationOutcome: preview.body.representationOutcome,
+      expectedAffectedObservationRevisions: preview.body.affectedObservationRevisions,
     }
     const accepted = await Effect.runPromise(
       postAdminJson({

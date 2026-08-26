@@ -548,6 +548,7 @@ export const AssetsApiLive = HttpApiBuilder.group(TaxMaxiApi, "assets", (handler
                 expectedResultingAssetId: payload.expectedResultingAssetId,
                 expectedAssetOutcome: payload.expectedAssetOutcome,
                 expectedRepresentationOutcome: payload.expectedRepresentationOutcome,
+                expectedAffectedObservationRevisions: payload.expectedAffectedObservationRevisions,
               },
               actorId: currentUser.userId,
             })

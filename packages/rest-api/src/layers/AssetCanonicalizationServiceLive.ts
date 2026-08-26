@@ -40,6 +40,31 @@ const MANUAL_SOURCE_NOTES = "Approved by an admin with an existing canonical ass
 const COINGECKO_CONCLUSION_POLICY_REVISION = "2026-08-26.coingecko-canonicalization.1"
 const MANUAL_CONCLUSION_POLICY_REVISION = "2026-08-26.manual-canonicalization.1"
 
+const makeExistingAssetClaim = ({
+  assetId,
+  representation,
+}: {
+  readonly assetId: string
+  readonly representation: Pick<
+    SyncEngineAssetRepresentation,
+    "blockchainName" | "representationType" | "contractAddress" | "mintAddress" | "decimals"
+  > | null
+}) => ({
+  _tag: "identity" as const,
+  assetId,
+  newAsset: null,
+  representation:
+    representation === null
+      ? null
+      : {
+          blockchain: representation.blockchainName,
+          type: representation.representationType,
+          contractAddress: representation.contractAddress,
+          mintAddress: representation.mintAddress,
+          decimals: representation.decimals,
+        },
+})
+
 const appendSourceNote = ({
   existing,
   note,
@@ -753,6 +778,7 @@ const make = Effect.gen(function* () {
                 })
               }
 
+              let selectedRepresentation: SyncEngineAssetRepresentation | null = null
               if (assetRepresentationId === null) {
                 yield* validateProviderEconomicAssetType({
                   assetType: canonicalAsset.value.type,
@@ -782,6 +808,7 @@ const make = Effect.gen(function* () {
                     "Asset representation does not belong to the selected asset."
                   )
                 }
+                selectedRepresentation = representation.value
 
                 yield* validateManualRepresentationIdentity({
                   providerAsset: providerAssetReview.providerAsset,
@@ -794,23 +821,20 @@ const make = Effect.gen(function* () {
                 })
               }
 
-              if (providerAssetReview.mapping?.mappingStatus === "pending_review") {
-                const reviewedAt = new Date()
-                yield* providerAssetRepository
-                  .recordAssetResolutionPolicyEvaluation({
-                    decision: {
+              const reviewedAt = new Date()
+              const conclusion =
+                providerAssetReview.mapping?.mappingStatus === "pending_review"
+                  ? {
                       providerAssetRowId,
                       evidenceRevision: providerAssetReview.providerAsset.evidenceRevision,
                       policyRevision: MANUAL_CONCLUSION_POLICY_REVISION,
-                      outcome: "attach",
+                      claim: makeExistingAssetClaim({
+                        assetId: canonicalAssetId,
+                        representation: selectedRepresentation,
+                      }),
                       assetId: canonicalAssetId,
                       assetRepresentationId,
-                      blockchain: null,
-                      representationType: null,
-                      contractAddress: null,
-                      mintAddress: null,
-                      decimals: null,
-                      reason: null,
+                      rationale: reviewerNotes,
                       evidence: [
                         {
                           authority: "human_admin",
@@ -830,18 +854,9 @@ const make = Effect.gen(function* () {
                           },
                         },
                       ],
-                      actor: "system:manual-asset-canonicalization",
-                    },
-                  })
-                  .pipe(
-                    Effect.mapError(
-                      () =>
-                        new AssetCanonicalizationInternalError({
-                          message: "Failed to record the manual mapping conclusion.",
-                        })
-                    )
-                  )
-              }
+                      actor: "human:admin",
+                    }
+                  : undefined
 
               yield* providerAssetRepository
                 .approveProviderAssetMappingAndRequestReplay({
@@ -858,6 +873,7 @@ const make = Effect.gen(function* () {
                       note: MANUAL_SOURCE_NOTES,
                     }),
                   },
+                  ...(conclusion === undefined ? {} : { conclusion }),
                   expectedObservedRepresentations: observedRepresentations,
                   expectedProviderAssetRetrievedAt: providerAssetReview.providerAsset.retrievedAt,
                 })
@@ -1172,23 +1188,20 @@ const make = Effect.gen(function* () {
                 }
               }
 
-              if (providerAssetReview.mapping?.mappingStatus === "pending_review") {
-                const reviewedAt = new Date()
-                yield* providerAssetRepository
-                  .recordAssetResolutionPolicyEvaluation({
-                    decision: {
+              const reviewedAt = new Date()
+              const conclusion =
+                providerAssetReview.mapping?.mappingStatus === "pending_review"
+                  ? {
                       providerAssetRowId,
                       evidenceRevision: providerAssetReview.providerAsset.evidenceRevision,
                       policyRevision: COINGECKO_CONCLUSION_POLICY_REVISION,
-                      outcome: "attach",
+                      claim: makeExistingAssetClaim({
+                        assetId: canonicalAsset.id,
+                        representation: assetRepresentationId === null ? null : canonicalAsset,
+                      }),
                       assetId: canonicalAsset.id,
                       assetRepresentationId,
-                      blockchain: null,
-                      representationType: null,
-                      contractAddress: null,
-                      mintAddress: null,
-                      decimals: null,
-                      reason: null,
+                      rationale: reviewerNotes,
                       evidence: [
                         {
                           authority: "coingecko",
@@ -1200,18 +1213,9 @@ const make = Effect.gen(function* () {
                           rawPayload: resolved.rawEvidence,
                         },
                       ],
-                      actor: "system:coingecko-asset-canonicalization",
-                    },
-                  })
-                  .pipe(
-                    Effect.mapError(
-                      () =>
-                        new AssetCanonicalizationInternalError({
-                          message: "Failed to record the CoinGecko mapping conclusion.",
-                        })
-                    )
-                  )
-              }
+                      actor: "human:admin",
+                    }
+                  : undefined
 
               yield* providerAssetRepository
                 .approveProviderAssetMappingAndRequestReplay({
@@ -1228,6 +1232,7 @@ const make = Effect.gen(function* () {
                       note: COINGECKO_SOURCE_NOTES,
                     }),
                   },
+                  ...(conclusion === undefined ? {} : { conclusion }),
                   expectedObservedRepresentations: observedRepresentations,
                   expectedProviderAssetRetrievedAt: providerAssetReview.providerAsset.retrievedAt,
                 })

@@ -27,6 +27,7 @@ import { cn } from "#/lib/utils"
 export function AssetCatalogDetailPane() {
   const {
     approvedAssetsUnavailable,
+    exactLookupOpen,
     exceptionActions,
     isLoading,
     mobileBackButtonRef,
@@ -59,7 +60,12 @@ export function AssetCatalogDetailPane() {
       {scope === "exceptions" && exceptionActions !== undefined ? (
         <AssetExceptionDetailPane
           actions={exceptionActions}
-          exception={selectedItem?.kind === "exception" ? selectedItem.exception : undefined}
+          exception={
+            !exactLookupOpen && selectedItem?.kind === "exception"
+              ? selectedItem.exception
+              : undefined
+          }
+          key={exactLookupOpen ? "exact-lookup" : "catalog-selection"}
         />
       ) : selectedItem ? (
         <CatalogItemDetail item={selectedItem} />

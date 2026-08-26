@@ -256,40 +256,11 @@ export const insertAssetResolutionDecision = ({
       .limit(1)
       .pipe(wrapSyncEngineSqlError(operation))
 
-    // Read joined state in a new statement after any lock wait. Under READ
-    // COMMITTED, the lock statement's join snapshot may predate the approval
-    // that released the provider row.
-    const [settledState] = yield* tx
-      .select({
-        mappingStatus: schema.providerAssetMappings.mappingStatus,
-        currentConclusionEvidenceRevision: schema.assetResolutionDecisions.evidenceRevision,
-      })
-      .from(schema.providerAssets)
-      .leftJoin(
-        schema.providerAssetMappings,
-        eq(schema.providerAssetMappings.providerAssetRowId, schema.providerAssets.id)
-      )
-      .leftJoin(
-        schema.assetResolutionCurrentState,
-        eq(schema.assetResolutionCurrentState.providerAssetRowId, schema.providerAssets.id)
-      )
-      .leftJoin(
-        schema.assetResolutionDecisions,
-        eq(
-          schema.assetResolutionDecisions.id,
-          schema.assetResolutionCurrentState.currentConclusionId
-        )
-      )
-      .where(eq(schema.providerAssets.id, decision.providerAssetRowId))
-      .limit(1)
-      .pipe(wrapSyncEngineSqlError(operation))
-
     const insert = tx.insert(schema.assetResolutionDecisions).values({
       providerAssetRowId: decision.providerAssetRowId,
       evidenceRevision: decision.evidenceRevision,
       policyRevision: decision.policyRevision,
       outcome: decision.outcome,
-      status: "active" as const,
       supersedesDecisionId,
       assetId: decision.assetId,
       assetRepresentationId: decision.assetRepresentationId,
@@ -353,15 +324,6 @@ export const insertAssetResolutionDecision = ({
       return inserted
     }
 
-    const settledAtSameOrNewerEvidence =
-      settledState !== undefined &&
-      (settledState.mappingStatus === "approved" || settledState.mappingStatus === "excluded") &&
-      settledState.currentConclusionEvidenceRevision !== null &&
-      settledState.currentConclusionEvidenceRevision >= decision.evidenceRevision
-    if (settledAtSameOrNewerEvidence) {
-      return inserted
-    }
-
     const establishesConclusion =
       decision.outcome === "excluded" ||
       (!["pending", "fail_closed"].includes(decision.outcome) &&
@@ -392,6 +354,50 @@ export const insertAssetResolutionDecision = ({
       .pipe(wrapSyncEngineSqlError(operation))
 
     return inserted
+  })
+
+/**
+ * Insert an automatic policy evaluation only while its evidence revision is
+ * still current. The provider-row lock keeps the revision check and decision
+ * insert in one transaction, so evidence cannot advance between them.
+ */
+export const insertCurrentAssetResolutionDecision = ({
+  tx,
+  decision,
+  operation,
+}: {
+  readonly tx: SyncEngineDbTransaction
+  readonly decision: AssetResolutionPolicyEvaluationRecord
+  readonly operation: string
+}): Effect.Effect<
+  | { readonly _tag: "inserted"; readonly id: string }
+  | { readonly _tag: "duplicate" }
+  | { readonly _tag: "stale" },
+  SyncEngineStorageError
+> =>
+  Effect.gen(function* () {
+    const [providerAsset] = yield* tx
+      .select({ evidenceRevision: schema.providerAssets.evidenceRevision })
+      .from(schema.providerAssets)
+      .where(eq(schema.providerAssets.id, decision.providerAssetRowId))
+      .for("no key update")
+      .limit(1)
+      .pipe(wrapSyncEngineSqlError(operation))
+
+    if (providerAsset?.evidenceRevision !== decision.evidenceRevision) {
+      return { _tag: "stale" as const }
+    }
+
+    const inserted = yield* insertAssetResolutionDecision({
+      tx,
+      decision,
+      skipOnEvaluationConflict: true,
+      operation,
+    })
+
+    return inserted === null
+      ? { _tag: "duplicate" as const }
+      : { _tag: "inserted" as const, id: inserted.id }
   })
 
 /**

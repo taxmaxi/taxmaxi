@@ -1503,7 +1503,6 @@ describe("coinbase normalization persistence", () => {
               evidenceRevision: btcUsage.btcProviderAsset.evidenceRevision,
               policyRevision: "test:approved-fee",
               outcome: "attach",
-              status: "active",
               assetId: BTC_ASSET_ID,
               assetRepresentationId: null,
               actor: "policy:test:approved-fee",

@@ -200,6 +200,14 @@ export class AssetExceptionPreviewResponse extends Schema.Class<AssetExceptionPr
   evidenceRevision: Schema.Number,
   currentConclusionRevision: Schema.String,
   currentPolicyEvaluationRevision: Schema.String,
+  affectedObservationRevisions: Schema.Array(
+    Schema.Struct({
+      providerAssetRowId: Schema.String.check(Schema.isUUID()),
+      evidenceRevision: Schema.Number,
+      currentConclusionRevision: Schema.String,
+      currentPolicyEvaluationRevision: Schema.String,
+    })
+  ),
 }) {}
 
 /** Maximum accepted length for public asset catalog search queries. */
@@ -472,6 +480,14 @@ export class AssetExceptionDecisionConfirmationRequest extends Schema.Class<Asse
   expectedResultingAssetId: Schema.NullOr(Schema.String.check(Schema.isUUID())),
   expectedAssetOutcome: Schema.Literals(["none", "reuse", "create"]),
   expectedRepresentationOutcome: Schema.Literals(["none", "reuse", "create", "reassign"]),
+  expectedAffectedObservationRevisions: Schema.Array(
+    Schema.Struct({
+      providerAssetRowId: Schema.String.check(Schema.isUUID()),
+      evidenceRevision: Schema.Number,
+      currentConclusionRevision: Schema.String,
+      currentPolicyEvaluationRevision: Schema.String,
+    })
+  ),
 }) {}
 
 const listAssets = HttpApiEndpoint.get("listAssets", "/assets", {

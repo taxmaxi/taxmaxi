@@ -83,6 +83,11 @@ const seedException = (
       if (decision === undefined) {
         return yield* Effect.die("Failed to seed resolution decision")
       }
+      yield* db.insert(schema.assetResolutionCurrentState).values({
+        providerAssetRowId: providerAsset.id,
+        currentConclusionId: null,
+        currentPolicyEvaluationId: decision.id,
+      })
       const [evidence] = yield* db
         .insert(schema.assetResolutionEvidence)
         .values({
@@ -149,6 +154,75 @@ beforeEach(async () => {
 })
 
 describe("AssetExceptionRepositoryLive", () => {
+  it("keeps the conclusion but clears the current policy evaluation when evidence advances", async () => {
+    const suffix = "-new-evidence"
+    const fixture = await seedException(suffix)
+    const currentConclusionId = await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const [conclusion] = yield* db
+          .insert(schema.assetResolutionDecisions)
+          .values({
+            providerAssetRowId: fixture.providerAssetRowId,
+            evidenceRevision: 2,
+            policyRevision: "test-policy.settled.1",
+            outcome: "excluded",
+            reason: "provider_artifact",
+            actor: "policy:test-policy.settled.1",
+          })
+          .returning({ id: schema.assetResolutionDecisions.id })
+        if (conclusion === undefined) {
+          return yield* Effect.die("Failed to seed current conclusion")
+        }
+        yield* db
+          .update(schema.assetResolutionCurrentState)
+          .set({
+            currentConclusionId: conclusion.id,
+            currentPolicyEvaluationId: fixture.decisionId,
+          })
+          .where(
+            eq(schema.assetResolutionCurrentState.providerAssetRowId, fixture.providerAssetRowId)
+          )
+        return conclusion.id
+      })
+    )
+
+    await runProviderRepository(
+      Effect.flatMap(ProviderAssetRepository, (repository) =>
+        repository.upsertProviderAssets({
+          providerKey: "coinbase",
+          entries: [
+            {
+              providerAssetId: `exception-token${suffix}`,
+              naturalKey: `currency_code:EXC${suffix}`,
+              currencyCode: "EXC",
+              name: "Exception Token Updated",
+              exponent: 6,
+              providerType: "crypto",
+              payload: { id: `exception-token${suffix}`, version: 2 },
+            },
+          ],
+        })
+      )
+    )
+    const detail = await runRepository(
+      Effect.flatMap(AssetExceptionRepository, (repository) =>
+        repository.findDetail({
+          _tag: "row_id",
+          providerAssetRowId: fixture.providerAssetRowId,
+        })
+      )
+    )
+
+    expect(Option.getOrNull(detail)).toMatchObject({
+      evidenceRevision: 3,
+      currentConclusionRevision: currentConclusionId,
+      currentPolicyEvaluationRevision: NO_CURRENT_ASSET_POLICY_EVALUATION,
+      currentConclusion: { id: currentConclusionId },
+      currentPolicyEvaluation: null,
+    })
+  })
+
   it("preserves an explicit null conclusion pointer when older history is conclusive", async () => {
     const fixture = await seedException("-explicit-null")
     await runPg(
@@ -159,15 +233,18 @@ describe("AssetExceptionRepositoryLive", () => {
           evidenceRevision: 1,
           policyRevision: "test-policy.legacy",
           outcome: "excluded",
-          status: "active",
           reason: "provider_artifact",
           actor: "policy:test-policy.legacy",
         })
-        yield* db.insert(schema.assetResolutionCurrentState).values({
-          providerAssetRowId: fixture.providerAssetRowId,
-          currentConclusionId: null,
-          currentPolicyEvaluationId: fixture.decisionId,
-        })
+        yield* db
+          .update(schema.assetResolutionCurrentState)
+          .set({
+            currentConclusionId: null,
+            currentPolicyEvaluationId: fixture.decisionId,
+          })
+          .where(
+            eq(schema.assetResolutionCurrentState.providerAssetRowId, fixture.providerAssetRowId)
+          )
       })
     )
 
@@ -205,7 +282,7 @@ describe("AssetExceptionRepositoryLive", () => {
     expect(result.submitted).toMatchObject({ _tag: "accepted" })
   })
 
-  it("previews a human correction to an automatic conclusion as a supersession", async () => {
+  it("classifies human changes to an automatic conclusion by their result", async () => {
     const fixture = await seedException("-automatic-conclusion")
     const automaticConclusionId = await runPg(
       Effect.gen(function* () {
@@ -217,7 +294,6 @@ describe("AssetExceptionRepositoryLive", () => {
             evidenceRevision: 1,
             policyRevision: "test-policy.automatic",
             outcome: "excluded",
-            status: "active",
             reason: "provider_artifact",
             actor: "policy:test-policy.automatic",
           })
@@ -225,19 +301,23 @@ describe("AssetExceptionRepositoryLive", () => {
         if (conclusion === undefined) {
           return yield* Effect.die("Failed to seed automatic conclusion")
         }
-        yield* db.insert(schema.assetResolutionCurrentState).values({
-          providerAssetRowId: fixture.providerAssetRowId,
-          currentConclusionId: conclusion.id,
-          currentPolicyEvaluationId: fixture.decisionId,
-        })
+        yield* db
+          .update(schema.assetResolutionCurrentState)
+          .set({
+            currentConclusionId: conclusion.id,
+            currentPolicyEvaluationId: fixture.decisionId,
+          })
+          .where(
+            eq(schema.assetResolutionCurrentState.providerAssetRowId, fixture.providerAssetRowId)
+          )
         return conclusion.id
       })
     )
 
-    const preview = await runRepository(
+    const previews = await runRepository(
       Effect.gen(function* () {
         const repository = yield* AssetExceptionRepository
-        return yield* repository.previewDecision({
+        const supersession = yield* repository.previewDecision({
           providerAssetRowId: fixture.providerAssetRowId,
           claim: { _tag: "exclusion", reason: "confirmed_spam" },
           evidenceRevision: 2,
@@ -246,13 +326,35 @@ describe("AssetExceptionRepositoryLive", () => {
           evidenceSnapshotIds: [fixture.evidenceId],
           rationale: null,
         })
+        const reversal = yield* repository.previewDecision({
+          providerAssetRowId: fixture.providerAssetRowId,
+          claim: {
+            _tag: "identity",
+            assetId: null,
+            newAsset: { name: "Corrected Token", symbol: "COR", type: "fungible" },
+            representation: null,
+          },
+          evidenceRevision: 2,
+          currentConclusionRevision: automaticConclusionId,
+          currentPolicyEvaluationRevision: fixture.decisionId,
+          evidenceSnapshotIds: [fixture.evidenceId],
+          rationale: "The automatic exclusion was incorrect.",
+        })
+        return { reversal, supersession }
       })
     )
 
-    expect(preview).toMatchObject({
+    expect(previews.supersession).toMatchObject({
       _tag: "ready",
       preview: {
         decisionAction: "supersession",
+        supersededConclusion: { id: automaticConclusionId },
+      },
+    })
+    expect(previews.reversal).toMatchObject({
+      _tag: "ready",
+      preview: {
+        decisionAction: "reversal",
         supersededConclusion: { id: automaticConclusionId },
       },
     })
@@ -286,11 +388,12 @@ describe("AssetExceptionRepositoryLive", () => {
           assetRepresentationId: null,
           mappingStatus: "approved",
         })
-        yield* db.insert(schema.assetResolutionCurrentState).values({
-          providerAssetRowId: fixture.providerAssetRowId,
-          currentConclusionId: null,
-          currentPolicyEvaluationId: fixture.decisionId,
-        })
+        yield* db
+          .update(schema.assetResolutionCurrentState)
+          .set({ currentConclusionId: null, currentPolicyEvaluationId: fixture.decisionId })
+          .where(
+            eq(schema.assetResolutionCurrentState.providerAssetRowId, fixture.providerAssetRowId)
+          )
         yield* db.insert(schema.assetDecisionRematerializations).values({
           decisionId: fixture.decisionId,
           sourceId: TEST_SOURCE_ID,
@@ -499,7 +602,6 @@ describe("AssetExceptionRepositoryLive", () => {
         const db = yield* drizzle
         const decisions = yield* db
           .select({
-            status: schema.assetResolutionDecisions.status,
             outcome: schema.assetResolutionDecisions.outcome,
             rationale: schema.assetResolutionDecisions.rationale,
           })
@@ -519,8 +621,8 @@ describe("AssetExceptionRepositoryLive", () => {
 
     expect(state.decisions).toEqual(
       expect.arrayContaining([
-        { status: "active", outcome: "pending", rationale: null },
-        { status: "active", outcome: "excluded", rationale: null },
+        { outcome: "pending", rationale: null },
+        { outcome: "excluded", rationale: null },
       ])
     )
     expect(state.mappings).toEqual([{ status: "excluded" }])
@@ -906,11 +1008,12 @@ describe("AssetExceptionRepositoryLive", () => {
     await runPg(
       Effect.gen(function* () {
         const db = yield* drizzle
-        yield* db.insert(schema.assetResolutionCurrentState).values({
-          providerAssetRowId: fixture.providerAssetRowId,
-          currentConclusionId: null,
-          currentPolicyEvaluationId: fixture.decisionId,
-        })
+        yield* db
+          .update(schema.assetResolutionCurrentState)
+          .set({ currentConclusionId: null, currentPolicyEvaluationId: fixture.decisionId })
+          .where(
+            eq(schema.assetResolutionCurrentState.providerAssetRowId, fixture.providerAssetRowId)
+          )
         yield* db
           .update(schema.providerAssets)
           .set({ evidenceRevision: 3 })
@@ -968,7 +1071,6 @@ describe("AssetExceptionRepositoryLive", () => {
             evidenceRevision: 2,
             policyRevision: "test-policy.2",
             outcome: "fail_closed",
-            status: "active",
             reason: "ownership_conflict",
             actor: "policy:test-policy.2",
           })
@@ -976,11 +1078,12 @@ describe("AssetExceptionRepositoryLive", () => {
         if (evaluation === undefined) {
           return yield* Effect.die("Failed to seed replacement policy evaluation")
         }
-        yield* db.insert(schema.assetResolutionCurrentState).values({
-          providerAssetRowId: fixture.providerAssetRowId,
-          currentConclusionId: null,
-          currentPolicyEvaluationId: evaluation.id,
-        })
+        yield* db
+          .update(schema.assetResolutionCurrentState)
+          .set({ currentConclusionId: null, currentPolicyEvaluationId: evaluation.id })
+          .where(
+            eq(schema.assetResolutionCurrentState.providerAssetRowId, fixture.providerAssetRowId)
+          )
         return evaluation.id
       })
     )
@@ -1040,11 +1143,12 @@ describe("AssetExceptionRepositoryLive", () => {
         if (evaluation === undefined) {
           return yield* Effect.die("Failed to seed competing policy evaluation")
         }
-        yield* db.insert(schema.assetResolutionCurrentState).values({
-          providerAssetRowId: fixture.providerAssetRowId,
-          currentConclusionId: null,
-          currentPolicyEvaluationId: fixture.decisionId,
-        })
+        yield* db
+          .update(schema.assetResolutionCurrentState)
+          .set({ currentConclusionId: null, currentPolicyEvaluationId: fixture.decisionId })
+          .where(
+            eq(schema.assetResolutionCurrentState.providerAssetRowId, fixture.providerAssetRowId)
+          )
         return evaluation.id
       })
     )
@@ -1766,9 +1870,12 @@ describe("AssetExceptionRepositoryLive", () => {
       currentPolicyEvaluationRevision: second.decisionId,
       evidenceSnapshotIds: [second.evidenceId],
     }
-    const preview = await runRepository(
+    const initialPreview = await runRepository(
       Effect.flatMap(AssetExceptionRepository, (repository) => repository.previewDecision(input))
     )
+    if (initialPreview._tag !== "ready") {
+      throw new Error("Expected ownership correction preview")
+    }
     const representationLocked = await Effect.runPromise(Deferred.make<void>())
     const releaseApproval = await Effect.runPromise(Deferred.make<void>())
     const approval = runPg(
@@ -1797,7 +1904,14 @@ describe("AssetExceptionRepositoryLive", () => {
     await Effect.runPromise(Deferred.await(representationLocked))
     const racedSubmission = runRepository(
       Effect.flatMap(AssetExceptionRepository, (repository) =>
-        repository.submitDecision({ input, actorId: TEST_USER_ID })
+        repository.submitDecision({
+          input: {
+            ...input,
+            expectedAffectedObservationRevisions:
+              initialPreview.preview.affectedObservationRevisions,
+          },
+          actorId: TEST_USER_ID,
+        })
       )
     )
     await context.waitForQueryBlockedOnLock({ queryIncludes: "asset_representations" })
@@ -1805,11 +1919,98 @@ describe("AssetExceptionRepositoryLive", () => {
     await approval
     expect(await racedSubmission).toEqual({ _tag: "identity_changed" })
 
+    const previewBeforeRelatedChange = await runRepository(
+      Effect.flatMap(AssetExceptionRepository, (repository) => repository.previewDecision(input))
+    )
+    if (previewBeforeRelatedChange._tag !== "ready") {
+      throw new Error("Expected refreshed ownership correction preview")
+    }
+
+    const relatedPolicyEvaluationId = await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const [policyEvaluation] = yield* db
+          .insert(schema.assetResolutionDecisions)
+          .values({
+            providerAssetRowId: second.providerAssetRowId,
+            evidenceRevision: 2,
+            policyRevision: "test-policy.concurrent-related.1",
+            outcome: "pending",
+            reason: "display_collision",
+            actor: "policy:test-policy.concurrent-related.1",
+          })
+          .returning({ id: schema.assetResolutionDecisions.id })
+        if (policyEvaluation === undefined) {
+          return yield* Effect.die("Failed to seed concurrent related policy evaluation")
+        }
+        yield* db
+          .update(schema.assetResolutionCurrentState)
+          .set({ currentPolicyEvaluationId: policyEvaluation.id })
+          .where(
+            eq(schema.assetResolutionCurrentState.providerAssetRowId, second.providerAssetRowId)
+          )
+        return policyEvaluation.id
+      })
+    )
+    const staleRelatedSubmission = await runRepository(
+      Effect.flatMap(AssetExceptionRepository, (repository) =>
+        repository.submitDecision({
+          input: {
+            ...input,
+            expectedAffectedObservationRevisions:
+              previewBeforeRelatedChange.preview.affectedObservationRevisions,
+          },
+          actorId: TEST_USER_ID,
+        })
+      )
+    )
+    const stateAfterStaleRelatedSubmission = await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const [representation] = yield* db
+          .select({ assetId: schema.assetRepresentations.assetId })
+          .from(schema.assetRepresentations)
+          .where(eq(schema.assetRepresentations.id, seeded.representationId))
+        const ownership = yield* db
+          .select({ id: schema.assetRepresentationOwnershipDecisions.id })
+          .from(schema.assetRepresentationOwnershipDecisions)
+          .where(
+            eq(
+              schema.assetRepresentationOwnershipDecisions.assetRepresentationId,
+              seeded.representationId
+            )
+          )
+        const rematerializations = yield* db
+          .select({ decisionId: schema.assetDecisionRematerializations.decisionId })
+          .from(schema.assetDecisionRematerializations)
+        return { ownership, rematerializations, representation }
+      })
+    )
+    expect(staleRelatedSubmission).toMatchObject({ _tag: "stale_revision" })
+    expect(stateAfterStaleRelatedSubmission.representation?.assetId).toBe(seeded.oldAssetId)
+    expect(stateAfterStaleRelatedSubmission.ownership).toEqual([])
+    expect(stateAfterStaleRelatedSubmission.rematerializations).toEqual([])
+
+    const preview = await runRepository(
+      Effect.flatMap(AssetExceptionRepository, (repository) => repository.previewDecision(input))
+    )
+    if (preview._tag !== "ready") {
+      throw new Error("Expected ownership correction preview after related change")
+    }
+    const expectedAffectedObservationRevisions = preview.preview.affectedObservationRevisions
+    const refreshedSecondInput = {
+      ...secondInput,
+      currentPolicyEvaluationRevision: relatedPolicyEvaluationId,
+    }
+
     const submissions = await Promise.all(
-      [input, secondInput].map((candidate) =>
+      [input, refreshedSecondInput].map((candidate) =>
         runRepository(
           Effect.flatMap(AssetExceptionRepository, (repository) =>
-            repository.submitDecision({ input: candidate, actorId: TEST_USER_ID })
+            repository.submitDecision({
+              input: { ...candidate, expectedAffectedObservationRevisions },
+              actorId: TEST_USER_ID,
+            })
           )
         )
       )
@@ -1820,8 +2021,11 @@ describe("AssetExceptionRepositoryLive", () => {
       preview: {
         representationOutcome: "reassign",
         impact: {
+          // These approved mappings need prospective replay after the
+          // ownership correction, but they do not block current calculations.
+          blockedReports: 0,
           affectedPrincipals: 2,
-          affectedTransactions: 2,
+          affectedTransactions: 3,
           affectedSources: 2,
           affectedCalculations: 2,
         },
@@ -1994,8 +2198,14 @@ describe("AssetExceptionRepositoryLive", () => {
         Effect.gen(function* () {
           const repository = yield* AssetExceptionRepository
           const preview = yield* repository.previewDecision(correction)
+          if (preview._tag !== "ready") {
+            return { preview, submitted: preview }
+          }
           const submitted = yield* repository.submitDecision({
-            input: correction,
+            input: {
+              ...correction,
+              expectedAffectedObservationRevisions: preview.preview.affectedObservationRevisions,
+            },
             actorId: TEST_USER_ID,
           })
           return { preview, submitted }
@@ -2041,10 +2251,6 @@ describe("AssetExceptionRepositoryLive", () => {
     const humanDecisionId = await runPg(
       Effect.gen(function* () {
         const db = yield* drizzle
-        yield* db
-          .update(schema.assetResolutionDecisions)
-          .set({ status: "superseded" })
-          .where(eq(schema.assetResolutionDecisions.id, fixture.decisionId))
         const [humanDecision] = yield* db
           .insert(schema.assetResolutionDecisions)
           .values({
@@ -2052,7 +2258,6 @@ describe("AssetExceptionRepositoryLive", () => {
             evidenceRevision: 2,
             policyRevision: "human-test.1",
             outcome: "excluded",
-            status: "active",
             supersedesDecisionId: fixture.decisionId,
             reason: "confirmed_spam",
             humanClaim: { _tag: "exclusion", reason: "confirmed_spam" },
@@ -2067,6 +2272,12 @@ describe("AssetExceptionRepositoryLive", () => {
           decisionId: humanDecision.id,
           evidenceId: fixture.evidenceId,
         })
+        yield* db
+          .update(schema.assetResolutionCurrentState)
+          .set({ currentConclusionId: humanDecision.id, currentPolicyEvaluationId: null })
+          .where(
+            eq(schema.assetResolutionCurrentState.providerAssetRowId, fixture.providerAssetRowId)
+          )
 
         yield* db
           .update(schema.providerAssets)
@@ -2115,10 +2326,6 @@ describe("AssetExceptionRepositoryLive", () => {
     const seeded = await runPg(
       Effect.gen(function* () {
         const db = yield* drizzle
-        yield* db
-          .update(schema.assetResolutionDecisions)
-          .set({ status: "superseded" })
-          .where(eq(schema.assetResolutionDecisions.id, fixture.decisionId))
         const [humanDecision] = yield* db
           .insert(schema.assetResolutionDecisions)
           .values({
@@ -2126,7 +2333,6 @@ describe("AssetExceptionRepositoryLive", () => {
             evidenceRevision: 2,
             policyRevision: "human-test.1",
             outcome: "excluded",
-            status: "active",
             supersedesDecisionId: fixture.decisionId,
             reason: "confirmed_spam",
             humanClaim: { _tag: "exclusion", reason: "confirmed_spam" },
@@ -2160,7 +2366,6 @@ describe("AssetExceptionRepositoryLive", () => {
             evidenceRevision: 3,
             policyRevision: "test-policy.2",
             outcome: "pending",
-            status: "active",
             reason: "display_collision",
             actor: "policy:test-policy.2",
           })
@@ -2259,7 +2464,6 @@ describe("AssetExceptionRepositoryLive", () => {
         const decisions = yield* db
           .select({
             id: schema.assetResolutionDecisions.id,
-            status: schema.assetResolutionDecisions.status,
             outcome: schema.assetResolutionDecisions.outcome,
             evidenceRevision: schema.assetResolutionDecisions.evidenceRevision,
           })
@@ -2303,11 +2507,11 @@ describe("AssetExceptionRepositoryLive", () => {
       currentPolicyEvaluationId: seeded.policyRecheckId,
     })
     expect(
-      persisted.decisions.find((decision) => decision.id === seeded.humanDecisionId)?.status
-    ).toBe("active")
+      persisted.decisions.find((decision) => decision.id === seeded.humanDecisionId)
+    ).toBeDefined()
     expect(
-      persisted.decisions.find((decision) => decision.id === seeded.policyRecheckId)?.status
-    ).toBe("active")
+      persisted.decisions.find((decision) => decision.id === seeded.policyRecheckId)
+    ).toBeDefined()
     expect(result).toMatchObject({
       _tag: "accepted",
       detail: {
@@ -3034,7 +3238,6 @@ describe("AssetExceptionRepositoryLive", () => {
             policyRevision: "test-policy.0",
             outcome: "pending",
             reason: "display_collision",
-            status: "superseded",
             actor: "policy:test-policy.0",
           })
           .returning({ id: schema.assetResolutionDecisions.id })

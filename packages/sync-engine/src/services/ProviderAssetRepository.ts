@@ -7,7 +7,7 @@
 import * as Context from "effect/Context"
 import type * as Effect from "effect/Effect"
 import type * as Option from "effect/Option"
-import type { ProviderAssetMappingStatus } from "@my/core/assets"
+import type { AssetExceptionClaim, ProviderAssetMappingStatus } from "@my/core/assets"
 import { SyncEngineStorageError } from "./SyncEngineStorageError.ts"
 
 /**
@@ -67,9 +67,23 @@ export interface ProviderAssetApprovalResult {
   readonly mappingChanged: boolean
 }
 
+/** Human-approved identity conclusion committed with a provider mapping approval. */
+export interface AssetResolutionHumanConclusionRecord {
+  readonly providerAssetRowId: string
+  readonly evidenceRevision: number
+  readonly policyRevision: string
+  readonly claim: Extract<AssetExceptionClaim, { readonly _tag: "identity" }>
+  readonly assetId: string
+  readonly assetRepresentationId: string | null
+  readonly rationale: string | null
+  readonly evidence: ReadonlyArray<AssetResolutionEvidenceRecord>
+  readonly actor: string
+}
+
 /** Result of atomically recording and applying an automatic exclusion. */
 export interface ProviderAssetExclusionResult extends ProviderAssetApprovalResult {
   readonly decisionRecorded: boolean
+  readonly stale?: true
 }
 
 /** Outcome of an automatic policy decision, recorded as immutable audit history. */
@@ -123,6 +137,7 @@ export interface AssetResolutionPolicyEvaluationRecord {
 /** Result of appending one decision to resolution audit history. */
 export interface AssetResolutionPolicyEvaluationRecordResult {
   readonly recorded: boolean
+  readonly stale?: true
 }
 
 /** One recorded resolution decision as read back from audit history. */
@@ -221,6 +236,8 @@ export interface ProviderAssetRepositoryShape {
    */
   readonly approveProviderAssetMappingAndRequestReplay: (params: {
     readonly mapping: ProviderAssetMappingDraft
+    /** When present, append this human conclusion in the same transaction. */
+    readonly conclusion?: AssetResolutionHumanConclusionRecord
     readonly expectedObservedRepresentations: ReadonlyArray<ProviderAssetObservedRepresentationRecord>
     readonly expectedProviderAssetRetrievedAt: Date
   }) => Effect.Effect<ProviderAssetApprovalResult, SyncEngineStorageError>
@@ -343,6 +360,7 @@ export interface ProviderAssetRepositoryShape {
    */
   readonly recordAssetResolutionPolicyEvaluation: (params: {
     readonly decision: AssetResolutionPolicyEvaluationRecord
+    readonly requireCurrentEvidenceRevision?: true
   }) => Effect.Effect<AssetResolutionPolicyEvaluationRecordResult, SyncEngineStorageError>
 
   /**

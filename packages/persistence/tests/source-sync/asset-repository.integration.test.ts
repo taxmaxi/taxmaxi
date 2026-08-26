@@ -1137,7 +1137,6 @@ describe("AssetRepositoryLive", () => {
           const decisions = yield* db
             .select({
               outcome: schema.assetResolutionDecisions.outcome,
-              status: schema.assetResolutionDecisions.status,
               assetId: schema.assetResolutionDecisions.assetId,
               assetRepresentationId: schema.assetResolutionDecisions.assetRepresentationId,
             })
@@ -1156,7 +1155,6 @@ describe("AssetRepositoryLive", () => {
       expect(stored.decisions).toEqual([
         {
           outcome: "create_standalone",
-          status: "active",
           assetId: created.id,
           assetRepresentationId: created.representationId,
         },

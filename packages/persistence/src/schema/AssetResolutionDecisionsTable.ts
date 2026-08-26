@@ -27,14 +27,6 @@ export const assetResolutionOutcomeEnum = pgEnum("asset_resolution_outcome", [
 
 export type AssetResolutionOutcome = (typeof assetResolutionOutcomeEnum.enumValues)[number]
 
-export const assetResolutionDecisionStatusEnum = pgEnum("asset_resolution_decision_status", [
-  "active",
-  "superseded",
-])
-
-export type AssetResolutionDecisionStatus =
-  (typeof assetResolutionDecisionStatusEnum.enumValues)[number]
-
 /**
  * Append-only automatic policy decision history for one provider
  * observation and evidence revision.
@@ -54,7 +46,6 @@ export const assetResolutionDecisions = pgTable(
     evidenceRevision: integer("evidence_revision").notNull(),
     policyRevision: text("policy_revision").notNull(),
     outcome: assetResolutionOutcomeEnum("outcome").notNull(),
-    status: assetResolutionDecisionStatusEnum("status").notNull().default("active"),
     supersedesDecisionId: uuid("supersedes_decision_id"),
     assetId: uuid("asset_id").references(() => assets.id),
     assetRepresentationId: uuid("asset_representation_id").references(

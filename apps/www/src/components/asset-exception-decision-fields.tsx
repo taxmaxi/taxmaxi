@@ -176,11 +176,13 @@ function CandidatePicker({ draft }: { readonly draft: DecisionDraft }) {
   // previous request settles; only the latest request may update the list.
   const latestSearchId = useRef(0)
 
-  const runSearch = (value: string) => {
+  const runSearch = (value: string, clearSelection = true) => {
     if (value.trim().length === 0) {
       return
     }
-    draft.setAssetId("")
+    if (clearSelection) {
+      draft.setAssetId("")
+    }
     const searchId = ++latestSearchId.current
     setBusy(true)
     search(value.trim())
@@ -202,7 +204,7 @@ function CandidatePicker({ draft }: { readonly draft: DecisionDraft }) {
   }
 
   useEffect(() => {
-    runSearch(draft.detail.currencyCode)
+    runSearch(draft.detail.currencyCode, false)
     // Initial search only — later searches are user-driven.
   }, [])
 
