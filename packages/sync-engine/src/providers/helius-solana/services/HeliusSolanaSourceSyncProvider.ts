@@ -12,6 +12,7 @@ import type {
   PersistedSourceTransaction,
   PersistedSourceTransfer,
   PersistedSourceVenueContext,
+  PersistNormalizedSourceArtifactsContext,
   SourceLegKind,
   SourceProviderTransferDraft,
   SourceTransactionDraft,
@@ -89,10 +90,17 @@ export interface PreparedHeliusSolanaNormalization {
   readonly providerTransfers: ReadonlyArray<SourceProviderTransferDraft>
   readonly canonicalTransfers: ReadonlyArray<SourceTransferDraft>
   readonly transactionReview: SourceTransactionReviewDraft | null
+  readonly overrideMaterializationAllowed: boolean
   readonly resolvedTransactionType: ResolvedProviderTransactionTypeMapping
   readonly legDerivationStrategy: "derive" | "skip"
   /** One plan per canonical transfer; empty when legDerivationStrategy is "skip". */
   readonly legPlans: ReadonlyArray<HeliusSolanaCanonicalLegPlan>
+}
+
+/** Provider-owned final leg decision for one prepared Helius record. */
+export interface DerivePreparedHeliusSolanaProviderLegsParams {
+  readonly prepared: PreparedHeliusSolanaNormalization
+  readonly context: PersistNormalizedSourceArtifactsContext
 }
 
 /**
@@ -186,6 +194,13 @@ export interface HeliusSolanaSourceSyncProviderShape {
 
   readonly deriveLegs: (
     params: DeriveHeliusSolanaProviderLegsParams
+  ) => Effect.Effect<
+    ReadonlyArray<SourceTransactionLegDraft>,
+    HeliusSolanaRecoverableNormalizationError | SyncEngineStorageError
+  >
+
+  readonly derivePreparedLegs: (
+    params: DerivePreparedHeliusSolanaProviderLegsParams
   ) => Effect.Effect<
     ReadonlyArray<SourceTransactionLegDraft>,
     HeliusSolanaRecoverableNormalizationError | SyncEngineStorageError

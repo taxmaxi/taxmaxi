@@ -7,9 +7,12 @@
 import { HttpApiBuilder } from "effect/unstable/httpapi"
 import {
   AssetOverrideRepository,
+  AssetOverrideTargetNotFoundError,
+  AssetOverrideValidationError,
   type AssetOverrideProjection,
   type AssetOverrideWriteResult,
 } from "@my/persistence/services"
+import type { PersistenceError } from "@my/persistence/errors"
 import * as Effect from "effect/Effect"
 import * as Option from "effect/Option"
 import {
@@ -44,6 +47,39 @@ const toProjectionResponse = (projection: AssetOverrideProjection) =>
       projection.activeOverride === null ? null : toHistoryResponse(projection.activeOverride),
     history: projection.history.map(toHistoryResponse),
   })
+
+const validationWarnings = ({
+  projection,
+  replacement,
+}: {
+  readonly projection: AssetOverrideProjection
+  readonly replacement:
+    | { readonly _tag: "identity"; readonly assetId: string }
+    | { readonly _tag: "inclusion"; readonly state: "included" | "excluded" }
+}) => {
+  if (replacement._tag === "identity" && projection.systemConclusion._tag === "identity") {
+    if (projection.systemConclusion.state === "unresolved") {
+      return ["identity_not_system_verified" as const]
+    }
+    if (
+      projection.systemConclusion.state === "resolved" &&
+      projection.systemConclusion.assetId !== replacement.assetId
+    ) {
+      return ["identity_differs_from_system" as const]
+    }
+  }
+
+  if (
+    replacement._tag === "inclusion" &&
+    projection.systemConclusion._tag === "inclusion" &&
+    projection.systemConclusion.state !== "blocked" &&
+    projection.systemConclusion.state !== replacement.state
+  ) {
+    return ["inclusion_differs_from_system" as const]
+  }
+
+  return []
+}
 
 const toTarget = (query: {
   readonly targetKind: "provider_asset" | "representation"
@@ -80,11 +116,9 @@ const toTarget = (query: {
   )
 }
 
-const mapRepositoryError = (error: {
-  readonly _tag: string
-  readonly message?: string
-  readonly code?: string
-}) => {
+const mapRepositoryError = (
+  error: AssetOverrideTargetNotFoundError | AssetOverrideValidationError | PersistenceError
+) => {
   switch (error._tag) {
     case "AssetOverrideTargetNotFoundError":
       return new AssetOverrideNotFoundError({
@@ -93,8 +127,8 @@ const mapRepositoryError = (error: {
       })
     case "AssetOverrideValidationError":
       return new AssetOverrideBadRequestError({
-        code: error.code ?? "invalid_override",
-        message: error.message ?? "Asset override is invalid.",
+        code: error.code,
+        message: error.message,
       })
     default:
       return internalError()
@@ -155,7 +189,7 @@ export const AssetOverridesApiLive = HttpApiBuilder.group(
             return AssetOverrideValidationResponse.make({
               valid: true,
               projection: toProjectionResponse(projection),
-              warnings: [],
+              warnings: validationWarnings({ projection, replacement: payload.replacement }),
             })
           })
         )

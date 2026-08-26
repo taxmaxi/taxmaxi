@@ -95,6 +95,18 @@ const extractCoinbaseTransaction = (payload: CoinbasePayload): CoinbaseTransacti
 
 const toNullable = (value: string | undefined): string | null => value ?? null
 
+const PROVIDER_FIAT_AMOUNT_PATTERN = /^-?[0-9]+(\.[0-9]+)?$/
+
+/**
+ * Coinbase reports every transaction's value in the account's native fiat
+ * currency. Keep only well-formed decimal amounts so the typed columns never
+ * carry values the database cannot aggregate.
+ */
+const toProviderFiat = (money: CoinbaseMoney): { amount: string; currency: string } | null =>
+  PROVIDER_FIAT_AMOUNT_PATTERN.test(money.amount)
+    ? { amount: money.amount, currency: money.currency.toUpperCase() }
+    : null
+
 /**
  * Parse and validate required timestamp fields.
  */
@@ -169,6 +181,7 @@ const partyAddress = (party: CoinbaseTransaction["from"]): string | null =>
 interface CoinbaseFeeTransferBuildResult {
   readonly transfer: CoinbaseRecordNormalizationResult["canonicalTransfers"][number] | null
   readonly unresolvedAssetCurrency: string | null
+  readonly currencyCode: string
 }
 
 const partyAccountRef = (party: CoinbaseTransaction["from"]) => {
@@ -338,6 +351,7 @@ const buildFeeTransfer = (params: {
       return {
         transfer: null,
         unresolvedAssetCurrency: null,
+        currencyCode: params.money.currency.toUpperCase(),
       } satisfies CoinbaseFeeTransferBuildResult
     }
 
@@ -347,6 +361,7 @@ const buildFeeTransfer = (params: {
       return {
         transfer: null,
         unresolvedAssetCurrency: params.money.currency.toUpperCase(),
+        currencyCode: params.money.currency.toUpperCase(),
       } satisfies CoinbaseFeeTransferBuildResult
     }
 
@@ -394,6 +409,7 @@ const buildFeeTransfer = (params: {
         },
       },
       unresolvedAssetCurrency: null,
+      currencyCode: params.money.currency.toUpperCase(),
     } satisfies CoinbaseFeeTransferBuildResult
   })
 
@@ -457,6 +473,12 @@ const normalizeCoinbaseRecord = (params: NormalizeCoinbaseRecordParams) =>
     const canonicalTransfers = feeTransferResults.flatMap((result) =>
       result.transfer === null ? [] : [result.transfer]
     )
+    const canonicalTransferCurrencies = feeTransferResults.flatMap((result) => {
+      const externalId = result.transfer?.externalId
+      return externalId === null || externalId === undefined
+        ? []
+        : [{ externalId, currencyCode: result.currencyCode }]
+    })
     const providerTransfers = buildPrincipalProviderTransfers({
       normalizeParams: params,
       transaction: transactionPayload,
@@ -469,6 +491,8 @@ const normalizeCoinbaseRecord = (params: NormalizeCoinbaseRecordParams) =>
         )
       )
     )
+
+    const providerFiat = toProviderFiat(transactionPayload.native_amount)
 
     const result: CoinbaseRecordNormalizationResult = {
       transaction: {
@@ -495,6 +519,8 @@ const normalizeCoinbaseRecord = (params: NormalizeCoinbaseRecordParams) =>
           from: transactionPayload.from ?? null,
           to: transactionPayload.to ?? null,
         },
+        providerFiatAmount: providerFiat?.amount ?? null,
+        providerFiatCurrency: providerFiat?.currency ?? null,
         principalId: params.source.principalId,
       },
       venueContext: {
@@ -517,6 +543,7 @@ const normalizeCoinbaseRecord = (params: NormalizeCoinbaseRecordParams) =>
       },
       providerTransfers,
       canonicalTransfers,
+      canonicalTransferCurrencies,
       unresolvedAssetCurrencies,
       primaryAssetCurrency: transactionPayload.amount.currency,
     }

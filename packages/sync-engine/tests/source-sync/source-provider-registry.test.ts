@@ -1,10 +1,7 @@
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import { describe, expect, it } from "vitest"
-import {
-  shouldDeriveCoinbaseLegs,
-  SourceProviderRegistryLive,
-} from "../../src/layers/SourceProviderRegistryLive.ts"
+import { SourceProviderRegistryLive } from "../../src/layers/SourceProviderRegistryLive.ts"
 import { CoinbaseSourceSyncProvider } from "../../src/providers/coinbase/services/CoinbaseSourceSyncProvider.ts"
 import {
   HELIUS_SOLANA_PROVIDER_KEY,
@@ -55,6 +52,7 @@ const CoinbaseSourceSyncProviderTestLive = Layer.succeed(
       Effect.die("Coinbase loadNormalizationLookups should not be called"),
     prepareNormalization: () => Effect.die("Coinbase prepareNormalization should not be called"),
     deriveLegs: () => Effect.die("Coinbase deriveLegs should not be called"),
+    derivePreparedLegs: () => Effect.die("Coinbase derivePreparedLegs should not be called"),
   })
 )
 
@@ -109,6 +107,8 @@ const HeliusSolanaSourceSyncProviderTestLive = Layer.succeed(
           providerCreatedAt: new Date("2026-01-01T00:00:00.000Z"),
           providerUpdatedAt: null,
           metadata: { provider: HELIUS_SOLANA_PROVIDER_KEY },
+          providerFiatAmount: null,
+          providerFiatCurrency: null,
           principalId: source.principalId,
         },
         venueContext: {
@@ -158,6 +158,7 @@ const HeliusSolanaSourceSyncProviderTestLive = Layer.succeed(
           userNotes: null,
           reviewedAt: null,
         },
+        overrideMaterializationAllowed: true,
         resolvedTransactionType: {
           providerTransactionType: "unknown",
           transactionType: null,
@@ -171,6 +172,7 @@ const HeliusSolanaSourceSyncProviderTestLive = Layer.succeed(
         legPlans: [],
       }),
     deriveLegs: () => Effect.die("Helius deriveLegs should not be called"),
+    derivePreparedLegs: () => Effect.succeed([]),
   })
 )
 
@@ -180,45 +182,6 @@ const RegistryLive = SourceProviderRegistryLive.pipe(
 )
 
 describe("SourceProviderRegistryLive", () => {
-  it("does not derive Coinbase legs when the required primary asset is excluded", () => {
-    expect(
-      shouldDeriveCoinbaseLegs({
-        accountingAssetRequirements: [{ inclusionState: "excluded", requiredForMainLeg: true }],
-        canDeriveWithAssetOverrides: false,
-        legDerivationStrategy: "derive",
-        primaryAssetAvailable: false,
-      })
-    ).toBe(false)
-  })
-
-  it("derives Coinbase main legs when only an optional fee asset is excluded", () => {
-    expect(
-      shouldDeriveCoinbaseLegs({
-        accountingAssetRequirements: [
-          { inclusionState: "included", requiredForMainLeg: true },
-          { inclusionState: "excluded", requiredForMainLeg: false },
-        ],
-        canDeriveWithAssetOverrides: true,
-        legDerivationStrategy: "skip",
-        primaryAssetAvailable: true,
-      })
-    ).toBe(true)
-  })
-
-  it("does not derive Coinbase legs when the provider strategy skips accounting", () => {
-    expect(
-      shouldDeriveCoinbaseLegs({
-        accountingAssetRequirements: [
-          { inclusionState: "included", requiredForMainLeg: true },
-          { inclusionState: "excluded", requiredForMainLeg: false },
-        ],
-        canDeriveWithAssetOverrides: false,
-        legDerivationStrategy: "skip",
-        primaryAssetAvailable: true,
-      })
-    ).toBe(false)
-  })
-
   it("resolves the production Solana provider key to the Helius provider module", async () => {
     const result = await Effect.runPromise(
       Effect.gen(function* () {

@@ -357,6 +357,8 @@ const makeExecutorLayer = ({
               providerCreatedAt: sourceRecord.occurredAt,
               providerUpdatedAt: sourceRecord.occurredAt,
               metadata: null,
+              providerFiatAmount: null,
+              providerFiatCurrency: null,
               principalId: source.principalId,
             },
             venueContext: {

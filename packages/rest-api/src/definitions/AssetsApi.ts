@@ -6,7 +6,13 @@
 
 import { HttpApiEndpoint, HttpApiGroup, OpenApi } from "effect/unstable/httpapi"
 import * as Schema from "effect/Schema"
-import { ProviderAssetMappingStatus } from "@my/core/assets"
+import {
+  AssetExceptionClaim,
+  AssetExceptionReason,
+  AssetExceptionRematerializationStatus,
+  AssetExceptionSeverity,
+  ProviderAssetMappingStatus,
+} from "@my/core/assets"
 import { AdminAuthMiddleware } from "./AuthMiddleware.ts"
 import { InternalServerError } from "./ApiErrors.ts"
 
@@ -25,6 +31,174 @@ export class AssetNotFoundError extends Schema.TaggedError<AssetNotFoundError>()
   },
   { httpApiStatus: 404 }
 ) {}
+
+export class AssetStaleRevisionError extends Schema.TaggedError<AssetStaleRevisionError>()(
+  "AssetStaleRevisionError",
+  {
+    code: Schema.Literal("stale_revision"),
+    evidenceRevision: Schema.Number,
+    activeDecisionRevision: Schema.String,
+  },
+  { httpApiStatus: 409 }
+) {}
+
+export class AssetDecisionConflictError extends Schema.TaggedError<AssetDecisionConflictError>()(
+  "AssetDecisionConflictError",
+  {
+    code: Schema.Literals(["ambiguous_identity", "identity_changed"]),
+  },
+  { httpApiStatus: 409 }
+) {}
+
+export class AssetDecisionValidationError extends Schema.TaggedError<AssetDecisionValidationError>()(
+  "AssetDecisionValidationError",
+  {
+    code: Schema.Literals(["invalid_evidence", "invalid_claim"]),
+  },
+  { httpApiStatus: 400 }
+) {}
+
+export class AssetExceptionImpactResponse extends Schema.Class<AssetExceptionImpactResponse>(
+  "AssetExceptionImpactResponse"
+)({
+  blockedReports: Schema.Number,
+  affectedPrincipals: Schema.Number,
+  affectedTransactions: Schema.Number,
+  affectedSources: Schema.Number,
+  affectedTransactionValueEur: Schema.NullOr(Schema.String),
+}) {}
+
+export class AssetExceptionListRowResponse extends Schema.Class<AssetExceptionListRowResponse>(
+  "AssetExceptionListRowResponse"
+)({
+  providerAssetRowId: Schema.String.check(Schema.isUUID()),
+  provider: Schema.String,
+  providerAssetId: Schema.NullOr(Schema.String),
+  naturalKey: Schema.NullOr(Schema.String),
+  currencyCode: Schema.String,
+  name: Schema.NullOr(Schema.String),
+  providerType: Schema.NullOr(Schema.String),
+  reason: AssetExceptionReason,
+  severity: AssetExceptionSeverity,
+  evidenceRevision: Schema.Number,
+  policyRevision: Schema.String,
+  activeDecisionRevision: Schema.String,
+  blockedReports: Schema.Number,
+  affectedPrincipals: Schema.Number,
+  affectedTransactions: Schema.Number,
+  affectedSources: Schema.Number,
+  affectedTransactionValueEur: Schema.NullOr(Schema.String),
+  oldestAt: Schema.DateTimeUtcFromString,
+}) {}
+
+export class AssetExceptionListResponse extends Schema.Class<AssetExceptionListResponse>(
+  "AssetExceptionListResponse"
+)({
+  exceptions: Schema.Array(AssetExceptionListRowResponse),
+  page: Schema.Struct({
+    nextCursor: Schema.NullOr(Schema.String),
+    hasMore: Schema.Boolean,
+  }),
+}) {}
+
+export class AssetExceptionEvidenceResponse extends Schema.Class<AssetExceptionEvidenceResponse>(
+  "AssetExceptionEvidenceResponse"
+)({
+  id: Schema.String.check(Schema.isUUID()),
+  authority: Schema.String,
+  claimKind: Schema.String,
+  sourceLocator: Schema.NullOr(Schema.String),
+  retrievedAt: Schema.DateTimeUtcFromString,
+  evidenceRevision: Schema.Number,
+  decodedClaim: Schema.Unknown,
+  rawPayload: Schema.Unknown,
+}) {}
+
+export class AssetExceptionDecisionHistoryResponse extends Schema.Class<AssetExceptionDecisionHistoryResponse>(
+  "AssetExceptionDecisionHistoryResponse"
+)({
+  id: Schema.String.check(Schema.isUUID()),
+  status: Schema.Literals(["active", "superseded"]),
+  supersedesDecisionId: Schema.NullOr(Schema.String.check(Schema.isUUID())),
+  outcome: Schema.Literals([
+    "attach",
+    "create_standalone",
+    "identity",
+    "excluded",
+    "pending",
+    "fail_closed",
+  ]),
+  claim: Schema.NullOr(AssetExceptionClaim),
+  rationale: Schema.NullOr(Schema.String),
+  reason: Schema.NullOr(Schema.String),
+  assetId: Schema.NullOr(Schema.String.check(Schema.isUUID())),
+  assetRepresentationId: Schema.NullOr(Schema.String.check(Schema.isUUID())),
+  actorId: Schema.String,
+  policyRevision: Schema.String,
+  evidenceRevision: Schema.Number,
+  evidenceSnapshotIds: Schema.Array(Schema.String.check(Schema.isUUID())),
+  createdAt: Schema.DateTimeUtcFromString,
+}) {}
+
+export class AssetExceptionRematerializationResponse extends Schema.Class<AssetExceptionRematerializationResponse>(
+  "AssetExceptionRematerializationResponse"
+)({
+  status: AssetExceptionRematerializationStatus,
+  affectedSourceCount: Schema.Number,
+  failedSourceCount: Schema.Number,
+  lastFailureAt: Schema.NullOr(Schema.DateTimeUtcFromString),
+  failureCode: Schema.NullOr(Schema.String),
+}) {}
+
+export class AssetExceptionDetailResponse extends Schema.Class<AssetExceptionDetailResponse>(
+  "AssetExceptionDetailResponse"
+)({
+  providerAssetRowId: Schema.String.check(Schema.isUUID()),
+  provider: Schema.String,
+  providerAssetId: Schema.NullOr(Schema.String),
+  naturalKey: Schema.NullOr(Schema.String),
+  currencyCode: Schema.String,
+  name: Schema.NullOr(Schema.String),
+  exponent: Schema.NullOr(Schema.Number),
+  providerType: Schema.NullOr(Schema.String),
+  rawProviderPayload: Schema.Unknown,
+  evidenceRevision: Schema.Number,
+  policyRevision: Schema.String,
+  activeDecisionRevision: Schema.String,
+  reviewStatus: Schema.Literals(["unresolved", "approved", "excluded"]),
+  policyOutput: Schema.NullOr(
+    Schema.Struct({
+      outcome: Schema.Literals([
+        "attach",
+        "create_standalone",
+        "excluded",
+        "pending",
+        "fail_closed",
+      ]),
+      reason: Schema.NullOr(Schema.String),
+    })
+  ),
+  activeDecision: Schema.NullOr(AssetExceptionDecisionHistoryResponse),
+  decisionHistory: Schema.Array(AssetExceptionDecisionHistoryResponse),
+  evidence: Schema.Array(AssetExceptionEvidenceResponse),
+  impact: AssetExceptionImpactResponse,
+  rematerialization: AssetExceptionRematerializationResponse,
+}) {}
+
+export class AssetExceptionPreviewResponse extends Schema.Class<AssetExceptionPreviewResponse>(
+  "AssetExceptionPreviewResponse"
+)({
+  claim: AssetExceptionClaim,
+  decisionAction: Schema.Literals(["initial", "supersession", "reversal"]),
+  resultingAssetId: Schema.NullOr(Schema.String.check(Schema.isUUID())),
+  assetOutcome: Schema.Literals(["none", "reuse", "create"]),
+  representationOutcome: Schema.Literals(["none", "reuse", "create"]),
+  supersededDecision: Schema.NullOr(AssetExceptionDecisionHistoryResponse),
+  impact: AssetExceptionImpactResponse,
+  rematerializationSourceCount: Schema.Number,
+  evidenceRevision: Schema.Number,
+  activeDecisionRevision: Schema.String,
+}) {}
 
 /** Maximum accepted length for public asset catalog search queries. */
 export const ASSET_CATALOG_SEARCH_QUERY_MAX_LENGTH = 128
@@ -257,6 +431,46 @@ const AssetCatalogListQuery = Schema.Struct({
   ),
 })
 
+const AssetExceptionListQuery = Schema.Struct({
+  q: Schema.optional(AssetCatalogSearchQuery),
+  cursor: Schema.optional(Schema.String),
+  limit: Schema.optional(
+    Schema.NumberFromString.check(
+      Schema.isInt(),
+      Schema.isGreaterThanOrEqualTo(1),
+      Schema.isLessThanOrEqualTo(100)
+    )
+  ),
+})
+
+const AssetExceptionLookupQuery = Schema.Struct({
+  provider: Schema.String,
+  providerAssetId: Schema.optional(Schema.String),
+  naturalKey: Schema.optional(Schema.String),
+})
+
+export class AssetExceptionDecisionRequest extends Schema.Class<AssetExceptionDecisionRequest>(
+  "AssetExceptionDecisionRequest"
+)({
+  claim: AssetExceptionClaim,
+  evidenceRevision: Schema.Number.pipe(
+    Schema.check(Schema.isInt()),
+    Schema.check(Schema.isGreaterThanOrEqualTo(1))
+  ),
+  activeDecisionRevision: Schema.String,
+  evidenceSnapshotIds: Schema.Array(Schema.String.check(Schema.isUUID())),
+  rationale: Schema.NullOr(Schema.String.check(Schema.isNonEmpty())),
+}) {}
+
+export class AssetExceptionDecisionConfirmationRequest extends Schema.Class<AssetExceptionDecisionConfirmationRequest>(
+  "AssetExceptionDecisionConfirmationRequest"
+)({
+  ...AssetExceptionDecisionRequest.fields,
+  expectedResultingAssetId: Schema.NullOr(Schema.String.check(Schema.isUUID())),
+  expectedAssetOutcome: Schema.Literals(["none", "reuse", "create"]),
+  expectedRepresentationOutcome: Schema.Literals(["none", "reuse", "create"]),
+}) {}
+
 const listAssets = HttpApiEndpoint.get("listAssets", "/assets", {
   query: AssetCatalogListQuery,
   success: AssetCatalogListResponse,
@@ -370,10 +584,108 @@ const approveProviderAsset = HttpApiEndpoint.post(
   )
   .middleware(AdminAuthMiddleware)
 
+const listAssetExceptions = HttpApiEndpoint.get("listAssetExceptions", "/assets/exceptions", {
+  query: AssetExceptionListQuery,
+  success: AssetExceptionListResponse,
+  error: [AssetBadRequestError, InternalServerError],
+})
+  .annotateMerge(
+    OpenApi.annotations({
+      summary: "List actionable asset exceptions",
+      description: "Lists completed deterministic domain exceptions in fixed impact order.",
+    })
+  )
+  .middleware(AdminAuthMiddleware)
+
+const lookupAssetException = HttpApiEndpoint.get(
+  "lookupAssetException",
+  "/assets/exceptions/lookup",
+  {
+    query: AssetExceptionLookupQuery,
+    success: AssetExceptionDetailResponse,
+    error: [AssetBadRequestError, AssetNotFoundError, InternalServerError],
+  }
+)
+  .annotateMerge(
+    OpenApi.annotations({
+      summary: "Look up an asset observation",
+      description:
+        "Finds an unresolved, approved, or excluded observation by an exact provider key.",
+    })
+  )
+  .middleware(AdminAuthMiddleware)
+
+const getAssetException = HttpApiEndpoint.get("getAssetException", "/assets/exceptions/:id", {
+  params: Schema.Struct({ id: Schema.String.check(Schema.isUUID()) }),
+  success: AssetExceptionDetailResponse,
+  error: [AssetNotFoundError, InternalServerError],
+})
+  .annotateMerge(
+    OpenApi.annotations({
+      summary: "Get asset exception detail",
+      description:
+        "Returns persisted evidence, policy output, impact, and complete decision history.",
+    })
+  )
+  .middleware(AdminAuthMiddleware)
+
+const previewAssetExceptionDecision = HttpApiEndpoint.post(
+  "previewAssetExceptionDecision",
+  "/assets/exceptions/:id/preview",
+  {
+    params: Schema.Struct({ id: Schema.String.check(Schema.isUUID()) }),
+    payload: Schema.Struct(AssetExceptionDecisionRequest.fields),
+    success: AssetExceptionPreviewResponse,
+    error: [
+      AssetNotFoundError,
+      AssetStaleRevisionError,
+      AssetDecisionConflictError,
+      AssetDecisionValidationError,
+      InternalServerError,
+    ],
+  }
+)
+  .annotateMerge(
+    OpenApi.annotations({
+      summary: "Preview an asset decision",
+      description: "Derives the identity and rematerialization outcome without writing.",
+    })
+  )
+  .middleware(AdminAuthMiddleware)
+
+const submitAssetExceptionDecision = HttpApiEndpoint.post(
+  "submitAssetExceptionDecision",
+  "/assets/exceptions/:id/decisions",
+  {
+    params: Schema.Struct({ id: Schema.String.check(Schema.isUUID()) }),
+    payload: Schema.Struct(AssetExceptionDecisionConfirmationRequest.fields),
+    success: AssetExceptionDetailResponse,
+    error: [
+      AssetNotFoundError,
+      AssetStaleRevisionError,
+      AssetDecisionConflictError,
+      AssetDecisionValidationError,
+      InternalServerError,
+    ],
+  }
+)
+  .annotateMerge(
+    OpenApi.annotations({
+      summary: "Accept an asset decision",
+      description: "Appends a human decision and atomically schedules affected source rebuilds.",
+    })
+  )
+  .middleware(AdminAuthMiddleware)
+
 export class AssetsApi extends HttpApiGroup.make("assets")
   .add(listAssets)
   .add(getAsset)
   .add(listPendingAssets)
+  .add(listAssetExceptions)
+  .add(lookupAssetException)
+  .add(getAssetException)
+  .add(previewAssetExceptionDecision)
+  .add(submitAssetExceptionDecision)
   .add(listProviderAssetReviews)
   .add(listUnresolvedTransferReconciliations)
   .add(approveProviderAsset)

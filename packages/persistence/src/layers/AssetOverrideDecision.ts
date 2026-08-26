@@ -11,8 +11,9 @@ export type AssetInclusionState = "included" | "excluded" | "blocked"
  *
  * `technicalBlocker` is true for non-overridable facts such as missing decimals or an
  * unsupported provider asset type. The identity override falls back to the system asset,
- * and the inclusion override falls back to the system inclusion state. An included result
- * without either an override or system asset remains blocked.
+ * and the inclusion override falls back to the system inclusion state. Choosing an identity
+ * resolves a non-technical identity blocker without requiring a second inclusion override.
+ * An included result without either an override or system asset remains blocked.
  */
 export interface AssetOverrideDecisionInput {
   readonly systemAssetId: string | null
@@ -43,9 +44,13 @@ export const resolveEffectiveAssetOverrideDecision = ({
   inclusionOverrideState,
 }: AssetOverrideDecisionInput): EffectiveAssetOverrideDecision => {
   const assetId = identityOverrideAssetId ?? systemAssetId
+  const identityResolvedInclusionState =
+    !technicalBlocker && identityOverrideAssetId !== null && systemInclusionState === "blocked"
+      ? "included"
+      : systemInclusionState
   const inclusionState = technicalBlocker
     ? "blocked"
-    : (inclusionOverrideState ?? systemInclusionState)
+    : (inclusionOverrideState ?? identityResolvedInclusionState)
 
   return {
     assetId: inclusionState === "included" ? assetId : null,

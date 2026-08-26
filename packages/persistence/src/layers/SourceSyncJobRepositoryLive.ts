@@ -5,7 +5,7 @@
  */
 
 import { SyncCreditReasonCode } from "@my/core/billing"
-import { and, asc, eq, inArray, isNotNull, isNull, lt, or, sql } from "drizzle-orm"
+import { and, asc, eq, inArray, isNotNull, isNull, lt, ne, or, sql } from "drizzle-orm"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import * as Schema from "effect/Schema"
@@ -172,6 +172,7 @@ const make = Effect.gen(function* () {
               isNull(schema.principalAssetOverrideApplications.supersededAt),
               or(
                 isNull(schema.principalAssetOverrideApplications.replayJobId),
+                eq(schema.principalAssetOverrideApplications.replayJobId, jobId),
                 sql`exists (
                   select 1
                   from ${schema.processingJobs} previous_replay
@@ -192,6 +193,28 @@ const make = Effect.gen(function* () {
             wrapSyncEngineSqlError(
               "sourceSyncJobRepository.materializeFollowUpJob.linkOverrideApplications"
             )
+          )
+
+        // The follow-up replay also owns every unfinished global decision
+        // rebuild for this source, including earlier operator failures.
+        yield* executor
+          .update(schema.assetDecisionRematerializations)
+          .set({
+            processingJobId: followUpJob.id,
+            status: "pending",
+            failureCode: null,
+            lastFailureAt: null,
+            updatedAt: createdAt,
+          })
+          .where(
+            and(
+              eq(schema.assetDecisionRematerializations.sourceId, sourceId),
+              ne(schema.assetDecisionRematerializations.status, "complete")
+            )
+          )
+          .pipe(
+            Effect.asVoid,
+            wrapSyncEngineSqlError("sourceSyncJobRepository.materializeFollowUpJob.repointRebuilds")
           )
       }
     })
@@ -291,6 +314,52 @@ const make = Effect.gen(function* () {
         Effect.asVoid,
         wrapSyncEngineSqlError("sourceSyncJobRepository.recordNewlyObservedOverrideApplications")
       )
+
+  /**
+   * Record the outcome of a finished replay on every unfinished decision
+   * rebuild for the source. A replay rebuilds the whole source from raw
+   * records, so one clean replay completes every tracked rebuild, and any
+   * failure parks them at operator_attention until a later replay succeeds.
+   * Rebuild readers (tax readiness, exception status) trust this stored
+   * status instead of re-deriving it from job chains.
+   */
+  const settleSourceRebuilds = ({
+    executor,
+    sourceId,
+    outcome,
+    at,
+  }: {
+    readonly executor: SourceSyncJobExecutor
+    readonly sourceId: string
+    readonly outcome:
+      | { readonly _tag: "complete" }
+      | { readonly _tag: "failed"; readonly failureCode: string }
+    readonly at: Date
+  }) =>
+    executor
+      .update(schema.assetDecisionRematerializations)
+      .set(
+        outcome._tag === "complete"
+          ? {
+              status: "complete",
+              failureCode: null,
+              lastFailureAt: null,
+              updatedAt: at,
+            }
+          : {
+              status: "operator_attention",
+              failureCode: outcome.failureCode,
+              lastFailureAt: at,
+              updatedAt: at,
+            }
+      )
+      .where(
+        and(
+          eq(schema.assetDecisionRematerializations.sourceId, sourceId),
+          ne(schema.assetDecisionRematerializations.status, "complete")
+        )
+      )
+      .pipe(Effect.asVoid, wrapSyncEngineSqlError("sourceSyncJobRepository.settleSourceRebuilds"))
 
   const selectActiveJobFields = {
     id: schema.processingJobs.id,
@@ -670,6 +739,7 @@ const make = Effect.gen(function* () {
               id: schema.processingJobs.id,
               sourceId: schema.processingJobs.sourceId,
               principalId: schema.processingJobs.principalId,
+              mode: schema.processingJobs.mode,
               followUpMode: schema.processingJobs.followUpMode,
             })
             .pipe(wrapSyncEngineSqlError("sourceSyncJobRepository.recoverStaleActiveJob.update"))
@@ -707,6 +777,15 @@ const make = Effect.gen(function* () {
             createdAt: completedAt,
           })
 
+          if (job.mode === "replay" && job.followUpMode !== "replay") {
+            yield* settleSourceRebuilds({
+              executor: tx,
+              sourceId: job.sourceId,
+              outcome: { _tag: "failed", failureCode: "replay_interrupted" },
+              at: completedAt,
+            })
+          }
+
           yield* Effect.logWarning(
             { sourceId, jobId, completedAt: completedAt.toISOString() },
             "source-sync:stale-active-job-recovered"
@@ -737,6 +816,7 @@ const make = Effect.gen(function* () {
               id: schema.processingJobs.id,
               sourceId: schema.processingJobs.sourceId,
               principalId: schema.processingJobs.principalId,
+              mode: schema.processingJobs.mode,
               followUpMode: schema.processingJobs.followUpMode,
             })
             .pipe(wrapSyncEngineSqlError("sourceSyncJobRepository.failJob.update"))
@@ -764,6 +844,15 @@ const make = Effect.gen(function* () {
             followUpMode: job.followUpMode,
             createdAt: completedAt,
           })
+
+          if (job.mode === "replay" && job.followUpMode !== "replay") {
+            yield* settleSourceRebuilds({
+              executor: tx,
+              sourceId: job.sourceId,
+              outcome: { _tag: "failed", failureCode: "replay_failed" },
+              at: completedAt,
+            })
+          }
         })
       )
       .pipe(preserveExpectedExecutionError("sourceSyncJobRepository.failJob"))
@@ -803,6 +892,7 @@ const make = Effect.gen(function* () {
               id: schema.processingJobs.id,
               sourceId: schema.processingJobs.sourceId,
               principalId: schema.processingJobs.principalId,
+              mode: schema.processingJobs.mode,
               followUpMode: schema.processingJobs.followUpMode,
             })
             .pipe(wrapSyncEngineSqlError("sourceSyncJobRepository.failCreditRequiredJob.update"))
@@ -830,6 +920,15 @@ const make = Effect.gen(function* () {
             followUpMode: job.followUpMode,
             createdAt: completedAt,
           })
+
+          if (job.mode === "replay" && job.followUpMode !== "replay") {
+            yield* settleSourceRebuilds({
+              executor: tx,
+              sourceId: job.sourceId,
+              outcome: { _tag: "failed", failureCode: reasonCode },
+              at: completedAt,
+            })
+          }
         })
       )
       .pipe(preserveExpectedExecutionError("sourceSyncJobRepository.failCreditRequiredJob"))
@@ -869,6 +968,7 @@ const make = Effect.gen(function* () {
               id: schema.processingJobs.id,
               sourceId: schema.processingJobs.sourceId,
               principalId: schema.processingJobs.principalId,
+              mode: schema.processingJobs.mode,
               followUpMode: schema.processingJobs.followUpMode,
             })
             .pipe(wrapSyncEngineSqlError("sourceSyncJobRepository.completeJob.update"))
@@ -896,6 +996,21 @@ const make = Effect.gen(function* () {
             followUpMode: job.followUpMode,
             createdAt: completedAt,
           })
+
+          // A replay that skipped rows left derived accounting incomplete
+          // even though the job itself completed, so it must not count as a
+          // finished rebuild.
+          if (job.mode === "replay" && job.followUpMode !== "replay") {
+            yield* settleSourceRebuilds({
+              executor: tx,
+              sourceId: job.sourceId,
+              outcome:
+                state.failedRecords === 0
+                  ? { _tag: "complete" }
+                  : { _tag: "failed", failureCode: "replay_failed_records" },
+              at: completedAt,
+            })
+          }
         })
       )
       .pipe(preserveExpectedExecutionError("sourceSyncJobRepository.completeJob"))
@@ -1051,6 +1166,24 @@ const make = Effect.gen(function* () {
           or(
             and(
               eq(schema.processingJobs.status, "pending"),
+              sql`not exists (
+                select 1
+                from ${schema.principalAssetOverrideApplications} dependent_application
+                cross join lateral unnest(dependent_application.depends_on_source_ids) dependency_source_id
+                where dependent_application.replay_job_id = ${schema.processingJobs.id}
+                  and dependent_application.superseded_at is null
+                  and not exists (
+                    select 1
+                    from ${schema.principalAssetOverrideApplications} owner_application
+                    inner join ${schema.processingJobs} owner_job
+                      on owner_job.id = owner_application.replay_job_id
+                    where owner_application.override_id = dependent_application.override_id
+                      and owner_application.source_id = dependency_source_id
+                      and owner_application.superseded_at is null
+                      and owner_job.status = 'completed'
+                      and owner_job.progress_details ->> 'failedRecords' = '0'
+                  )
+              )`,
               or(
                 isNull(schema.processingJobs.queueName),
                 isNull(schema.processingJobs.queueJobId),
@@ -1119,6 +1252,24 @@ const make = Effect.gen(function* () {
           and(
             isNotNull(schema.processingJobs.principalId),
             eq(schema.processingJobs.status, "pending"),
+            sql`not exists (
+              select 1
+              from ${schema.principalAssetOverrideApplications} dependent_application
+              cross join lateral unnest(dependent_application.depends_on_source_ids) dependency_source_id
+              where dependent_application.replay_job_id = ${schema.processingJobs.id}
+                and dependent_application.superseded_at is null
+                and not exists (
+                  select 1
+                  from ${schema.principalAssetOverrideApplications} owner_application
+                  inner join ${schema.processingJobs} owner_job
+                    on owner_job.id = owner_application.replay_job_id
+                  where owner_application.override_id = dependent_application.override_id
+                    and owner_application.source_id = dependency_source_id
+                    and owner_application.superseded_at is null
+                    and owner_job.status = 'completed'
+                    and owner_job.progress_details ->> 'failedRecords' = '0'
+                )
+            )`,
             or(
               isNull(schema.processingJobs.queueName),
               isNull(schema.processingJobs.queueJobId),

@@ -9,7 +9,20 @@
  */
 
 import { createHash } from "node:crypto"
-import { and, asc, desc, eq, gt, inArray, isNotNull, isNull, lte, or, sql } from "drizzle-orm"
+import {
+  and,
+  asc,
+  desc,
+  eq,
+  gt,
+  inArray,
+  isNotNull,
+  isNull,
+  lte,
+  notInArray,
+  or,
+  sql,
+} from "drizzle-orm"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import * as Schema from "effect/Schema"
@@ -400,20 +413,6 @@ const make = Effect.gen(function* () {
     readonly providerTransfer: PersistedSourceProviderTransfer
   }) =>
     Effect.gen(function* () {
-      // A provider-asset target stays valid for every transfer of its provider
-      // asset row, so it is consulted as a fallback even when the transfer
-      // carries an observed representation identity. The representation target
-      // is the primary evidence identity and wins when both exist.
-      const providerAssetCondition =
-        providerTransfer.providerAssetId === null
-          ? null
-          : and(
-              eq(schema.principalAssetOverrides.targetKind, "provider_asset"),
-              eq(
-                schema.principalAssetOverrides.providerAssetRowId,
-                providerTransfer.providerAssetId
-              )
-            )
       const representationCondition =
         providerTransfer.observedBlockchainId === null ||
         providerTransfer.observedRepresentationType === null
@@ -438,10 +437,19 @@ const make = Effect.gen(function* () {
                     providerTransfer.observedMintAddress
                   )
             )
-      const targetCondition =
-        representationCondition !== null && providerAssetCondition !== null
-          ? or(representationCondition, providerAssetCondition)
-          : (representationCondition ?? providerAssetCondition)
+      // Exact representation evidence is the durable cross-provider target.
+      // Provider-asset overrides are only a fallback for chainless observations.
+      const providerAssetCondition =
+        representationCondition !== null || providerTransfer.providerAssetId === null
+          ? null
+          : and(
+              eq(schema.principalAssetOverrides.targetKind, "provider_asset"),
+              eq(
+                schema.principalAssetOverrides.providerAssetRowId,
+                providerTransfer.providerAssetId
+              )
+            )
+      const targetCondition = representationCondition ?? providerAssetCondition
       if (targetCondition === null) return null
 
       const overrides = yield* executor
@@ -965,6 +973,8 @@ const make = Effect.gen(function* () {
         providerCreatedAt: sql.raw("excluded.provider_created_at"),
         providerUpdatedAt: sql.raw("excluded.provider_updated_at"),
         metadata: sql.raw("excluded.metadata"),
+        providerFiatAmount: sql.raw("excluded.provider_fiat_amount"),
+        providerFiatCurrency: sql.raw("excluded.provider_fiat_currency"),
         principalId: sql.raw("excluded.principal_id"),
         updatedAt: now,
       } as const
@@ -1494,6 +1504,73 @@ const make = Effect.gen(function* () {
         }
       })
     )
+
+  /**
+   * Keep the transaction's provider-asset dependencies in step with the
+   * latest normalization pass. Replays can change which provider assets a
+   * record depends on, so stale rows are removed instead of accreting.
+   */
+  const syncProviderAssetTransactionUses = ({
+    executor,
+    transactionId,
+    sourceId,
+    providerAssetRowIds,
+  }: {
+    readonly executor: SourceNormalizationExecutor
+    readonly transactionId: string
+    readonly sourceId: string
+    readonly providerAssetRowIds: ReadonlyArray<string>
+  }) =>
+    Effect.gen(function* () {
+      const now = nowDate()
+      const distinctProviderAssetRowIds = [...new Set(providerAssetRowIds)]
+
+      yield* executor
+        .delete(schema.providerAssetTransactionUses)
+        .where(
+          and(
+            eq(schema.providerAssetTransactionUses.transactionId, transactionId),
+            distinctProviderAssetRowIds.length === 0
+              ? undefined
+              : notInArray(
+                  schema.providerAssetTransactionUses.providerAssetRowId,
+                  distinctProviderAssetRowIds
+                )
+          )
+        )
+        .pipe(
+          wrapSyncEngineSqlError(
+            "sourceNormalizationRepository.syncProviderAssetTransactionUses.deleteStale"
+          )
+        )
+
+      if (distinctProviderAssetRowIds.length === 0) {
+        return
+      }
+
+      yield* executor
+        .insert(schema.providerAssetTransactionUses)
+        .values(
+          distinctProviderAssetRowIds.map((providerAssetRowId) => ({
+            providerAssetRowId,
+            transactionId,
+            sourceId,
+            createdAt: now,
+            updatedAt: now,
+          }))
+        )
+        .onConflictDoNothing({
+          target: [
+            schema.providerAssetTransactionUses.providerAssetRowId,
+            schema.providerAssetTransactionUses.transactionId,
+          ],
+        })
+        .pipe(
+          wrapSyncEngineSqlError(
+            "sourceNormalizationRepository.syncProviderAssetTransactionUses.insert"
+          )
+        )
+    })
 
   const upsertProviderTransfers = ({
     executor,
@@ -3074,6 +3151,12 @@ const make = Effect.gen(function* () {
           yield* recordSourceRepresentationUses({
             executor: tx,
             providerTransfers: params.providerTransfers,
+          })
+          yield* syncProviderAssetTransactionUses({
+            executor: tx,
+            transactionId: persistedTransaction.id,
+            sourceId: persistedTransaction.sourceId,
+            providerAssetRowIds: params.providerAssetRowIds,
           })
           const persistedProviderTransfers = yield* upsertProviderTransfers({
             executor: tx,

@@ -3,6 +3,11 @@ import type {
   AssetCatalogListResponse,
   AssetCanonicalizationRequest,
   AssetCanonicalizationResponse,
+  AssetExceptionDecisionConfirmationRequest,
+  AssetExceptionDecisionRequest,
+  AssetExceptionDetailResponse,
+  AssetExceptionListResponse,
+  AssetExceptionPreviewResponse,
   PendingAssetListResponse,
   ProviderAssetApprovalRequest,
   ProviderAssetReviewListResponse,
@@ -75,6 +80,33 @@ export type AssetCanonicalization = AssetCanonicalizationResponse
 export type ProviderAssetApprovalInput = {
   readonly id: string
 } & ProviderAssetApprovalRequest
+export type AssetExceptionList = AssetExceptionListResponse
+export type AssetExceptionDetail = AssetExceptionDetailResponse
+export type AssetExceptionPreview = AssetExceptionPreviewResponse
+export type AssetExceptionDecisionInput = {
+  readonly id: string
+} & AssetExceptionDecisionRequest
+export type AssetExceptionDecisionConfirmationInput = {
+  readonly id: string
+} & AssetExceptionDecisionConfirmationRequest
+
+export type AssetExceptionListInput = {
+  readonly query?: string | null
+  readonly cursor?: string | null
+  readonly limit?: number
+}
+
+export type AssetExceptionLookupInput =
+  | {
+      readonly provider: string
+      readonly providerAssetId: string
+      readonly naturalKey?: never
+    }
+  | {
+      readonly provider: string
+      readonly naturalKey: string
+      readonly providerAssetId?: never
+    }
 
 export type AssetCatalogListInput = {
   readonly query?: string | null
@@ -116,6 +148,21 @@ export type AssetsEffectResource = {
   readonly listPending: (
     input?: PendingAssetListInput
   ) => Effect.Effect<PendingAssetList, unknown, never>
+  readonly listExceptions: (
+    input?: AssetExceptionListInput
+  ) => Effect.Effect<AssetExceptionList, unknown, never>
+  readonly getException: (input: {
+    readonly id: string
+  }) => Effect.Effect<AssetExceptionDetail, unknown, never>
+  readonly lookupException: (
+    input: AssetExceptionLookupInput
+  ) => Effect.Effect<AssetExceptionDetail, unknown, never>
+  readonly previewExceptionDecision: (
+    input: AssetExceptionDecisionInput
+  ) => Effect.Effect<AssetExceptionPreview, unknown, never>
+  readonly submitExceptionDecision: (
+    input: AssetExceptionDecisionConfirmationInput
+  ) => Effect.Effect<AssetExceptionDetail, unknown, never>
 }
 
 export type AssetsPromiseResource = {
@@ -131,6 +178,26 @@ export type AssetsPromiseResource = {
     input?: PendingAssetListInput,
     options?: AssetRequestOptions
   ) => Promise<PendingAssetList>
+  readonly listExceptions: (
+    input?: AssetExceptionListInput,
+    options?: AssetRequestOptions
+  ) => Promise<AssetExceptionList>
+  readonly getException: (
+    input: { readonly id: string },
+    options?: AssetRequestOptions
+  ) => Promise<AssetExceptionDetail>
+  readonly lookupException: (
+    input: AssetExceptionLookupInput,
+    options?: AssetRequestOptions
+  ) => Promise<AssetExceptionDetail>
+  readonly previewExceptionDecision: (
+    input: AssetExceptionDecisionInput,
+    options?: AssetRequestOptions
+  ) => Promise<AssetExceptionPreview>
+  readonly submitExceptionDecision: (
+    input: AssetExceptionDecisionConfirmationInput,
+    options?: AssetRequestOptions
+  ) => Promise<AssetExceptionDetail>
 }
 
 export type InternalAssetsEffectResource = AssetsEffectResource & {
@@ -250,6 +317,36 @@ export const makeAssetsEffectResource = (
       ),
       toPendingAssetList
     ),
+  listExceptions: (input) =>
+    Effect.flatMap(client, (resolved) =>
+      resolved.assets.listAssetExceptions({
+        query: {
+          q: input?.query ?? undefined,
+          cursor: input?.cursor ?? undefined,
+          limit: input?.limit,
+        },
+      })
+    ),
+  getException: ({ id }) =>
+    Effect.flatMap(client, (resolved) => resolved.assets.getAssetException({ params: { id } })),
+  lookupException: (input) =>
+    Effect.flatMap(client, (resolved) =>
+      resolved.assets.lookupAssetException({
+        query: {
+          provider: input.provider,
+          providerAssetId: input.providerAssetId,
+          naturalKey: input.naturalKey,
+        },
+      })
+    ),
+  previewExceptionDecision: ({ id, ...payload }) =>
+    Effect.flatMap(client, (resolved) =>
+      resolved.assets.previewAssetExceptionDecision({ params: { id }, payload })
+    ),
+  submitExceptionDecision: ({ id, ...payload }) =>
+    Effect.flatMap(client, (resolved) =>
+      resolved.assets.submitAssetExceptionDecision({ params: { id }, payload })
+    ),
 })
 
 export const makeInternalAssetsEffectResource = (
@@ -308,6 +405,12 @@ export const makeAssetsPromiseResource = (
   list: (input, options) => run(effect.list(input), options),
   get: (input, options) => run(effect.get(input), options),
   listPending: (input, options) => run(effect.listPending(input), options),
+  listExceptions: (input, options) => run(effect.listExceptions(input), options),
+  getException: (input, options) => run(effect.getException(input), options),
+  lookupException: (input, options) => run(effect.lookupException(input), options),
+  previewExceptionDecision: (input, options) =>
+    run(effect.previewExceptionDecision(input), options),
+  submitExceptionDecision: (input, options) => run(effect.submitExceptionDecision(input), options),
 })
 
 export const makeInternalAssetsPromiseResource = (

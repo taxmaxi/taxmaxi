@@ -1,6 +1,7 @@
 import * as Schema from "effect/Schema"
 import { describe, expect, it } from "vitest"
 import {
+  AssetOverrideBadRequestError,
   AssetOverrideConflictError,
   AssetOverrideNotFoundError,
 } from "../src/definitions/AssetOverridesApi.ts"
@@ -29,6 +30,32 @@ const projection = {
 }
 
 describe("asset override API errors", () => {
+  it.each([
+    "invalid_target",
+    "invalid_representation_target",
+    "override_kind_mismatch",
+    "asset_not_found",
+    "asset_type_mismatch",
+    "missing_decimals",
+    "unsupported_asset_type",
+    "cyclic_replay_dependency",
+    "reason_required",
+    "no_active_override",
+  ] as const)("exposes the stable %s validation code", (code) => {
+    const error = new AssetOverrideBadRequestError({ code, message: "Invalid override." })
+    expect(Schema.encodeSync(AssetOverrideBadRequestError)(error)).toMatchObject({ code })
+  })
+
+  it("rejects undocumented validation codes", () => {
+    expect(() =>
+      Schema.decodeUnknownSync(AssetOverrideBadRequestError)({
+        _tag: "AssetOverrideBadRequestError",
+        code: "new_undocumented_code",
+        message: "Invalid override.",
+      })
+    ).toThrow()
+  })
+
   it("exposes a stable code for missing targets", () => {
     const error = new AssetOverrideNotFoundError({
       code: "asset_override_target_not_found",

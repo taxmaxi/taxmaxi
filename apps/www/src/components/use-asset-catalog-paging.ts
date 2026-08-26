@@ -11,27 +11,37 @@ export function useAssetCatalogPaging({
   approvedAssetsUnavailable,
   canLoadMoreApproved,
   canLoadMorePending,
+  canLoadMoreExceptions,
   isLoadingApproved,
   isLoadingPending,
+  isLoadingExceptions,
   items,
   onLoadMoreApproved,
   onLoadMorePending,
+  onLoadMoreExceptions,
   onRetryApproved,
   onRetryPending,
+  onRetryExceptions,
   pendingAssetsUnavailable,
+  exceptionsUnavailable,
   scope,
 }: {
   readonly approvedAssetsUnavailable: boolean
   readonly canLoadMoreApproved: boolean
   readonly canLoadMorePending: boolean
+  readonly canLoadMoreExceptions: boolean
   readonly isLoadingApproved: boolean
   readonly isLoadingPending: boolean
+  readonly isLoadingExceptions: boolean
   readonly items: ReadonlyArray<CatalogItem>
   readonly onLoadMoreApproved: () => Promise<unknown> | void
   readonly onLoadMorePending: () => Promise<unknown> | void
+  readonly onLoadMoreExceptions: () => Promise<unknown> | void
   readonly onRetryApproved: () => Promise<unknown> | void
   readonly onRetryPending: () => Promise<unknown> | void
+  readonly onRetryExceptions: () => Promise<unknown> | void
   readonly pendingAssetsUnavailable: boolean
+  readonly exceptionsUnavailable: boolean
   readonly scope: CatalogScope
 }) {
   const [visibleItemLimit, setVisibleItemLimit] = useState(INITIAL_VISIBLE_ITEM_LIMIT)
@@ -39,31 +49,45 @@ export function useAssetCatalogPaging({
   const hasLocallyHiddenItems = visibleItems.length < items.length
 
   const canLoadMoreApprovedForScope =
-    scope !== "pending" && canLoadMoreApproved && !approvedAssetsUnavailable
+    (scope === "all" || scope === "approved") && canLoadMoreApproved && !approvedAssetsUnavailable
 
   const canLoadMorePendingForScope =
-    scope !== "approved" && canLoadMorePending && !pendingAssetsUnavailable
+    (scope === "all" || scope === "pending") && canLoadMorePending && !pendingAssetsUnavailable
+
+  const canLoadMoreExceptionsForScope =
+    scope === "exceptions" && canLoadMoreExceptions && !exceptionsUnavailable
 
   const hasMoreItems =
-    hasLocallyHiddenItems || canLoadMoreApprovedForScope || canLoadMorePendingForScope
+    hasLocallyHiddenItems ||
+    canLoadMoreApprovedForScope ||
+    canLoadMorePendingForScope ||
+    canLoadMoreExceptionsForScope
 
   const canLoadMoreNow =
     hasLocallyHiddenItems ||
     (canLoadMoreApprovedForScope && !isLoadingApproved) ||
-    (canLoadMorePendingForScope && !isLoadingPending)
+    (canLoadMorePendingForScope && !isLoadingPending) ||
+    (canLoadMoreExceptionsForScope && !isLoadingExceptions)
 
   const hasLoadError =
-    (scope !== "pending" && approvedAssetsUnavailable) ||
-    (scope !== "approved" && pendingAssetsUnavailable)
+    ((scope === "all" || scope === "approved") && approvedAssetsUnavailable) ||
+    ((scope === "all" || scope === "pending") && pendingAssetsUnavailable) ||
+    (scope === "exceptions" && exceptionsUnavailable)
 
-  const canRetryApproved = scope !== "pending" && approvedAssetsUnavailable && !isLoadingApproved
+  const canRetryApproved =
+    (scope === "all" || scope === "approved") && approvedAssetsUnavailable && !isLoadingApproved
 
-  const canRetryPending = scope !== "approved" && pendingAssetsUnavailable && !isLoadingPending
+  const canRetryPending =
+    (scope === "all" || scope === "pending") && pendingAssetsUnavailable && !isLoadingPending
 
-  const canRetryNow = canRetryApproved || canRetryPending
+  const canRetryExceptions = scope === "exceptions" && exceptionsUnavailable && !isLoadingExceptions
+
+  const canRetryNow = canRetryApproved || canRetryPending || canRetryExceptions
 
   const isLoadingVisibleFeed =
-    (scope !== "pending" && isLoadingApproved) || (scope !== "approved" && isLoadingPending)
+    ((scope === "all" || scope === "approved") && isLoadingApproved) ||
+    ((scope === "all" || scope === "pending") && isLoadingPending) ||
+    (scope === "exceptions" && isLoadingExceptions)
 
   const visibleMatchCount = visibleItems.length
 
@@ -91,14 +115,20 @@ export function useAssetCatalogPaging({
     if (canLoadMorePendingForScope && !isLoadingPending) {
       void onLoadMorePending()
     }
+    if (canLoadMoreExceptionsForScope && !isLoadingExceptions) {
+      void onLoadMoreExceptions()
+    }
   }, [
     canLoadMoreApprovedForScope,
     canLoadMorePendingForScope,
+    canLoadMoreExceptionsForScope,
     isLoadingApproved,
     isLoadingPending,
+    isLoadingExceptions,
     items.length,
     onLoadMoreApproved,
     onLoadMorePending,
+    onLoadMoreExceptions,
     visibleItems.length,
   ])
 
@@ -109,7 +139,17 @@ export function useAssetCatalogPaging({
     if (canRetryPending) {
       void onRetryPending()
     }
-  }, [canRetryApproved, canRetryPending, onRetryApproved, onRetryPending])
+    if (canRetryExceptions) {
+      void onRetryExceptions()
+    }
+  }, [
+    canRetryApproved,
+    canRetryExceptions,
+    canRetryPending,
+    onRetryApproved,
+    onRetryExceptions,
+    onRetryPending,
+  ])
 
   const resetVisibleItems = useCallback(() => {
     setVisibleItemLimit(INITIAL_VISIBLE_ITEM_LIMIT)

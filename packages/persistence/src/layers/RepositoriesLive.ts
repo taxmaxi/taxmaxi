@@ -49,6 +49,7 @@ import { GoogleAuthProviderLive } from "./GoogleAuthProviderLive.ts"
 import { LocalAuthProviderLive } from "./LocalAuthProviderLive.ts"
 import { LegalReferenceRepositoryLive } from "./LegalReferenceRepositoryLive.ts"
 import { AssetCatalogRepositoryLive } from "./AssetCatalogRepositoryLive.ts"
+import { AssetExceptionRepositoryLive } from "./AssetExceptionRepositoryLive.ts"
 import { AssetOverrideRepositoryLive } from "./AssetOverrideRepositoryLive.ts"
 import { AssetRepositoryLive } from "./AssetRepositoryLive.ts"
 import { AssetResolutionJobRepositoryLive } from "./AssetResolutionJobRepositoryLive.ts"
@@ -122,6 +123,7 @@ export const RepositoriesLive = Layer.mergeAll(
   CexAccountRepositoryLive,
   TaxCalculationServiceLive,
   AssetCatalogRepositoryLive,
+  AssetExceptionRepositoryLive,
   AssetOverrideRepositoryLive,
   AssetRepositoryLive,
   AssetResolutionJobRepositoryLive,

@@ -249,6 +249,8 @@ export class TaxCalculationResponse extends Schema.Class<TaxCalculationResponse>
 )({
   year: Schema.Number,
   currency: Schema.String,
+  calculationState: Schema.Literals(["complete", "partial"]),
+  unpricedEventCount: Schema.Int,
   taxableGains: Schema.Number,
   taxableLosses: Schema.Number,
   taxFreeGains: Schema.Number,

@@ -871,7 +871,7 @@ const make = Effect.gen(function* () {
         providerAssetRowId: providerAsset.id,
       })
 
-      return mapping?.mappingStatus !== "approved"
+      return mapping?.mappingStatus !== "approved" && mapping?.mappingStatus !== "excluded"
     })
 
   const ensureProviderAssetForReference = ({

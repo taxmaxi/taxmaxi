@@ -36,6 +36,10 @@ export interface CoinbaseRecordNormalizationResult {
   readonly venueContext: SourceVenueContextDraft
   readonly providerTransfers: ReadonlyArray<SourceProviderTransferDraft>
   readonly canonicalTransfers: ReadonlyArray<SourceTransferDraft>
+  readonly canonicalTransferCurrencies: ReadonlyArray<{
+    readonly externalId: string
+    readonly currencyCode: string
+  }>
   readonly unresolvedAssetCurrencies: ReadonlyArray<string>
   readonly primaryAssetCurrency: string
 }

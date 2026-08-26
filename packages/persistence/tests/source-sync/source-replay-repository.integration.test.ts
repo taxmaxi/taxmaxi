@@ -326,6 +326,241 @@ describe("SourceReplayRepositoryLive", () => {
     }
   )
 
+  it("defers a consumer replay until its active inventory-owner replay finishes", async () => {
+    const ownerSourceId = "00000000-0000-0000-0000-000000000295"
+    await runPg(
+      seedUpstreamConsumption({
+        ownerSourceId,
+        relationshipKind: "disposal match",
+        suffix: "ordered-owner",
+      })
+    )
+    const ownerJobId = await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const [job] = yield* db
+          .insert(schema.processingJobs)
+          .values({
+            sourceId: ownerSourceId,
+            principalId: TEST_PRINCIPAL_ID,
+            mode: "replay",
+            status: "pending",
+          })
+          .returning({ id: schema.processingJobs.id })
+        if (job === undefined) return yield* Effect.die("Failed to seed owner replay job")
+        const [override] = yield* db
+          .insert(schema.principalAssetOverrides)
+          .values({
+            principalId: TEST_PRINCIPAL_ID,
+            kind: "identity",
+            targetKind: "representation",
+            blockchainId: fixture.baseBlockchainId,
+            representationType: "token",
+            contractAddress: "ordered-owner-dependency",
+            mintAddress: null,
+            action: "set",
+            inspectedSystemRevision: "ordered-owner-revision",
+            inspectedIdentityState: "resolved",
+            inspectedAssetId: TEST_BTC_ASSET_ID,
+            replacementAssetId: TEST_BTC_ASSET_ID,
+            actorId: fixture.userId,
+            reason: "Keep the consumer behind its inventory owner.",
+          })
+          .returning({ id: schema.principalAssetOverrides.id })
+        if (override === undefined) return yield* Effect.die("Failed to seed replay override")
+        yield* db.insert(schema.principalAssetOverrideApplications).values([
+          {
+            overrideId: override.id,
+            sourceId: ownerSourceId,
+            replayJobId: job.id,
+            dependsOnSourceIds: [],
+          },
+          {
+            overrideId: override.id,
+            sourceId: TEST_SOURCE_ID,
+            replayJobId: null,
+            dependsOnSourceIds: [ownerSourceId],
+          },
+        ])
+        return job.id
+      })
+    )
+
+    const deferred = await runReplayRepository(
+      Effect.flatMap(SourceReplayRepository, (repository) =>
+        repository.resetSourceDerivedState({ sourceId: TEST_SOURCE_ID })
+      ).pipe(Effect.result)
+    )
+    expect(deferred).toMatchObject({
+      _tag: "Failure",
+      failure: {
+        _tag: "SourceReplayDependencyPendingError",
+        sourceId: TEST_SOURCE_ID,
+        ownerSourceIds: [ownerSourceId],
+      },
+    })
+
+    await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        yield* db
+          .update(schema.processingJobs)
+          .set({ status: "failed", errorMessage: "owner replay failed" })
+          .where(eq(schema.processingJobs.id, ownerJobId))
+      })
+    )
+    const failedOwner = await runReplayRepository(
+      Effect.flatMap(SourceReplayRepository, (repository) =>
+        repository.resetSourceDerivedState({ sourceId: TEST_SOURCE_ID })
+      ).pipe(Effect.result)
+    )
+    expect(failedOwner).toMatchObject({
+      _tag: "Failure",
+      failure: { _tag: "SourceReplayDependencyPendingError", ownerSourceIds: [ownerSourceId] },
+    })
+
+    await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        yield* db
+          .update(schema.processingJobs)
+          .set({
+            status: "completed",
+            completedAt: new Date("2025-01-03T00:00:00.000Z"),
+            progressDetails: { failedRecords: 0 },
+          })
+          .where(eq(schema.processingJobs.id, ownerJobId))
+      })
+    )
+    const replayed = await runReplayRepository(
+      Effect.flatMap(SourceReplayRepository, (repository) =>
+        repository.resetSourceDerivedState({ sourceId: TEST_SOURCE_ID })
+      ).pipe(Effect.result)
+    )
+    expect(replayed).toMatchObject({ _tag: "Success" })
+  })
+
+  it("rejects a source replay whose cross-source inventory dependencies form a cycle", async () => {
+    const ownerSourceId = "00000000-0000-0000-0000-000000000296"
+    await runPg(
+      seedUpstreamConsumption({
+        ownerSourceId,
+        relationshipKind: "disposal match",
+        suffix: "cyclic-owner",
+      })
+    )
+    await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const timestamp = new Date("2025-01-03T08:00:00.000Z")
+        const [sourceTransaction, ownerTransaction] = yield* db
+          .insert(schema.transactions)
+          .values([
+            {
+              sourceId: TEST_SOURCE_ID,
+              externalId: "cyclic-source-acquisition",
+              timestamp,
+              principalId: TEST_PRINCIPAL_ID,
+            },
+            {
+              sourceId: ownerSourceId,
+              externalId: "cyclic-owner-disposal",
+              timestamp,
+              principalId: TEST_PRINCIPAL_ID,
+            },
+          ])
+          .returning({ id: schema.transactions.id, sourceId: schema.transactions.sourceId })
+        if (sourceTransaction === undefined || ownerTransaction === undefined) {
+          return yield* Effect.die("Failed to seed cyclic replay transactions")
+        }
+        const transactionBySource = new Map(
+          [sourceTransaction, ownerTransaction].map((transaction) => [
+            transaction.sourceId,
+            transaction.id,
+          ])
+        )
+        const sourceTransactionId = transactionBySource.get(TEST_SOURCE_ID)
+        const ownerTransactionId = transactionBySource.get(ownerSourceId)
+        if (sourceTransactionId === undefined || ownerTransactionId === undefined) {
+          return yield* Effect.die("Failed to identify cyclic replay transactions")
+        }
+
+        const [sourceLeg, ownerLeg] = yield* db
+          .insert(schema.transactionLegs)
+          .values([
+            {
+              sourceId: TEST_SOURCE_ID,
+              externalId: "cyclic-source-acquisition-leg",
+              timestamp,
+              principalId: TEST_PRINCIPAL_ID,
+              assetId: TEST_BTC_ASSET_ID,
+              amount: "1",
+              kind: "acquisition",
+              provenance: "deterministic",
+              transactionId: sourceTransactionId,
+            },
+            {
+              sourceId: ownerSourceId,
+              externalId: "cyclic-owner-disposal-leg",
+              timestamp,
+              principalId: TEST_PRINCIPAL_ID,
+              assetId: TEST_BTC_ASSET_ID,
+              amount: "1",
+              kind: "disposal",
+              provenance: "deterministic",
+              transactionId: ownerTransactionId,
+            },
+          ])
+          .returning({ id: schema.transactionLegs.id, sourceId: schema.transactionLegs.sourceId })
+        if (sourceLeg === undefined || ownerLeg === undefined) {
+          return yield* Effect.die("Failed to seed cyclic replay legs")
+        }
+        const legBySource = new Map([sourceLeg, ownerLeg].map((leg) => [leg.sourceId, leg.id]))
+        const sourceLegId = legBySource.get(TEST_SOURCE_ID)
+        const ownerLegId = legBySource.get(ownerSourceId)
+        if (sourceLegId === undefined || ownerLegId === undefined) {
+          return yield* Effect.die("Failed to identify cyclic replay legs")
+        }
+
+        const [sourceLot] = yield* db
+          .insert(schema.fifoLots)
+          .values({
+            principalId: TEST_PRINCIPAL_ID,
+            sourceId: TEST_SOURCE_ID,
+            assetId: TEST_BTC_ASSET_ID,
+            acquiredAt: timestamp,
+            originalAmount: "1",
+            remainingAmount: "0",
+            costBasisPerToken: "10000",
+            costBasisCurrency: "EUR",
+            sourceLegId,
+          })
+          .returning({ id: schema.fifoLots.id })
+        if (sourceLot === undefined) return yield* Effect.die("Failed to seed cyclic replay lot")
+
+        yield* db.insert(schema.disposalMatches).values({
+          disposalLegId: ownerLegId,
+          fifoLotId: sourceLot.id,
+          matchedAmount: "1",
+          costBasis: "10000",
+          proceeds: "11000",
+          gainLoss: "1000",
+        })
+      })
+    )
+
+    const result = await runReplayRepository(
+      Effect.flatMap(SourceReplayRepository, (repository) =>
+        repository.resetSourceDerivedState({ sourceId: TEST_SOURCE_ID })
+      ).pipe(Effect.result)
+    )
+
+    expect(result).toMatchObject({
+      _tag: "Failure",
+      failure: { _tag: "SourceReplayDependencyCycleError", sourceId: TEST_SOURCE_ID },
+    })
+  })
+
   it("retries with a newly referenced upstream FIFO owner locked", async () => {
     const firstOwnerSourceId = "00000000-0000-0000-0000-000000000292"
     const secondOwnerSourceId = "00000000-0000-0000-0000-000000000293"
@@ -403,6 +638,8 @@ describe("SourceReplayRepositoryLive", () => {
             providerCreatedAt: new Date("2025-01-01T10:00:00.000Z"),
             providerUpdatedAt: new Date("2025-01-01T10:00:00.000Z"),
             metadata: { provider: "coinbase" },
+            providerFiatAmount: null,
+            providerFiatCurrency: null,
             principalId: TEST_PRINCIPAL_ID,
           },
           venueContext: {
@@ -420,6 +657,7 @@ describe("SourceReplayRepositoryLive", () => {
           },
           providerTransfers: [],
           canonicalTransfers: [],
+          providerAssetRowIds: [],
           legs: [
             {
               sourceId: TEST_SOURCE_ID,
@@ -542,7 +780,7 @@ describe("SourceReplayRepositoryLive", () => {
     { dependencyKind: "inventory allocation", dependentLegKind: "fee" },
     { dependencyKind: "disposal match", dependentLegKind: "disposal" },
   ] as const)(
-    "blocks replay when another source has a $dependencyKind consuming one of its FIFO lots",
+    "resets replay state and schedules a dependent source with a $dependencyKind",
     async ({ dependencyKind, dependentLegKind }) => {
       const dependentSourceId = "00000000-0000-0000-0000-000000000282"
       const replayTransactionId = "00000000-0000-0000-0000-000000000283"
@@ -687,15 +925,7 @@ describe("SourceReplayRepositoryLive", () => {
         ).pipe(Effect.result)
       )
 
-      expect(replayResult).toMatchObject({
-        _tag: "Failure",
-        failure: {
-          _tag: "SourceReplayDependencyError",
-          sourceId: TEST_SOURCE_ID,
-          dependentSourceIds: [dependentSourceId],
-          affectedPrincipalIds: [TEST_PRINCIPAL_ID],
-        },
-      })
+      expect(replayResult).toMatchObject({ _tag: "Success" })
 
       const state = await runPg(
         Effect.gen(function* () {
@@ -704,15 +934,18 @@ describe("SourceReplayRepositoryLive", () => {
           const movements = yield* db.select().from(schema.inventoryMovements)
           const allocations = yield* db.select().from(schema.inventoryMovementAllocations)
           const matches = yield* db.select().from(schema.disposalMatches)
-          return { lots, movements, allocations, matches }
+          const jobs = yield* db
+            .select({ sourceId: schema.processingJobs.sourceId, mode: schema.processingJobs.mode })
+            .from(schema.processingJobs)
+          return { lots, movements, allocations, matches, jobs }
         })
       )
 
-      expect(state.lots).toHaveLength(1)
+      expect(state.lots).toHaveLength(0)
       expect(state.movements).toHaveLength(dependencyKind === "inventory allocation" ? 1 : 0)
-      expect(state.allocations).toHaveLength(dependencyKind === "inventory allocation" ? 1 : 0)
-      expect(state.matches).toHaveLength(dependencyKind === "disposal match" ? 1 : 0)
-      expect(state.lots[0]?.remainingAmount).toContain("0.60000000")
+      expect(state.allocations).toHaveLength(0)
+      expect(state.matches).toHaveLength(0)
+      expect(state.jobs).toEqual([{ sourceId: dependentSourceId, mode: "replay" }])
     }
   )
 })

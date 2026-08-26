@@ -75,6 +75,7 @@ export interface ProviderAssetExclusionResult extends ProviderAssetApprovalResul
 export type AssetResolutionAuditOutcome =
   | "attach"
   | "create_standalone"
+  | "identity"
   | "excluded"
   | "pending"
   | "fail_closed"
@@ -198,7 +199,7 @@ export interface ProviderAssetObservedRepresentationRecord {
 /** Representation evidence prepared for a provider-asset source use; null fields are unknown. */
 export interface ProviderAssetSourceUseObservation {
   readonly providerAssetRowId: string
-  readonly observedBlockchainId: string
+  readonly observedBlockchainId: string | null
   readonly representationType: "native" | "token" | "nft" | null
   readonly contractAddress: string | null
   readonly mintAddress: string | null

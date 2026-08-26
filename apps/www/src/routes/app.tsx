@@ -13,6 +13,8 @@ import { AppWorkspace } from "#/components/app-workspace"
 import { Dashboard } from "#/components/dashboard"
 import { useAppLogout } from "#/hooks/use-app-logout"
 import type { Account } from "#/lib/dashboard-types"
+import { m } from "#/paraglide/messages"
+import { getLocale } from "#/paraglide/runtime"
 import { clearAuthSessionCookie, getAuthStatus } from "#/server-functions/auth"
 import { queries, queryKeys } from "#/integrations/taxmaxi/queries"
 
@@ -183,10 +185,10 @@ function formatProviderNetwork(source: TaxMaxiSource): string | undefined {
 
 function formatLastSync(lastSyncedAt: string | null): string {
   if (lastSyncedAt === null) {
-    return "Never synced"
+    return m["app.dashboard.neverSynced"]()
   }
 
-  return new Intl.DateTimeFormat("en-US", {
+  return new Intl.DateTimeFormat(getLocale(), {
     day: "numeric",
     month: "short",
     year: "numeric",

@@ -7,20 +7,7 @@
  * @module TaxCalculationServiceLive
  */
 
-import {
-  and,
-  count,
-  eq,
-  exists,
-  gte,
-  inArray,
-  isNull,
-  lt,
-  notExists,
-  notInArray,
-  or,
-  sql,
-} from "drizzle-orm"
+import { and, count, eq, gte, inArray, isNull, lt, notInArray, or, sql } from "drizzle-orm"
 import { EUR } from "@my/core/currency"
 import { withObservedOperation } from "@my/core/shared/observability/ObservedOperation"
 import * as BigDecimal from "effect/BigDecimal"
@@ -61,6 +48,7 @@ interface DisposalMatchRow {
   readonly disposedAt: Date
   readonly disposalCurrency: string | null
   readonly costBasisCurrency: string
+  readonly costBasisStatus: "known" | "pending_review"
 }
 
 interface IncomeLegRow {
@@ -139,6 +127,7 @@ const make = Effect.gen(function* () {
     disposedAt: schema.transactionLegs.timestamp,
     disposalCurrency: schema.transactionLegs.fiatCurrency,
     costBasisCurrency: schema.fifoLots.costBasisCurrency,
+    costBasisStatus: schema.fifoLots.costBasisStatus,
   } as const
 
   const selectIncomeLegFields = {
@@ -250,12 +239,12 @@ const make = Effect.gen(function* () {
    * Filter for observations used by the source whose transactions stay
    * outside derived accounting AND make the calculation incomplete: no
    * mapping row yet, or a mapping that is still an open question
-   * (pending_review or rejected). An excluded observation, or an approval
-   * produced by asset resolution, stops blocking only after a replay requested
-   * after both the mapping decision and source-use discovery has completed.
-   * Principal overrides may settle an otherwise blocking observation once
-   * their own replay has completed. Shared by the count and the list so they
-   * cannot disagree.
+   * (pending_review or rejected). A settled observation remains blocking
+   * while its active decision rebuild is incomplete because derived rows may
+   * still reflect its previous state. Rebuild status is written by the job
+   * lifecycle in SourceSyncJobRepositoryLive when replays finish. A principal
+   * override can settle an otherwise blocking observation only after its own
+   * replay completes. Shared by the count and list so they cannot disagree.
    *
    * @param sourceId - Source identifier
    * @returns Drizzle where condition over source uses joined with mappings
@@ -267,44 +256,17 @@ const make = Effect.gen(function* () {
         isNull(schema.providerAssetMappings.id),
         notInArray(schema.providerAssetMappings.mappingStatus, ["approved", "excluded"]),
         and(
-          or(
-            eq(schema.providerAssetMappings.mappingStatus, "excluded"),
-            and(
-              eq(schema.providerAssetMappings.mappingStatus, "approved"),
-              exists(
-                db
-                  .select({ id: schema.assetResolutionDecisions.id })
-                  .from(schema.assetResolutionDecisions)
-                  .where(
-                    and(
-                      eq(
-                        schema.assetResolutionDecisions.providerAssetRowId,
-                        schema.providerAssetSourceUses.providerAssetRowId
-                      ),
-                      eq(schema.assetResolutionDecisions.status, "active"),
-                      inArray(schema.assetResolutionDecisions.outcome, [
-                        "attach",
-                        "create_standalone",
-                      ])
-                    )
-                  )
-              )
-            )
-          ),
-          notExists(
-            db
-              .select({ id: schema.processingJobs.id })
-              .from(schema.processingJobs)
-              .where(
-                and(
-                  eq(schema.processingJobs.sourceId, schema.providerAssetSourceUses.sourceId),
-                  eq(schema.processingJobs.mode, "replay"),
-                  eq(schema.processingJobs.status, "completed"),
-                  gte(schema.processingJobs.createdAt, schema.providerAssetMappings.updatedAt),
-                  gte(schema.processingJobs.createdAt, schema.providerAssetSourceUses.updatedAt)
-                )
-              )
-          )
+          inArray(schema.providerAssetMappings.mappingStatus, ["approved", "excluded"]),
+          sql<boolean>`exists (
+            select 1
+            from ${schema.assetDecisionRematerializations} rematerialization
+            inner join ${schema.assetResolutionDecisions} decision
+              on decision.id = rematerialization.decision_id
+            where rematerialization.source_id = ${schema.providerAssetSourceUses.sourceId}
+              and decision.provider_asset_row_id = ${schema.providerAssetMappings.providerAssetRowId}
+              and decision.status = 'active'
+              and rematerialization.status <> 'complete'
+          )`
         )
       ),
       sql`not (
@@ -813,6 +775,7 @@ const make = Effect.gen(function* () {
   }) =>
     Effect.reduce(rows, emptyTotals, (totals, row) =>
       Effect.gen(function* () {
+        if (row.disposalCurrency === null || row.costBasisStatus === "pending_review") return totals
         yield* ensureReportingCurrency({
           sourceId,
           field: `disposal leg ${row.disposalLegId} fiat currency`,
@@ -868,19 +831,12 @@ const make = Effect.gen(function* () {
   }) =>
     Effect.reduce(rows, zeroAmount, (incomeTotal, row) =>
       Effect.gen(function* () {
+        if (row.fiatCurrency === null || row.fiatAmount === null) return incomeTotal
         yield* ensureReportingCurrency({
           sourceId,
           field: `income leg ${row.legId} fiat currency`,
           currency: row.fiatCurrency,
         })
-
-        if (row.fiatAmount === null) {
-          return yield* new TaxCalculationIncompleteDataError({
-            sourceId,
-            field: `income leg ${row.legId} fiat amount`,
-            reason: "missing fiat valuation",
-          })
-        }
 
         const fiatAmount = yield* decodeDecimal({
           value: row.fiatAmount,
@@ -923,16 +879,21 @@ const make = Effect.gen(function* () {
       const yearStart = startOfYearUtc(year)
       const yearEnd = endOfYearUtc(year)
 
-      const disposalRows = yield* loadDisposalMatches({
-        sourceId,
-        yearStart,
-        yearEnd,
-      })
-      const incomeRows = yield* loadIncomeLegs({
-        sourceId,
-        yearStart,
-        yearEnd,
-      })
+      const [disposalRows, incomeRows] = yield* Effect.all([
+        loadDisposalMatches({ sourceId, yearStart, yearEnd }),
+        loadIncomeLegs({ sourceId, yearStart, yearEnd }),
+      ])
+      const unpricedDisposalIds = new Set(
+        disposalRows
+          .filter(
+            (row) => row.disposalCurrency === null || row.costBasisStatus === "pending_review"
+          )
+          .map((row) => row.disposalLegId)
+      )
+      const unpricedIncomeCount = incomeRows.filter(
+        (row) => row.fiatAmount === null || row.fiatCurrency === null
+      ).length
+      const unpricedEventCount = unpricedDisposalIds.size + unpricedIncomeCount
 
       yield* Effect.annotateCurrentSpan({
         sourceId,
@@ -954,6 +915,8 @@ const make = Effect.gen(function* () {
       const summary = {
         year,
         currency: REPORTING_CURRENCY,
+        calculationState: unpricedEventCount === 0 ? "complete" : "partial",
+        unpricedEventCount,
         taxableGains: toResponseNumber(disposalTotals.taxableGains),
         taxableLosses: toResponseNumber(disposalTotals.taxableLosses),
         taxFreeGains: toResponseNumber(disposalTotals.taxFreeGains),

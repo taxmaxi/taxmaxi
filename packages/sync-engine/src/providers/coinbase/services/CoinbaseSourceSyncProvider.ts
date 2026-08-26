@@ -12,6 +12,7 @@ import type {
   PersistedSourceTransaction,
   PersistedSourceTransfer,
   PersistedSourceVenueContext,
+  PersistNormalizedSourceArtifactsContext,
   SourceTransactionDraft,
   SourceTransactionLegDraft,
   SourceTransactionReviewDraft,
@@ -66,8 +67,18 @@ export interface PreparedCoinbaseNormalization {
   readonly resolvedTransactionType: CoinbaseResolvedTransactionTypeMapping
   readonly primaryAsset: SyncEngineAsset | null
   readonly primaryProviderAssetId: string | null
+  readonly feeProviderAssetIdsByExternalId: ReadonlyMap<string, string>
   readonly canDeriveWithAssetOverrides: boolean
   readonly legDerivationStrategy: "derive" | "skip"
+  readonly overrideMaterializationAllowed: false
+  /** False for a settled primary exclusion; approved secondary fees still derive. */
+  readonly deriveMainLeg: boolean
+}
+
+/** Provider-owned final leg decision for one prepared Coinbase record. */
+export interface DerivePreparedCoinbaseProviderLegsParams {
+  readonly prepared: PreparedCoinbaseNormalization
+  readonly context: PersistNormalizedSourceArtifactsContext
 }
 
 /**
@@ -78,6 +89,7 @@ export interface DeriveCoinbaseProviderLegsParams {
   readonly venueContext: PersistedSourceVenueContext | null
   readonly primaryAsset: SyncEngineAsset | null
   readonly canonicalTransfers: ReadonlyArray<PersistedSourceTransfer>
+  readonly deriveMainLeg: boolean
 }
 
 /**
@@ -116,6 +128,13 @@ export interface CoinbaseSourceSyncProviderShape {
 
   readonly deriveLegs: (
     params: DeriveCoinbaseProviderLegsParams
+  ) => Effect.Effect<
+    ReadonlyArray<SourceTransactionLegDraft>,
+    CoinbaseLegDerivationError | SyncEngineStorageError
+  >
+
+  readonly derivePreparedLegs: (
+    params: DerivePreparedCoinbaseProviderLegsParams
   ) => Effect.Effect<
     ReadonlyArray<SourceTransactionLegDraft>,
     CoinbaseLegDerivationError | SyncEngineStorageError

@@ -194,6 +194,8 @@ const seedProviderTransfer = ({
         providerCreatedAt: timestamp,
         providerUpdatedAt: timestamp,
         metadata: { provider: "coinbase" },
+        providerFiatAmount: null,
+        providerFiatCurrency: null,
         principalId: TEST_PRINCIPAL_ID,
       })
       .returning({ id: schema.transactions.id })
@@ -350,6 +352,8 @@ const seedOnchainReceipt = ({
         providerCreatedAt: timestamp,
         providerUpdatedAt: timestamp,
         metadata: { provider: "bitcoin" },
+        providerFiatAmount: null,
+        providerFiatCurrency: null,
         principalId: TEST_PRINCIPAL_ID,
       })
       .returning({ id: schema.transactions.id })
@@ -509,6 +513,8 @@ const seedObservedOnchainReceipt = ({
         providerCreatedAt: timestamp,
         providerUpdatedAt: timestamp,
         metadata: { provider: observedAsset.provider },
+        providerFiatAmount: null,
+        providerFiatCurrency: null,
         principalId: TEST_PRINCIPAL_ID,
       })
       .returning({ id: schema.transactions.id })
@@ -591,6 +597,8 @@ describe("TransferReconciliationServiceLive", () => {
             providerCreatedAt: timestamp,
             providerUpdatedAt: timestamp,
             metadata: { provider: "helius-solana" },
+            providerFiatAmount: null,
+            providerFiatCurrency: null,
             principalId: TEST_PRINCIPAL_ID,
           },
           venueContext: {
@@ -658,6 +666,7 @@ describe("TransferReconciliationServiceLive", () => {
             })),
           ],
           canonicalTransfers: [],
+          providerAssetRowIds: [],
           legs: [],
           transactionReview: null,
           resolvedTransactionType: {
@@ -4668,6 +4677,8 @@ describe("TransferReconciliationServiceLive", () => {
             providerCreatedAt: null,
             providerUpdatedAt: null,
             metadata: null,
+            providerFiatAmount: null,
+            providerFiatCurrency: null,
             principalId: TEST_PRINCIPAL_ID,
           },
           venueContext: {
@@ -4685,6 +4696,7 @@ describe("TransferReconciliationServiceLive", () => {
           },
           providerTransfers: [],
           canonicalTransfers: [],
+          providerAssetRowIds: [],
           deriveLegs: ({ transaction }) =>
             Effect.succeed([
               {
@@ -5636,7 +5648,7 @@ describe("TransferReconciliationServiceLive", () => {
     }
   )
 
-  it("rolls reconciliation effects back into place when replay reset fails", async () => {
+  it("rolls back reconciliation effects and queues cross-source replay atomically", async () => {
     const walletAddress = "bc1qownedwalletreplayatomicity0000000000000000"
     const providerTimestamp = new Date("2025-04-14T08:30:00.000Z")
     const providerAssetRowId = await runPg(
@@ -5825,15 +5837,7 @@ describe("TransferReconciliationServiceLive", () => {
         })
       )
     )
-    expect(replayResult).toMatchObject({
-      _tag: "Failure",
-      failure: {
-        _tag: "SourceReplayDependencyError",
-        sourceId: TEST_SOURCE_ID,
-        dependentSourceIds: [dependentSourceId],
-        affectedPrincipalIds: [TEST_PRINCIPAL_ID],
-      },
-    })
+    expect(replayResult).toMatchObject({ _tag: "Success" })
 
     const state = await runPg(
       Effect.gen(function* () {
@@ -5869,21 +5873,26 @@ describe("TransferReconciliationServiceLive", () => {
           })
           .from(schema.inventoryMovements)
           .where(eq(schema.inventoryMovements.id, movementId))
-        return { destinationLots, internalLegs, movement, movementAllocations, reconciliation }
+        const replayJobs = yield* db
+          .select({ sourceId: schema.processingJobs.sourceId, mode: schema.processingJobs.mode })
+          .from(schema.processingJobs)
+        return {
+          destinationLots,
+          internalLegs,
+          movement,
+          movementAllocations,
+          reconciliation,
+          replayJobs,
+        }
       })
     )
 
-    expect(state.reconciliation).toEqual({
-      canonicalTransferId: receipt.transferId,
-      status: "approved",
-    })
-    expect(state.internalLegs).toHaveLength(2)
-    expect(state.destinationLots).toHaveLength(1)
+    expect(state.reconciliation).toBeUndefined()
+    expect(state.internalLegs).toHaveLength(0)
+    expect(state.destinationLots).toHaveLength(0)
     expect(state.movementAllocations).toHaveLength(0)
-    expect(state.movement).toEqual({
-      reconciliationStatus: "matched",
-      taxTreatment: "non_taxable",
-    })
+    expect(state.movement).toBeUndefined()
+    expect(state.replayJobs).toContainEqual({ sourceId: dependentSourceId, mode: "replay" })
   })
 
   it("locks the replay source before taking the reconciliation snapshot", async () => {
@@ -6224,6 +6233,8 @@ describe("TransferReconciliationServiceLive", () => {
             providerCreatedAt: null,
             providerUpdatedAt: null,
             metadata: null,
+            providerFiatAmount: null,
+            providerFiatCurrency: null,
             principalId: TEST_PRINCIPAL_ID,
           },
           venueContext: {
@@ -6241,6 +6252,7 @@ describe("TransferReconciliationServiceLive", () => {
           },
           providerTransfers: [],
           canonicalTransfers: [],
+          providerAssetRowIds: [],
           deriveLegs: ({ transaction }) =>
             Effect.succeed([
               {
@@ -7994,6 +8006,8 @@ describe("TransferReconciliationServiceLive", () => {
             providerCreatedAt: timestamp,
             providerUpdatedAt: timestamp,
             metadata: { provider: "coinbase" },
+            providerFiatAmount: null,
+            providerFiatCurrency: null,
             principalId: TEST_PRINCIPAL_ID,
           })
           .returning({ id: schema.transactions.id })
@@ -8013,6 +8027,8 @@ describe("TransferReconciliationServiceLive", () => {
             providerCreatedAt: timestamp,
             providerUpdatedAt: timestamp,
             metadata: { provider: "helius-solana" },
+            providerFiatAmount: null,
+            providerFiatCurrency: null,
             principalId: TEST_PRINCIPAL_ID,
           })
           .returning({ id: schema.transactions.id })

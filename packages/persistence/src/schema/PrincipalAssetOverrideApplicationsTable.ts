@@ -17,6 +17,7 @@ export const principalAssetOverrideApplications = pgTable(
     replayJobId: uuid("replay_job_id").references(() => processingJobs.id, {
       onDelete: "set null",
     }),
+    dependsOnSourceIds: uuid("depends_on_source_ids").array().notNull().default([]),
     requiresReplay: boolean("requires_replay").notNull().default(true),
     supersededAt: timestamp("superseded_at"),
     createdAt: timestamp("created_at").notNull().defaultNow(),

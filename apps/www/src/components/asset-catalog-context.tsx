@@ -6,9 +6,22 @@ import {
   type CatalogItem,
   type CatalogScope,
 } from "#/components/asset-catalog-model"
+import type { TaxMaxiAssetException } from "#/components/asset-catalog-model"
 import { useAssetCatalogPaging } from "#/components/use-asset-catalog-paging"
 import { useAssetCatalogSelection } from "#/components/use-asset-catalog-selection"
-import { filterTaxMaxiAssets, type TaxMaxiAsset, type TaxMaxiPendingAsset } from "#/lib/assets"
+import {
+  filterTaxMaxiAssets,
+  matchesAssetCatalogQuery,
+  type TaxMaxiAsset,
+  type TaxMaxiPendingAsset,
+} from "#/lib/assets"
+import type {
+  AssetCatalogList,
+  AssetExceptionDecisionInput,
+  AssetExceptionDecisionConfirmationInput,
+  AssetExceptionDetail,
+  AssetExceptionPreview,
+} from "taxmaxi"
 
 type AssetCatalogFeed<T> = {
   readonly canLoadMore?: boolean
@@ -22,14 +35,24 @@ type AssetCatalogFeed<T> = {
 export type AssetCatalogFeeds = {
   readonly approved: AssetCatalogFeed<TaxMaxiAsset>
   readonly pending: AssetCatalogFeed<TaxMaxiPendingAsset>
+  readonly exceptions?: AssetCatalogFeed<TaxMaxiAssetException>
+}
+
+export type AssetExceptionActions = {
+  readonly get: (id: string) => Promise<AssetExceptionDetail>
+  readonly preview: (input: AssetExceptionDecisionInput) => Promise<AssetExceptionPreview>
+  readonly submit: (input: AssetExceptionDecisionConfirmationInput) => Promise<AssetExceptionDetail>
+  readonly searchAssets: (query: string) => Promise<AssetCatalogList>
 }
 
 const doNothing = () => undefined
 
 function useAssetCatalogController({
+  exceptionActions,
   feeds,
   onQueryChange,
 }: {
+  readonly exceptionActions?: AssetExceptionActions
   readonly feeds: AssetCatalogFeeds
   readonly onQueryChange: (query: string) => void
 }) {
@@ -56,6 +79,26 @@ function useAssetCatalogController({
     [feeds.pending.items, query]
   )
 
+  const exceptionItems = useMemo<ReadonlyArray<CatalogItem>>(
+    () =>
+      (feeds.exceptions?.items ?? [])
+        .filter((exception) =>
+          matchesAssetCatalogQuery({
+            query,
+            values: [
+              exception.currencyCode,
+              exception.name ?? "",
+              exception.provider,
+              exception.providerAssetId ?? "",
+              exception.naturalKey ?? "",
+              exception.reason,
+            ],
+          })
+        )
+        .map((exception) => ({ kind: "exception" as const, exception })),
+    [feeds.exceptions?.items, query]
+  )
+
   const items = useMemo(() => {
     switch (scope) {
       case "approved":
@@ -64,21 +107,28 @@ function useAssetCatalogController({
         return pendingItems
       case "all":
         return [...pendingItems, ...approvedItems]
+      case "exceptions":
+        return exceptionItems
     }
-  }, [approvedItems, pendingItems, scope])
+  }, [approvedItems, exceptionItems, pendingItems, scope])
 
   const paging = useAssetCatalogPaging({
     approvedAssetsUnavailable: feeds.approved.unavailable ?? false,
     canLoadMoreApproved: feeds.approved.canLoadMore ?? false,
     canLoadMorePending: feeds.pending.canLoadMore ?? false,
+    canLoadMoreExceptions: feeds.exceptions?.canLoadMore ?? false,
     isLoadingApproved: feeds.approved.isLoading ?? false,
     isLoadingPending: feeds.pending.isLoading ?? false,
+    isLoadingExceptions: feeds.exceptions?.isLoading ?? false,
     items,
     onLoadMoreApproved: feeds.approved.loadMore ?? doNothing,
     onLoadMorePending: feeds.pending.loadMore ?? doNothing,
+    onLoadMoreExceptions: feeds.exceptions?.loadMore ?? doNothing,
     onRetryApproved: feeds.approved.retry ?? doNothing,
     onRetryPending: feeds.pending.retry ?? doNothing,
+    onRetryExceptions: feeds.exceptions?.retry ?? doNothing,
     pendingAssetsUnavailable: feeds.pending.unavailable ?? false,
+    exceptionsUnavailable: feeds.exceptions?.unavailable ?? false,
     scope,
   })
 
@@ -120,6 +170,9 @@ function useAssetCatalogController({
       onSelect: selection.selectItem,
       onShowMobileList: selection.showMobileList,
       pendingAssetsUnavailable: feeds.pending.unavailable ?? false,
+      exceptionsAvailable: feeds.exceptions !== undefined,
+      exceptionsUnavailable: feeds.exceptions?.unavailable ?? false,
+      exceptionActions,
       query,
       scope,
       selectedItem: selection.selectedItem,
@@ -130,8 +183,10 @@ function useAssetCatalogController({
       approvedItems.length,
       changeQuery,
       changeScope,
+      exceptionActions,
       feeds.approved.unavailable,
       feeds.pending.unavailable,
+      feeds.exceptions,
       paging.canLoadMoreNow,
       paging.canRetryNow,
       paging.catalogStatus,
@@ -159,14 +214,16 @@ const AssetCatalogContext = createContext<AssetCatalogContextValue | null>(null)
 
 export function AssetCatalogProvider({
   children,
+  exceptionActions,
   feeds,
   onQueryChange = doNothing,
 }: {
   readonly children: ReactNode
+  readonly exceptionActions?: AssetExceptionActions
   readonly feeds: AssetCatalogFeeds
   readonly onQueryChange?: (query: string) => void
 }) {
-  const catalog = useAssetCatalogController({ feeds, onQueryChange })
+  const catalog = useAssetCatalogController({ exceptionActions, feeds, onQueryChange })
 
   return <AssetCatalogContext value={catalog}>{children}</AssetCatalogContext>
 }

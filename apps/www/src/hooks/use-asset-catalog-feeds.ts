@@ -16,9 +16,11 @@ export const pendingAssetListInput = { limit: DEFAULT_TAXMAXI_PENDING_ASSET_LIMI
 /**
  * Loads the approved and pending asset feeds with debounced search. Shared
  * by the public /assets page and the in-app /app/assets overlay so both
- * render the same catalog.
+ * render the same catalog. Also exposes the debounced query so callers can
+ * search extra feeds, such as the admin exception queue, with the same terms.
  */
 export function useAssetCatalogFeeds(taxmaxi: TaxMaxi): {
+  readonly debouncedCatalogQuery: string
   readonly feeds: AssetCatalogFeeds
   readonly onQueryChange: (query: string) => void
 } {
@@ -117,5 +119,5 @@ export function useAssetCatalogFeeds(taxmaxi: TaxMaxi): {
     ]
   )
 
-  return { feeds, onQueryChange: setCatalogQuery }
+  return { debouncedCatalogQuery, feeds, onQueryChange: setCatalogQuery }
 }

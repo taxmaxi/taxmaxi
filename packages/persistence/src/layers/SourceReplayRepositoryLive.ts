@@ -4,7 +4,7 @@
  * @module SourceReplayRepositoryLive
  */
 
-import { and, asc, eq, inArray, ne, sql } from "drizzle-orm"
+import { and, asc, eq, inArray, isNull, ne, sql } from "drizzle-orm"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import * as Schema from "effect/Schema"
@@ -12,7 +12,9 @@ import { drizzle } from "./PgClientLive.ts"
 import { schema } from "../schema/index.ts"
 import { sourceInventoryLockQuery } from "./SourceInventoryLock.ts"
 import {
+  SourceReplayDependencyCycleError,
   SourceReplayDependencyError,
+  SourceReplayDependencyPendingError,
   SourceReplayRepository,
   type SourceReplayRepositoryShape,
 } from "@my/sync-engine/services"
@@ -103,7 +105,7 @@ const make = Effect.gen(function* () {
               )
             )
           const lockedSources = yield* tx
-            .select({ id: schema.sources.id })
+            .select({ id: schema.sources.id, principalId: schema.sources.principalId })
             .from(schema.sources)
             .where(inArray(schema.sources.id, lockedSourceIds))
             .orderBy(asc(schema.sources.id))
@@ -117,6 +119,151 @@ const make = Effect.gen(function* () {
           if (!lockedSources.some((source) => source.id === sourceId)) {
             return
           }
+          const sourcePrincipalId = lockedSources.find(
+            (source) => source.id === sourceId
+          )?.principalId
+          if (sourcePrincipalId === undefined) return
+
+          const allocationDependencies = yield* tx
+            .select({
+              ownerSourceId: schema.fifoLots.sourceId,
+              dependentSourceId: schema.inventoryMovements.sourceId,
+            })
+            .from(schema.inventoryMovementAllocations)
+            .innerJoin(
+              schema.inventoryMovements,
+              eq(
+                schema.inventoryMovements.id,
+                schema.inventoryMovementAllocations.inventoryMovementId
+              )
+            )
+            .innerJoin(
+              schema.fifoLots,
+              eq(schema.fifoLots.id, schema.inventoryMovementAllocations.fifoLotId)
+            )
+            .where(
+              and(
+                eq(schema.fifoLots.principalId, sourcePrincipalId),
+                ne(schema.inventoryMovements.sourceId, schema.fifoLots.sourceId)
+              )
+            )
+            .pipe(
+              wrapSyncEngineSqlError(
+                "sourceReplayRepository.resetSourceDerivedState.loadAllocationDependencies"
+              )
+            )
+          const disposalDependencies = yield* tx
+            .select({
+              ownerSourceId: schema.fifoLots.sourceId,
+              dependentSourceId: schema.transactionLegs.sourceId,
+            })
+            .from(schema.disposalMatches)
+            .innerJoin(
+              schema.transactionLegs,
+              eq(schema.transactionLegs.id, schema.disposalMatches.disposalLegId)
+            )
+            .innerJoin(schema.fifoLots, eq(schema.fifoLots.id, schema.disposalMatches.fifoLotId))
+            .where(
+              and(
+                eq(schema.fifoLots.principalId, sourcePrincipalId),
+                ne(schema.transactionLegs.sourceId, schema.fifoLots.sourceId)
+              )
+            )
+            .pipe(
+              wrapSyncEngineSqlError(
+                "sourceReplayRepository.resetSourceDerivedState.loadDisposalDependencies"
+              )
+            )
+          const dependentSourceIdsByOwner = new Map<string, Set<string>>()
+          for (const { ownerSourceId, dependentSourceId } of [
+            ...allocationDependencies,
+            ...disposalDependencies,
+          ]) {
+            const dependentSourceIds =
+              dependentSourceIdsByOwner.get(ownerSourceId) ?? new Set<string>()
+            dependentSourceIds.add(dependentSourceId)
+            dependentSourceIdsByOwner.set(ownerSourceId, dependentSourceIds)
+          }
+          const reachableSourceIds = [...(dependentSourceIdsByOwner.get(sourceId) ?? [])]
+          const visitedSourceIds = new Set<string>()
+          while (reachableSourceIds.length > 0) {
+            const reachableSourceId = reachableSourceIds.pop()
+            if (reachableSourceId === undefined) continue
+            if (reachableSourceId === sourceId) {
+              return yield* new SourceReplayDependencyCycleError({ sourceId })
+            }
+            if (visitedSourceIds.has(reachableSourceId)) continue
+            visitedSourceIds.add(reachableSourceId)
+            reachableSourceIds.push(...(dependentSourceIdsByOwner.get(reachableSourceId) ?? []))
+          }
+
+          const dependentApplications = yield* tx
+            .select({
+              overrideId: schema.principalAssetOverrideApplications.overrideId,
+              dependsOnSourceIds: schema.principalAssetOverrideApplications.dependsOnSourceIds,
+            })
+            .from(schema.principalAssetOverrideApplications)
+            .where(
+              and(
+                eq(schema.principalAssetOverrideApplications.sourceId, sourceId),
+                isNull(schema.principalAssetOverrideApplications.supersededAt)
+              )
+            )
+            .pipe(
+              wrapSyncEngineSqlError(
+                "sourceReplayRepository.resetSourceDerivedState.loadReplayDependencies"
+              )
+            )
+          const durablePendingOwnerSourceIds = yield* Effect.reduce(
+            dependentApplications,
+            () => new Set<string>(),
+            (pendingOwnerSourceIds, application) =>
+              Effect.gen(function* () {
+                for (const ownerSourceId of application.dependsOnSourceIds) {
+                  const [ownerApplication] = yield* tx
+                    .select({
+                      successful: sql<boolean>`(
+                        ${schema.processingJobs.status} = 'completed'
+                        and ${schema.processingJobs.progressDetails} ->> 'failedRecords' = '0'
+                      )`,
+                    })
+                    .from(schema.principalAssetOverrideApplications)
+                    .leftJoin(
+                      schema.processingJobs,
+                      eq(
+                        schema.processingJobs.id,
+                        schema.principalAssetOverrideApplications.replayJobId
+                      )
+                    )
+                    .where(
+                      and(
+                        eq(
+                          schema.principalAssetOverrideApplications.overrideId,
+                          application.overrideId
+                        ),
+                        eq(schema.principalAssetOverrideApplications.sourceId, ownerSourceId),
+                        isNull(schema.principalAssetOverrideApplications.supersededAt)
+                      )
+                    )
+                    .limit(1)
+                    .pipe(
+                      wrapSyncEngineSqlError(
+                        "sourceReplayRepository.resetSourceDerivedState.loadReplayDependencyOwner"
+                      )
+                    )
+                  if (ownerApplication?.successful !== true) {
+                    pendingOwnerSourceIds.add(ownerSourceId)
+                  }
+                }
+                return pendingOwnerSourceIds
+              })
+          )
+          if (durablePendingOwnerSourceIds.size > 0) {
+            return yield* new SourceReplayDependencyPendingError({
+              sourceId,
+              ownerSourceIds: [...durablePendingOwnerSourceIds].sort(),
+            })
+          }
 
           const revalidatedOwnerSourceIds = yield* loadReferencedOwnerSourceIds()
           if (
@@ -126,6 +273,31 @@ const make = Effect.gen(function* () {
             )
           ) {
             return yield* new ReplayInventoryOwnerSetChanged()
+          }
+
+          if (referencedOwnerSourceIds.length > 0) {
+            const activeOwnerJobs = yield* tx
+              .selectDistinct({ sourceId: schema.processingJobs.sourceId })
+              .from(schema.processingJobs)
+              .where(
+                and(
+                  inArray(schema.processingJobs.sourceId, referencedOwnerSourceIds),
+                  inArray(schema.processingJobs.status, ["pending", "processing"])
+                )
+              )
+              .orderBy(asc(schema.processingJobs.sourceId))
+              .pipe(
+                wrapSyncEngineSqlError(
+                  "sourceReplayRepository.resetSourceDerivedState.loadActiveOwnerJobs"
+                )
+              )
+
+            if (activeOwnerJobs.length > 0) {
+              return yield* new SourceReplayDependencyPendingError({
+                sourceId,
+                ownerSourceIds: activeOwnerJobs.map(({ sourceId: ownerSourceId }) => ownerSourceId),
+              })
+            }
           }
 
           const crossSourceAllocations = yield* tx
@@ -182,17 +354,85 @@ const make = Effect.gen(function* () {
 
           const crossSourceDependencies = [...crossSourceAllocations, ...crossSourceDisposalMatches]
 
-          if (crossSourceDependencies.length > 0) {
+          const crossPrincipalDependencies = crossSourceDependencies.filter(
+            ({ affectedPrincipalId }) => affectedPrincipalId !== sourcePrincipalId
+          )
+          if (crossPrincipalDependencies.length > 0) {
             return yield* new SourceReplayDependencyError({
               sourceId,
               dependentSourceIds: Array.from(
-                new Set(crossSourceDependencies.map((row) => row.dependentSourceId))
+                new Set(crossPrincipalDependencies.map((row) => row.dependentSourceId))
               ).sort(),
               affectedPrincipalIds: Array.from(
-                new Set(crossSourceDependencies.map((row) => row.affectedPrincipalId))
+                new Set(crossPrincipalDependencies.map((row) => row.affectedPrincipalId))
               ).sort(),
             })
           }
+
+          const dependentSourceIds = Array.from(
+            new Set(crossSourceDependencies.map((row) => row.dependentSourceId))
+          ).sort()
+          const replayRequestedAt = nowDate()
+          yield* Effect.forEach(
+            dependentSourceIds,
+            (dependentSourceId) =>
+              Effect.gen(function* () {
+                const [active] = yield* tx
+                  .update(schema.processingJobs)
+                  .set({ followUpMode: "replay", updatedAt: replayRequestedAt })
+                  .where(
+                    and(
+                      eq(schema.processingJobs.sourceId, dependentSourceId),
+                      eq(schema.processingJobs.principalId, sourcePrincipalId),
+                      inArray(schema.processingJobs.status, ["pending", "processing"])
+                    )
+                  )
+                  .returning({ id: schema.processingJobs.id })
+
+                if (active !== undefined) return
+
+                const [created] = yield* tx
+                  .insert(schema.processingJobs)
+                  .values({
+                    sourceId: dependentSourceId,
+                    principalId: sourcePrincipalId,
+                    mode: "replay",
+                    status: "pending",
+                    attemptCount: 0,
+                    maxAttempts: 3,
+                    progressDetails: { mode: "replay", reason: "fifo_dependency" },
+                    createdAt: replayRequestedAt,
+                    updatedAt: replayRequestedAt,
+                  })
+                  .onConflictDoNothing()
+                  .returning({ id: schema.processingJobs.id })
+
+                if (created === undefined) {
+                  yield* tx
+                    .update(schema.processingJobs)
+                    .set({ followUpMode: "replay", updatedAt: replayRequestedAt })
+                    .where(
+                      and(
+                        eq(schema.processingJobs.sourceId, dependentSourceId),
+                        eq(schema.processingJobs.principalId, sourcePrincipalId),
+                        inArray(schema.processingJobs.status, ["pending", "processing"])
+                      )
+                    )
+                  return
+                }
+
+                yield* tx
+                  .update(schema.principalAssetOverrideApplications)
+                  .set({ replayJobId: created.id })
+                  .where(
+                    and(
+                      eq(schema.principalAssetOverrideApplications.sourceId, dependentSourceId),
+                      isNull(schema.principalAssetOverrideApplications.supersededAt)
+                    )
+                  )
+              }),
+            { concurrency: 1 }
+          )
 
           const inventoryMovementAllocations = yield* tx
             .select({
@@ -305,7 +545,9 @@ const make = Effect.gen(function* () {
           while: (error) => error instanceof ReplayInventoryOwnerSetChanged,
         }),
         Effect.mapError((error) =>
-          error instanceof SourceReplayDependencyError
+          error instanceof SourceReplayDependencyCycleError ||
+          error instanceof SourceReplayDependencyError ||
+          error instanceof SourceReplayDependencyPendingError
             ? error
             : toSyncEngineStorageError({
                 error,

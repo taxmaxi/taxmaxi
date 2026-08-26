@@ -1,8 +1,8 @@
 {
   "version": "8",
   "dialect": "postgres",
-  "id": "d0c8745f-2f9c-4af9-b934-938564059cbd",
-  "prevIds": ["00000000-0000-0000-0000-000000000000"],
+  "id": "8c518d6e-8374-464d-be20-510eec5db210",
+  "prevIds": ["90b26cb8-f459-4aac-88ab-4ced05b3e966"],
   "ddl": [
     {
       "values": ["evm", "solana", "bitcoin"],
@@ -12,46 +12,7 @@
     },
     {
       "values": ["native", "token", "nft"],
-      "name": "asset_representation_type",
-      "entityType": "enums",
-      "schema": "public"
-    },
-    {
-      "values": ["active", "superseded"],
-      "name": "asset_resolution_decision_status",
-      "entityType": "enums",
-      "schema": "public"
-    },
-    {
-      "values": ["attach", "create_standalone", "excluded", "pending", "fail_closed"],
-      "name": "asset_resolution_outcome",
-      "entityType": "enums",
-      "schema": "public"
-    },
-    {
-      "values": ["fungible", "nft"],
       "name": "asset_type",
-      "entityType": "enums",
-      "schema": "public"
-    },
-    {
-      "values": [
-        "incomplete",
-        "incomplete_expired",
-        "trialing",
-        "active",
-        "past_due",
-        "canceled",
-        "unpaid",
-        "paused"
-      ],
-      "name": "billing_subscription_status",
-      "entityType": "enums",
-      "schema": "public"
-    },
-    {
-      "values": ["annual_grant", "top_up", "transaction_usage", "manual_adjustment"],
-      "name": "credit_entry_kind",
       "entityType": "enums",
       "schema": "public"
     },
@@ -104,36 +65,6 @@
       "schema": "public"
     },
     {
-      "values": ["resolved", "unresolved", "excluded"],
-      "name": "principal_asset_identity_state",
-      "entityType": "enums",
-      "schema": "public"
-    },
-    {
-      "values": ["included", "excluded", "blocked"],
-      "name": "principal_asset_inclusion_state",
-      "entityType": "enums",
-      "schema": "public"
-    },
-    {
-      "values": ["set", "withdraw"],
-      "name": "principal_asset_override_action",
-      "entityType": "enums",
-      "schema": "public"
-    },
-    {
-      "values": ["identity", "inclusion"],
-      "name": "principal_asset_override_kind",
-      "entityType": "enums",
-      "schema": "public"
-    },
-    {
-      "values": ["representation", "provider_asset"],
-      "name": "principal_asset_override_target_kind",
-      "entityType": "enums",
-      "schema": "public"
-    },
-    {
       "values": ["x402_receipt", "siwx_wallet", "cli_claim_token"],
       "name": "principal_claim_type",
       "entityType": "enums",
@@ -152,7 +83,7 @@
       "schema": "public"
     },
     {
-      "values": ["pending", "processing", "completed", "failed", "credit_required"],
+      "values": ["pending", "processing", "completed", "failed"],
       "name": "job_status",
       "entityType": "enums",
       "schema": "public"
@@ -178,12 +109,6 @@
     {
       "values": ["asset", "fiat"],
       "name": "provider_asset_mapping_kind",
-      "entityType": "enums",
-      "schema": "public"
-    },
-    {
-      "values": ["approved", "pending_review", "rejected", "excluded"],
-      "name": "provider_asset_mapping_status",
       "entityType": "enums",
       "schema": "public"
     },
@@ -221,12 +146,6 @@
     {
       "values": ["inbound", "outbound"],
       "name": "provider_transfer_direction",
-      "entityType": "enums",
-      "schema": "public"
-    },
-    {
-      "values": ["accounting_and_evidence", "accounting_only", "evidence_only", "stale"],
-      "name": "provider_transfer_processing_mode",
       "entityType": "enums",
       "schema": "public"
     },
@@ -318,61 +237,7 @@
     },
     {
       "isRlsEnabled": false,
-      "name": "asset_representation_ownership_decisions",
-      "entityType": "tables",
-      "schema": "public"
-    },
-    {
-      "isRlsEnabled": false,
-      "name": "asset_representations",
-      "entityType": "tables",
-      "schema": "public"
-    },
-    {
-      "isRlsEnabled": false,
-      "name": "asset_resolution_decisions",
-      "entityType": "tables",
-      "schema": "public"
-    },
-    {
-      "isRlsEnabled": false,
-      "name": "asset_resolution_evidence",
-      "entityType": "tables",
-      "schema": "public"
-    },
-    {
-      "isRlsEnabled": false,
-      "name": "asset_resolution_jobs",
-      "entityType": "tables",
-      "schema": "public"
-    },
-    {
-      "isRlsEnabled": false,
       "name": "assets",
-      "entityType": "tables",
-      "schema": "public"
-    },
-    {
-      "isRlsEnabled": false,
-      "name": "billing_accounts",
-      "entityType": "tables",
-      "schema": "public"
-    },
-    {
-      "isRlsEnabled": false,
-      "name": "billing_payment_reversals",
-      "entityType": "tables",
-      "schema": "public"
-    },
-    {
-      "isRlsEnabled": false,
-      "name": "credit_ledger",
-      "entityType": "tables",
-      "schema": "public"
-    },
-    {
-      "isRlsEnabled": false,
-      "name": "stripe_events",
       "entityType": "tables",
       "schema": "public"
     },
@@ -486,18 +351,6 @@
     },
     {
       "isRlsEnabled": false,
-      "name": "principal_asset_override_applications",
-      "entityType": "tables",
-      "schema": "public"
-    },
-    {
-      "isRlsEnabled": false,
-      "name": "principal_asset_overrides",
-      "entityType": "tables",
-      "schema": "public"
-    },
-    {
-      "isRlsEnabled": false,
       "name": "principal_claims",
       "entityType": "tables",
       "schema": "public"
@@ -546,12 +399,6 @@
     },
     {
       "isRlsEnabled": false,
-      "name": "provider_asset_source_uses",
-      "entityType": "tables",
-      "schema": "public"
-    },
-    {
-      "isRlsEnabled": false,
       "name": "provider_assets",
       "entityType": "tables",
       "schema": "public"
@@ -583,12 +430,6 @@
     {
       "isRlsEnabled": false,
       "name": "source_records_raw",
-      "entityType": "tables",
-      "schema": "public"
-    },
-    {
-      "isRlsEnabled": false,
-      "name": "source_representation_uses",
       "entityType": "tables",
       "schema": "public"
     },
@@ -679,12 +520,6 @@
     {
       "isRlsEnabled": false,
       "name": "users",
-      "entityType": "tables",
-      "schema": "public"
-    },
-    {
-      "isRlsEnabled": false,
-      "name": "wallet_name_cache",
       "entityType": "tables",
       "schema": "public"
     },
@@ -907,137 +742,7 @@
       "name": "id",
       "entityType": "columns",
       "schema": "public",
-      "table": "asset_representation_ownership_decisions"
-    },
-    {
-      "type": "uuid",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "asset_representation_id",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "asset_representation_ownership_decisions"
-    },
-    {
-      "type": "uuid",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "asset_id",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "asset_representation_ownership_decisions"
-    },
-    {
-      "type": "asset_resolution_decision_status",
-      "typeSchema": "public",
-      "notNull": true,
-      "dimensions": 0,
-      "default": "'active'",
-      "generated": null,
-      "identity": null,
-      "name": "status",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "asset_representation_ownership_decisions"
-    },
-    {
-      "type": "uuid",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "supersedes_decision_id",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "asset_representation_ownership_decisions"
-    },
-    {
-      "type": "text",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "policy_revision",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "asset_representation_ownership_decisions"
-    },
-    {
-      "type": "text",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "reason",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "asset_representation_ownership_decisions"
-    },
-    {
-      "type": "text",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "actor",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "asset_representation_ownership_decisions"
-    },
-    {
-      "type": "timestamp",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": "now()",
-      "generated": null,
-      "identity": null,
-      "name": "created_at",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "asset_representation_ownership_decisions"
-    },
-    {
-      "type": "uuid",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": "gen_random_uuid()",
-      "generated": null,
-      "identity": null,
-      "name": "id",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "asset_representations"
-    },
-    {
-      "type": "uuid",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "asset_id",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "asset_representations"
+      "table": "assets"
     },
     {
       "type": "uuid",
@@ -1050,20 +755,7 @@
       "name": "blockchain_id",
       "entityType": "columns",
       "schema": "public",
-      "table": "asset_representations"
-    },
-    {
-      "type": "asset_representation_type",
-      "typeSchema": "public",
-      "notNull": true,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "type",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "asset_representations"
+      "table": "assets"
     },
     {
       "type": "text",
@@ -1074,630 +766,6 @@
       "generated": null,
       "identity": null,
       "name": "contract_address",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "asset_representations"
-    },
-    {
-      "type": "text",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "mint_address",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "asset_representations"
-    },
-    {
-      "type": "integer",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "decimals",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "asset_representations"
-    },
-    {
-      "type": "text",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "logo_url",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "asset_representations"
-    },
-    {
-      "type": "boolean",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": "false",
-      "generated": null,
-      "identity": null,
-      "name": "is_spam",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "asset_representations"
-    },
-    {
-      "type": "jsonb",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "metadata",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "asset_representations"
-    },
-    {
-      "type": "timestamp",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": "now()",
-      "generated": null,
-      "identity": null,
-      "name": "created_at",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "asset_representations"
-    },
-    {
-      "type": "timestamp",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": "now()",
-      "generated": null,
-      "identity": null,
-      "name": "updated_at",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "asset_representations"
-    },
-    {
-      "type": "uuid",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": "gen_random_uuid()",
-      "generated": null,
-      "identity": null,
-      "name": "id",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "asset_resolution_decisions"
-    },
-    {
-      "type": "uuid",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "provider_asset_row_id",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "asset_resolution_decisions"
-    },
-    {
-      "type": "integer",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "evidence_revision",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "asset_resolution_decisions"
-    },
-    {
-      "type": "text",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "policy_revision",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "asset_resolution_decisions"
-    },
-    {
-      "type": "asset_resolution_outcome",
-      "typeSchema": "public",
-      "notNull": true,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "outcome",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "asset_resolution_decisions"
-    },
-    {
-      "type": "asset_resolution_decision_status",
-      "typeSchema": "public",
-      "notNull": true,
-      "dimensions": 0,
-      "default": "'active'",
-      "generated": null,
-      "identity": null,
-      "name": "status",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "asset_resolution_decisions"
-    },
-    {
-      "type": "uuid",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "supersedes_decision_id",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "asset_resolution_decisions"
-    },
-    {
-      "type": "uuid",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "asset_id",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "asset_resolution_decisions"
-    },
-    {
-      "type": "uuid",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "asset_representation_id",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "asset_resolution_decisions"
-    },
-    {
-      "type": "text",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "blockchain",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "asset_resolution_decisions"
-    },
-    {
-      "type": "text",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "representation_type",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "asset_resolution_decisions"
-    },
-    {
-      "type": "text",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "contract_address",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "asset_resolution_decisions"
-    },
-    {
-      "type": "text",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "mint_address",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "asset_resolution_decisions"
-    },
-    {
-      "type": "integer",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "decimals",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "asset_resolution_decisions"
-    },
-    {
-      "type": "text",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "reason",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "asset_resolution_decisions"
-    },
-    {
-      "type": "text",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "actor",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "asset_resolution_decisions"
-    },
-    {
-      "type": "timestamp",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": "now()",
-      "generated": null,
-      "identity": null,
-      "name": "created_at",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "asset_resolution_decisions"
-    },
-    {
-      "type": "uuid",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": "gen_random_uuid()",
-      "generated": null,
-      "identity": null,
-      "name": "id",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "asset_resolution_evidence"
-    },
-    {
-      "type": "uuid",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "decision_id",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "asset_resolution_evidence"
-    },
-    {
-      "type": "text",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "authority",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "asset_resolution_evidence"
-    },
-    {
-      "type": "text",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "claim_kind",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "asset_resolution_evidence"
-    },
-    {
-      "type": "text",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "source_locator",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "asset_resolution_evidence"
-    },
-    {
-      "type": "timestamp",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "retrieved_at",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "asset_resolution_evidence"
-    },
-    {
-      "type": "integer",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "evidence_revision",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "asset_resolution_evidence"
-    },
-    {
-      "type": "jsonb",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "decoded_claim",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "asset_resolution_evidence"
-    },
-    {
-      "type": "jsonb",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "raw_payload",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "asset_resolution_evidence"
-    },
-    {
-      "type": "timestamp",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": "now()",
-      "generated": null,
-      "identity": null,
-      "name": "created_at",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "asset_resolution_evidence"
-    },
-    {
-      "type": "uuid",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": "gen_random_uuid()",
-      "generated": null,
-      "identity": null,
-      "name": "id",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "asset_resolution_jobs"
-    },
-    {
-      "type": "uuid",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "provider_asset_row_id",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "asset_resolution_jobs"
-    },
-    {
-      "type": "integer",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "evidence_revision",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "asset_resolution_jobs"
-    },
-    {
-      "type": "job_status",
-      "typeSchema": "public",
-      "notNull": true,
-      "dimensions": 0,
-      "default": "'pending'",
-      "generated": null,
-      "identity": null,
-      "name": "status",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "asset_resolution_jobs"
-    },
-    {
-      "type": "integer",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": "0",
-      "generated": null,
-      "identity": null,
-      "name": "attempt_count",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "asset_resolution_jobs"
-    },
-    {
-      "type": "integer",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": "3",
-      "generated": null,
-      "identity": null,
-      "name": "max_attempts",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "asset_resolution_jobs"
-    },
-    {
-      "type": "timestamp",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "started_at",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "asset_resolution_jobs"
-    },
-    {
-      "type": "timestamp",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "heartbeat_at",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "asset_resolution_jobs"
-    },
-    {
-      "type": "timestamp",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "next_retry_at",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "asset_resolution_jobs"
-    },
-    {
-      "type": "text",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "worker_id",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "asset_resolution_jobs"
-    },
-    {
-      "type": "text",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "error_message",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "asset_resolution_jobs"
-    },
-    {
-      "type": "timestamp",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": "now()",
-      "generated": null,
-      "identity": null,
-      "name": "created_at",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "asset_resolution_jobs"
-    },
-    {
-      "type": "timestamp",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": "now()",
-      "generated": null,
-      "identity": null,
-      "name": "updated_at",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "asset_resolution_jobs"
-    },
-    {
-      "type": "uuid",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": "gen_random_uuid()",
-      "generated": null,
-      "identity": null,
-      "name": "id",
       "entityType": "columns",
       "schema": "public",
       "table": "assets"
@@ -1724,6 +792,19 @@
       "generated": null,
       "identity": null,
       "name": "symbol",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "assets"
+    },
+    {
+      "type": "integer",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "decimals",
       "entityType": "columns",
       "schema": "public",
       "table": "assets"
@@ -1759,7 +840,7 @@
       "typeSchema": "public",
       "notNull": true,
       "dimensions": 0,
-      "default": "'fungible'",
+      "default": "'token'",
       "generated": null,
       "identity": null,
       "name": "type",
@@ -1794,136 +875,6 @@
       "table": "assets"
     },
     {
-      "type": "uuid",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "user_id",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "billing_accounts"
-    },
-    {
-      "type": "text",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "stripe_customer_id",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "billing_accounts"
-    },
-    {
-      "type": "integer",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": "0",
-      "generated": null,
-      "identity": null,
-      "name": "stripe_customer_generation",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "billing_accounts"
-    },
-    {
-      "type": "integer",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": "0",
-      "generated": null,
-      "identity": null,
-      "name": "annual_checkout_generation",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "billing_accounts"
-    },
-    {
-      "type": "timestamp",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "annual_checkout_expires_at",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "billing_accounts"
-    },
-    {
-      "type": "text",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "annual_checkout_price_id",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "billing_accounts"
-    },
-    {
-      "type": "integer",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": "0",
-      "generated": null,
-      "identity": null,
-      "name": "subscription_sync_generation",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "billing_accounts"
-    },
-    {
-      "type": "text",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "stripe_subscription_id",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "billing_accounts"
-    },
-    {
-      "type": "billing_subscription_status",
-      "typeSchema": "public",
-      "notNull": false,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "subscription_status",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "billing_accounts"
-    },
-    {
-      "type": "timestamp",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "current_period_end",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "billing_accounts"
-    },
-    {
       "type": "boolean",
       "typeSchema": null,
       "notNull": true,
@@ -1931,361 +882,10 @@
       "default": "false",
       "generated": null,
       "identity": null,
-      "name": "cancel_at_period_end",
+      "name": "is_spam",
       "entityType": "columns",
       "schema": "public",
-      "table": "billing_accounts"
-    },
-    {
-      "type": "timestamp",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "last_subscription_event_created_at",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "billing_accounts"
-    },
-    {
-      "type": "timestamp",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": "now()",
-      "generated": null,
-      "identity": null,
-      "name": "created_at",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "billing_accounts"
-    },
-    {
-      "type": "timestamp",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": "now()",
-      "generated": null,
-      "identity": null,
-      "name": "updated_at",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "billing_accounts"
-    },
-    {
-      "type": "text",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "payment_reference",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "billing_payment_reversals"
-    },
-    {
-      "type": "text",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "reversal_group",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "billing_payment_reversals"
-    },
-    {
-      "type": "text",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "loss_reference",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "billing_payment_reversals"
-    },
-    {
-      "type": "integer",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "reversed_amount",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "billing_payment_reversals"
-    },
-    {
-      "type": "integer",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "payment_amount",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "billing_payment_reversals"
-    },
-    {
-      "type": "text",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "event_reference",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "billing_payment_reversals"
-    },
-    {
-      "type": "timestamp",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "event_created_at",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "billing_payment_reversals"
-    },
-    {
-      "type": "text",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "stripe_invoice_id",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "billing_payment_reversals"
-    },
-    {
-      "type": "boolean",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": "false",
-      "generated": null,
-      "identity": null,
-      "name": "terminal",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "billing_payment_reversals"
-    },
-    {
-      "type": "timestamp",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": "now()",
-      "generated": null,
-      "identity": null,
-      "name": "updated_at",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "billing_payment_reversals"
-    },
-    {
-      "type": "uuid",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": "gen_random_uuid()",
-      "generated": null,
-      "identity": null,
-      "name": "id",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "credit_ledger"
-    },
-    {
-      "type": "uuid",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "user_id",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "credit_ledger"
-    },
-    {
-      "type": "integer",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "delta",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "credit_ledger"
-    },
-    {
-      "type": "credit_entry_kind",
-      "typeSchema": "public",
-      "notNull": true,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "kind",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "credit_ledger"
-    },
-    {
-      "type": "text",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "reference",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "credit_ledger"
-    },
-    {
-      "type": "text",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "payment_reference",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "credit_ledger"
-    },
-    {
-      "type": "integer",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "payment_amount",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "credit_ledger"
-    },
-    {
-      "type": "text",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "stripe_invoice_id",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "credit_ledger"
-    },
-    {
-      "type": "text",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "replay_reservation_id",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "credit_ledger"
-    },
-    {
-      "type": "timestamp",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "expires_at",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "credit_ledger"
-    },
-    {
-      "type": "timestamp",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": "now()",
-      "generated": null,
-      "identity": null,
-      "name": "created_at",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "credit_ledger"
-    },
-    {
-      "type": "text",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "id",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "stripe_events"
-    },
-    {
-      "type": "text",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "type",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "stripe_events"
-    },
-    {
-      "type": "timestamp",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": "now()",
-      "generated": null,
-      "identity": null,
-      "name": "processed_at",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "stripe_events"
+      "table": "assets"
     },
     {
       "type": "uuid",
@@ -2730,7 +1330,7 @@
       "table": "disposal_matches"
     },
     {
-      "type": "numeric(355,255)",
+      "type": "numeric(100,30)",
       "typeSchema": null,
       "notNull": true,
       "dimensions": 0,
@@ -2990,19 +1590,6 @@
       "table": "fifo_lots"
     },
     {
-      "type": "uuid",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "asset_representation_id",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "fifo_lots"
-    },
-    {
       "type": "timestamp",
       "typeSchema": null,
       "notNull": true,
@@ -3016,7 +1603,7 @@
       "table": "fifo_lots"
     },
     {
-      "type": "numeric(355,255)",
+      "type": "numeric(100,30)",
       "typeSchema": null,
       "notNull": true,
       "dimensions": 0,
@@ -3029,7 +1616,7 @@
       "table": "fifo_lots"
     },
     {
-      "type": "numeric(355,255)",
+      "type": "numeric(100,30)",
       "typeSchema": null,
       "notNull": true,
       "dimensions": 0,
@@ -3042,7 +1629,7 @@
       "table": "fifo_lots"
     },
     {
-      "type": "numeric(355,18)",
+      "type": "numeric(36,18)",
       "typeSchema": null,
       "notNull": true,
       "dimensions": 0,
@@ -3276,7 +1863,7 @@
       "table": "inventory_movement_allocations"
     },
     {
-      "type": "numeric(355,255)",
+      "type": "numeric(100,30)",
       "typeSchema": null,
       "notNull": true,
       "dimensions": 0,
@@ -3406,19 +1993,6 @@
       "table": "inventory_movements"
     },
     {
-      "type": "uuid",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "asset_representation_id",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "inventory_movements"
-    },
-    {
       "type": "timestamp",
       "typeSchema": null,
       "notNull": true,
@@ -3484,7 +2058,7 @@
       "table": "inventory_movements"
     },
     {
-      "type": "numeric(355,255)",
+      "type": "numeric(100,30)",
       "typeSchema": null,
       "notNull": true,
       "dimensions": 0,
@@ -4547,370 +3121,6 @@
       "name": "id",
       "entityType": "columns",
       "schema": "public",
-      "table": "principal_asset_override_applications"
-    },
-    {
-      "type": "uuid",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "override_id",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "principal_asset_override_applications"
-    },
-    {
-      "type": "uuid",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "source_id",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "principal_asset_override_applications"
-    },
-    {
-      "type": "uuid",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "replay_job_id",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "principal_asset_override_applications"
-    },
-    {
-      "type": "boolean",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": "true",
-      "generated": null,
-      "identity": null,
-      "name": "requires_replay",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "principal_asset_override_applications"
-    },
-    {
-      "type": "timestamp",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "superseded_at",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "principal_asset_override_applications"
-    },
-    {
-      "type": "timestamp",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": "now()",
-      "generated": null,
-      "identity": null,
-      "name": "created_at",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "principal_asset_override_applications"
-    },
-    {
-      "type": "uuid",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": "gen_random_uuid()",
-      "generated": null,
-      "identity": null,
-      "name": "id",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "principal_asset_overrides"
-    },
-    {
-      "type": "uuid",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "principal_id",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "principal_asset_overrides"
-    },
-    {
-      "type": "principal_asset_override_kind",
-      "typeSchema": "public",
-      "notNull": true,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "kind",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "principal_asset_overrides"
-    },
-    {
-      "type": "principal_asset_override_target_kind",
-      "typeSchema": "public",
-      "notNull": true,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "target_kind",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "principal_asset_overrides"
-    },
-    {
-      "type": "uuid",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "blockchain_id",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "principal_asset_overrides"
-    },
-    {
-      "type": "asset_representation_type",
-      "typeSchema": "public",
-      "notNull": false,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "representation_type",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "principal_asset_overrides"
-    },
-    {
-      "type": "text",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "contract_address",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "principal_asset_overrides"
-    },
-    {
-      "type": "text",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "mint_address",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "principal_asset_overrides"
-    },
-    {
-      "type": "uuid",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "provider_asset_row_id",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "principal_asset_overrides"
-    },
-    {
-      "type": "principal_asset_override_action",
-      "typeSchema": "public",
-      "notNull": true,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "action",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "principal_asset_overrides"
-    },
-    {
-      "type": "text",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "inspected_system_revision",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "principal_asset_overrides"
-    },
-    {
-      "type": "principal_asset_identity_state",
-      "typeSchema": "public",
-      "notNull": false,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "inspected_identity_state",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "principal_asset_overrides"
-    },
-    {
-      "type": "principal_asset_inclusion_state",
-      "typeSchema": "public",
-      "notNull": false,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "inspected_inclusion_state",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "principal_asset_overrides"
-    },
-    {
-      "type": "text",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "inspected_inclusion_reason",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "principal_asset_overrides"
-    },
-    {
-      "type": "uuid",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "inspected_asset_id",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "principal_asset_overrides"
-    },
-    {
-      "type": "uuid",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "replacement_asset_id",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "principal_asset_overrides"
-    },
-    {
-      "type": "principal_asset_inclusion_state",
-      "typeSchema": "public",
-      "notNull": false,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "replacement_inclusion_state",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "principal_asset_overrides"
-    },
-    {
-      "type": "uuid",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "actor_id",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "principal_asset_overrides"
-    },
-    {
-      "type": "text",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "reason",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "principal_asset_overrides"
-    },
-    {
-      "type": "uuid",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "supersedes_override_id",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "principal_asset_overrides"
-    },
-    {
-      "type": "timestamp",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": "now()",
-      "generated": null,
-      "identity": null,
-      "name": "created_at",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "principal_asset_overrides"
-    },
-    {
-      "type": "uuid",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": "gen_random_uuid()",
-      "generated": null,
-      "identity": null,
-      "name": "id",
-      "entityType": "columns",
-      "schema": "public",
       "table": "principal_claims"
     },
     {
@@ -5364,58 +3574,6 @@
       "generated": null,
       "identity": null,
       "name": "error_message",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "processing_jobs"
-    },
-    {
-      "type": "text",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "credit_reason_code",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "processing_jobs"
-    },
-    {
-      "type": "integer",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "credits_available",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "processing_jobs"
-    },
-    {
-      "type": "integer",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "credits_consumed",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "processing_jobs"
-    },
-    {
-      "type": "integer",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "additional_credits_required",
       "entityType": "columns",
       "schema": "public",
       "table": "processing_jobs"
@@ -6201,14 +4359,14 @@
       "table": "provider_asset_mappings"
     },
     {
-      "type": "uuid",
+      "type": "text",
       "typeSchema": null,
       "notNull": false,
       "dimensions": 0,
       "default": null,
       "generated": null,
       "identity": null,
-      "name": "asset_representation_id",
+      "name": "canonical_asset_symbol",
       "entityType": "columns",
       "schema": "public",
       "table": "provider_asset_mappings"
@@ -6227,7 +4385,7 @@
       "table": "provider_asset_mappings"
     },
     {
-      "type": "provider_asset_mapping_status",
+      "type": "provider_mapping_status",
       "typeSchema": "public",
       "notNull": true,
       "dimensions": 0,
@@ -6290,58 +4448,6 @@
       "entityType": "columns",
       "schema": "public",
       "table": "provider_asset_mappings"
-    },
-    {
-      "type": "uuid",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "provider_asset_row_id",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "provider_asset_source_uses"
-    },
-    {
-      "type": "uuid",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "source_id",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "provider_asset_source_uses"
-    },
-    {
-      "type": "timestamp",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": "now()",
-      "generated": null,
-      "identity": null,
-      "name": "created_at",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "provider_asset_source_uses"
-    },
-    {
-      "type": "timestamp",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": "now()",
-      "generated": null,
-      "identity": null,
-      "name": "updated_at",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "provider_asset_source_uses"
     },
     {
       "type": "uuid",
@@ -6456,19 +4562,6 @@
       "generated": null,
       "identity": null,
       "name": "raw_provider_payload",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "provider_assets"
-    },
-    {
-      "type": "integer",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": "1",
-      "generated": null,
-      "identity": null,
-      "name": "evidence_revision",
       "entityType": "columns",
       "schema": "public",
       "table": "provider_assets"
@@ -6929,19 +5022,6 @@
       "table": "provider_transfers"
     },
     {
-      "type": "provider_transfer_processing_mode",
-      "typeSchema": "public",
-      "notNull": true,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "processing_mode",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "provider_transfers"
-    },
-    {
       "type": "text",
       "typeSchema": null,
       "notNull": false,
@@ -7020,72 +5100,7 @@
       "table": "provider_transfers"
     },
     {
-      "type": "uuid",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "observed_blockchain_id",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "provider_transfers"
-    },
-    {
-      "type": "asset_representation_type",
-      "typeSchema": "public",
-      "notNull": false,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "observed_representation_type",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "provider_transfers"
-    },
-    {
-      "type": "text",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "observed_contract_address",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "provider_transfers"
-    },
-    {
-      "type": "text",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "observed_mint_address",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "provider_transfers"
-    },
-    {
-      "type": "integer",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "observed_decimals",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "provider_transfers"
-    },
-    {
-      "type": "numeric(355,255)",
+      "type": "numeric(100,30)",
       "typeSchema": null,
       "notNull": true,
       "dimensions": 0,
@@ -7382,110 +5397,6 @@
       "entityType": "columns",
       "schema": "public",
       "table": "source_records_raw"
-    },
-    {
-      "type": "uuid",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": "gen_random_uuid()",
-      "generated": null,
-      "identity": null,
-      "name": "id",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "source_representation_uses"
-    },
-    {
-      "type": "uuid",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "source_id",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "source_representation_uses"
-    },
-    {
-      "type": "uuid",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "blockchain_id",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "source_representation_uses"
-    },
-    {
-      "type": "asset_representation_type",
-      "typeSchema": "public",
-      "notNull": true,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "representation_type",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "source_representation_uses"
-    },
-    {
-      "type": "text",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "contract_address",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "source_representation_uses"
-    },
-    {
-      "type": "text",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "mint_address",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "source_representation_uses"
-    },
-    {
-      "type": "timestamp",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": "now()",
-      "generated": null,
-      "identity": null,
-      "name": "created_at",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "source_representation_uses"
-    },
-    {
-      "type": "timestamp",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": "now()",
-      "generated": null,
-      "identity": null,
-      "name": "updated_at",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "source_representation_uses"
     },
     {
       "type": "uuid",
@@ -8203,20 +6114,7 @@
       "table": "transaction_legs"
     },
     {
-      "type": "uuid",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "asset_representation_id",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "transaction_legs"
-    },
-    {
-      "type": "numeric(355,255)",
+      "type": "numeric(100,30)",
       "typeSchema": null,
       "notNull": true,
       "dimensions": 0,
@@ -9802,20 +7700,7 @@
       "table": "transfers"
     },
     {
-      "type": "uuid",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "asset_representation_id",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "transfers"
-    },
-    {
-      "type": "numeric(355,255)",
+      "type": "numeric(100,30)",
       "typeSchema": null,
       "notNull": true,
       "dimensions": 0,
@@ -9984,110 +7869,6 @@
       "table": "users"
     },
     {
-      "type": "uuid",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": "gen_random_uuid()",
-      "generated": null,
-      "identity": null,
-      "name": "id",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "wallet_name_cache"
-    },
-    {
-      "type": "text",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "namespace",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "wallet_name_cache"
-    },
-    {
-      "type": "text",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "name",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "wallet_name_cache"
-    },
-    {
-      "type": "text",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "resolved_address",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "wallet_name_cache"
-    },
-    {
-      "type": "timestamp with time zone",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": "now()",
-      "generated": null,
-      "identity": null,
-      "name": "resolved_at",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "wallet_name_cache"
-    },
-    {
-      "type": "timestamp with time zone",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "expires_at",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "wallet_name_cache"
-    },
-    {
-      "type": "timestamp",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": "now()",
-      "generated": null,
-      "identity": null,
-      "name": "created_at",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "wallet_name_cache"
-    },
-    {
-      "type": "timestamp",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": "now()",
-      "generated": null,
-      "identity": null,
-      "name": "updated_at",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "wallet_name_cache"
-    },
-    {
       "nameExplicit": true,
       "columns": [
         {
@@ -10175,412 +7956,6 @@
       "nameExplicit": true,
       "columns": [
         {
-          "value": "asset_representation_id",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": null
-        }
-      ],
-      "isUnique": true,
-      "where": "\"status\" = 'active'",
-      "with": "",
-      "method": "btree",
-      "concurrently": false,
-      "name": "asset_representation_ownership_active_unique",
-      "entityType": "indexes",
-      "schema": "public",
-      "table": "asset_representation_ownership_decisions"
-    },
-    {
-      "nameExplicit": true,
-      "columns": [
-        {
-          "value": "supersedes_decision_id",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": null
-        }
-      ],
-      "isUnique": true,
-      "where": "\"supersedes_decision_id\" is not null",
-      "with": "",
-      "method": "btree",
-      "concurrently": false,
-      "name": "asset_representation_ownership_supersedes_unique",
-      "entityType": "indexes",
-      "schema": "public",
-      "table": "asset_representation_ownership_decisions"
-    },
-    {
-      "nameExplicit": true,
-      "columns": [
-        {
-          "value": "asset_id",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": null
-        }
-      ],
-      "isUnique": false,
-      "where": null,
-      "with": "",
-      "method": "btree",
-      "concurrently": false,
-      "name": "idx_asset_representation_ownership_asset_id",
-      "entityType": "indexes",
-      "schema": "public",
-      "table": "asset_representation_ownership_decisions"
-    },
-    {
-      "nameExplicit": true,
-      "columns": [
-        {
-          "value": "blockchain_id",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": null
-        }
-      ],
-      "isUnique": true,
-      "where": "\"type\" = 'native'",
-      "with": "",
-      "method": "btree",
-      "concurrently": false,
-      "name": "asset_representations_native_blockchain_unique_idx",
-      "entityType": "indexes",
-      "schema": "public",
-      "table": "asset_representations"
-    },
-    {
-      "nameExplicit": true,
-      "columns": [
-        {
-          "value": "blockchain_id",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": null
-        },
-        {
-          "value": "contract_address",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": null
-        }
-      ],
-      "isUnique": true,
-      "where": "\"contract_address\" is not null",
-      "with": "",
-      "method": "btree",
-      "concurrently": false,
-      "name": "asset_representations_contract_unique_idx",
-      "entityType": "indexes",
-      "schema": "public",
-      "table": "asset_representations"
-    },
-    {
-      "nameExplicit": true,
-      "columns": [
-        {
-          "value": "blockchain_id",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": null
-        },
-        {
-          "value": "mint_address",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": null
-        }
-      ],
-      "isUnique": true,
-      "where": "\"mint_address\" is not null",
-      "with": "",
-      "method": "btree",
-      "concurrently": false,
-      "name": "asset_representations_mint_unique_idx",
-      "entityType": "indexes",
-      "schema": "public",
-      "table": "asset_representations"
-    },
-    {
-      "nameExplicit": true,
-      "columns": [
-        {
-          "value": "asset_id",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": null
-        },
-        {
-          "value": "id",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": null
-        }
-      ],
-      "isUnique": true,
-      "where": null,
-      "with": "",
-      "method": "btree",
-      "concurrently": false,
-      "name": "asset_representations_asset_id_id_unique_idx",
-      "entityType": "indexes",
-      "schema": "public",
-      "table": "asset_representations"
-    },
-    {
-      "nameExplicit": true,
-      "columns": [
-        {
-          "value": "asset_id",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": null
-        }
-      ],
-      "isUnique": false,
-      "where": null,
-      "with": "",
-      "method": "btree",
-      "concurrently": false,
-      "name": "idx_asset_representations_asset",
-      "entityType": "indexes",
-      "schema": "public",
-      "table": "asset_representations"
-    },
-    {
-      "nameExplicit": true,
-      "columns": [
-        {
-          "value": "blockchain_id",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": null
-        }
-      ],
-      "isUnique": false,
-      "where": null,
-      "with": "",
-      "method": "btree",
-      "concurrently": false,
-      "name": "idx_asset_representations_blockchain",
-      "entityType": "indexes",
-      "schema": "public",
-      "table": "asset_representations"
-    },
-    {
-      "nameExplicit": true,
-      "columns": [
-        {
-          "value": "provider_asset_row_id",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": null
-        },
-        {
-          "value": "evidence_revision",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": null
-        }
-      ],
-      "isUnique": true,
-      "where": "\"status\" = 'active'",
-      "with": "",
-      "method": "btree",
-      "concurrently": false,
-      "name": "asset_resolution_decisions_active_observation_revision_unique",
-      "entityType": "indexes",
-      "schema": "public",
-      "table": "asset_resolution_decisions"
-    },
-    {
-      "nameExplicit": true,
-      "columns": [
-        {
-          "value": "supersedes_decision_id",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": null
-        }
-      ],
-      "isUnique": true,
-      "where": "\"supersedes_decision_id\" is not null",
-      "with": "",
-      "method": "btree",
-      "concurrently": false,
-      "name": "asset_resolution_decisions_supersedes_unique",
-      "entityType": "indexes",
-      "schema": "public",
-      "table": "asset_resolution_decisions"
-    },
-    {
-      "nameExplicit": true,
-      "columns": [
-        {
-          "value": "asset_id",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": null
-        }
-      ],
-      "isUnique": false,
-      "where": null,
-      "with": "",
-      "method": "btree",
-      "concurrently": false,
-      "name": "idx_asset_resolution_decisions_asset_id",
-      "entityType": "indexes",
-      "schema": "public",
-      "table": "asset_resolution_decisions"
-    },
-    {
-      "nameExplicit": true,
-      "columns": [
-        {
-          "value": "decision_id",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": null
-        },
-        {
-          "value": "authority",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": null
-        },
-        {
-          "value": "claim_kind",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": null
-        }
-      ],
-      "isUnique": true,
-      "where": null,
-      "with": "",
-      "method": "btree",
-      "concurrently": false,
-      "name": "asset_resolution_evidence_decision_authority_claim_unique",
-      "entityType": "indexes",
-      "schema": "public",
-      "table": "asset_resolution_evidence"
-    },
-    {
-      "nameExplicit": true,
-      "columns": [
-        {
-          "value": "decision_id",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": null
-        }
-      ],
-      "isUnique": false,
-      "where": null,
-      "with": "",
-      "method": "btree",
-      "concurrently": false,
-      "name": "idx_asset_resolution_evidence_decision_id",
-      "entityType": "indexes",
-      "schema": "public",
-      "table": "asset_resolution_evidence"
-    },
-    {
-      "nameExplicit": true,
-      "columns": [
-        {
-          "value": "provider_asset_row_id",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": null
-        },
-        {
-          "value": "evidence_revision",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": null
-        }
-      ],
-      "isUnique": true,
-      "where": null,
-      "with": "",
-      "method": "btree",
-      "concurrently": false,
-      "name": "asset_resolution_jobs_observation_revision_unique",
-      "entityType": "indexes",
-      "schema": "public",
-      "table": "asset_resolution_jobs"
-    },
-    {
-      "nameExplicit": true,
-      "columns": [
-        {
-          "value": "status",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": null
-        }
-      ],
-      "isUnique": false,
-      "where": null,
-      "with": "",
-      "method": "btree",
-      "concurrently": false,
-      "name": "idx_asset_resolution_jobs_status",
-      "entityType": "indexes",
-      "schema": "public",
-      "table": "asset_resolution_jobs"
-    },
-    {
-      "nameExplicit": true,
-      "columns": [
-        {
-          "value": "heartbeat_at",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": null
-        }
-      ],
-      "isUnique": false,
-      "where": null,
-      "with": "",
-      "method": "btree",
-      "concurrently": false,
-      "name": "idx_asset_resolution_jobs_heartbeat_at",
-      "entityType": "indexes",
-      "schema": "public",
-      "table": "asset_resolution_jobs"
-    },
-    {
-      "nameExplicit": true,
-      "columns": [
-        {
           "value": "symbol",
           "isExpression": false,
           "asc": true,
@@ -10609,162 +7984,15 @@
           "opclass": null
         }
       ],
-      "isUnique": true,
+      "isUnique": false,
       "where": null,
       "with": "",
       "method": "btree",
       "concurrently": false,
-      "name": "asset_coingecko_coin_id_unique_idx",
+      "name": "asset_coingecko_coin_id_idx",
       "entityType": "indexes",
       "schema": "public",
       "table": "assets"
-    },
-    {
-      "nameExplicit": true,
-      "columns": [
-        {
-          "value": "stripe_customer_id",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": null
-        }
-      ],
-      "isUnique": true,
-      "where": "\"stripe_customer_id\" is not null",
-      "with": "",
-      "method": "btree",
-      "concurrently": false,
-      "name": "billing_accounts_stripe_customer_unique",
-      "entityType": "indexes",
-      "schema": "public",
-      "table": "billing_accounts"
-    },
-    {
-      "nameExplicit": true,
-      "columns": [
-        {
-          "value": "stripe_subscription_id",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": null
-        }
-      ],
-      "isUnique": true,
-      "where": "\"stripe_subscription_id\" is not null",
-      "with": "",
-      "method": "btree",
-      "concurrently": false,
-      "name": "billing_accounts_stripe_subscription_unique",
-      "entityType": "indexes",
-      "schema": "public",
-      "table": "billing_accounts"
-    },
-    {
-      "nameExplicit": true,
-      "columns": [
-        {
-          "value": "payment_reference",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": null
-        }
-      ],
-      "isUnique": false,
-      "where": null,
-      "with": "",
-      "method": "btree",
-      "concurrently": false,
-      "name": "idx_billing_payment_reversals_payment_reference",
-      "entityType": "indexes",
-      "schema": "public",
-      "table": "billing_payment_reversals"
-    },
-    {
-      "nameExplicit": true,
-      "columns": [
-        {
-          "value": "reference",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": null
-        }
-      ],
-      "isUnique": true,
-      "where": null,
-      "with": "",
-      "method": "btree",
-      "concurrently": false,
-      "name": "credit_ledger_reference_unique",
-      "entityType": "indexes",
-      "schema": "public",
-      "table": "credit_ledger"
-    },
-    {
-      "nameExplicit": true,
-      "columns": [
-        {
-          "value": "user_id",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": null
-        }
-      ],
-      "isUnique": false,
-      "where": null,
-      "with": "",
-      "method": "btree",
-      "concurrently": false,
-      "name": "idx_credit_ledger_user_id",
-      "entityType": "indexes",
-      "schema": "public",
-      "table": "credit_ledger"
-    },
-    {
-      "nameExplicit": true,
-      "columns": [
-        {
-          "value": "payment_reference",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": null
-        }
-      ],
-      "isUnique": false,
-      "where": null,
-      "with": "",
-      "method": "btree",
-      "concurrently": false,
-      "name": "idx_credit_ledger_payment_reference",
-      "entityType": "indexes",
-      "schema": "public",
-      "table": "credit_ledger"
-    },
-    {
-      "nameExplicit": true,
-      "columns": [
-        {
-          "value": "expires_at",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": null
-        }
-      ],
-      "isUnique": false,
-      "where": null,
-      "with": "",
-      "method": "btree",
-      "concurrently": false,
-      "name": "idx_credit_ledger_expires_at",
-      "entityType": "indexes",
-      "schema": "public",
-      "table": "credit_ledger"
     },
     {
       "nameExplicit": true,
@@ -11519,209 +8747,6 @@
       "nameExplicit": true,
       "columns": [
         {
-          "value": "override_id",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": null
-        },
-        {
-          "value": "source_id",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": null
-        }
-      ],
-      "isUnique": true,
-      "where": null,
-      "with": "",
-      "method": "btree",
-      "concurrently": false,
-      "name": "principal_asset_override_applications_override_source_unique",
-      "entityType": "indexes",
-      "schema": "public",
-      "table": "principal_asset_override_applications"
-    },
-    {
-      "nameExplicit": true,
-      "columns": [
-        {
-          "value": "source_id",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": null
-        },
-        {
-          "value": "superseded_at",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": null
-        }
-      ],
-      "isUnique": false,
-      "where": null,
-      "with": "",
-      "method": "btree",
-      "concurrently": false,
-      "name": "idx_principal_asset_override_applications_source_active",
-      "entityType": "indexes",
-      "schema": "public",
-      "table": "principal_asset_override_applications"
-    },
-    {
-      "nameExplicit": true,
-      "columns": [
-        {
-          "value": "replay_job_id",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": null
-        }
-      ],
-      "isUnique": false,
-      "where": null,
-      "with": "",
-      "method": "btree",
-      "concurrently": false,
-      "name": "idx_principal_asset_override_applications_replay_job",
-      "entityType": "indexes",
-      "schema": "public",
-      "table": "principal_asset_override_applications"
-    },
-    {
-      "nameExplicit": true,
-      "columns": [
-        {
-          "value": "supersedes_override_id",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": null
-        }
-      ],
-      "isUnique": true,
-      "where": "\"supersedes_override_id\" is not null",
-      "with": "",
-      "method": "btree",
-      "concurrently": false,
-      "name": "principal_asset_overrides_supersedes_unique",
-      "entityType": "indexes",
-      "schema": "public",
-      "table": "principal_asset_overrides"
-    },
-    {
-      "nameExplicit": true,
-      "columns": [
-        {
-          "value": "principal_id",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": null
-        },
-        {
-          "value": "kind",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": null
-        },
-        {
-          "value": "provider_asset_row_id",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": null
-        },
-        {
-          "value": "created_at",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": null
-        }
-      ],
-      "isUnique": false,
-      "where": null,
-      "with": "",
-      "method": "btree",
-      "concurrently": false,
-      "name": "idx_principal_asset_overrides_provider_target",
-      "entityType": "indexes",
-      "schema": "public",
-      "table": "principal_asset_overrides"
-    },
-    {
-      "nameExplicit": true,
-      "columns": [
-        {
-          "value": "principal_id",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": null
-        },
-        {
-          "value": "kind",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": null
-        },
-        {
-          "value": "blockchain_id",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": null
-        },
-        {
-          "value": "representation_type",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": null
-        },
-        {
-          "value": "contract_address",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": null
-        },
-        {
-          "value": "mint_address",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": null
-        },
-        {
-          "value": "created_at",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": null
-        }
-      ],
-      "isUnique": false,
-      "where": null,
-      "with": "",
-      "method": "btree",
-      "concurrently": false,
-      "name": "idx_principal_asset_overrides_representation_target",
-      "entityType": "indexes",
-      "schema": "public",
-      "table": "principal_asset_overrides"
-    },
-    {
-      "nameExplicit": true,
-      "columns": [
-        {
           "value": "claim_type",
           "isExpression": false,
           "asc": true,
@@ -12317,27 +9342,6 @@
       "nameExplicit": true,
       "columns": [
         {
-          "value": "source_id",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": null
-        }
-      ],
-      "isUnique": false,
-      "where": null,
-      "with": "",
-      "method": "btree",
-      "concurrently": false,
-      "name": "idx_provider_asset_source_uses_source",
-      "entityType": "indexes",
-      "schema": "public",
-      "table": "provider_asset_source_uses"
-    },
-    {
-      "nameExplicit": true,
-      "columns": [
-        {
           "value": "provider",
           "isExpression": false,
           "asc": true,
@@ -12725,139 +9729,6 @@
       "entityType": "indexes",
       "schema": "public",
       "table": "source_records_raw"
-    },
-    {
-      "nameExplicit": true,
-      "columns": [
-        {
-          "value": "source_id",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": null
-        },
-        {
-          "value": "blockchain_id",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": null
-        }
-      ],
-      "isUnique": true,
-      "where": "\"representation_type\" = 'native'",
-      "with": "",
-      "method": "btree",
-      "concurrently": false,
-      "name": "source_representation_uses_native_unique_idx",
-      "entityType": "indexes",
-      "schema": "public",
-      "table": "source_representation_uses"
-    },
-    {
-      "nameExplicit": true,
-      "columns": [
-        {
-          "value": "source_id",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": null
-        },
-        {
-          "value": "blockchain_id",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": null
-        },
-        {
-          "value": "representation_type",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": null
-        },
-        {
-          "value": "lower(\"contract_address\")",
-          "isExpression": true,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": null
-        }
-      ],
-      "isUnique": true,
-      "where": "\"contract_address\" is not null",
-      "with": "",
-      "method": "btree",
-      "concurrently": false,
-      "name": "source_representation_uses_contract_unique_idx",
-      "entityType": "indexes",
-      "schema": "public",
-      "table": "source_representation_uses"
-    },
-    {
-      "nameExplicit": true,
-      "columns": [
-        {
-          "value": "source_id",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": null
-        },
-        {
-          "value": "blockchain_id",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": null
-        },
-        {
-          "value": "representation_type",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": null
-        },
-        {
-          "value": "mint_address",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": null
-        }
-      ],
-      "isUnique": true,
-      "where": "\"mint_address\" is not null",
-      "with": "",
-      "method": "btree",
-      "concurrently": false,
-      "name": "source_representation_uses_mint_unique_idx",
-      "entityType": "indexes",
-      "schema": "public",
-      "table": "source_representation_uses"
-    },
-    {
-      "nameExplicit": true,
-      "columns": [
-        {
-          "value": "source_id",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": null
-        }
-      ],
-      "isUnique": false,
-      "where": null,
-      "with": "",
-      "method": "btree",
-      "concurrently": false,
-      "name": "idx_source_representation_uses_source",
-      "entityType": "indexes",
-      "schema": "public",
-      "table": "source_representation_uses"
     },
     {
       "nameExplicit": true,
@@ -13890,13 +10761,6 @@
           "asc": true,
           "nullsFirst": false,
           "opclass": null
-        },
-        {
-          "value": "asset_representation_id",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": null
         }
       ],
       "isUnique": true,
@@ -14050,34 +10914,6 @@
       "table": "transfers"
     },
     {
-      "nameExplicit": true,
-      "columns": [
-        {
-          "value": "namespace",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": null
-        },
-        {
-          "value": "name",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": null
-        }
-      ],
-      "isUnique": true,
-      "where": null,
-      "with": "",
-      "method": "btree",
-      "concurrently": false,
-      "name": "wallet_name_cache_namespace_name_idx",
-      "entityType": "indexes",
-      "schema": "public",
-      "table": "wallet_name_cache"
-    },
-    {
       "nameExplicit": false,
       "columns": ["principal_id"],
       "schemaTo": "public",
@@ -14104,58 +10940,6 @@
       "table": "asset_prices"
     },
     {
-      "nameExplicit": true,
-      "columns": ["asset_id", "asset_representation_id"],
-      "schemaTo": "public",
-      "tableTo": "asset_representations",
-      "columnsTo": ["asset_id", "id"],
-      "onUpdate": "NO ACTION",
-      "onDelete": "NO ACTION",
-      "name": "asset_representation_ownership_owner_matches_fk",
-      "entityType": "fks",
-      "schema": "public",
-      "table": "asset_representation_ownership_decisions"
-    },
-    {
-      "nameExplicit": true,
-      "columns": ["asset_id"],
-      "schemaTo": "public",
-      "tableTo": "assets",
-      "columnsTo": ["id"],
-      "onUpdate": "NO ACTION",
-      "onDelete": "NO ACTION",
-      "name": "asset_representation_ownership_asset_id_fk",
-      "entityType": "fks",
-      "schema": "public",
-      "table": "asset_representation_ownership_decisions"
-    },
-    {
-      "nameExplicit": true,
-      "columns": ["supersedes_decision_id"],
-      "schemaTo": "public",
-      "tableTo": "asset_representation_ownership_decisions",
-      "columnsTo": ["id"],
-      "onUpdate": "NO ACTION",
-      "onDelete": "NO ACTION",
-      "name": "asset_representation_ownership_supersedes_fk",
-      "entityType": "fks",
-      "schema": "public",
-      "table": "asset_representation_ownership_decisions"
-    },
-    {
-      "nameExplicit": false,
-      "columns": ["asset_id"],
-      "schemaTo": "public",
-      "tableTo": "assets",
-      "columnsTo": ["id"],
-      "onUpdate": "NO ACTION",
-      "onDelete": "NO ACTION",
-      "name": "asset_representations_asset_id_assets_id_fkey",
-      "entityType": "fks",
-      "schema": "public",
-      "table": "asset_representations"
-    },
-    {
       "nameExplicit": false,
       "columns": ["blockchain_id"],
       "schemaTo": "public",
@@ -14163,114 +10947,10 @@
       "columnsTo": ["id"],
       "onUpdate": "NO ACTION",
       "onDelete": "NO ACTION",
-      "name": "asset_representations_blockchain_id_blockchains_id_fkey",
+      "name": "assets_blockchain_id_blockchains_id_fkey",
       "entityType": "fks",
       "schema": "public",
-      "table": "asset_representations"
-    },
-    {
-      "nameExplicit": false,
-      "columns": ["provider_asset_row_id"],
-      "schemaTo": "public",
-      "tableTo": "provider_assets",
-      "columnsTo": ["id"],
-      "onUpdate": "NO ACTION",
-      "onDelete": "CASCADE",
-      "name": "asset_resolution_decisions_z5wvnNDSeDWF_fkey",
-      "entityType": "fks",
-      "schema": "public",
-      "table": "asset_resolution_decisions"
-    },
-    {
-      "nameExplicit": false,
-      "columns": ["asset_id"],
-      "schemaTo": "public",
-      "tableTo": "assets",
-      "columnsTo": ["id"],
-      "onUpdate": "NO ACTION",
-      "onDelete": "NO ACTION",
-      "name": "asset_resolution_decisions_asset_id_assets_id_fkey",
-      "entityType": "fks",
-      "schema": "public",
-      "table": "asset_resolution_decisions"
-    },
-    {
-      "nameExplicit": false,
-      "columns": ["asset_representation_id"],
-      "schemaTo": "public",
-      "tableTo": "asset_representations",
-      "columnsTo": ["id"],
-      "onUpdate": "NO ACTION",
-      "onDelete": "NO ACTION",
-      "name": "asset_resolution_decisions_QbAUryyGxFkm_fkey",
-      "entityType": "fks",
-      "schema": "public",
-      "table": "asset_resolution_decisions"
-    },
-    {
-      "nameExplicit": true,
-      "columns": ["supersedes_decision_id"],
-      "schemaTo": "public",
-      "tableTo": "asset_resolution_decisions",
-      "columnsTo": ["id"],
-      "onUpdate": "NO ACTION",
-      "onDelete": "NO ACTION",
-      "name": "asset_resolution_decisions_supersedes_decision_id_fk",
-      "entityType": "fks",
-      "schema": "public",
-      "table": "asset_resolution_decisions"
-    },
-    {
-      "nameExplicit": false,
-      "columns": ["decision_id"],
-      "schemaTo": "public",
-      "tableTo": "asset_resolution_decisions",
-      "columnsTo": ["id"],
-      "onUpdate": "NO ACTION",
-      "onDelete": "CASCADE",
-      "name": "asset_resolution_evidence_13op32dmB3hM_fkey",
-      "entityType": "fks",
-      "schema": "public",
-      "table": "asset_resolution_evidence"
-    },
-    {
-      "nameExplicit": false,
-      "columns": ["provider_asset_row_id"],
-      "schemaTo": "public",
-      "tableTo": "provider_assets",
-      "columnsTo": ["id"],
-      "onUpdate": "NO ACTION",
-      "onDelete": "CASCADE",
-      "name": "asset_resolution_jobs_VHrqXS8DXhzo_fkey",
-      "entityType": "fks",
-      "schema": "public",
-      "table": "asset_resolution_jobs"
-    },
-    {
-      "nameExplicit": false,
-      "columns": ["user_id"],
-      "schemaTo": "public",
-      "tableTo": "users",
-      "columnsTo": ["id"],
-      "onUpdate": "NO ACTION",
-      "onDelete": "CASCADE",
-      "name": "billing_accounts_user_id_users_id_fkey",
-      "entityType": "fks",
-      "schema": "public",
-      "table": "billing_accounts"
-    },
-    {
-      "nameExplicit": false,
-      "columns": ["user_id"],
-      "schemaTo": "public",
-      "tableTo": "users",
-      "columnsTo": ["id"],
-      "onUpdate": "NO ACTION",
-      "onDelete": "CASCADE",
-      "name": "credit_ledger_user_id_users_id_fkey",
-      "entityType": "fks",
-      "schema": "public",
-      "table": "credit_ledger"
+      "table": "assets"
     },
     {
       "nameExplicit": false,
@@ -14416,19 +11096,6 @@
       "table": "fifo_lots"
     },
     {
-      "nameExplicit": true,
-      "columns": ["asset_id", "asset_representation_id"],
-      "schemaTo": "public",
-      "tableTo": "asset_representations",
-      "columnsTo": ["asset_id", "id"],
-      "onUpdate": "NO ACTION",
-      "onDelete": "NO ACTION",
-      "name": "fifo_lots_representation_matches_asset_fk",
-      "entityType": "fks",
-      "schema": "public",
-      "table": "fifo_lots"
-    },
-    {
       "nameExplicit": false,
       "columns": ["user_id"],
       "schemaTo": "public",
@@ -14559,19 +11226,6 @@
       "table": "inventory_movements"
     },
     {
-      "nameExplicit": true,
-      "columns": ["asset_id", "asset_representation_id"],
-      "schemaTo": "public",
-      "tableTo": "asset_representations",
-      "columnsTo": ["asset_id", "id"],
-      "onUpdate": "NO ACTION",
-      "onDelete": "NO ACTION",
-      "name": "inventory_movements_representation_matches_asset_fk",
-      "entityType": "fks",
-      "schema": "public",
-      "table": "inventory_movements"
-    },
-    {
       "nameExplicit": false,
       "columns": ["rule_set_id"],
       "schemaTo": "public",
@@ -14674,136 +11328,6 @@
       "entityType": "fks",
       "schema": "public",
       "table": "oauth_states"
-    },
-    {
-      "nameExplicit": false,
-      "columns": ["override_id"],
-      "schemaTo": "public",
-      "tableTo": "principal_asset_overrides",
-      "columnsTo": ["id"],
-      "onUpdate": "NO ACTION",
-      "onDelete": "CASCADE",
-      "name": "principal_asset_override_applications_0WXg3aRBVFsR_fkey",
-      "entityType": "fks",
-      "schema": "public",
-      "table": "principal_asset_override_applications"
-    },
-    {
-      "nameExplicit": false,
-      "columns": ["source_id"],
-      "schemaTo": "public",
-      "tableTo": "sources",
-      "columnsTo": ["id"],
-      "onUpdate": "NO ACTION",
-      "onDelete": "CASCADE",
-      "name": "principal_asset_override_applications_source_id_sources_id_fkey",
-      "entityType": "fks",
-      "schema": "public",
-      "table": "principal_asset_override_applications"
-    },
-    {
-      "nameExplicit": false,
-      "columns": ["replay_job_id"],
-      "schemaTo": "public",
-      "tableTo": "processing_jobs",
-      "columnsTo": ["id"],
-      "onUpdate": "NO ACTION",
-      "onDelete": "SET NULL",
-      "name": "principal_asset_override_applications_VvSwSMmYpRl5_fkey",
-      "entityType": "fks",
-      "schema": "public",
-      "table": "principal_asset_override_applications"
-    },
-    {
-      "nameExplicit": false,
-      "columns": ["principal_id"],
-      "schemaTo": "public",
-      "tableTo": "principals",
-      "columnsTo": ["id"],
-      "onUpdate": "NO ACTION",
-      "onDelete": "CASCADE",
-      "name": "principal_asset_overrides_principal_id_principals_id_fkey",
-      "entityType": "fks",
-      "schema": "public",
-      "table": "principal_asset_overrides"
-    },
-    {
-      "nameExplicit": false,
-      "columns": ["blockchain_id"],
-      "schemaTo": "public",
-      "tableTo": "blockchains",
-      "columnsTo": ["id"],
-      "onUpdate": "NO ACTION",
-      "onDelete": "NO ACTION",
-      "name": "principal_asset_overrides_blockchain_id_blockchains_id_fkey",
-      "entityType": "fks",
-      "schema": "public",
-      "table": "principal_asset_overrides"
-    },
-    {
-      "nameExplicit": false,
-      "columns": ["provider_asset_row_id"],
-      "schemaTo": "public",
-      "tableTo": "provider_assets",
-      "columnsTo": ["id"],
-      "onUpdate": "NO ACTION",
-      "onDelete": "CASCADE",
-      "name": "principal_asset_overrides_cS2sDYiBVOvP_fkey",
-      "entityType": "fks",
-      "schema": "public",
-      "table": "principal_asset_overrides"
-    },
-    {
-      "nameExplicit": false,
-      "columns": ["inspected_asset_id"],
-      "schemaTo": "public",
-      "tableTo": "assets",
-      "columnsTo": ["id"],
-      "onUpdate": "NO ACTION",
-      "onDelete": "NO ACTION",
-      "name": "principal_asset_overrides_inspected_asset_id_assets_id_fkey",
-      "entityType": "fks",
-      "schema": "public",
-      "table": "principal_asset_overrides"
-    },
-    {
-      "nameExplicit": false,
-      "columns": ["replacement_asset_id"],
-      "schemaTo": "public",
-      "tableTo": "assets",
-      "columnsTo": ["id"],
-      "onUpdate": "NO ACTION",
-      "onDelete": "NO ACTION",
-      "name": "principal_asset_overrides_replacement_asset_id_assets_id_fkey",
-      "entityType": "fks",
-      "schema": "public",
-      "table": "principal_asset_overrides"
-    },
-    {
-      "nameExplicit": false,
-      "columns": ["actor_id"],
-      "schemaTo": "public",
-      "tableTo": "users",
-      "columnsTo": ["id"],
-      "onUpdate": "NO ACTION",
-      "onDelete": "NO ACTION",
-      "name": "principal_asset_overrides_actor_id_users_id_fkey",
-      "entityType": "fks",
-      "schema": "public",
-      "table": "principal_asset_overrides"
-    },
-    {
-      "nameExplicit": true,
-      "columns": ["supersedes_override_id"],
-      "schemaTo": "public",
-      "tableTo": "principal_asset_overrides",
-      "columnsTo": ["id"],
-      "onUpdate": "NO ACTION",
-      "onDelete": "NO ACTION",
-      "name": "principal_asset_overrides_supersedes_fk",
-      "entityType": "fks",
-      "schema": "public",
-      "table": "principal_asset_overrides"
     },
     {
       "nameExplicit": false,
@@ -15001,45 +11525,6 @@
       "table": "provider_asset_mappings"
     },
     {
-      "nameExplicit": true,
-      "columns": ["canonical_asset_id", "asset_representation_id"],
-      "schemaTo": "public",
-      "tableTo": "asset_representations",
-      "columnsTo": ["asset_id", "id"],
-      "onUpdate": "NO ACTION",
-      "onDelete": "NO ACTION",
-      "name": "provider_asset_mappings_representation_matches_asset_fk",
-      "entityType": "fks",
-      "schema": "public",
-      "table": "provider_asset_mappings"
-    },
-    {
-      "nameExplicit": false,
-      "columns": ["provider_asset_row_id"],
-      "schemaTo": "public",
-      "tableTo": "provider_assets",
-      "columnsTo": ["id"],
-      "onUpdate": "NO ACTION",
-      "onDelete": "CASCADE",
-      "name": "provider_asset_source_uses_QG8VOjaj7Uvp_fkey",
-      "entityType": "fks",
-      "schema": "public",
-      "table": "provider_asset_source_uses"
-    },
-    {
-      "nameExplicit": false,
-      "columns": ["source_id"],
-      "schemaTo": "public",
-      "tableTo": "sources",
-      "columnsTo": ["id"],
-      "onUpdate": "NO ACTION",
-      "onDelete": "CASCADE",
-      "name": "provider_asset_source_uses_source_id_sources_id_fkey",
-      "entityType": "fks",
-      "schema": "public",
-      "table": "provider_asset_source_uses"
-    },
-    {
       "nameExplicit": false,
       "columns": ["transaction_type_key"],
       "schemaTo": "public",
@@ -15106,19 +11591,6 @@
     },
     {
       "nameExplicit": false,
-      "columns": ["observed_blockchain_id"],
-      "schemaTo": "public",
-      "tableTo": "blockchains",
-      "columnsTo": ["id"],
-      "onUpdate": "NO ACTION",
-      "onDelete": "NO ACTION",
-      "name": "provider_transfers_observed_blockchain_id_blockchains_id_fkey",
-      "entityType": "fks",
-      "schema": "public",
-      "table": "provider_transfers"
-    },
-    {
-      "nameExplicit": false,
       "columns": ["user_id"],
       "schemaTo": "public",
       "tableTo": "users",
@@ -15142,32 +11614,6 @@
       "entityType": "fks",
       "schema": "public",
       "table": "source_records_raw"
-    },
-    {
-      "nameExplicit": false,
-      "columns": ["source_id"],
-      "schemaTo": "public",
-      "tableTo": "sources",
-      "columnsTo": ["id"],
-      "onUpdate": "NO ACTION",
-      "onDelete": "CASCADE",
-      "name": "source_representation_uses_source_id_sources_id_fkey",
-      "entityType": "fks",
-      "schema": "public",
-      "table": "source_representation_uses"
-    },
-    {
-      "nameExplicit": false,
-      "columns": ["blockchain_id"],
-      "schemaTo": "public",
-      "tableTo": "blockchains",
-      "columnsTo": ["id"],
-      "onUpdate": "NO ACTION",
-      "onDelete": "NO ACTION",
-      "name": "source_representation_uses_blockchain_id_blockchains_id_fkey",
-      "entityType": "fks",
-      "schema": "public",
-      "table": "source_representation_uses"
     },
     {
       "nameExplicit": false,
@@ -15386,19 +11832,6 @@
       "onUpdate": "NO ACTION",
       "onDelete": "CASCADE",
       "name": "transaction_legs_fee_for_transaction_id_transactions_id_fkey",
-      "entityType": "fks",
-      "schema": "public",
-      "table": "transaction_legs"
-    },
-    {
-      "nameExplicit": true,
-      "columns": ["asset_id", "asset_representation_id"],
-      "schemaTo": "public",
-      "tableTo": "asset_representations",
-      "columnsTo": ["asset_id", "id"],
-      "onUpdate": "NO ACTION",
-      "onDelete": "NO ACTION",
-      "name": "transaction_legs_representation_matches_asset_fk",
       "entityType": "fks",
       "schema": "public",
       "table": "transaction_legs"
@@ -15716,35 +12149,6 @@
       "table": "transfers"
     },
     {
-      "nameExplicit": true,
-      "columns": ["asset_id", "asset_representation_id"],
-      "schemaTo": "public",
-      "tableTo": "asset_representations",
-      "columnsTo": ["asset_id", "id"],
-      "onUpdate": "NO ACTION",
-      "onDelete": "NO ACTION",
-      "name": "transfers_representation_matches_asset_fk",
-      "entityType": "fks",
-      "schema": "public",
-      "table": "transfers"
-    },
-    {
-      "columns": ["payment_reference", "reversal_group"],
-      "nameExplicit": false,
-      "name": "billing_payment_reversals_pkey",
-      "entityType": "pks",
-      "schema": "public",
-      "table": "billing_payment_reversals"
-    },
-    {
-      "columns": ["provider_asset_row_id", "source_id"],
-      "nameExplicit": false,
-      "name": "provider_asset_source_uses_pkey",
-      "entityType": "pks",
-      "schema": "public",
-      "table": "provider_asset_source_uses"
-    },
-    {
       "columns": ["id"],
       "nameExplicit": false,
       "name": "addresses_pkey",
@@ -15763,73 +12167,9 @@
     {
       "columns": ["id"],
       "nameExplicit": false,
-      "name": "asset_representation_ownership_decisions_pkey",
-      "schema": "public",
-      "table": "asset_representation_ownership_decisions",
-      "entityType": "pks"
-    },
-    {
-      "columns": ["id"],
-      "nameExplicit": false,
-      "name": "asset_representations_pkey",
-      "schema": "public",
-      "table": "asset_representations",
-      "entityType": "pks"
-    },
-    {
-      "columns": ["id"],
-      "nameExplicit": false,
-      "name": "asset_resolution_decisions_pkey",
-      "schema": "public",
-      "table": "asset_resolution_decisions",
-      "entityType": "pks"
-    },
-    {
-      "columns": ["id"],
-      "nameExplicit": false,
-      "name": "asset_resolution_evidence_pkey",
-      "schema": "public",
-      "table": "asset_resolution_evidence",
-      "entityType": "pks"
-    },
-    {
-      "columns": ["id"],
-      "nameExplicit": false,
-      "name": "asset_resolution_jobs_pkey",
-      "schema": "public",
-      "table": "asset_resolution_jobs",
-      "entityType": "pks"
-    },
-    {
-      "columns": ["id"],
-      "nameExplicit": false,
       "name": "assets_pkey",
       "schema": "public",
       "table": "assets",
-      "entityType": "pks"
-    },
-    {
-      "columns": ["user_id"],
-      "nameExplicit": false,
-      "name": "billing_accounts_pkey",
-      "schema": "public",
-      "table": "billing_accounts",
-      "entityType": "pks"
-    },
-    {
-      "columns": ["id"],
-      "nameExplicit": false,
-      "name": "credit_ledger_pkey",
-      "schema": "public",
-      "table": "credit_ledger",
-      "entityType": "pks"
-    },
-    {
-      "columns": ["id"],
-      "nameExplicit": false,
-      "name": "stripe_events_pkey",
-      "schema": "public",
-      "table": "stripe_events",
       "entityType": "pks"
     },
     {
@@ -15979,22 +12319,6 @@
     {
       "columns": ["id"],
       "nameExplicit": false,
-      "name": "principal_asset_override_applications_pkey",
-      "schema": "public",
-      "table": "principal_asset_override_applications",
-      "entityType": "pks"
-    },
-    {
-      "columns": ["id"],
-      "nameExplicit": false,
-      "name": "principal_asset_overrides_pkey",
-      "schema": "public",
-      "table": "principal_asset_overrides",
-      "entityType": "pks"
-    },
-    {
-      "columns": ["id"],
-      "nameExplicit": false,
       "name": "principal_claims_pkey",
       "schema": "public",
       "table": "principal_claims",
@@ -16102,14 +12426,6 @@
       "name": "source_records_raw_pkey",
       "schema": "public",
       "table": "source_records_raw",
-      "entityType": "pks"
-    },
-    {
-      "columns": ["id"],
-      "nameExplicit": false,
-      "name": "source_representation_uses_pkey",
-      "schema": "public",
-      "table": "source_representation_uses",
       "entityType": "pks"
     },
     {
@@ -16233,14 +12549,6 @@
       "entityType": "pks"
     },
     {
-      "columns": ["id"],
-      "nameExplicit": false,
-      "name": "wallet_name_cache_pkey",
-      "schema": "public",
-      "table": "wallet_name_cache",
-      "entityType": "pks"
-    },
-    {
       "nameExplicit": true,
       "columns": ["address", "principal_id"],
       "nullsNotDistinct": false,
@@ -16257,6 +12565,15 @@
       "entityType": "uniques",
       "schema": "public",
       "table": "asset_prices"
+    },
+    {
+      "nameExplicit": true,
+      "columns": ["blockchain_id", "contract_address"],
+      "nullsNotDistinct": false,
+      "name": "unique_token_idx",
+      "entityType": "uniques",
+      "schema": "public",
+      "table": "assets"
     },
     {
       "nameExplicit": true,
@@ -16367,62 +12684,6 @@
       "entityType": "uniques"
     },
     {
-      "value": "\"decimals\" >= 0",
-      "name": "asset_representations_decimals_non_negative",
-      "entityType": "checks",
-      "schema": "public",
-      "table": "asset_representations"
-    },
-    {
-      "value": "(\n        \"type\" = 'native'\n        and \"contract_address\" is null\n        and \"mint_address\" is null\n      ) or (\n        \"type\" in ('token', 'nft')\n        and num_nonnulls(\"contract_address\", \"mint_address\") = 1\n      )",
-      "name": "asset_representations_identity_matches_type",
-      "entityType": "checks",
-      "schema": "public",
-      "table": "asset_representations"
-    },
-    {
-      "value": "\"evidence_revision\" > 0",
-      "name": "asset_resolution_decisions_evidence_revision_positive",
-      "entityType": "checks",
-      "schema": "public",
-      "table": "asset_resolution_decisions"
-    },
-    {
-      "value": "\"outcome\"::text not in ('attach', 'create_standalone') or (\"asset_id\" is not null and \"asset_representation_id\" is not null)",
-      "name": "asset_resolution_decisions_approval_requires_target",
-      "entityType": "checks",
-      "schema": "public",
-      "table": "asset_resolution_decisions"
-    },
-    {
-      "value": "\"evidence_revision\" > 0",
-      "name": "asset_resolution_jobs_evidence_revision_positive",
-      "entityType": "checks",
-      "schema": "public",
-      "table": "asset_resolution_jobs"
-    },
-    {
-      "value": "\"attempt_count\" >= 0",
-      "name": "asset_resolution_jobs_attempt_count_non_negative",
-      "entityType": "checks",
-      "schema": "public",
-      "table": "asset_resolution_jobs"
-    },
-    {
-      "value": "\"max_attempts\" > 0",
-      "name": "asset_resolution_jobs_max_attempts_positive",
-      "entityType": "checks",
-      "schema": "public",
-      "table": "asset_resolution_jobs"
-    },
-    {
-      "value": "\"delta\" <> 0",
-      "name": "credit_ledger_delta_non_zero",
-      "entityType": "checks",
-      "schema": "public",
-      "table": "credit_ledger"
-    },
-    {
       "value": "num_nonnulls(\"source_leg_id\", \"source_provider_transfer_id\") = 1",
       "name": "fifo_lots_origin_present",
       "entityType": "checks",
@@ -16449,41 +12710,6 @@
       "entityType": "checks",
       "schema": "public",
       "table": "inventory_movements"
-    },
-    {
-      "value": "(\n        \"target_kind\" = 'provider_asset'\n        and \"provider_asset_row_id\" is not null\n        and \"blockchain_id\" is null\n        and \"representation_type\" is null\n        and \"contract_address\" is null\n        and \"mint_address\" is null\n      ) or (\n        \"target_kind\" = 'representation'\n        and \"provider_asset_row_id\" is null\n        and \"blockchain_id\" is not null\n        and \"representation_type\" is not null\n        and (\n          (\"representation_type\" = 'native' and \"contract_address\" is null and \"mint_address\" is null)\n          or (\"representation_type\" in ('token', 'nft') and num_nonnulls(\"contract_address\", \"mint_address\") = 1)\n        )\n      )",
-      "name": "principal_asset_overrides_target_complete",
-      "entityType": "checks",
-      "schema": "public",
-      "table": "principal_asset_overrides"
-    },
-    {
-      "value": "(\n        \"kind\" = 'identity'\n        and \"inspected_identity_state\" is not null\n        and \"inspected_inclusion_state\" is null\n        and \"inspected_inclusion_reason\" is null\n      ) or (\n        \"kind\" = 'inclusion'\n        and \"inspected_identity_state\" is null\n        and \"inspected_inclusion_state\" is not null\n        and \"inspected_asset_id\" is null\n      )",
-      "name": "principal_asset_overrides_inspected_conclusion_matches_kind",
-      "entityType": "checks",
-      "schema": "public",
-      "table": "principal_asset_overrides"
-    },
-    {
-      "value": "(\n        \"action\" = 'withdraw'\n        and \"replacement_asset_id\" is null\n        and \"replacement_inclusion_state\" is null\n      ) or (\n        \"action\" = 'set'\n        and \"kind\" = 'identity'\n        and \"replacement_asset_id\" is not null\n        and \"replacement_inclusion_state\" is null\n      ) or (\n        \"action\" = 'set'\n        and \"kind\" = 'inclusion'\n        and \"replacement_asset_id\" is null\n        and \"replacement_inclusion_state\" in ('included', 'excluded')\n      )",
-      "name": "principal_asset_overrides_replacement_matches_action_and_kind",
-      "entityType": "checks",
-      "schema": "public",
-      "table": "principal_asset_overrides"
-    },
-    {
-      "value": "length(trim(\"reason\")) > 0",
-      "name": "principal_asset_overrides_reason_present",
-      "entityType": "checks",
-      "schema": "public",
-      "table": "principal_asset_overrides"
-    },
-    {
-      "value": "\"supersedes_override_id\" is null or \"supersedes_override_id\" <> \"id\"",
-      "name": "principal_asset_overrides_not_self_superseding",
-      "entityType": "checks",
-      "schema": "public",
-      "table": "principal_asset_overrides"
     },
     {
       "value": "\"claim_type\" not in ('siwx_wallet', 'cli_claim_token') or (\"source_id\" is not null and \"chain_type\" is not null and \"wallet_address\" is not null and \"year\" is not null and \"jurisdiction\" is not null)",
@@ -16528,29 +12754,8 @@
       "table": "protocol_transaction_type_mappings"
     },
     {
-      "value": "(\n        \"mapping_kind\" = 'asset'\n        and \"canonical_asset_id\" is not null\n      ) or (\n        \"mapping_kind\" = 'fiat'\n        and \"canonical_fiat_currency\" is not null\n      ) or \"mapping_status\" in ('pending_review', 'rejected', 'excluded')",
-      "name": "provider_asset_mappings_kind_requires_target",
-      "entityType": "checks",
-      "schema": "public",
-      "table": "provider_asset_mappings"
-    },
-    {
-      "value": "\"asset_representation_id\" is null or \"canonical_asset_id\" is not null",
-      "name": "provider_asset_mappings_representation_requires_asset",
-      "entityType": "checks",
-      "schema": "public",
-      "table": "provider_asset_mappings"
-    },
-    {
       "value": "\"provider_asset_id\" is not null or \"natural_key\" is not null",
       "name": "provider_assets_identity_requires_key",
-      "entityType": "checks",
-      "schema": "public",
-      "table": "provider_assets"
-    },
-    {
-      "value": "\"evidence_revision\" > 0",
-      "name": "provider_assets_evidence_revision_positive",
       "entityType": "checks",
       "schema": "public",
       "table": "provider_assets"
@@ -16589,34 +12794,6 @@
       "entityType": "checks",
       "schema": "public",
       "table": "provider_transfers"
-    },
-    {
-      "value": "coalesce((\n        \"observed_representation_type\" is null\n        and \"observed_blockchain_id\" is null\n        and \"observed_contract_address\" is null\n        and \"observed_mint_address\" is null\n        and \"observed_decimals\" is null\n      ) or (\n        \"observed_representation_type\" is null\n        and \"observed_blockchain_id\" is not null\n        and num_nonnulls(\"observed_contract_address\", \"observed_mint_address\") = 1\n      ) or (\n        \"observed_representation_type\" = 'native'\n        and \"observed_blockchain_id\" is not null\n        and \"observed_contract_address\" is null\n        and \"observed_mint_address\" is null\n      ) or (\n        \"observed_representation_type\" in ('token', 'nft')\n        and \"observed_blockchain_id\" is not null\n        and num_nonnulls(\"observed_contract_address\", \"observed_mint_address\") = 1\n      ), false)",
-      "name": "provider_transfers_observed_representation_complete",
-      "entityType": "checks",
-      "schema": "public",
-      "table": "provider_transfers"
-    },
-    {
-      "value": "\"observed_decimals\" is null or \"observed_decimals\" >= 0",
-      "name": "provider_transfers_observed_decimals_non_negative",
-      "entityType": "checks",
-      "schema": "public",
-      "table": "provider_transfers"
-    },
-    {
-      "value": "\"processing_mode\" not in ('accounting_only', 'stale') or (\n        \"observed_representation_type\" is null\n        and \"observed_blockchain_id\" is null\n        and \"observed_contract_address\" is null\n        and \"observed_mint_address\" is null\n        and \"observed_decimals\" is null\n      )",
-      "name": "provider_transfers_non_observation_has_no_identity",
-      "entityType": "checks",
-      "schema": "public",
-      "table": "provider_transfers"
-    },
-    {
-      "value": "(\n        \"representation_type\" = 'native'\n        and \"contract_address\" is null\n        and \"mint_address\" is null\n      ) or (\n        \"representation_type\" in ('token', 'nft')\n        and num_nonnulls(\"contract_address\", \"mint_address\") = 1\n      )",
-      "name": "source_representation_uses_identity_matches_type",
-      "entityType": "checks",
-      "schema": "public",
-      "table": "source_representation_uses"
     },
     {
       "value": "\"address_id\" is not null or \"cex_account_id\" is not null",

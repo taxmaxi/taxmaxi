@@ -4,6 +4,9 @@ import {
   DEFAULT_BASE_URL,
   TaxMaxi,
   TaxMaxiError,
+  getTaxMaxiAssetDecisionConflict,
+  getTaxMaxiAssetDecisionErrorCode,
+  getTaxMaxiAssetOverrideValidationErrorCode,
   getTaxMaxiCreditRequired,
   isTaxMaxiUnauthorizedError,
   makeTaxMaxiHttpClientTransform,
@@ -112,6 +115,31 @@ const sourceResponse = {
     epochMillis: 1_767_225_600_000,
   },
 } as const
+
+const assetOverrideTarget = {
+  _tag: "provider_asset" as const,
+  providerAssetRowId: "00000000-0000-4000-8000-000000000051",
+}
+
+const assetOverrideProjectionResponse = {
+  kind: "identity" as const,
+  target: assetOverrideTarget,
+  systemRevision: "system-revision-1",
+  systemConclusion: {
+    _tag: "identity" as const,
+    state: "unresolved" as const,
+    assetId: null,
+  },
+  activeOverride: null,
+  effectiveConclusion: {
+    _tag: "identity" as const,
+    state: "unresolved" as const,
+    assetId: null,
+  },
+  staleSystemRevision: false,
+  history: [],
+  recomputationState: "complete" as const,
+}
 
 const sourceOverviewResponseBody = JSON.stringify({
   source: sourceResponse,
@@ -248,6 +276,32 @@ const assetCatalogListResponseBody = JSON.stringify({
 })
 
 const assetCatalogAssetResponseBody = JSON.stringify(assetCatalogAssetResponse)
+
+const assetExceptionListResponseBody = JSON.stringify({
+  exceptions: [
+    {
+      providerAssetRowId: "00000000-0000-4000-8000-000000000020",
+      provider: "coinbase",
+      providerAssetId: "exception-token",
+      naturalKey: "currency_code:EXC",
+      currencyCode: "EXC",
+      name: "Exception Token",
+      providerType: "crypto",
+      reason: "ownership_conflict",
+      severity: "critical",
+      evidenceRevision: 2,
+      policyRevision: "policy.1",
+      activeDecisionRevision: "00000000-0000-4000-8000-000000000021",
+      blockedReports: 1,
+      affectedPrincipals: 1,
+      affectedTransactions: 2,
+      affectedSources: 1,
+      affectedTransactionValueEur: "1250.50",
+      oldestAt: "2026-08-21T12:00:00.000Z",
+    },
+  ],
+  page: { nextCursor: "opaque-cursor", hasMore: true },
+})
 
 const assetCanonicalizationResponseBody = JSON.stringify({
   providerAsset: {
@@ -514,6 +568,115 @@ describe("TaxMaxi Effect client foundation", () => {
 })
 
 describe("TaxMaxi Promise client", () => {
+  it("builds every asset override request with the documented path and payload", async () => {
+    const requests: Array<{
+      readonly body: unknown
+      readonly method: string
+      readonly url: string
+    }> = []
+    const taxmaxi = new TaxMaxi({
+      apiKey: "tm_asset_overrides",
+      baseUrl: "https://sdk.example.test",
+      fetch: async (input, init) => {
+        const request = input instanceof Request ? input : new Request(input, init)
+        const url = request.url
+        const requestBody = await request.clone().text()
+        const body = requestBody === "" ? undefined : JSON.parse(requestBody)
+        requests.push({ body, method: request.method, url })
+
+        const responseBody = url.includes("/history")
+          ? []
+          : url.includes("/validate")
+            ? {
+                valid: true,
+                projection: assetOverrideProjectionResponse,
+                warnings: ["identity_not_system_verified"],
+              }
+            : assetOverrideProjectionResponse
+        return new Response(JSON.stringify(responseBody), {
+          headers: { "Content-Type": "application/json" },
+          status: 200,
+        })
+      },
+    })
+    const replacement = {
+      _tag: "identity" as const,
+      assetId: "00000000-0000-4000-8000-000000000052",
+    }
+    const overrideId = "00000000-0000-4000-8000-000000000053"
+    const readInput = { kind: "identity" as const, target: assetOverrideTarget }
+    const setInput = {
+      ...readInput,
+      expectedSystemRevision: "system-revision-1",
+      replacement,
+      reason: "The provider statement confirms this identity.",
+    }
+
+    await taxmaxi.assetOverrides.current(readInput)
+    await taxmaxi.assetOverrides.history(readInput)
+    await taxmaxi.assetOverrides.validate({ ...readInput, replacement })
+    await taxmaxi.assetOverrides.create(setInput)
+    await taxmaxi.assetOverrides.replace({ ...setInput, overrideId })
+    await taxmaxi.assetOverrides.withdraw({
+      ...readInput,
+      overrideId,
+      expectedSystemRevision: "system-revision-1",
+      reason: "Return to the current TaxMaxi conclusion.",
+    })
+
+    const query =
+      "kind=identity&targetKind=provider_asset&providerAssetRowId=00000000-0000-4000-8000-000000000051"
+    expect(requests).toEqual([
+      {
+        body: undefined,
+        method: "GET",
+        url: `https://sdk.example.test/v1/asset-overrides/current?${query}`,
+      },
+      {
+        body: undefined,
+        method: "GET",
+        url: `https://sdk.example.test/v1/asset-overrides/history?${query}`,
+      },
+      {
+        body: { kind: "identity", target: assetOverrideTarget, replacement },
+        method: "POST",
+        url: "https://sdk.example.test/v1/asset-overrides/validate",
+      },
+      {
+        body: {
+          kind: "identity",
+          target: assetOverrideTarget,
+          expectedSystemRevision: "system-revision-1",
+          replacement,
+          reason: "The provider statement confirms this identity.",
+        },
+        method: "POST",
+        url: "https://sdk.example.test/v1/asset-overrides",
+      },
+      {
+        body: {
+          kind: "identity",
+          target: assetOverrideTarget,
+          expectedSystemRevision: "system-revision-1",
+          replacement,
+          reason: "The provider statement confirms this identity.",
+        },
+        method: "POST",
+        url: `https://sdk.example.test/v1/asset-overrides/${overrideId}/replacements`,
+      },
+      {
+        body: {
+          kind: "identity",
+          target: assetOverrideTarget,
+          expectedSystemRevision: "system-revision-1",
+          reason: "Return to the current TaxMaxi conclusion.",
+        },
+        method: "POST",
+        url: `https://sdk.example.test/v1/asset-overrides/${overrideId}/withdrawals`,
+      },
+    ])
+  })
+
   it("lists canonical transactions through the transactions resource", async () => {
     const capturedRequests: Array<CapturedRequest> = []
     const taxmaxi = new TaxMaxi({
@@ -846,6 +1009,7 @@ describe("TaxMaxi Promise client", () => {
       assetCatalogListResponseBody,
       assetCatalogAssetResponseBody,
       pendingAssetListResponseBody,
+      assetExceptionListResponseBody,
     ]
     const taxmaxi = new TaxMaxi({
       apiKey: "",
@@ -877,6 +1041,11 @@ describe("TaxMaxi Promise client", () => {
       provider: "coinbase",
       limit: 10,
     })
+    const exceptionList = await taxmaxi.assets.listExceptions({
+      query: "spam",
+      cursor: "opaque-start",
+      limit: 5,
+    })
 
     expect(assetList).toStrictEqual({
       assets: [assetCatalogAssetResponse],
@@ -893,6 +1062,15 @@ describe("TaxMaxi Promise client", () => {
         hasMore: false,
       },
     })
+    expect(exceptionList).toMatchObject({
+      exceptions: [
+        {
+          providerAssetRowId: "00000000-0000-4000-8000-000000000020",
+          severity: "critical",
+        },
+      ],
+      page: { nextCursor: "opaque-cursor", hasMore: true },
+    })
 
     expect(capturedRequests).toEqual([
       expect.objectContaining({
@@ -903,6 +1081,9 @@ describe("TaxMaxi Promise client", () => {
       }),
       expect.objectContaining({
         url: "https://sdk.example.test/v1/assets/pending?q=btc&provider=coinbase&limit=10",
+      }),
+      expect.objectContaining({
+        url: "https://sdk.example.test/v1/assets/exceptions?q=spam&cursor=opaque-start&limit=5",
       }),
     ])
   })
@@ -1154,6 +1335,55 @@ describe("TaxMaxi Promise client", () => {
       getTaxMaxiCreditRequired(toTaxMaxiError({ _tag: "SourceNotFoundError", message: "gone" }))
     ).toBeNull()
     expect(getTaxMaxiCreditRequired(null)).toBeNull()
+  })
+
+  it.each(["stale_revision", "ambiguous_identity", "identity_changed"] as const)(
+    "extracts the %s asset decision conflict from a wrapped API error",
+    (code) => {
+      const cause = {
+        _tag: code === "stale_revision" ? "AssetStaleRevisionError" : "AssetDecisionConflictError",
+        code,
+        ...(code === "stale_revision"
+          ? {
+              evidenceRevision: 3,
+              activeDecisionRevision: "00000000-0000-4000-8000-000000000704",
+            }
+          : {}),
+      }
+
+      expect(getTaxMaxiAssetDecisionConflict(toTaxMaxiError(cause))).toBe(code)
+      expect(getTaxMaxiAssetDecisionConflict(cause)).toBe(code)
+    }
+  )
+
+  it("returns null asset decision conflict details for unrelated errors", () => {
+    expect(getTaxMaxiAssetDecisionConflict(new Error("boom"))).toBeNull()
+    expect(getTaxMaxiAssetDecisionConflict(null)).toBeNull()
+  })
+
+  it.each(["invalid_evidence", "invalid_claim"] as const)(
+    "extracts the %s asset decision validation code without treating it as a conflict",
+    (code) => {
+      const cause = { _tag: "AssetDecisionValidationError", code }
+
+      expect(getTaxMaxiAssetDecisionErrorCode(toTaxMaxiError(cause))).toBe(code)
+      expect(getTaxMaxiAssetDecisionErrorCode(cause)).toBe(code)
+      expect(getTaxMaxiAssetDecisionConflict(cause)).toBeNull()
+    }
+  )
+
+  it("extracts a stable asset override validation code", () => {
+    const cause = {
+      _tag: "AssetOverrideBadRequestError",
+      code: "asset_type_mismatch",
+      message: "Economic asset type is incompatible with the observed target type.",
+    }
+
+    expect(getTaxMaxiAssetOverrideValidationErrorCode(cause)).toBe("asset_type_mismatch")
+    expect(getTaxMaxiAssetOverrideValidationErrorCode(toTaxMaxiError(cause))).toBe(
+      "asset_type_mismatch"
+    )
+    expect(getTaxMaxiAssetOverrideValidationErrorCode(new Error("boom"))).toBeNull()
   })
 
   it("builds explicit first-party request clients with cookie headers", async () => {

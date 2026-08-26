@@ -6,6 +6,7 @@
 
 import { HttpApiEndpoint, HttpApiGroup, OpenApi } from "effect/unstable/httpapi"
 import * as Schema from "effect/Schema"
+import { AssetOverrideValidationErrorCode } from "@my/persistence/services"
 import { InternalServerError } from "./ApiErrors.ts"
 import { AuthMiddleware } from "./AuthMiddleware.ts"
 
@@ -78,7 +79,13 @@ export class AssetOverrideValidationResponse extends Schema.Class<AssetOverrideV
 )({
   valid: Schema.Literal(true),
   projection: AssetOverrideProjectionResponse,
-  warnings: Schema.Array(Schema.String),
+  warnings: Schema.Array(
+    Schema.Literals([
+      "identity_not_system_verified",
+      "identity_differs_from_system",
+      "inclusion_differs_from_system",
+    ])
+  ),
 }) {}
 
 export class AssetOverrideNotFoundError extends Schema.TaggedError<AssetOverrideNotFoundError>()(
@@ -92,7 +99,10 @@ export class AssetOverrideNotFoundError extends Schema.TaggedError<AssetOverride
 
 export class AssetOverrideBadRequestError extends Schema.TaggedError<AssetOverrideBadRequestError>()(
   "AssetOverrideBadRequestError",
-  { code: Schema.String, message: Schema.String },
+  {
+    code: Schema.Union([Schema.Literal("invalid_target"), AssetOverrideValidationErrorCode]),
+    message: Schema.String,
+  },
   { httpApiStatus: 422 }
 ) {}
 

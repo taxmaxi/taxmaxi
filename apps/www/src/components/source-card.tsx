@@ -1,6 +1,8 @@
 import type * as React from "react"
 
 import { cn } from "#/lib/utils"
+import { m } from "#/paraglide/messages"
+import { getLocale } from "#/paraglide/runtime"
 
 export type SourceKind = "exchange" | "wallet"
 
@@ -224,7 +226,6 @@ const SOURCE_GRID_PATTERN = [
 ] as const
 
 const SOURCE_CHIP_PATTERN = [true, false, true, false, true, false, true, false, true] as const
-const integerFormatter = new Intl.NumberFormat("en-US", { maximumFractionDigits: 0 })
 
 /**
  * Shared card chrome: size, rounding, padding, brand background, pattern,
@@ -458,9 +459,11 @@ export function SourceCardPattern({ source }: { source: Source }) {
 }
 
 function formatSourceKind(kind: SourceKind): string {
-  return kind === "exchange" ? "Exchange" : "Wallet"
+  return kind === "exchange"
+    ? m["app.dashboard.sources.kindExchange"]()
+    : m["app.dashboard.sources.kindWallet"]()
 }
 
 function formatInteger(value: number) {
-  return integerFormatter.format(value)
+  return new Intl.NumberFormat(getLocale(), { maximumFractionDigits: 0 }).format(value)
 }

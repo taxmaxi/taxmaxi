@@ -4,4 +4,4 @@
  * @module query
  */
 
-export { and, eq } from "drizzle-orm"
+export { and, eq, sql } from "drizzle-orm"

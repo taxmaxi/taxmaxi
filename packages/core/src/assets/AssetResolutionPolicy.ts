@@ -6,8 +6,11 @@
  * create-standalone, excluded, pending, or fail-closed. CoinGecko may prove
  * representation ownership for an existing economic asset under exact
  * platform, address, type, and decimals checks. A new exact representation
- * with no plausible existing candidate, no ownership conflict, and no
- * authoritative spam evidence may become a standalone economic asset. An
+ * with no plausible existing candidate and no ownership conflict may become
+ * a standalone economic asset only when a registry vouches for it: a
+ * CoinGecko coin that lists the exact representation, or a verified verdict
+ * from an allowlisted authority. The absence of spam evidence alone never
+ * creates; an unvouched token stays pending for human review. An
  * explicit banned verdict from an allowlisted authority excludes the
  * observation unless exact attach evidence contradicts it, in which case the
  * conflict fails closed for human review. Names and symbols are display
@@ -21,7 +24,7 @@ import * as Effect from "effect/Effect"
 import * as Schema from "effect/Schema"
 
 /** Policy revision recorded with every automatic resolution decision. */
-export const ASSET_RESOLUTION_POLICY_REVISION = "2026-08-21.jupiter-banned-exclusion.1"
+export const ASSET_RESOLUTION_POLICY_REVISION = "2026-08-26.standalone-positive-signal.1"
 
 const NonEmptyString = Schema.String.check(Schema.isNonEmpty())
 
@@ -349,6 +352,7 @@ export const PendingResolutionReason = Schema.Literals([
   "non_exact_platform_match",
   "spam_evidence",
   "unsupported_representation_type",
+  "unverified_asset",
 ]).annotate({
   identifier: "PendingResolutionReason",
   title: "Pending Resolution Reason",
@@ -868,6 +872,16 @@ const decideStandaloneCreation = ({
     return pending("display_collision")
   }
 
+  // Creation needs a registry that vouches for the token: a CoinGecko coin
+  // listing this exact representation, or a verified verdict from an
+  // allowlisted authority. The absence of spam evidence is not evidence of
+  // legitimacy — a mint no registry knows stays pending for human review.
+  const hasPositiveSignal =
+    coinGecko !== null || legitimacy.some((claim) => claim.verdict === "verified")
+  if (!hasPositiveSignal) {
+    return pending("unverified_asset")
+  }
+
   const symbol =
     (coinGecko === null ? null : emptyToNull(coinGecko.symbol)) ??
     emptyToNull(providerDisplay.symbol)
@@ -904,8 +918,10 @@ const decideStandaloneCreation = ({
  * conflict between allowlisted authorities and fails closed for human
  * review. Display metadata only blocks: a name or symbol match without
  * authoritative linkage stays pending as a possible duplicate. An exact,
- * supported, collision-free representation with no authoritative spam
- * evidence becomes a standalone economic asset.
+ * supported, collision-free representation becomes a standalone economic
+ * asset only when a registry vouches for it — a CoinGecko coin listing the
+ * exact representation, or a verified authority verdict. Without that
+ * positive signal the observation stays pending as an unverified asset.
  */
 export const decideAssetResolution = ({
   chain,
@@ -926,8 +942,14 @@ export const decideAssetResolution = ({
 
   const { claims: legitimacyClaims, failure: legitimacyFailure } = partitionLegitimacy(legitimacy)
   const hasBannedClaim = legitimacyClaims.some((claim) => claim.verdict === "banned")
-  const guardAttachAgainstBan = (decision: AssetResolutionDecision): AssetResolutionDecision =>
-    decision._tag === "attach" && hasBannedClaim ? failClosed("conflicting_evidence") : decision
+  const settleWithBannedClaim = (decision: AssetResolutionDecision): AssetResolutionDecision => {
+    if (!hasBannedClaim) {
+      return decision
+    }
+    return decision._tag === "attach"
+      ? failClosed("conflicting_evidence")
+      : excluded("authority_banned")
+  }
 
   const representationKey = exactRepresentationKey(chain)
   const owned = identity.representations.find((representation) => {
@@ -935,7 +957,7 @@ export const decideAssetResolution = ({
     return ownedKey !== null && ownedKey === representationKey
   })
   if (owned !== undefined) {
-    return guardAttachAgainstBan(decideForOwnedRepresentation({ owned, chain, registry, identity }))
+    return settleWithBannedClaim(decideForOwnedRepresentation({ owned, chain, registry, identity }))
   }
 
   if (
@@ -943,14 +965,11 @@ export const decideAssetResolution = ({
     registry._tag !== "registry_not_found" &&
     registry._tag !== "registry_not_queried"
   ) {
-    if (hasBannedClaim) {
-      return excluded("authority_banned")
-    }
-    return failClosed(evidenceFailureReason(registry))
+    return settleWithBannedClaim(failClosed(evidenceFailureReason(registry)))
   }
 
   if (legitimacyFailure !== null) {
-    return failClosed(evidenceFailureReason(legitimacyFailure))
+    return settleWithBannedClaim(failClosed(evidenceFailureReason(legitimacyFailure)))
   }
 
   if (registry._tag === "coingecko_claim") {
@@ -968,7 +987,7 @@ export const decideAssetResolution = ({
       platform.decimals === chain.decimals
 
     if (hasExactRegistryAttach) {
-      return guardAttachAgainstBan(attach({ assetKey: matchingRegistryOwner.assetKey, chain }))
+      return settleWithBannedClaim(attach({ assetKey: matchingRegistryOwner.assetKey, chain }))
     }
 
     if (hasBannedClaim) {
@@ -1001,13 +1020,15 @@ export const decideAssetResolution = ({
     }
   }
 
-  return decideStandaloneCreation({
-    chain,
-    coinGecko: registry._tag === "coingecko_claim" ? registry : null,
-    legitimacy: legitimacyClaims,
-    identity,
-    providerDisplay,
-  })
+  return settleWithBannedClaim(
+    decideStandaloneCreation({
+      chain,
+      coinGecko: registry._tag === "coingecko_claim" ? registry : null,
+      legitimacy: legitimacyClaims,
+      identity,
+      providerDisplay,
+    })
+  )
 }
 
 const decodeChainEvidence = (

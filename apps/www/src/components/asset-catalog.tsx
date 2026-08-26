@@ -5,6 +5,7 @@ import { AppFocusSurface } from "#/components/app-focus-surface"
 import { AppOverlay } from "#/components/app-overlay"
 import {
   AssetCatalogProvider,
+  type AssetExceptionActions,
   type AssetCatalogFeeds,
   useAssetCatalog,
 } from "#/components/asset-catalog-context"
@@ -22,11 +23,13 @@ const focusCatalogSearch = () => document.getElementById(ASSET_CATALOG_SEARCH_ID
  * page, and an overlay above the dashboard for the in-app /app/assets route.
  */
 export function AssetCatalog({
+  exceptionActions,
   feeds,
   onClose,
   onQueryChange,
   surface = "page",
 }: {
+  readonly exceptionActions?: AssetExceptionActions
   readonly feeds: AssetCatalogFeeds
   readonly onClose: () => void
   readonly onQueryChange?: (query: string) => void
@@ -39,7 +42,11 @@ export function AssetCatalog({
   }, [surface])
 
   const catalog = (
-    <AssetCatalogProvider feeds={feeds} onQueryChange={onQueryChange}>
+    <AssetCatalogProvider
+      exceptionActions={exceptionActions}
+      feeds={feeds}
+      onQueryChange={onQueryChange}
+    >
       <AssetCatalogNavigator />
     </AssetCatalogProvider>
   )

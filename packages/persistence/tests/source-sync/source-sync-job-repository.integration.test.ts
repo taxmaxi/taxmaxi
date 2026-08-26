@@ -828,6 +828,149 @@ describe("SourceSyncJobRepositoryLive", () => {
     expect(pendingJobIds).not.toContain(nullHeartbeat.id)
   })
 
+  it("dispatches dependent override replays only after every owner replay succeeds", async () => {
+    const dependentSourceId = "00000000-0000-0000-0000-000000000298"
+    const staleBefore = new Date("2025-01-03T00:00:00.000Z")
+    const { overrideId } = await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const [coinbase] = yield* db
+          .select({ id: schema.cex.id })
+          .from(schema.cex)
+          .where(eq(schema.cex.name, "coinbase"))
+          .limit(1)
+        const [blockchain] = yield* db
+          .select({ id: schema.blockchains.id })
+          .from(schema.blockchains)
+          .where(eq(schema.blockchains.name, "base"))
+          .limit(1)
+
+        if (coinbase === undefined || blockchain === undefined) {
+          return yield* Effect.die("Missing override replay dependency fixtures")
+        }
+
+        const [account] = yield* db
+          .insert(schema.cexAccount)
+          .values({
+            cexId: coinbase.id,
+            principalId: TEST_PRINCIPAL_ID,
+            providerUserId: "dispatch-dependent-user",
+            providerAccountId: "dispatch-dependent-account",
+            accessToken: "dispatch-dependent-access-token",
+            refreshToken: "dispatch-dependent-refresh-token",
+            expiresAt: new Date("2026-01-01T00:00:00.000Z"),
+            scopes: "wallet:accounts:read wallet:transactions:read",
+          })
+          .returning({ id: schema.cexAccount.id })
+
+        if (account === undefined) return yield* Effect.die("Failed to seed dependent account")
+
+        yield* db.insert(schema.sources).values({
+          id: dependentSourceId,
+          principalId: TEST_PRINCIPAL_ID,
+          name: "Dependent Coinbase Source",
+          providerKey: "coinbase",
+          sourceableType: "cex",
+          cexAccountId: account.id,
+          addressId: null,
+        })
+
+        const [override] = yield* db
+          .insert(schema.principalAssetOverrides)
+          .values({
+            principalId: TEST_PRINCIPAL_ID,
+            kind: "inclusion",
+            targetKind: "representation",
+            blockchainId: blockchain.id,
+            representationType: "token",
+            contractAddress: "0x0000000000000000000000000000000000000298",
+            action: "set",
+            inspectedSystemRevision: "dispatch-dependency-test",
+            inspectedInclusionState: "excluded",
+            inspectedInclusionReason: "taxmaxi_policy",
+            replacementInclusionState: "included",
+            actorId: TEST_USER_ID,
+            reason: "Test replay dispatch dependencies",
+          })
+          .returning({ id: schema.principalAssetOverrides.id })
+
+        if (override === undefined) return yield* Effect.die("Failed to seed replay override")
+
+        yield* db.insert(schema.sourceRepresentationUses).values({
+          sourceId: TEST_SOURCE_ID,
+          blockchainId: blockchain.id,
+          representationType: "token",
+          contractAddress: "0x0000000000000000000000000000000000000298",
+        })
+
+        return { overrideId: override.id }
+      })
+    )
+    const ownerJob = await createJob({ mode: "replay" })
+    const dependentJob = await createJob({
+      mode: "replay",
+      sourceId: dependentSourceId,
+      principalId: TEST_PRINCIPAL_ID,
+    })
+
+    await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        yield* db.insert(schema.principalAssetOverrideApplications).values([
+          {
+            overrideId,
+            sourceId: TEST_SOURCE_ID,
+            replayJobId: ownerJob.id,
+            dependsOnSourceIds: [],
+          },
+          {
+            overrideId,
+            sourceId: dependentSourceId,
+            replayJobId: dependentJob.id,
+            dependsOnSourceIds: [TEST_SOURCE_ID],
+          },
+        ])
+      })
+    )
+
+    const listPendingJobIds = () =>
+      runRepository(
+        Effect.flatMap(SourceSyncJobRepository, (repository) =>
+          repository
+            .listPendingJobsNeedingDispatch({ staleBefore, limit: 20 })
+            .pipe(Effect.map((jobs) => jobs.map((job) => job.id)))
+        )
+      )
+
+    expect(await listPendingJobIds()).toEqual(expect.arrayContaining([ownerJob.id]))
+    expect(await listPendingJobIds()).not.toContain(dependentJob.id)
+
+    await claimJob({ jobId: ownerJob.id })
+    await runRepository(
+      Effect.flatMap(SourceSyncJobRepository, (repository) =>
+        repository.failJob({
+          jobId: ownerJob.id,
+          message: "Owner replay failed",
+          completedAt: new Date("2025-01-02T00:00:00.000Z"),
+        })
+      )
+    )
+    expect(await listPendingJobIds()).not.toContain(dependentJob.id)
+
+    const retryOwnerJob = await createJob({ mode: "replay" })
+    expect(await listPendingJobIds()).toContain(retryOwnerJob.id)
+    expect(await listPendingJobIds()).not.toContain(dependentJob.id)
+
+    await claimJob({ jobId: retryOwnerJob.id })
+    await runRepository(
+      Effect.flatMap(SourceSyncJobRepository, (repository) =>
+        repository.completeJob({ jobId: retryOwnerJob.id, state: successfulCompletedState })
+      )
+    )
+
+    expect(await listPendingJobIds()).toContain(dependentJob.id)
+  })
+
   it("recovers a stale active job and allows a fresh job to start", async () => {
     const staleBefore = new Date("2025-01-03T00:00:00.000Z")
     const staleHeartbeatAt = new Date("2025-01-02T00:00:00.000Z")
@@ -1243,4 +1386,210 @@ describe("SourceSyncJobRepositoryLive", () => {
       expect(appliedReplayJobId).toBe(retryReplayJobId)
     }
   )
+
+  const seedRebuildTracking = ({
+    processingJobId,
+    status = "pending",
+    failureCode = null,
+  }: {
+    readonly processingJobId: string | null
+    readonly status?: "pending" | "operator_attention"
+    readonly failureCode?: string | null
+  }) =>
+    runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const [providerAsset] = yield* db
+          .insert(schema.providerAssets)
+          .values({
+            provider: "coinbase",
+            providerAssetId: "rebuild-tracking-asset",
+            currencyCode: "RBT",
+            retrievedAt: new Date("2025-01-01T00:00:00.000Z"),
+          })
+          .returning({ id: schema.providerAssets.id })
+        if (providerAsset === undefined) {
+          return yield* Effect.die("Failed to create provider asset fixture")
+        }
+        const [decision] = yield* db
+          .insert(schema.assetResolutionDecisions)
+          .values({
+            providerAssetRowId: providerAsset.id,
+            evidenceRevision: 1,
+            policyRevision: "test:rebuild-tracking",
+            outcome: "excluded",
+            status: "active",
+            actor: TEST_USER_ID,
+          })
+          .returning({ id: schema.assetResolutionDecisions.id })
+        if (decision === undefined) {
+          return yield* Effect.die("Failed to create decision fixture")
+        }
+        yield* db.insert(schema.assetDecisionRematerializations).values({
+          decisionId: decision.id,
+          sourceId: TEST_SOURCE_ID,
+          processingJobId,
+          status,
+          failureCode,
+          lastFailureAt: failureCode === null ? null : new Date("2025-01-01T00:00:00.000Z"),
+        })
+        return decision.id
+      })
+    )
+
+  const selectRebuildRow = (decisionId: string) =>
+    runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const [row] = yield* db
+          .select({
+            processingJobId: schema.assetDecisionRematerializations.processingJobId,
+            status: schema.assetDecisionRematerializations.status,
+            failureCode: schema.assetDecisionRematerializations.failureCode,
+            lastFailureAt: schema.assetDecisionRematerializations.lastFailureAt,
+          })
+          .from(schema.assetDecisionRematerializations)
+          .where(eq(schema.assetDecisionRematerializations.decisionId, decisionId))
+        if (row === undefined) {
+          return yield* Effect.die("Missing rematerialization row")
+        }
+        return row
+      })
+    )
+
+  const insertProcessingReplayJob = () =>
+    runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const [job] = yield* db
+          .insert(schema.processingJobs)
+          .values({
+            sourceId: TEST_SOURCE_ID,
+            principalId: TEST_PRINCIPAL_ID,
+            mode: "replay",
+            status: "processing",
+          })
+          .returning({ id: schema.processingJobs.id })
+        if (job === undefined) return yield* Effect.die("Failed to create replay job")
+        return job.id
+      })
+    )
+
+  it("completes source rebuilds when a replay finishes without failed records", async () => {
+    const jobId = await insertProcessingReplayJob()
+    const decisionId = await seedRebuildTracking({ processingJobId: jobId })
+
+    await runRepository(
+      Effect.flatMap(SourceSyncJobRepository, (repository) =>
+        repository.completeJob({ jobId, state: { ...completedState, failedRecords: 0 } })
+      )
+    )
+
+    expect(await selectRebuildRow(decisionId)).toMatchObject({
+      status: "complete",
+      failureCode: null,
+      lastFailureAt: null,
+    })
+  })
+
+  it("parks source rebuilds when a completed replay skipped records", async () => {
+    const jobId = await insertProcessingReplayJob()
+    const decisionId = await seedRebuildTracking({ processingJobId: jobId })
+
+    await runRepository(
+      Effect.flatMap(SourceSyncJobRepository, (repository) =>
+        repository.completeJob({ jobId, state: completedState })
+      )
+    )
+
+    expect(await selectRebuildRow(decisionId)).toMatchObject({
+      status: "operator_attention",
+      failureCode: "replay_failed_records",
+      lastFailureAt: expect.any(Date),
+    })
+  })
+
+  it("parks source rebuilds when a replay fails terminally", async () => {
+    const jobId = await insertProcessingReplayJob()
+    const decisionId = await seedRebuildTracking({ processingJobId: jobId })
+
+    await runRepository(
+      Effect.flatMap(SourceSyncJobRepository, (repository) =>
+        repository.failJob({
+          jobId,
+          message: "replay exploded",
+          completedAt: new Date("2025-01-02T00:00:00.000Z"),
+        })
+      )
+    )
+
+    expect(await selectRebuildRow(decisionId)).toMatchObject({
+      status: "operator_attention",
+      failureCode: "replay_failed",
+    })
+  })
+
+  it("repoints unfinished rebuilds to the materialized follow-up replay", async () => {
+    const activeJobId = await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const [job] = yield* db
+          .insert(schema.processingJobs)
+          .values({
+            sourceId: TEST_SOURCE_ID,
+            principalId: TEST_PRINCIPAL_ID,
+            mode: "sync",
+            status: "processing",
+            followUpMode: "replay",
+          })
+          .returning({ id: schema.processingJobs.id })
+        if (job === undefined) return yield* Effect.die("Failed to create active sync job")
+        return job.id
+      })
+    )
+    const decisionId = await seedRebuildTracking({
+      processingJobId: activeJobId,
+      status: "operator_attention",
+      failureCode: "replay_failed",
+    })
+
+    await runRepository(
+      Effect.flatMap(SourceSyncJobRepository, (repository) =>
+        repository.completeJob({ jobId: activeJobId, state: completedState })
+      )
+    )
+
+    const followUpJobId = (await selectProcessingJob({ jobId: activeJobId })).followUpJobId
+    expect(followUpJobId).toEqual(expect.any(String))
+    expect(await selectRebuildRow(decisionId)).toEqual({
+      processingJobId: followUpJobId,
+      status: "pending",
+      failureCode: null,
+      lastFailureAt: null,
+    })
+  })
+
+  it("completes rebuilds parked at operator_attention when a later replay succeeds", async () => {
+    const decisionId = await seedRebuildTracking({
+      processingJobId: null,
+      status: "operator_attention",
+      failureCode: "replay_failed",
+    })
+
+    const recoveryJobId = await insertProcessingReplayJob()
+    await runRepository(
+      Effect.flatMap(SourceSyncJobRepository, (repository) =>
+        repository.completeJob({
+          jobId: recoveryJobId,
+          state: { ...completedState, failedRecords: 0 },
+        })
+      )
+    )
+
+    expect(await selectRebuildRow(decisionId)).toMatchObject({
+      status: "complete",
+      failureCode: null,
+      lastFailureAt: null,
+    })
+  })
 })

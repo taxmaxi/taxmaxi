@@ -12,7 +12,7 @@ describe("AssetOverrideDecision", () => {
         systemInclusionState: "blocked",
         technicalBlocker: false,
         identityOverrideAssetId: "asset-1",
-        inclusionOverrideState: "included",
+        inclusionOverrideState: null,
       })
     ).toEqual({ assetId: "asset-1", inclusionState: "included" })
   })

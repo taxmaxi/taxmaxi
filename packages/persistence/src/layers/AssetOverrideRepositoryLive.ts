@@ -4,7 +4,7 @@
  * @module AssetOverrideRepositoryLive
  */
 
-import { and, asc, eq, exists, inArray, isNull, ne, notExists, or, sql } from "drizzle-orm"
+import { and, asc, eq, inArray, isNull, ne, sql } from "drizzle-orm"
 import * as Data from "effect/Data"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
@@ -257,34 +257,7 @@ const make = Effect.gen(function* () {
         and(
           eq(schema.sources.principalId, principalId),
           eq(schema.providerAssetSourceUses.providerAssetRowId, target.providerAssetRowId),
-          or(
-            notExists(
-              executor
-                .select({ id: schema.providerTransfers.id })
-                .from(schema.providerTransfers)
-                .where(
-                  and(
-                    eq(schema.providerTransfers.sourceId, schema.sources.id),
-                    eq(schema.providerTransfers.providerAssetId, target.providerAssetRowId)
-                  )
-                )
-            ),
-            exists(
-              executor
-                .select({ id: schema.providerTransfers.id })
-                .from(schema.providerTransfers)
-                .where(
-                  and(
-                    eq(schema.providerTransfers.sourceId, schema.sources.id),
-                    eq(schema.providerTransfers.providerAssetId, target.providerAssetRowId),
-                    or(
-                      isNull(schema.providerTransfers.observedBlockchainId),
-                      isNull(schema.providerTransfers.observedRepresentationType)
-                    )
-                  )
-                )
-            )
-          )
+          eq(schema.providerAssetSourceUses.hasChainlessObservation, true)
         )
       )
       .orderBy(asc(schema.sources.id))
@@ -451,7 +424,7 @@ const make = Effect.gen(function* () {
       return { revision, conclusion }
     })
 
-  const loadCrossSourceDependentIds = ({
+  const loadCrossSourceDependencies = ({
     executor,
     sourceIds,
   }: {
@@ -460,7 +433,10 @@ const make = Effect.gen(function* () {
   }) =>
     Effect.gen(function* () {
       const allocationDependencies = yield* executor
-        .selectDistinct({ sourceId: schema.inventoryMovements.sourceId })
+        .selectDistinct({
+          ownerSourceId: schema.fifoLots.sourceId,
+          dependentSourceId: schema.inventoryMovements.sourceId,
+        })
         .from(schema.inventoryMovementAllocations)
         .innerJoin(
           schema.inventoryMovements,
@@ -478,7 +454,10 @@ const make = Effect.gen(function* () {
         )
 
       const disposalDependencies = yield* executor
-        .selectDistinct({ sourceId: schema.transactionLegs.sourceId })
+        .selectDistinct({
+          ownerSourceId: schema.fifoLots.sourceId,
+          dependentSourceId: schema.transactionLegs.sourceId,
+        })
         .from(schema.disposalMatches)
         .innerJoin(
           schema.transactionLegs,
@@ -492,31 +471,93 @@ const make = Effect.gen(function* () {
           )
         )
 
-      return [
-        ...new Set([...allocationDependencies, ...disposalDependencies].map((row) => row.sourceId)),
-      ].sort()
+      return [...allocationDependencies, ...disposalDependencies]
     })
 
-  const validateReplayDependencies = ({
+  const loadReplayPlan = ({
     executor,
     sourceIds,
   }: {
     readonly executor: AssetOverrideExecutor
     readonly sourceIds: ReadonlyArray<string>
   }) =>
-    loadCrossSourceDependentIds({ executor, sourceIds }).pipe(
-      Effect.flatMap((dependentSourceIds) =>
-        dependentSourceIds.length === 0
-          ? Effect.void
-          : Effect.fail(
-              new AssetOverrideValidationError({
-                code: "cross_source_fifo_dependency",
-                message:
-                  "This override cannot be applied while other sources consume inventory from an affected source.",
-              })
-            )
-      )
+    Effect.gen(function* () {
+      const affectedSourceIds = [...new Set(sourceIds)]
+      const dependenciesBySourceId = new Map<string, Set<string>>()
+      let frontier = [...affectedSourceIds]
+
+      while (frontier.length > 0) {
+        const dependencies = yield* loadCrossSourceDependencies({ executor, sourceIds: frontier })
+        for (const { ownerSourceId, dependentSourceId } of dependencies) {
+          const owners = dependenciesBySourceId.get(dependentSourceId) ?? new Set<string>()
+          owners.add(ownerSourceId)
+          dependenciesBySourceId.set(dependentSourceId, owners)
+        }
+        const dependentSourceIds = dependencies.map(({ dependentSourceId }) => dependentSourceId)
+        const unseen = [...new Set(dependentSourceIds)].filter(
+          (sourceId) => !affectedSourceIds.includes(sourceId)
+        )
+        affectedSourceIds.push(...unseen)
+        frontier = unseen
+      }
+
+      return { affectedSourceIds, dependenciesBySourceId }
+    })
+
+  const validateReplayPlan = ({
+    affectedSourceIds,
+    dependenciesBySourceId,
+  }: {
+    readonly affectedSourceIds: ReadonlyArray<string>
+    readonly dependenciesBySourceId: ReadonlyMap<string, ReadonlySet<string>>
+  }) => {
+    const dependentSourceIdsByOwner = new Map<string, Set<string>>()
+    const remainingOwnerCountBySource = new Map<string, number>(
+      affectedSourceIds.map((sourceId) => [sourceId, 0] as const)
     )
+
+    for (const [dependentSourceId, ownerSourceIds] of dependenciesBySourceId) {
+      remainingOwnerCountBySource.set(dependentSourceId, ownerSourceIds.size)
+      for (const ownerSourceId of ownerSourceIds) {
+        const dependentSourceIds = dependentSourceIdsByOwner.get(ownerSourceId) ?? new Set<string>()
+        dependentSourceIds.add(dependentSourceId)
+        dependentSourceIdsByOwner.set(ownerSourceId, dependentSourceIds)
+      }
+    }
+
+    const dispatchableSourceIds = [...remainingOwnerCountBySource]
+      .filter(([, ownerCount]) => ownerCount === 0)
+      .map(([sourceId]) => sourceId)
+    let visitedSourceCount = 0
+
+    while (dispatchableSourceIds.length > 0) {
+      const sourceId = dispatchableSourceIds.pop()
+      if (sourceId === undefined) continue
+      visitedSourceCount += 1
+
+      for (const dependentSourceId of dependentSourceIdsByOwner.get(sourceId) ?? []) {
+        const remainingOwnerCount = remainingOwnerCountBySource.get(dependentSourceId)
+        if (remainingOwnerCount === undefined) continue
+        const nextOwnerCount = remainingOwnerCount - 1
+        remainingOwnerCountBySource.set(dependentSourceId, nextOwnerCount)
+        if (nextOwnerCount === 0) dispatchableSourceIds.push(dependentSourceId)
+      }
+    }
+
+    return visitedSourceCount === affectedSourceIds.length
+      ? Effect.void
+      : Effect.fail(
+          new AssetOverrideValidationError({
+            code: "cyclic_replay_dependency",
+            message: "The affected sources depend on each other and cannot be replayed safely.",
+          })
+        )
+  }
+
+  const loadReplaySourceIds = (params: {
+    readonly executor: AssetOverrideExecutor
+    readonly sourceIds: ReadonlyArray<string>
+  }) => loadReplayPlan(params).pipe(Effect.map(({ affectedSourceIds }) => affectedSourceIds))
 
   const loadHistory = ({
     executor,
@@ -667,12 +708,13 @@ const make = Effect.gen(function* () {
     Effect.gen(function* () {
       const canonicalTarget = canonicalizeTarget(target)
       yield* validateTargetShape(canonicalTarget)
-      const sourceIds = yield* loadOwnedSourceIds({
+      const ownedSourceIds = yield* loadOwnedSourceIds({
         executor: db,
         principalId,
         target: canonicalTarget,
       })
-      if (sourceIds.length === 0) return Option.none<AssetOverrideProjection>()
+      if (ownedSourceIds.length === 0) return Option.none<AssetOverrideProjection>()
+      const sourceIds = yield* loadReplaySourceIds({ executor: db, sourceIds: ownedSourceIds })
       return Option.some(
         yield* buildProjection({
           executor: db,
@@ -860,13 +902,15 @@ const make = Effect.gen(function* () {
     Effect.gen(function* () {
       const canonicalTarget = canonicalizeTarget(target)
       yield* validateTargetShape(canonicalTarget)
-      const sourceIds = yield* loadOwnedSourceIds({
+      const ownedSourceIds = yield* loadOwnedSourceIds({
         executor: db,
         principalId,
         target: canonicalTarget,
       })
-      if (sourceIds.length === 0) return yield* new AssetOverrideTargetNotFoundError()
-      yield* validateReplayDependencies({ executor: db, sourceIds })
+      if (ownedSourceIds.length === 0) return yield* new AssetOverrideTargetNotFoundError()
+      const replayPlan = yield* loadReplayPlan({ executor: db, sourceIds: ownedSourceIds })
+      yield* validateReplayPlan(replayPlan)
+      const sourceIds = replayPlan.affectedSourceIds
       yield* validateReplacement({ executor: db, kind, replacement, target: canonicalTarget })
       return yield* buildProjection({
         executor: db,
@@ -912,12 +956,15 @@ const make = Effect.gen(function* () {
           yield* tx.execute(
             sql`select pg_advisory_xact_lock(hashtextextended(${`${principalId}:${kind}:${JSON.stringify(canonicalTarget)}`}, 0))`
           )
-          const sourceIds = yield* loadOwnedSourceIds({
+          const ownedSourceIds = yield* loadOwnedSourceIds({
             executor: tx,
             principalId,
             target: canonicalTarget,
           })
-          if (sourceIds.length === 0) return yield* new AssetOverrideTargetNotFoundError()
+          if (ownedSourceIds.length === 0) return yield* new AssetOverrideTargetNotFoundError()
+          const replayPlan = yield* loadReplayPlan({ executor: tx, sourceIds: ownedSourceIds })
+          yield* validateReplayPlan(replayPlan)
+          const sourceIds = replayPlan.affectedSourceIds
           yield* tx.execute(sourceInventoryLockQuery(sourceIds))
           yield* tx.execute(sql`
             lock table
@@ -929,7 +976,6 @@ const make = Effect.gen(function* () {
               ${schema.assetRepresentations}
             in share mode
           `)
-          yield* validateReplayDependencies({ executor: tx, sourceIds })
           const before = yield* buildProjection({
             executor: tx,
             kind,
@@ -985,11 +1031,17 @@ const make = Effect.gen(function* () {
               cause: "Override insert returned no row.",
             })
           }
-          const confirmedSourceIds = yield* loadOwnedSourceIds({
+          const confirmedOwnedSourceIds = yield* loadOwnedSourceIds({
             executor: tx,
             principalId,
             target: canonicalTarget,
           })
+          const confirmedReplayPlan = yield* loadReplayPlan({
+            executor: tx,
+            sourceIds: confirmedOwnedSourceIds,
+          })
+          yield* validateReplayPlan(confirmedReplayPlan)
+          const confirmedSourceIds = confirmedReplayPlan.affectedSourceIds
           const confirmed = yield* buildProjection({
             executor: tx,
             kind,
@@ -1022,6 +1074,9 @@ const make = Effect.gen(function* () {
               overrideId: insertedOverride.id,
               sourceId,
               replayJobId,
+              dependsOnSourceIds: [
+                ...(confirmedReplayPlan.dependenciesBySourceId.get(sourceId) ?? []),
+              ].sort(),
               requiresReplay: true,
               createdAt: now,
             }))
@@ -1043,12 +1098,16 @@ const make = Effect.gen(function* () {
           () =>
             Effect.gen(function* () {
               const canonicalTarget = canonicalizeTarget(target)
-              const sourceIds = yield* loadOwnedSourceIds({
+              const ownedSourceIds = yield* loadOwnedSourceIds({
                 executor: db,
                 principalId,
                 target: canonicalTarget,
               })
-              if (sourceIds.length === 0) return yield* new AssetOverrideTargetNotFoundError()
+              if (ownedSourceIds.length === 0) return yield* new AssetOverrideTargetNotFoundError()
+              const sourceIds = yield* loadReplaySourceIds({
+                executor: db,
+                sourceIds: ownedSourceIds,
+              })
               const projection = yield* buildProjection({
                 executor: db,
                 kind,

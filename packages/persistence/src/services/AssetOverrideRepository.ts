@@ -103,9 +103,34 @@ export class AssetOverrideTargetNotFoundError extends Schema.TaggedError<AssetOv
   }
 }
 
+/** Stable machine-readable reasons an asset override request can be rejected. */
+export const ASSET_OVERRIDE_VALIDATION_ERROR_CODES = [
+  "invalid_representation_target",
+  "override_kind_mismatch",
+  "asset_not_found",
+  "asset_type_mismatch",
+  "missing_decimals",
+  "unsupported_asset_type",
+  "cyclic_replay_dependency",
+  "reason_required",
+  "no_active_override",
+] as const
+
+/** Schema shared by persistence, REST, and SDK error contracts. */
+export const AssetOverrideValidationErrorCode = Schema.Literals(
+  ASSET_OVERRIDE_VALIDATION_ERROR_CODES
+).annotate({
+  identifier: "AssetOverrideValidationErrorCode",
+  title: "Asset Override Validation Error Code",
+  description: "Stable reason an asset override request was rejected",
+})
+
+/** A stable machine-readable asset override validation code. */
+export type AssetOverrideValidationErrorCode = typeof AssetOverrideValidationErrorCode.Type
+
 export class AssetOverrideValidationError extends Schema.TaggedError<AssetOverrideValidationError>()(
   "AssetOverrideValidationError",
-  { code: Schema.String, message: Schema.String }
+  { code: AssetOverrideValidationErrorCode, message: Schema.String }
 ) {}
 
 /**

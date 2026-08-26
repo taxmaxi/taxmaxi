@@ -119,6 +119,8 @@ export interface CalculateTaxParams {
 export interface CalculateTaxResult {
   readonly year: number
   readonly currency: CurrencyCode
+  readonly calculationState: "complete" | "partial"
+  readonly unpricedEventCount: number
   readonly taxableGains: number
   readonly taxableLosses: number
   readonly taxFreeGains: number

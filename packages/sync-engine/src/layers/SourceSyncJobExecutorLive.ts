@@ -25,6 +25,8 @@ import {
   SourceNotFoundError,
   SourceRawRecordRepository,
   SourceReplayDependencyError,
+  SourceReplayDependencyCycleError,
+  SourceReplayDependencyPendingError,
   SourceReplayRepository,
   SourceRepository,
   type SourceRawRecord,
@@ -110,7 +112,9 @@ type PreparedReplayRecord =
 type SourceSyncExecutionError =
   | UnsupportedProviderError
   | SourceProviderModuleError
+  | SourceReplayDependencyCycleError
   | SourceReplayDependencyError
+  | SourceReplayDependencyPendingError
   | SyncEngineStorageError
   | SourceSyncCreditExhaustedError
 
@@ -161,7 +165,8 @@ const errorMessage = (error: unknown): string => {
 }
 
 const isRetryableExecutionError = (error: SourceSyncExecutionError): boolean =>
-  error._tag === "SourceSyncProviderFailureError" && "retryable" in error && error.retryable
+  error._tag === "SourceReplayDependencyPendingError" ||
+  (error._tag === "SourceSyncProviderFailureError" && "retryable" in error && error.retryable)
 
 const make = Effect.gen(function* () {
   const sourceProviderRegistry = yield* SourceProviderRegistry
@@ -299,6 +304,34 @@ const make = Effect.gen(function* () {
         } satisfies NormalizationSummary
       }
 
+      const transferObservations = decision.providerTransfers.flatMap((providerTransfer) => {
+        const providerAssetRowId = providerTransfer.providerAssetId
+        if (providerAssetRowId === null) return []
+        return [
+          {
+            providerAssetRowId,
+            observedBlockchainId: providerTransfer.observedBlockchainId ?? null,
+            representationType: providerTransfer.observedRepresentationType ?? null,
+            contractAddress: providerTransfer.observedContractAddress ?? null,
+            mintAddress: providerTransfer.observedMintAddress ?? null,
+            decimals: providerTransfer.observedDecimals ?? null,
+          },
+        ]
+      })
+      const providerAssetsWithTransfers = new Set(
+        transferObservations.map(({ providerAssetRowId }) => providerAssetRowId)
+      )
+      const transactionOnlyObservations = decision.providerAssetRowIds
+        .filter((providerAssetRowId) => !providerAssetsWithTransfers.has(providerAssetRowId))
+        .map((providerAssetRowId) => ({
+          providerAssetRowId,
+          observedBlockchainId: null,
+          representationType: null,
+          contractAddress: null,
+          mintAddress: null,
+          decimals: null,
+        }))
+
       yield* syncEngineTransaction.run(
         sourceNormalizationRepository.persistNormalizedArtifacts({
           ...(replayReservationId === null ? {} : { replayReservationId }),
@@ -306,31 +339,15 @@ const make = Effect.gen(function* () {
             .recordProviderAssetSourceUses({
               sourceId: decision.transaction.sourceId,
               providerAssetRowIds: decision.providerAssetRowIds,
-              observations: decision.providerTransfers.flatMap((providerTransfer) => {
-                const providerAssetRowId = providerTransfer.providerAssetId
-                const observedBlockchainId = providerTransfer.observedBlockchainId
-                if (providerAssetRowId === null || observedBlockchainId == null) {
-                  return []
-                }
-                return [
-                  {
-                    providerAssetRowId,
-                    observedBlockchainId,
-                    representationType: providerTransfer.observedRepresentationType ?? null,
-                    contractAddress: providerTransfer.observedContractAddress ?? null,
-                    mintAddress: providerTransfer.observedMintAddress ?? null,
-                    decimals: providerTransfer.observedDecimals ?? null,
-                  },
-                ]
-              }),
+              observations: [...transferObservations, ...transactionOnlyObservations],
             })
             .pipe(Effect.asVoid),
           transaction: decision.transaction,
           venueContext: decision.venueContext,
           onchainContext: decision.onchainContext,
           providerTransfers: decision.providerTransfers,
-          providerAssetRowIds: decision.providerAssetRowIds,
           canonicalTransfers: decision.canonicalTransfers,
+          providerAssetRowIds: decision.providerAssetRowIds,
           transactionReview: decision.transactionReview,
           ...(decision.overrideMaterializationAllowed === undefined
             ? {}

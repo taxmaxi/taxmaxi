@@ -33,29 +33,6 @@ import { SyncEngineStorageError } from "../services/SyncEngineStorageError.ts"
 const COINBASE_PROVIDER_KEY = "coinbase"
 const COINBASE_TRANSACTION_RECORD_TYPE = "coinbase_transaction"
 
-interface CoinbaseAccountingAssetRequirement {
-  readonly requiredForMainLeg: boolean
-  readonly inclusionState: "blocked" | "excluded" | "included"
-}
-
-/** Decide whether Coinbase has the effective assets needed to derive its main accounting leg. */
-export const shouldDeriveCoinbaseLegs = ({
-  accountingAssetRequirements,
-  canDeriveWithAssetOverrides,
-  legDerivationStrategy,
-  primaryAssetAvailable,
-}: {
-  readonly accountingAssetRequirements: ReadonlyArray<CoinbaseAccountingAssetRequirement>
-  readonly canDeriveWithAssetOverrides: boolean
-  readonly legDerivationStrategy: "derive" | "skip"
-  readonly primaryAssetAvailable: boolean
-}): boolean =>
-  primaryAssetAvailable &&
-  (legDerivationStrategy === "derive" || canDeriveWithAssetOverrides) &&
-  accountingAssetRequirements.every(
-    ({ inclusionState, requiredForMainLeg }) => !requiredForMainLeg || inclusionState === "included"
-  )
-
 const toReferenceDataError = (
   error: CoinbaseReferenceDataServiceError
 ): SourceProviderModuleError =>
@@ -122,46 +99,12 @@ const makeCoinbaseProviderModule = (
                 providerTransfers: prepared.providerTransfers,
                 canonicalTransfers: prepared.canonicalTransfers,
                 transactionReview: prepared.transactionReview,
-                overrideMaterializationAllowed: false,
+                overrideMaterializationAllowed: prepared.overrideMaterializationAllowed,
                 resolvedTransactionType: prepared.resolvedTransactionType,
-                deriveLegs: ({
-                  transaction,
-                  venueContext,
-                  canonicalTransfers,
-                  effectiveProviderAssets,
-                }) => {
-                  const effectivePrimaryAsset = effectiveProviderAssets.find(
-                    ({ providerAssetRowId }) =>
-                      providerAssetRowId === prepared.primaryProviderAssetId
-                  )
-                  const primaryAsset =
-                    effectivePrimaryAsset === undefined
-                      ? prepared.primaryAsset
-                      : effectivePrimaryAsset.asset
-                  const accountingAssetRequirements = effectiveProviderAssets.map(
-                    ({ inclusionState, providerAssetRowId }) => ({
-                      inclusionState,
-                      requiredForMainLeg: providerAssetRowId === prepared.primaryProviderAssetId,
-                    })
-                  )
-                  const canDerive = shouldDeriveCoinbaseLegs({
-                    accountingAssetRequirements,
-                    canDeriveWithAssetOverrides: prepared.canDeriveWithAssetOverrides,
-                    legDerivationStrategy: prepared.legDerivationStrategy,
-                    primaryAssetAvailable: primaryAsset !== null,
-                  })
-
-                  return canDerive
-                    ? coinbaseSourceSyncProvider
-                        .deriveLegs({
-                          transaction,
-                          venueContext,
-                          primaryAsset,
-                          canonicalTransfers,
-                        })
-                        .pipe(Effect.mapError(toCoinbaseRecoverableNormalizationError))
-                    : Effect.succeed([])
-                },
+                deriveLegs: (context) =>
+                  coinbaseSourceSyncProvider
+                    .derivePreparedLegs({ prepared, context })
+                    .pipe(Effect.mapError(toCoinbaseRecoverableNormalizationError)),
               } as const
             })
       )
@@ -200,22 +143,12 @@ const makeHeliusSolanaProviderModule = (
                 providerTransfers: prepared.providerTransfers,
                 canonicalTransfers: prepared.canonicalTransfers,
                 transactionReview: prepared.transactionReview,
-                overrideMaterializationAllowed:
-                  prepared.transactionReview === null ||
-                  prepared.transactionReview.matchedLayer === "solana_asset_mapping",
+                overrideMaterializationAllowed: prepared.overrideMaterializationAllowed,
                 resolvedTransactionType: prepared.resolvedTransactionType,
-                deriveLegs:
-                  prepared.legDerivationStrategy === "derive"
-                    ? ({ transaction, venueContext, canonicalTransfers }) =>
-                        heliusSolanaSourceSyncProvider
-                          .deriveLegs({
-                            transaction,
-                            venueContext,
-                            canonicalTransfers,
-                            legPlans: prepared.legPlans,
-                          })
-                          .pipe(Effect.mapError(toHeliusSolanaRecoverableNormalizationError))
-                    : () => Effect.succeed([]),
+                deriveLegs: (context) =>
+                  heliusSolanaSourceSyncProvider
+                    .derivePreparedLegs({ prepared, context })
+                    .pipe(Effect.mapError(toHeliusSolanaRecoverableNormalizationError)),
               } as const
             })
       )

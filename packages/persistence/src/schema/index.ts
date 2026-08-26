@@ -1,6 +1,8 @@
 import * as addresses from "./AddressesTable.ts"
 import * as assetPrices from "./AssetPricesTable.ts"
+import * as assetDecisionRematerializations from "./AssetDecisionRematerializationsTable.ts"
 import * as assetRepresentations from "./AssetRepresentationsTable.ts"
+import * as assetResolutionDecisionEvidenceLinks from "./AssetResolutionDecisionEvidenceLinksTable.ts"
 import * as assetRepresentationOwnershipDecisions from "./AssetRepresentationOwnershipDecisionsTable.ts"
 import * as assetResolutionDecisions from "./AssetResolutionDecisionsTable.ts"
 import * as assetResolutionEvidence from "./AssetResolutionEvidenceTable.ts"
@@ -29,6 +31,7 @@ import * as protocolMappingEvidence from "./ProtocolMappingEvidenceTable.ts"
 import * as protocolTransactionTypeMappings from "./ProtocolTransactionTypeMappingsTable.ts"
 import * as providerAssetMappings from "./ProviderAssetMappingsTable.ts"
 import * as providerAssetSourceUses from "./ProviderAssetSourceUsesTable.ts"
+import * as providerAssetTransactionUses from "./ProviderAssetTransactionUsesTable.ts"
 import * as providerAssets from "./ProviderAssetsTable.ts"
 import * as providerTransfers from "./ProviderTransfersTable.ts"
 import * as providerTransactionTypeCatalog from "./ProviderTransactionTypeCatalogTable.ts"
@@ -55,10 +58,12 @@ import * as walletNameCache from "./WalletNameCacheTable.ts"
 
 export const schema = {
   ...addresses,
+  ...assetDecisionRematerializations,
   ...assetPrices,
   ...assetRepresentations,
   ...assetRepresentationOwnershipDecisions,
   ...assetResolutionDecisions,
+  ...assetResolutionDecisionEvidenceLinks,
   ...assetResolutionEvidence,
   ...assetResolutionJobs,
   ...assets,
@@ -85,6 +90,7 @@ export const schema = {
   ...protocolTransactionTypeMappings,
   ...providerAssetMappings,
   ...providerAssetSourceUses,
+  ...providerAssetTransactionUses,
   ...providerAssets,
   ...providerTransfers,
   ...providerTransactionTypeCatalog,
@@ -111,7 +117,9 @@ export const schema = {
 }
 
 export type { Address } from "./AddressesTable.ts"
+export type { AssetDecisionRematerialization } from "./AssetDecisionRematerializationsTable.ts"
 export type { AssetPrice, AssetPriceInsert } from "./AssetPricesTable.ts"
+export type { AssetResolutionDecisionEvidenceLink } from "./AssetResolutionDecisionEvidenceLinksTable.ts"
 export type {
   AssetRepresentation,
   AssetRepresentationInsert,
@@ -199,6 +207,10 @@ export type {
   ProviderAssetSourceUse,
   ProviderAssetSourceUseInsert,
 } from "./ProviderAssetSourceUsesTable.ts"
+export type {
+  ProviderAssetTransactionUse,
+  ProviderAssetTransactionUseInsert,
+} from "./ProviderAssetTransactionUsesTable.ts"
 export type { ProviderAssetInsert, ProviderAssetRow } from "./ProviderAssetsTable.ts"
 export type {
   ProviderTransfer,

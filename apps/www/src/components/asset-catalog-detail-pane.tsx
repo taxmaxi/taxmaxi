@@ -2,6 +2,7 @@ import { ArrowLeft, ArrowUpRight, CircleDotDashed, Clock3, ShieldCheck } from "l
 import { Fragment } from "react"
 
 import { useAssetCatalog } from "#/components/asset-catalog-context"
+import { AssetExceptionDetailPane } from "#/components/asset-exception-detail"
 import { AssetCatalogEmptyState } from "#/components/asset-catalog-empty-state"
 import { AssetCatalogItemMark } from "#/components/asset-catalog-item-mark"
 import {
@@ -26,6 +27,7 @@ import { cn } from "#/lib/utils"
 export function AssetCatalogDetailPane() {
   const {
     approvedAssetsUnavailable,
+    exceptionActions,
     isLoading,
     mobileBackButtonRef,
     mobileDetailOpen,
@@ -54,7 +56,12 @@ export function AssetCatalogDetailPane() {
           {m["assetCatalog.actions.backToList"]()}
         </Button>
       ) : null}
-      {selectedItem ? (
+      {scope === "exceptions" && exceptionActions !== undefined ? (
+        <AssetExceptionDetailPane
+          actions={exceptionActions}
+          exception={selectedItem?.kind === "exception" ? selectedItem.exception : undefined}
+        />
+      ) : selectedItem ? (
         <CatalogItemDetail item={selectedItem} />
       ) : (
         <AssetCatalogEmptyState
@@ -69,6 +76,9 @@ export function AssetCatalogDetailPane() {
 }
 
 function CatalogItemDetail({ item }: { readonly item: CatalogItem }) {
+  if (item.kind === "exception") {
+    return null
+  }
   if (item.kind === "pending") {
     return <PendingAssetDetail asset={item.asset} />
   }

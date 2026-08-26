@@ -76,6 +76,7 @@ const seedChainlessProviderAsset = () =>
       yield* db.insert(schema.providerAssetSourceUses).values({
         providerAssetRowId: providerAsset.id,
         sourceId: TEST_SOURCE_ID,
+        hasChainlessObservation: true,
       })
 
       return providerAsset.id
@@ -118,6 +119,7 @@ const seedUnknownTypeRepresentation = () =>
       yield* db.insert(schema.providerAssetSourceUses).values({
         providerAssetRowId: providerAsset.id,
         sourceId: TEST_SOURCE_ID,
+        hasChainlessObservation: true,
       })
       const timestamp = new Date("2026-08-21T01:00:00.000Z")
       const [transaction] = yield* db
@@ -212,6 +214,7 @@ const seedCrossSourceFifoDependency = (
       yield* db.insert(schema.providerAssetSourceUses).values({
         providerAssetRowId,
         sourceId: dependentSourceId,
+        hasChainlessObservation: true,
       })
 
       const timestamp = new Date("2026-08-22T10:00:00.000Z")
@@ -312,6 +315,104 @@ const seedCrossSourceFifoDependency = (
       }
 
       return { dependentLegId, dependentSourceId, lotId: lot.id }
+    })
+  )
+
+const seedTransitiveFifoDependency = ({
+  sourceLegId,
+  sourceId,
+}: {
+  readonly sourceLegId: string
+  readonly sourceId: string
+}) =>
+  context.runPg(
+    Effect.gen(function* () {
+      const db = yield* drizzle
+      const transitiveSourceId = "00000000-0000-0000-0000-000000000273"
+      const [coinbase] = yield* db
+        .select({ id: schema.cex.id })
+        .from(schema.cex)
+        .where(eq(schema.cex.name, "coinbase"))
+        .limit(1)
+      if (coinbase === undefined) return yield* Effect.die("Missing Coinbase fixture")
+
+      const [account] = yield* db
+        .insert(schema.cexAccount)
+        .values({
+          cexId: coinbase.id,
+          principalId: TEST_PRINCIPAL_ID,
+          providerUserId: "override-transitive-user",
+          providerAccountId: "override-transitive-account",
+        })
+        .returning({ id: schema.cexAccount.id })
+      if (account === undefined) return yield* Effect.die("Failed to seed transitive account")
+
+      yield* db.insert(schema.sources).values({
+        id: transitiveSourceId,
+        principalId: TEST_PRINCIPAL_ID,
+        name: "Transitive Coinbase Source",
+        providerKey: "coinbase",
+        sourceableType: "cex",
+        cexAccountId: account.id,
+        addressId: null,
+      })
+
+      const timestamp = new Date("2026-08-22T10:01:00.000Z")
+      const [transaction] = yield* db
+        .insert(schema.transactions)
+        .values({
+          sourceId: transitiveSourceId,
+          externalId: "override-transitive-disposal",
+          timestamp,
+          principalId: TEST_PRINCIPAL_ID,
+        })
+        .returning({ id: schema.transactions.id })
+      if (transaction === undefined) {
+        return yield* Effect.die("Failed to seed transitive transaction")
+      }
+
+      const [leg] = yield* db
+        .insert(schema.transactionLegs)
+        .values({
+          sourceId: transitiveSourceId,
+          externalId: "override-transitive-disposal-leg",
+          timestamp,
+          principalId: TEST_PRINCIPAL_ID,
+          assetId: TEST_BTC_ASSET_ID,
+          amount: "1",
+          kind: "disposal",
+          provenance: "deterministic",
+          transactionId: transaction.id,
+        })
+        .returning({ id: schema.transactionLegs.id })
+      if (leg === undefined) return yield* Effect.die("Failed to seed transitive leg")
+
+      const [lot] = yield* db
+        .insert(schema.fifoLots)
+        .values({
+          principalId: TEST_PRINCIPAL_ID,
+          sourceId,
+          assetId: TEST_BTC_ASSET_ID,
+          acquiredAt: timestamp,
+          originalAmount: "1",
+          remainingAmount: "0",
+          costBasisPerToken: "10",
+          costBasisCurrency: "EUR",
+          sourceLegId,
+        })
+        .returning({ id: schema.fifoLots.id })
+      if (lot === undefined) return yield* Effect.die("Failed to seed transitive FIFO lot")
+
+      yield* db.insert(schema.disposalMatches).values({
+        disposalLegId: leg.id,
+        fifoLotId: lot.id,
+        matchedAmount: "1",
+        costBasis: "10",
+        proceeds: "12",
+        gainLoss: "2",
+      })
+
+      return transitiveSourceId
     })
   )
 
@@ -708,6 +809,48 @@ describe("AssetOverrideRepository", () => {
     expect(afterConcurrentChange.systemRevision).not.toBe(initial.systemRevision)
     expect(afterConcurrentChange.staleSystemRevision).toBe(true)
     expect(afterConcurrentChange.history).toHaveLength(1)
+    expect(afterConcurrentChange.activeOverride?.id).toBe(created.projection.activeOverride?.id)
+    expect(afterConcurrentChange.effectiveConclusion).toEqual({
+      _tag: "identity",
+      state: "resolved",
+      assetId: TEST_BTC_ASSET_ID,
+    })
+  })
+
+  it("accepts only one of two simultaneous override writers", async () => {
+    const providerAssetRowId = await seedChainlessProviderAsset()
+    const target = { _tag: "provider_asset" as const, providerAssetRowId }
+    const initial = await runRepository(
+      Effect.flatMap(AssetOverrideRepository, (repository) =>
+        repository.getProjection({ principalId: TEST_PRINCIPAL_ID, kind: "identity", target })
+      )
+    )
+
+    const write = (assetId: string) =>
+      runRepository(
+        Effect.flatMap(AssetOverrideRepository, (repository) =>
+          repository.setOverride({
+            principalId: TEST_PRINCIPAL_ID,
+            actorId: "00000000-0000-0000-0000-000000000181",
+            kind: "identity",
+            target,
+            expectedSystemRevision: initial.systemRevision,
+            expectedActiveOverrideId: null,
+            replacement: { _tag: "identity", assetId },
+            reason: "Only one racing decision may become active.",
+          })
+        )
+      )
+
+    const results = await Promise.all([write(TEST_BTC_ASSET_ID), write(TEST_EUR_ASSET_ID)])
+
+    expect(results.map((result) => result._tag).sort()).toEqual(["accepted", "conflict"])
+    const projection = await runRepository(
+      Effect.flatMap(AssetOverrideRepository, (repository) =>
+        repository.getProjection({ principalId: TEST_PRINCIPAL_ID, kind: "identity", target })
+      )
+    )
+    expect(projection.history).toHaveLength(1)
   })
 
   it("acquires revision locks in normalization write order", async () => {
@@ -791,7 +934,7 @@ describe("AssetOverrideRepository", () => {
     expect(result._tag).toBe("accepted")
   })
 
-  it("rejects overrides whose replay would break cross-source FIFO dependencies", async () => {
+  it("accepts overrides and schedules every cross-source FIFO dependency", async () => {
     const providerAssetRowId = await seedChainlessProviderAsset()
     await seedCrossSourceFifoDependency(providerAssetRowId)
     const target = { _tag: "provider_asset" as const, providerAssetRowId }
@@ -801,43 +944,33 @@ describe("AssetOverrideRepository", () => {
       )
     )
 
-    const validationError = await runRepository(
+    const validation = await runRepository(
       Effect.flatMap(AssetOverrideRepository, (repository) =>
-        repository
-          .validateOverride({
-            principalId: TEST_PRINCIPAL_ID,
-            kind: "identity",
-            target,
-            replacement: { _tag: "identity", assetId: TEST_BTC_ASSET_ID },
-          })
-          .pipe(Effect.flip)
+        repository.validateOverride({
+          principalId: TEST_PRINCIPAL_ID,
+          kind: "identity",
+          target,
+          replacement: { _tag: "identity", assetId: TEST_BTC_ASSET_ID },
+        })
       )
     )
-    expect(validationError).toMatchObject({
-      _tag: "AssetOverrideValidationError",
-      code: "cross_source_fifo_dependency",
-    })
+    expect(validation.systemConclusion).toMatchObject({ _tag: "identity", state: "unresolved" })
 
-    const writeError = await runRepository(
+    const writeResult = await runRepository(
       Effect.flatMap(AssetOverrideRepository, (repository) =>
-        repository
-          .setOverride({
-            principalId: TEST_PRINCIPAL_ID,
-            actorId: "00000000-0000-0000-0000-000000000181",
-            kind: "identity",
-            target,
-            expectedSystemRevision: initial.systemRevision,
-            expectedActiveOverrideId: null,
-            replacement: { _tag: "identity", assetId: TEST_BTC_ASSET_ID },
-            reason: "This write must not schedule an unsafe replay.",
-          })
-          .pipe(Effect.flip)
+        repository.setOverride({
+          principalId: TEST_PRINCIPAL_ID,
+          actorId: "00000000-0000-0000-0000-000000000181",
+          kind: "identity",
+          target,
+          expectedSystemRevision: initial.systemRevision,
+          expectedActiveOverrideId: null,
+          replacement: { _tag: "identity", assetId: TEST_BTC_ASSET_ID },
+          reason: "Replay the affected source and every FIFO consumer.",
+        })
       )
     )
-    expect(writeError).toMatchObject({
-      _tag: "AssetOverrideValidationError",
-      code: "cross_source_fifo_dependency",
-    })
+    expect(writeResult._tag).toBe("accepted")
 
     await context.runPg(
       Effect.gen(function* () {
@@ -846,13 +979,440 @@ describe("AssetOverrideRepository", () => {
           .select({ id: schema.principalAssetOverrides.id })
           .from(schema.principalAssetOverrides)
         const jobs = yield* db.select({ id: schema.processingJobs.id }).from(schema.processingJobs)
-        expect(overrides).toHaveLength(0)
-        expect(jobs).toHaveLength(0)
+        const applications = yield* db
+          .select({ sourceId: schema.principalAssetOverrideApplications.sourceId })
+          .from(schema.principalAssetOverrideApplications)
+        expect(overrides).toHaveLength(1)
+        expect(jobs).toHaveLength(2)
+        expect(new Set(applications.map(({ sourceId }) => sourceId)).size).toBe(2)
       })
     )
   })
 
-  it("rechecks FIFO dependencies after a concurrent inventory writer releases the source", async () => {
+  it("schedules the full transitive FIFO dependency chain", async () => {
+    const providerAssetRowId = await seedChainlessProviderAsset()
+    const direct = await seedCrossSourceFifoDependency(providerAssetRowId)
+    await seedTransitiveFifoDependency({
+      sourceId: direct.dependentSourceId,
+      sourceLegId: direct.dependentLegId,
+    })
+    const target = { _tag: "provider_asset" as const, providerAssetRowId }
+    const initial = await runRepository(
+      Effect.flatMap(AssetOverrideRepository, (repository) =>
+        repository.getProjection({ principalId: TEST_PRINCIPAL_ID, kind: "identity", target })
+      )
+    )
+
+    const result = await runRepository(
+      Effect.flatMap(AssetOverrideRepository, (repository) =>
+        repository.setOverride({
+          principalId: TEST_PRINCIPAL_ID,
+          actorId: "00000000-0000-0000-0000-000000000181",
+          kind: "identity",
+          target,
+          expectedSystemRevision: initial.systemRevision,
+          expectedActiveOverrideId: null,
+          replacement: { _tag: "identity", assetId: TEST_BTC_ASSET_ID },
+          reason: "Replay every direct and transitive FIFO consumer.",
+        })
+      )
+    )
+
+    expect(result._tag).toBe("accepted")
+    const replayPlan = await context.runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const jobs = yield* db
+          .select({ sourceId: schema.processingJobs.sourceId })
+          .from(schema.processingJobs)
+        const applications = yield* db
+          .select({
+            sourceId: schema.principalAssetOverrideApplications.sourceId,
+            dependsOnSourceIds: schema.principalAssetOverrideApplications.dependsOnSourceIds,
+          })
+          .from(schema.principalAssetOverrideApplications)
+        return { applications, replayedSourceIds: new Set(jobs.map(({ sourceId }) => sourceId)) }
+      })
+    )
+    expect(replayPlan.replayedSourceIds).toEqual(
+      new Set([TEST_SOURCE_ID, direct.dependentSourceId, "00000000-0000-0000-0000-000000000273"])
+    )
+    expect(replayPlan.applications).toEqual(
+      expect.arrayContaining([
+        { sourceId: TEST_SOURCE_ID, dependsOnSourceIds: [] },
+        { sourceId: direct.dependentSourceId, dependsOnSourceIds: [TEST_SOURCE_ID] },
+        {
+          sourceId: "00000000-0000-0000-0000-000000000273",
+          dependsOnSourceIds: [direct.dependentSourceId],
+        },
+      ])
+    )
+  })
+
+  it("rejects a reverse FIFO edge added after override acceptance", async () => {
+    const providerAssetRowId = await seedChainlessProviderAsset()
+    const { dependentSourceId, lotId: ownerLotId } =
+      await seedCrossSourceFifoDependency(providerAssetRowId)
+    await context.runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        yield* db.insert(schema.processingJobs).values(
+          [TEST_SOURCE_ID, dependentSourceId].map((sourceId) => ({
+            sourceId,
+            principalId: TEST_PRINCIPAL_ID,
+            mode: "sync" as const,
+            status: "processing" as const,
+          }))
+        )
+      })
+    )
+    const target = { _tag: "provider_asset" as const, providerAssetRowId }
+    const initial = await runRepository(
+      Effect.flatMap(AssetOverrideRepository, (repository) =>
+        repository.getProjection({ principalId: TEST_PRINCIPAL_ID, kind: "identity", target })
+      )
+    )
+    const accepted = await runRepository(
+      Effect.flatMap(AssetOverrideRepository, (repository) =>
+        repository.setOverride({
+          principalId: TEST_PRINCIPAL_ID,
+          actorId: "00000000-0000-0000-0000-000000000181",
+          kind: "identity",
+          target,
+          expectedSystemRevision: initial.systemRevision,
+          expectedActiveOverrideId: null,
+          replacement: { _tag: "identity", assetId: TEST_BTC_ASSET_ID },
+          reason: "Keep a later sync from making the accepted replay plan cyclic.",
+        })
+      )
+    )
+    expect(accepted._tag).toBe("accepted")
+
+    const reverseEdge = await context.runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const timestamp = new Date("2026-08-22T11:00:00.000Z")
+        const [ownerTransaction, dependentTransaction] = yield* db
+          .insert(schema.transactions)
+          .values([
+            {
+              sourceId: TEST_SOURCE_ID,
+              externalId: "cycle-owner-disposal",
+              timestamp,
+              principalId: TEST_PRINCIPAL_ID,
+            },
+            {
+              sourceId: dependentSourceId,
+              externalId: "cycle-dependent-acquisition",
+              timestamp,
+              principalId: TEST_PRINCIPAL_ID,
+            },
+          ])
+          .returning({ id: schema.transactions.id, sourceId: schema.transactions.sourceId })
+        if (ownerTransaction === undefined || dependentTransaction === undefined) {
+          return yield* Effect.die("Failed to seed cyclic dependency transactions")
+        }
+
+        const transactionBySource = new Map(
+          [ownerTransaction, dependentTransaction].map((transaction) => [
+            transaction.sourceId,
+            transaction.id,
+          ])
+        )
+        const ownerTransactionId = transactionBySource.get(TEST_SOURCE_ID)
+        const dependentTransactionId = transactionBySource.get(dependentSourceId)
+        if (ownerTransactionId === undefined || dependentTransactionId === undefined) {
+          return yield* Effect.die("Failed to identify cyclic dependency transactions")
+        }
+
+        const [ownerDisposalLeg, dependentAcquisitionLeg] = yield* db
+          .insert(schema.transactionLegs)
+          .values([
+            {
+              sourceId: TEST_SOURCE_ID,
+              externalId: "cycle-owner-disposal-leg",
+              timestamp,
+              principalId: TEST_PRINCIPAL_ID,
+              assetId: TEST_BTC_ASSET_ID,
+              amount: "1",
+              kind: "disposal",
+              provenance: "deterministic",
+              transactionId: ownerTransactionId,
+            },
+            {
+              sourceId: dependentSourceId,
+              externalId: "cycle-dependent-acquisition-leg",
+              timestamp,
+              principalId: TEST_PRINCIPAL_ID,
+              assetId: TEST_BTC_ASSET_ID,
+              amount: "1",
+              kind: "acquisition",
+              provenance: "deterministic",
+              transactionId: dependentTransactionId,
+            },
+          ])
+          .returning({ id: schema.transactionLegs.id, sourceId: schema.transactionLegs.sourceId })
+        if (ownerDisposalLeg === undefined || dependentAcquisitionLeg === undefined) {
+          return yield* Effect.die("Failed to seed cyclic dependency legs")
+        }
+
+        const legBySource = new Map(
+          [ownerDisposalLeg, dependentAcquisitionLeg].map((leg) => [leg.sourceId, leg.id])
+        )
+        const ownerDisposalLegId = legBySource.get(TEST_SOURCE_ID)
+        const dependentAcquisitionLegId = legBySource.get(dependentSourceId)
+        if (ownerDisposalLegId === undefined || dependentAcquisitionLegId === undefined) {
+          return yield* Effect.die("Failed to identify cyclic dependency legs")
+        }
+
+        const [dependentLot] = yield* db
+          .insert(schema.fifoLots)
+          .values({
+            principalId: TEST_PRINCIPAL_ID,
+            sourceId: dependentSourceId,
+            assetId: TEST_BTC_ASSET_ID,
+            acquiredAt: timestamp,
+            originalAmount: "1",
+            remainingAmount: "0",
+            costBasisPerToken: "10",
+            costBasisCurrency: "EUR",
+            sourceLegId: dependentAcquisitionLegId,
+          })
+          .returning({ id: schema.fifoLots.id })
+        if (dependentLot === undefined) return yield* Effect.die("Failed to seed dependent lot")
+
+        const reverseEdge = yield* db
+          .insert(schema.disposalMatches)
+          .values({
+            disposalLegId: ownerDisposalLegId,
+            fifoLotId: dependentLot.id,
+            matchedAmount: "1",
+            costBasis: "10",
+            proceeds: "12",
+            gainLoss: "2",
+          })
+          .pipe(Effect.result)
+
+        return {
+          dependentLotId: dependentLot.id,
+          ownerDisposalLegId,
+          reverseEdge,
+        }
+      })
+    )
+    expect(reverseEdge.reverseEdge).toMatchObject({ _tag: "Failure" })
+
+    const persistedReplayRows = await context.runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const overrides = yield* db.select().from(schema.principalAssetOverrides)
+        const jobs = yield* db.select().from(schema.processingJobs)
+        const matches = yield* db.select().from(schema.disposalMatches)
+        const applications = yield* db
+          .select({ replayJobId: schema.principalAssetOverrideApplications.replayJobId })
+          .from(schema.principalAssetOverrideApplications)
+        return { applications, jobs, matches, overrides }
+      })
+    )
+    expect(persistedReplayRows.overrides).toHaveLength(1)
+    expect(persistedReplayRows.jobs).toHaveLength(2)
+    expect(persistedReplayRows.jobs.every((job) => job.followUpMode === "replay")).toBe(true)
+    expect(persistedReplayRows.applications.every(({ replayJobId }) => replayJobId === null)).toBe(
+      true
+    )
+    expect(persistedReplayRows.matches).toHaveLength(1)
+
+    const directReplayRetries = await context.runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        yield* db
+          .update(schema.processingJobs)
+          .set({ status: "completed", progressDetails: { failedRecords: 0 } })
+          .where(eq(schema.processingJobs.mode, "sync"))
+        const failedReplayJobs = yield* db
+          .insert(schema.processingJobs)
+          .values(
+            [TEST_SOURCE_ID, dependentSourceId].map((sourceId) => ({
+              sourceId,
+              principalId: TEST_PRINCIPAL_ID,
+              mode: "replay" as const,
+              status: "failed" as const,
+              completedAt: new Date("2026-08-22T12:00:00.000Z"),
+              progressDetails: { failedRecords: 1 },
+            }))
+          )
+          .returning({ id: schema.processingJobs.id, sourceId: schema.processingJobs.sourceId })
+        for (const replayJob of failedReplayJobs) {
+          yield* db
+            .update(schema.principalAssetOverrideApplications)
+            .set({ replayJobId: replayJob.id })
+            .where(eq(schema.principalAssetOverrideApplications.sourceId, replayJob.sourceId))
+        }
+        return yield* db
+          .insert(schema.processingJobs)
+          .values(
+            [TEST_SOURCE_ID, dependentSourceId].map((sourceId) => ({
+              sourceId,
+              principalId: TEST_PRINCIPAL_ID,
+              mode: "replay" as const,
+              status: "processing" as const,
+            }))
+          )
+          .returning({ id: schema.processingJobs.id, sourceId: schema.processingJobs.sourceId })
+      })
+    )
+    const retryWindowEdge = await context.runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        return yield* db
+          .insert(schema.disposalMatches)
+          .values({
+            disposalLegId: reverseEdge.ownerDisposalLegId,
+            fifoLotId: reverseEdge.dependentLotId,
+            matchedAmount: "1",
+            costBasis: "10",
+            proceeds: "12",
+            gainLoss: "2",
+          })
+          .pipe(Effect.result)
+      })
+    )
+    expect(retryWindowEdge).toMatchObject({ _tag: "Failure" })
+
+    await context.runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        for (const replayJob of directReplayRetries) {
+          yield* db
+            .update(schema.processingJobs)
+            .set({ status: "completed", progressDetails: { failedRecords: 0 } })
+            .where(eq(schema.processingJobs.id, replayJob.id))
+          yield* db
+            .update(schema.principalAssetOverrideApplications)
+            .set({ replayJobId: replayJob.id })
+            .where(eq(schema.principalAssetOverrideApplications.sourceId, replayJob.sourceId))
+        }
+        yield* db.insert(schema.disposalMatches).values({
+          disposalLegId: reverseEdge.ownerDisposalLegId,
+          fifoLotId: reverseEdge.dependentLotId,
+          matchedAmount: "1",
+          costBasis: "10",
+          proceeds: "12",
+          gainLoss: "2",
+        })
+      })
+    )
+
+    const matchesAfterReplay = await context.runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        return yield* db.select().from(schema.disposalMatches)
+      })
+    )
+    expect(matchesAfterReplay).toHaveLength(2)
+
+    await context.runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const unrelatedSourceId = "00000000-0000-0000-0000-000000000274"
+        const [coinbase] = yield* db
+          .select({ id: schema.cex.id })
+          .from(schema.cex)
+          .where(eq(schema.cex.name, "coinbase"))
+          .limit(1)
+        const [override] = yield* db
+          .select({ id: schema.principalAssetOverrides.id })
+          .from(schema.principalAssetOverrides)
+          .limit(1)
+        if (coinbase === undefined || override === undefined) {
+          return yield* Effect.die("Missing disconnected replay fixtures")
+        }
+
+        const [account] = yield* db
+          .insert(schema.cexAccount)
+          .values({
+            cexId: coinbase.id,
+            principalId: TEST_PRINCIPAL_ID,
+            providerUserId: "unrelated-active-replay-user",
+            providerAccountId: "unrelated-active-replay-account",
+          })
+          .returning({ id: schema.cexAccount.id })
+        if (account === undefined) return yield* Effect.die("Failed to seed unrelated account")
+
+        yield* db.insert(schema.sources).values({
+          id: unrelatedSourceId,
+          principalId: TEST_PRINCIPAL_ID,
+          name: "Unrelated Active Replay Source",
+          providerKey: "coinbase",
+          sourceableType: "cex",
+          cexAccountId: account.id,
+          addressId: null,
+        })
+        const [unrelatedReplayJob] = yield* db
+          .insert(schema.processingJobs)
+          .values({
+            sourceId: unrelatedSourceId,
+            principalId: TEST_PRINCIPAL_ID,
+            mode: "replay",
+            status: "pending",
+          })
+          .returning({ id: schema.processingJobs.id })
+        if (unrelatedReplayJob === undefined) {
+          return yield* Effect.die("Failed to seed unrelated replay job")
+        }
+        yield* db.insert(schema.principalAssetOverrideApplications).values({
+          overrideId: override.id,
+          sourceId: unrelatedSourceId,
+          replayJobId: unrelatedReplayJob.id,
+        })
+
+        const [transaction] = yield* db
+          .insert(schema.transactions)
+          .values({
+            sourceId: dependentSourceId,
+            externalId: "disconnected-replay-cycle-disposal",
+            timestamp: new Date("2026-08-22T13:00:00.000Z"),
+            principalId: TEST_PRINCIPAL_ID,
+          })
+          .returning({ id: schema.transactions.id })
+        if (transaction === undefined) return yield* Effect.die("Failed to seed disposal")
+        const [disposalLeg] = yield* db
+          .insert(schema.transactionLegs)
+          .values({
+            sourceId: dependentSourceId,
+            externalId: "disconnected-replay-cycle-disposal-leg",
+            timestamp: new Date("2026-08-22T13:00:00.000Z"),
+            principalId: TEST_PRINCIPAL_ID,
+            assetId: TEST_BTC_ASSET_ID,
+            amount: "1",
+            kind: "disposal",
+            provenance: "deterministic",
+            transactionId: transaction.id,
+          })
+          .returning({ id: schema.transactionLegs.id })
+        if (disposalLeg === undefined) return yield* Effect.die("Failed to seed disposal leg")
+
+        yield* db.insert(schema.disposalMatches).values({
+          disposalLegId: disposalLeg.id,
+          fifoLotId: ownerLotId,
+          matchedAmount: "1",
+          costBasis: "10",
+          proceeds: "12",
+          gainLoss: "2",
+        })
+      })
+    )
+
+    const matchesWithDisconnectedReplay = await context.runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        return yield* db.select().from(schema.disposalMatches)
+      })
+    )
+    expect(matchesWithDisconnectedReplay).toHaveLength(3)
+  })
+
+  it("includes a FIFO dependency added by a concurrent inventory writer", async () => {
     const providerAssetRowId = await seedChainlessProviderAsset()
     const { dependentLegId, lotId } = await seedCrossSourceFifoDependency(providerAssetRowId, {
       insertDependency: false,
@@ -885,28 +1445,51 @@ describe("AssetOverrideRepository", () => {
     )
 
     await new Promise((resolve) => setTimeout(resolve, 100))
-    const overrideResult = runRepository(
+    const overrideWrite = runRepository(
       Effect.flatMap(AssetOverrideRepository, (repository) =>
-        repository
-          .setOverride({
-            principalId: TEST_PRINCIPAL_ID,
-            actorId: "00000000-0000-0000-0000-000000000181",
-            kind: "identity",
-            target,
-            expectedSystemRevision: initial.systemRevision,
-            expectedActiveOverrideId: null,
-            replacement: { _tag: "identity", assetId: TEST_BTC_ASSET_ID },
-            reason: "Reject if a concurrent source consumes affected inventory.",
-          })
-          .pipe(Effect.flip)
+        repository.setOverride({
+          principalId: TEST_PRINCIPAL_ID,
+          actorId: "00000000-0000-0000-0000-000000000181",
+          kind: "identity",
+          target,
+          expectedSystemRevision: initial.systemRevision,
+          expectedActiveOverrideId: null,
+          replacement: { _tag: "identity", assetId: TEST_BTC_ASSET_ID },
+          reason: "Include a concurrently added FIFO consumer in replay.",
+        })
       )
     )
 
-    const [, error] = await Promise.all([concurrentConsumer, overrideResult])
-    expect(error).toMatchObject({
-      _tag: "AssetOverrideValidationError",
-      code: "cross_source_fifo_dependency",
-    })
+    const [, result] = await Promise.all([concurrentConsumer, overrideWrite])
+    expect(result._tag).toBe("accepted")
+    const jobs = await context.runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        return yield* db
+          .select({ sourceId: schema.processingJobs.sourceId })
+          .from(schema.processingJobs)
+      })
+    )
+    expect(new Set(jobs.map(({ sourceId }) => sourceId)).size).toBe(2)
+    const dependentApplication = await context.runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const [application] = yield* db
+          .select({
+            dependsOnSourceIds: schema.principalAssetOverrideApplications.dependsOnSourceIds,
+          })
+          .from(schema.principalAssetOverrideApplications)
+          .where(
+            eq(
+              schema.principalAssetOverrideApplications.sourceId,
+              "00000000-0000-0000-0000-000000000272"
+            )
+          )
+          .limit(1)
+        return application
+      })
+    )
+    expect(dependentApplication?.dependsOnSourceIds).toEqual([TEST_SOURCE_ID])
   })
 
   it("does not reveal whether an unowned provider asset exists", async () => {
@@ -922,6 +1505,77 @@ describe("AssetOverrideRepository", () => {
     )
 
     expect(Option.isNone(result)).toBe(true)
+  })
+
+  it("uses representation targets instead of provider targets for exact observations", async () => {
+    const { baseBlockchainId } = await context.runPg(seedSyncEngineRepositoryFixture())
+    const contractAddress = "0x0000000000000000000000000000000000000abc"
+    const providerAssetRowId = await context.runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const [providerAsset] = yield* db
+          .insert(schema.providerAssets)
+          .values({
+            provider: "coinbase",
+            providerAssetId: "exact-observation-only",
+            currencyCode: "EXACT",
+            exponent: 18,
+            providerType: "crypto",
+            retrievedAt: new Date("2026-08-22T12:00:00.000Z"),
+          })
+          .returning({ id: schema.providerAssets.id })
+        if (providerAsset === undefined) return yield* Effect.die("Failed to seed provider asset")
+
+        yield* db.insert(schema.providerAssetMappings).values({
+          providerAssetRowId: providerAsset.id,
+          mappingKind: "asset",
+          mappingStatus: "pending_review",
+        })
+        yield* db.insert(schema.providerAssetSourceUses).values({
+          providerAssetRowId: providerAsset.id,
+          sourceId: TEST_SOURCE_ID,
+          hasChainlessObservation: false,
+        })
+        yield* db.insert(schema.sourceRepresentationUses).values({
+          sourceId: TEST_SOURCE_ID,
+          blockchainId: baseBlockchainId,
+          representationType: "token",
+          contractAddress,
+          mintAddress: null,
+        })
+        return providerAsset.id
+      })
+    )
+
+    const [providerProjection, representationProjection] = await Promise.all([
+      runRepository(
+        Effect.flatMap(AssetOverrideRepository, (repository) =>
+          repository.findProjection({
+            principalId: TEST_PRINCIPAL_ID,
+            kind: "identity",
+            target: { _tag: "provider_asset", providerAssetRowId },
+          })
+        )
+      ),
+      runRepository(
+        Effect.flatMap(AssetOverrideRepository, (repository) =>
+          repository.findProjection({
+            principalId: TEST_PRINCIPAL_ID,
+            kind: "identity",
+            target: {
+              _tag: "representation",
+              blockchainId: baseBlockchainId,
+              representationType: "token",
+              contractAddress,
+              mintAddress: null,
+            },
+          })
+        )
+      ),
+    ])
+
+    expect(Option.isNone(providerProjection)).toBe(true)
+    expect(Option.isSome(representationProjection)).toBe(true)
   })
 
   it("retains the inspected inclusion reason in append-only history", async () => {

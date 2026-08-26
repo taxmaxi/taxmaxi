@@ -1015,18 +1015,24 @@ const make = Effect.gen(function* () {
       .pipe(
         Effect.map((mapping) => ({
           assetId: Option.fromNullishOr(mapping.canonicalAssetId),
-          requiresReview: mapping.mappingKind !== "fiat" && mapping.canonicalAssetId === null,
+          requiresReview:
+            mapping.kind !== "excluded" &&
+            mapping.mappingKind !== "fiat" &&
+            mapping.canonicalAssetId === null,
+          excluded: mapping.kind === "excluded",
         })),
         Effect.catchTag("CoinbaseProviderAssetMappingNotFoundError", () =>
           Effect.succeed({
             assetId: Option.none<string>(),
             requiresReview: true,
+            excluded: false,
           })
         ),
         Effect.catchTag("CoinbasePendingProviderAssetMappingError", () =>
           Effect.succeed({
             assetId: Option.none<string>(),
             requiresReview: true,
+            excluded: false,
           })
         ),
         Effect.flatMap((resolution) =>
@@ -1035,7 +1041,11 @@ const make = Effect.gen(function* () {
             : resolvePrincipalOverrideAsset({ currencyCode, principalId }).pipe(
                 Effect.map((overrideAssetId) =>
                   Option.isSome(overrideAssetId)
-                    ? { assetId: overrideAssetId, requiresReview: false }
+                    ? {
+                        assetId: overrideAssetId,
+                        requiresReview: false,
+                        excluded: resolution.excluded,
+                      }
                     : resolution
                 )
               )
@@ -1061,6 +1071,8 @@ const make = Effect.gen(function* () {
     lookups,
   }) =>
     Effect.gen(function* () {
+      const excludedAssetCurrencies = new Set<string>()
+      const resolvedAssetCurrencies = new Set<string>()
       const normalized = yield* coinbaseRecordNormalizer.normalize({
         source,
         sourceRecord,
@@ -1070,7 +1082,14 @@ const make = Effect.gen(function* () {
             principalId: source.principalId,
             rawSourcePayload: sourceRecord.payload,
           }).pipe(
-            Effect.map((resolution) => resolution.assetId),
+            Effect.map((resolution) => {
+              const normalizedCurrencyCode = currencyCode.toUpperCase()
+              resolvedAssetCurrencies.add(normalizedCurrencyCode)
+              if (resolution.excluded) {
+                excludedAssetCurrencies.add(normalizedCurrencyCode)
+              }
+              return resolution.assetId
+            }),
             Effect.mapError(
               (cause) =>
                 new CoinbaseRecordNormalizationError({
@@ -1087,6 +1106,7 @@ const make = Effect.gen(function* () {
           Array.from(
             new Set([
               normalized.primaryAssetCurrency.toUpperCase(),
+              ...resolvedAssetCurrencies,
               ...normalized.unresolvedAssetCurrencies.map((currencyCode) =>
                 currencyCode.toUpperCase()
               ),
@@ -1145,7 +1165,9 @@ const make = Effect.gen(function* () {
       const reviewableAssetCurrencies = primaryAssetResolution.requiresReview
         ? [normalized.primaryAssetCurrency.toUpperCase(), ...normalized.unresolvedAssetCurrencies]
         : normalized.unresolvedAssetCurrencies
-      const unresolvedAssetCurrencies = Array.from(new Set(reviewableAssetCurrencies)).sort()
+      const unresolvedAssetCurrencies = Array.from(new Set(reviewableAssetCurrencies))
+        .filter((currencyCode) => !excludedAssetCurrencies.has(currencyCode.toUpperCase()))
+        .sort()
       const transactionReview =
         unresolvedAssetCurrencies.length === 0
           ? baseTransactionReview
@@ -1157,6 +1179,12 @@ const make = Effect.gen(function* () {
             })
       const providerAssetRowIds = Array.from(providerAssetIdsByCurrency.values()).filter(
         (providerAssetRowId): providerAssetRowId is string => providerAssetRowId !== null
+      )
+      const feeProviderAssetIdsByExternalId = new Map(
+        normalized.canonicalTransferCurrencies.flatMap(({ externalId, currencyCode }) => {
+          const providerAssetRowId = providerAssetIdsByCurrency.get(currencyCode) ?? null
+          return providerAssetRowId === null ? [] : [[externalId, providerAssetRowId] as const]
+        })
       )
 
       return {
@@ -1180,8 +1208,11 @@ const make = Effect.gen(function* () {
         resolvedTransactionType,
         primaryAsset: Option.getOrNull(maybePrimaryAsset),
         primaryProviderAssetId,
+        feeProviderAssetIdsByExternalId,
         canDeriveWithAssetOverrides: baseTransactionReview === null,
         legDerivationStrategy: unresolvedAssetCurrencies.length === 0 ? "derive" : "skip",
+        overrideMaterializationAllowed: false,
+        deriveMainLeg: !primaryAssetResolution.excluded,
       }
     })
 
@@ -1190,6 +1221,7 @@ const make = Effect.gen(function* () {
     venueContext,
     primaryAsset,
     canonicalTransfers,
+    deriveMainLeg,
   }) =>
     Effect.gen(function* () {
       const resolvedFeeTransfers = yield* Effect.forEach(canonicalTransfers, (transfer) =>
@@ -1209,8 +1241,57 @@ const make = Effect.gen(function* () {
         venueContext,
         primaryAsset,
         feeTransfers: resolvedFeeTransfers,
+        deriveMainLeg,
       })
 
+      return derived.legs
+    })
+
+  const derivePreparedLegs: CoinbaseSourceSyncProviderShape["derivePreparedLegs"] = ({
+    prepared,
+    context,
+  }) =>
+    Effect.gen(function* () {
+      const effectivePrimaryAsset = context.effectiveProviderAssets.find(
+        ({ providerAssetRowId }) => providerAssetRowId === prepared.primaryProviderAssetId
+      )
+      const primaryAsset =
+        effectivePrimaryAsset === undefined ? prepared.primaryAsset : effectivePrimaryAsset.asset
+      const primaryIncluded =
+        effectivePrimaryAsset === undefined || effectivePrimaryAsset.inclusionState === "included"
+      const deriveMainLeg = prepared.deriveMainLeg && primaryIncluded
+      const canDerive =
+        (!deriveMainLeg || primaryAsset !== null) &&
+        (prepared.legDerivationStrategy === "derive" || prepared.canDeriveWithAssetOverrides)
+      if (!canDerive) return []
+
+      const resolvedFeeTransfers = yield* Effect.forEach(context.canonicalTransfers, (transfer) => {
+        const providerAssetRowId =
+          transfer.externalId === null
+            ? undefined
+            : prepared.feeProviderAssetIdsByExternalId.get(transfer.externalId)
+        const effectiveFeeAsset = context.effectiveProviderAssets.find(
+          (asset) => asset.providerAssetRowId === providerAssetRowId
+        )
+        if (effectiveFeeAsset !== undefined && effectiveFeeAsset.inclusionState !== "included") {
+          return Effect.succeed(null)
+        }
+        if (effectiveFeeAsset?.asset !== null && effectiveFeeAsset?.asset !== undefined) {
+          return Effect.succeed({ transfer, asset: effectiveFeeAsset.asset })
+        }
+        return resolveCanonicalAsset({
+          assetId: transfer.assetId,
+          message: `Missing asset row for fee transfer asset ${transfer.assetId}`,
+        }).pipe(Effect.map((asset) => ({ transfer, asset })))
+      }).pipe(Effect.map((fees) => fees.filter((fee) => fee !== null)))
+
+      const derived = yield* coinbaseLegDerivationService.deriveLegs({
+        transaction: context.transaction,
+        venueContext: context.venueContext,
+        primaryAsset,
+        feeTransfers: resolvedFeeTransfers,
+        deriveMainLeg,
+      })
       return derived.legs
     })
 
@@ -1236,6 +1317,7 @@ const make = Effect.gen(function* () {
     loadNormalizationLookups,
     prepareNormalization,
     deriveLegs,
+    derivePreparedLegs,
   } satisfies CoinbaseSourceSyncProviderShape)
 })
 

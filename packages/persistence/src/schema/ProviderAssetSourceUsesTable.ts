@@ -1,4 +1,4 @@
-import { index, pgTable, primaryKey, timestamp, uuid } from "drizzle-orm/pg-core"
+import { boolean, index, pgTable, primaryKey, timestamp, uuid } from "drizzle-orm/pg-core"
 import { providerAssets } from "./ProviderAssetsTable.ts"
 import { sources } from "./SourcesTable.ts"
 
@@ -12,6 +12,7 @@ export const providerAssetSourceUses = pgTable(
     sourceId: uuid("source_id")
       .notNull()
       .references(() => sources.id, { onDelete: "cascade" }),
+    hasChainlessObservation: boolean("has_chainless_observation").notNull().default(false),
     createdAt: timestamp("created_at").notNull().defaultNow(),
     updatedAt: timestamp("updated_at").notNull().defaultNow(),
   },

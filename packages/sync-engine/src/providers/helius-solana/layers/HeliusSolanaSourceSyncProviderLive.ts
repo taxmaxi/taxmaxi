@@ -2650,6 +2650,8 @@ const make = ({
         activityFacts,
         transferEvidenceContradictions: contradictions,
       },
+      providerFiatAmount: null,
+      providerFiatCurrency: null,
       principalId,
     })
 
@@ -2673,6 +2675,69 @@ const make = ({
         chain: SOLANA_BLOCKCHAIN_NAME,
       },
     })
+
+    const deriveLegs: HeliusSolanaSourceSyncProviderShape["deriveLegs"] = ({
+      transaction,
+      canonicalTransfers,
+      legPlans,
+    }) => {
+      const plansByTransferExternalId = new Map(
+        legPlans.map((plan) => [plan.transferExternalId, plan])
+      )
+
+      return Effect.forEach(canonicalTransfers, (transfer) => {
+        const plan =
+          transfer.externalId === null
+            ? undefined
+            : plansByTransferExternalId.get(transfer.externalId)
+
+        if (plan === undefined) {
+          return Effect.fail(
+            new HeliusSolanaNormalizationReferenceError({
+              message: `Missing Solana leg plan for canonical transfer ${transfer.externalId ?? transfer.id}.`,
+            })
+          )
+        }
+
+        return Effect.succeed({
+          sourceId: transfer.sourceId,
+          sourceRawRecordId: transfer.sourceRawRecordId,
+          externalId: `${transfer.externalId ?? transfer.id}:leg`,
+          txHash: transfer.txHash,
+          timestamp: transfer.timestamp,
+          principalId: transaction.principalId,
+          addressId: transfer.addressId,
+          assetId: transfer.assetId,
+          assetRepresentationId: transfer.assetRepresentationId,
+          amount: transfer.amount,
+          kind: plan.kind,
+          provenance: "deterministic",
+          derivationRule: plan.derivationRule,
+          metadata: {
+            provider: HELIUS_SOLANA_PROVIDER_KEY,
+            role: plan.role,
+          },
+          transactionId: transaction.id,
+          sourceTransferId: transfer.id,
+          fiatAmount: null,
+          fiatCurrency: null,
+          feeForTransactionId: plan.kind === "fee" ? transaction.id : null,
+        } satisfies SourceTransactionLegDraft)
+      })
+    }
+
+    const derivePreparedLegs: HeliusSolanaSourceSyncProviderShape["derivePreparedLegs"] = ({
+      prepared,
+      context,
+    }) =>
+      prepared.legDerivationStrategy === "derive"
+        ? deriveLegs({
+            transaction: context.transaction,
+            venueContext: context.venueContext,
+            canonicalTransfers: context.canonicalTransfers,
+            legPlans: prepared.legPlans,
+          })
+        : Effect.succeed([])
 
     return HeliusSolanaSourceSyncProvider.of({
       fetchRawBatch,
@@ -2860,7 +2925,10 @@ const make = ({
               position: solMovements.length + index,
             })),
           ]
-          const canonicalMovements = [...rawSolMovements, ...joinedCanonicalSplMovements]
+          const canonicalMovements = [
+            ...rawSolMovements.filter((movement) => movement.asset.kind !== "excluded"),
+            ...joinedCanonicalSplMovements,
+          ]
           const conflictingApprovedMovement = canonicalMovements.find(
             (movement) =>
               movement.asset.mappingStatus === "approved" &&
@@ -3029,6 +3097,9 @@ const make = ({
             providerTransfers,
             canonicalTransfers,
             transactionReview,
+            overrideMaterializationAllowed:
+              transactionReview === null ||
+              transactionReview.matchedLayer === "solana_asset_mapping",
             resolvedTransactionType,
             legDerivationStrategy,
             legPlans:
@@ -3037,52 +3108,8 @@ const make = ({
                 : [],
           }
         }),
-      deriveLegs: ({ transaction, canonicalTransfers, legPlans }) =>
-        Effect.gen(function* () {
-          const plansByTransferExternalId = new Map(
-            legPlans.map((plan) => [plan.transferExternalId, plan])
-          )
-
-          return yield* Effect.forEach(canonicalTransfers, (transfer) => {
-            const plan =
-              transfer.externalId === null
-                ? undefined
-                : plansByTransferExternalId.get(transfer.externalId)
-
-            if (plan === undefined) {
-              return Effect.fail(
-                new HeliusSolanaNormalizationReferenceError({
-                  message: `Missing Solana leg plan for canonical transfer ${transfer.externalId ?? transfer.id}.`,
-                })
-              )
-            }
-
-            return Effect.succeed({
-              sourceId: transfer.sourceId,
-              sourceRawRecordId: transfer.sourceRawRecordId,
-              externalId: `${transfer.externalId ?? transfer.id}:leg`,
-              txHash: transfer.txHash,
-              timestamp: transfer.timestamp,
-              principalId: transaction.principalId,
-              addressId: transfer.addressId,
-              assetId: transfer.assetId,
-              assetRepresentationId: transfer.assetRepresentationId,
-              amount: transfer.amount,
-              kind: plan.kind,
-              provenance: "deterministic",
-              derivationRule: plan.derivationRule,
-              metadata: {
-                provider: HELIUS_SOLANA_PROVIDER_KEY,
-                role: plan.role,
-              },
-              transactionId: transaction.id,
-              sourceTransferId: transfer.id,
-              fiatAmount: null,
-              fiatCurrency: null,
-              feeForTransactionId: plan.kind === "fee" ? transaction.id : null,
-            } satisfies SourceTransactionLegDraft)
-          })
-        }),
+      deriveLegs,
+      derivePreparedLegs,
     } satisfies HeliusSolanaSourceSyncProviderShape)
   })
 

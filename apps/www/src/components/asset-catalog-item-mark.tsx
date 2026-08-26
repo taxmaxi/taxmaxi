@@ -2,7 +2,7 @@ import { useState } from "react"
 
 import { cn } from "#/lib/utils"
 import { m } from "#/paraglide/messages"
-import { getCatalogItemName, type CatalogItem } from "./asset-catalog-model"
+import { getCatalogItemName, getCatalogItemSymbol, type CatalogItem } from "./asset-catalog-model"
 
 export function AssetCatalogItemMark({
   item,
@@ -11,7 +11,7 @@ export function AssetCatalogItemMark({
   readonly item: CatalogItem
   readonly size: "sm" | "lg"
 }) {
-  const symbol = item.asset.symbol
+  const symbol = getCatalogItemSymbol(item)
   const logoUrl = item.kind === "approved" ? item.asset.logoUrl : null
   const [failedLogoUrl, setFailedLogoUrl] = useState<string | null>(null)
   const usableLogoUrl = logoUrl === failedLogoUrl ? null : logoUrl

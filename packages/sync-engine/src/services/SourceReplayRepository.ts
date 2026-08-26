@@ -26,6 +26,31 @@ export class SourceReplayDependencyError extends Schema.TaggedError<SourceReplay
 }
 
 /**
+ * SourceReplayDependencyPendingError - An inventory owner must replay before its consumer.
+ */
+export class SourceReplayDependencyPendingError extends Schema.TaggedError<SourceReplayDependencyPendingError>()(
+  "SourceReplayDependencyPendingError",
+  {
+    sourceId: Schema.String,
+    ownerSourceIds: Schema.Array(Schema.String),
+  }
+) {
+  override get message(): string {
+    return `Replay source ${this.sourceId} after inventory owners ${this.ownerSourceIds.join(", ")}`
+  }
+}
+
+/** A source belongs to a cross-source FIFO cycle that cannot be replayed one source at a time. */
+export class SourceReplayDependencyCycleError extends Schema.TaggedError<SourceReplayDependencyCycleError>()(
+  "SourceReplayDependencyCycleError",
+  { sourceId: Schema.String }
+) {
+  override get message(): string {
+    return `Cannot replay source ${this.sourceId}; its cross-source inventory dependencies form a cycle.`
+  }
+}
+
+/**
  * SourceReplayRepositoryShape - Replay reset semantics used by the sync engine.
  */
 export interface SourceReplayRepositoryShape {
@@ -35,7 +60,13 @@ export interface SourceReplayRepositoryShape {
    */
   readonly resetSourceDerivedState: (params: {
     readonly sourceId: string
-  }) => Effect.Effect<void, SourceReplayDependencyError | SyncEngineStorageError>
+  }) => Effect.Effect<
+    void,
+    | SourceReplayDependencyCycleError
+    | SourceReplayDependencyError
+    | SourceReplayDependencyPendingError
+    | SyncEngineStorageError
+  >
 }
 
 /**

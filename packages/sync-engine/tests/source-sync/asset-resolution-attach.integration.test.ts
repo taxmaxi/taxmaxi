@@ -208,7 +208,13 @@ const FakeAssetResolutionCoinGeckoClientLive = Layer.succeed(AssetResolutionCoin
   },
 })
 
-type FakeJupiterMode = "not_indexed" | "banned" | "suspicious" | "unverified" | "retryable"
+type FakeJupiterMode =
+  | "not_indexed"
+  | "banned"
+  | "suspicious"
+  | "unverified"
+  | "verified"
+  | "retryable"
 
 let jupiterMode: FakeJupiterMode = "not_indexed"
 
@@ -221,6 +227,9 @@ const jupiterSearchPayload = (mode: FakeJupiterMode) => {
   }
   if (mode === "unverified") {
     return [{ id: ORB_MINT, name: "Orb Test Coin", symbol: "ORB" }]
+  }
+  if (mode === "verified") {
+    return [{ id: ORB_MINT, name: "Orb Test Coin", symbol: "ORB", isVerified: true }]
   }
 
   return []
@@ -821,8 +830,10 @@ describe("asset resolution attach and rebuild", () => {
         expect(pendingTax._tag).toBe("Failure")
 
         // No ORB economic asset exists and the registry does not know the
-        // mint: the exact long-tail representation creates its own asset.
+        // mint, but Jupiter vouches for it: the exact long-tail
+        // representation creates its own asset.
         coinGeckoMode = "not_found"
+        jupiterMode = "verified"
         yield* recordOrbSolanaObservation()
         const jobId = yield* fetchPendingResolutionJobId()
 
@@ -879,7 +890,7 @@ describe("asset resolution attach and rebuild", () => {
             claimKind: "legitimacy",
             sourceLocator: `jupiter://tokens/v2/search?query=${ORB_MINT}`,
             evidenceRevision: 1,
-            decodedClaim: null,
+            decodedClaim: expect.objectContaining({ verdict: "verified" }),
           }),
         ])
         expect(state.ownershipDecisions).toEqual([
@@ -993,6 +1004,38 @@ describe("asset resolution attach and rebuild", () => {
           expect.objectContaining({
             outcome: "pending",
             reason: "display_collision",
+            actor: "system:asset-resolution-policy",
+          }),
+        ])
+        expect(state.mapping).toMatchObject({ mappingStatus: "pending_review" })
+        expect(state.representations).toEqual([])
+
+        const job = yield* fetchResolutionJobState({ jobId })
+        expect(job.status).toBe("completed")
+      })
+    )
+  })
+
+  it("stays pending as an unverified asset when no registry vouches for the mint", async () => {
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        yield* runSync()
+        // The registry does not know the mint and Jupiter has never indexed
+        // it. The absence of spam evidence must not create a canonical
+        // asset; the observation waits for human review.
+        coinGeckoMode = "not_found"
+        yield* recordOrbSolanaObservation()
+        const jobId = yield* fetchPendingResolutionJobId()
+
+        const result = yield* runResolutionJob({ jobId })
+        expect(result.outcome).toBe("pending")
+
+        const state = yield* fetchAttachState()
+        expect(state.owningAssets).toEqual([])
+        expect(state.decisions).toEqual([
+          expect.objectContaining({
+            outcome: "pending",
+            reason: "unverified_asset",
             actor: "system:asset-resolution-policy",
           }),
         ])
@@ -1449,7 +1492,7 @@ describe("asset resolution attach and rebuild", () => {
     )
   })
 
-  it("pauses on suspicious signals but creates when a later signal is unverified", async () => {
+  it("pauses on suspicious signals but creates when a later signal is verified", async () => {
     await Effect.runPromise(
       Effect.gen(function* () {
         coinGeckoMode = "not_found"
@@ -1473,9 +1516,10 @@ describe("asset resolution attach and rebuild", () => {
         const blockedTax = yield* calculateTax().pipe(Effect.result)
         expect(blockedTax._tag).toBe("Failure")
 
-        // Unverified decides nothing: the same observation at a new evidence
-        // revision follows the normal standalone-create path.
-        jupiterMode = "unverified"
+        // A later verified verdict vouches for the token: the same
+        // observation at a new evidence revision follows the normal
+        // standalone-create path.
+        jupiterMode = "verified"
         const secondJobId = "00000000-4000-4000-8000-000000000772"
         yield* Effect.gen(function* () {
           const db = yield* drizzle
@@ -1505,12 +1549,12 @@ describe("asset resolution attach and rebuild", () => {
           })
         }).pipe(Effect.provide(TestPgClientLive))
 
-        const unverified = yield* runResolutionJob({ jobId: secondJobId })
-        expect(unverified.outcome).toBe("created")
+        const verified = yield* runResolutionJob({ jobId: secondJobId })
+        expect(verified.outcome).toBe("created")
 
-        const unverifiedState = yield* fetchAttachState()
-        expect(unverifiedState.mapping).toMatchObject({ mappingStatus: "approved" })
-        expect(unverifiedState.representations).toEqual([
+        const verifiedState = yield* fetchAttachState()
+        expect(verifiedState.mapping).toMatchObject({ mappingStatus: "approved" })
+        expect(verifiedState.representations).toEqual([
           expect.objectContaining({ type: "token", mintAddress: ORB_MINT, decimals: 8 }),
         ])
       })

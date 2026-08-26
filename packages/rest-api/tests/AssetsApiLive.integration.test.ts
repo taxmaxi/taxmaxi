@@ -23,16 +23,24 @@ import { describe, expect, it } from "vitest"
 import {
   AssetCatalogAssetResponse,
   AssetCatalogListResponse,
+  AssetExceptionDetailResponse,
+  AssetExceptionListResponse,
+  AssetExceptionPreviewResponse,
   PendingAssetListResponse,
   ProviderAssetReviewRow,
   ProviderAssetReviewListResponse,
   UnresolvedTransferReconciliationListResponse,
 } from "../src/definitions/AssetsApi.ts"
+import {
+  AssetOverrideHistoryResponse,
+  AssetOverrideProjectionResponse,
+  AssetOverrideValidationResponse,
+} from "../src/definitions/AssetOverridesApi.ts"
 import { AnonSessionServiceLive } from "../src/layers/AnonSessionServiceLive.ts"
 import { SimpleTokenValidatorLive } from "../src/layers/AuthMiddlewareLive.ts"
 import { TaxMaxiApiLive } from "../src/layers/TaxMaxiApiLive.ts"
 import { drizzle } from "../../persistence/src/layers/PgClientLive.ts"
-import { eq } from "../../persistence/src/query/index.ts"
+import { eq, sql } from "../../persistence/src/query/index.ts"
 import { RepositoriesLive } from "../../persistence/src/layers/RepositoriesLive.ts"
 import { schema } from "../../persistence/src/schema/index.ts"
 import {
@@ -56,6 +64,7 @@ const AnonSessionServiceTestLive = AnonSessionServiceLive.pipe(
   Layer.provide(ConfigProvider.layer(TestConfigProvider))
 )
 const ADMIN_BEARER_TOKEN = "user_00000000-0000-4000-8000-000000000099_admin"
+const USER_BEARER_TOKEN = "user_00000000-0000-4000-8000-000000000098_user"
 
 const SourceSyncServiceTestLive = Layer.succeed(SourceSyncService, {
   startSourceSyncJob: () =>
@@ -178,6 +187,15 @@ const getAdminStatus = (path: string) =>
     return response.status
   })
 
+const getUserStatus = (path: string) =>
+  Effect.gen(function* () {
+    const response = yield* HttpClientRequest.get(path).pipe(
+      HttpClientRequest.bearerToken(USER_BEARER_TOKEN),
+      HttpClient.execute
+    )
+    return response.status
+  })
+
 const postAdminJson = <Response, Requirements>({
   path,
   payload,
@@ -222,6 +240,180 @@ const decodeTestProviderAssetCursor = Schema.decodeUnknownSync(
 await Effect.runPromise(context.recreateTestDatabase())
 
 describe("AssetsApiLive", () => {
+  it("runs the authenticated asset override flow through validation, CAS, history, replacement, and withdrawal", async () => {
+    const userId = crypto.randomUUID()
+    const principalId = crypto.randomUUID()
+    const sourceId = crypto.randomUUID()
+    const fixture = await Effect.runPromise(
+      Effect.gen(function* () {
+        yield* seedSyncEngineRepositoryFixture({ userId, principalId, sourceId })
+        const db = yield* drizzle
+        const [firstAsset, secondAsset] = yield* db
+          .insert(schema.assets)
+          .values([
+            { name: "Override API Asset One", symbol: "OA1", type: "fungible" },
+            { name: "Override API Asset Two", symbol: "OA2", type: "fungible" },
+          ])
+          .returning({ id: schema.assets.id })
+        const [providerAsset] = yield* db
+          .insert(schema.providerAssets)
+          .values({
+            provider: "coinbase",
+            providerAssetId: `override-api-${crypto.randomUUID()}`,
+            currencyCode: "OAPI",
+            exponent: 8,
+            providerType: "crypto",
+            retrievedAt: new Date("2026-08-26T12:00:00.000Z"),
+          })
+          .returning({ id: schema.providerAssets.id })
+        if (firstAsset === undefined || secondAsset === undefined || providerAsset === undefined) {
+          return yield* Effect.die("Failed to seed asset override API fixture")
+        }
+        yield* db.insert(schema.providerAssetMappings).values({
+          providerAssetRowId: providerAsset.id,
+          mappingKind: "asset",
+          mappingStatus: "pending_review",
+        })
+        yield* db.insert(schema.providerAssetSourceUses).values({
+          providerAssetRowId: providerAsset.id,
+          sourceId,
+          hasChainlessObservation: true,
+        })
+        return {
+          firstAssetId: firstAsset.id,
+          secondAssetId: secondAsset.id,
+          providerAssetRowId: providerAsset.id,
+        }
+      }).pipe(Effect.provide(TestPgClientLive))
+    )
+    const token = `user_${userId}_user`
+    const target = {
+      _tag: "provider_asset" as const,
+      providerAssetRowId: fixture.providerAssetRowId,
+    }
+    const query = `kind=identity&targetKind=provider_asset&providerAssetRowId=${fixture.providerAssetRowId}`
+    const runRequest = <Response, Requirements>({
+      request,
+      responseSchema,
+    }: {
+      readonly request: HttpClientRequest.HttpClientRequest
+      readonly responseSchema: Schema.ConstraintDecoder<Response, Requirements>
+    }) =>
+      Effect.gen(function* () {
+        const response = yield* request.pipe(
+          HttpClientRequest.bearerToken(token),
+          HttpClient.execute
+        )
+        const body = yield* response.json
+        return {
+          status: response.status,
+          body: yield* Schema.decodeUnknownEffect(responseSchema)(body),
+        }
+      }).pipe(Effect.provide(HttpLive), Effect.scoped)
+
+    const initial = await Effect.runPromise(
+      runRequest({
+        request: HttpClientRequest.get(`/v1/asset-overrides/current?${query}`),
+        responseSchema: AssetOverrideProjectionResponse,
+      })
+    )
+    expect(initial.status).toBe(200)
+    expect(initial.body.systemConclusion).toMatchObject({ state: "unresolved" })
+
+    const validation = await Effect.runPromise(
+      runRequest({
+        request: HttpClientRequest.post("/v1/asset-overrides/validate").pipe(
+          HttpClientRequest.bodyJsonUnsafe({
+            kind: "identity",
+            target,
+            replacement: { _tag: "identity", assetId: fixture.firstAssetId },
+          })
+        ),
+        responseSchema: AssetOverrideValidationResponse,
+      })
+    )
+    expect(validation.body.warnings).toEqual(["identity_not_system_verified"])
+
+    const createPayload = {
+      kind: "identity",
+      target,
+      expectedSystemRevision: initial.body.systemRevision,
+      replacement: { _tag: "identity", assetId: fixture.firstAssetId },
+      reason: "The account statement confirms the first asset.",
+    }
+    const created = await Effect.runPromise(
+      runRequest({
+        request: HttpClientRequest.post("/v1/asset-overrides").pipe(
+          HttpClientRequest.bodyJsonUnsafe(createPayload)
+        ),
+        responseSchema: AssetOverrideProjectionResponse,
+      })
+    )
+    expect(created.status).toBe(200)
+    expect(created.body.activeOverride?.actorId).toBe(userId)
+    expect(created.body.effectiveConclusion).toMatchObject({ assetId: fixture.firstAssetId })
+
+    const conflictStatus = await Effect.runPromise(
+      HttpClientRequest.post("/v1/asset-overrides").pipe(
+        HttpClientRequest.bodyJsonUnsafe(createPayload),
+        HttpClientRequest.bearerToken(token),
+        HttpClient.execute,
+        Effect.map((response) => response.status),
+        Effect.provide(HttpLive),
+        Effect.scoped
+      )
+    )
+    expect(conflictStatus).toBe(409)
+
+    const activeOverrideId = created.body.activeOverride?.id
+    if (activeOverrideId === undefined) expect.unreachable("Expected an active override")
+    const replaced = await Effect.runPromise(
+      runRequest({
+        request: HttpClientRequest.post(
+          `/v1/asset-overrides/${activeOverrideId}/replacements`
+        ).pipe(
+          HttpClientRequest.bodyJsonUnsafe({
+            ...createPayload,
+            expectedSystemRevision: created.body.systemRevision,
+            replacement: { _tag: "identity", assetId: fixture.secondAssetId },
+            reason: "The audited statement confirms the second asset.",
+          })
+        ),
+        responseSchema: AssetOverrideProjectionResponse,
+      })
+    )
+    expect(replaced.body.history).toHaveLength(2)
+    expect(replaced.body.effectiveConclusion).toMatchObject({ assetId: fixture.secondAssetId })
+
+    const history = await Effect.runPromise(
+      runRequest({
+        request: HttpClientRequest.get(`/v1/asset-overrides/history?${query}`),
+        responseSchema: Schema.Array(AssetOverrideHistoryResponse),
+      })
+    )
+    expect(history.body).toHaveLength(2)
+
+    const replacementOverrideId = replaced.body.activeOverride?.id
+    if (replacementOverrideId === undefined) expect.unreachable("Expected replacement override")
+    const withdrawn = await Effect.runPromise(
+      runRequest({
+        request: HttpClientRequest.post(
+          `/v1/asset-overrides/${replacementOverrideId}/withdrawals`
+        ).pipe(
+          HttpClientRequest.bodyJsonUnsafe({
+            kind: "identity",
+            target,
+            expectedSystemRevision: replaced.body.systemRevision,
+            reason: "Return to the current TaxMaxi conclusion.",
+          })
+        ),
+        responseSchema: AssetOverrideProjectionResponse,
+      })
+    )
+    expect(withdrawn.body.activeOverride).toBeNull()
+    expect(withdrawn.body.history).toHaveLength(3)
+  })
+
   it("lists canonical assets from the asset table without authentication", async () => {
     const response = await Effect.runPromise(
       getJson({
@@ -924,6 +1116,21 @@ describe("AssetsApiLive", () => {
       path: `/v1/assets/transfer-reconciliations/unresolved?cursor=${Buffer.from("not-json").toString("base64url")}`,
       requiresAdmin: true,
     },
+    {
+      endpoint: "admin asset exceptions with a non-numeric transaction value",
+      path: `/v1/assets/exceptions?cursor=${encodeTestCursor({
+        version: 1,
+        blockedReports: 1,
+        affectedPrincipals: 1,
+        affectedTransactions: 1,
+        affectedSources: 1,
+        affectedTransactionValueEur: "not-a-number",
+        severity: "high",
+        oldestAt: "2026-08-21T12:00:00.000Z",
+        providerAssetRowId: crypto.randomUUID(),
+      })}`,
+      requiresAdmin: true,
+    },
   ] as const)("rejects an invalid cursor for $endpoint", async ({ path, requiresAdmin }) => {
     const status = await Effect.runPromise(
       (requiresAdmin ? getAdminStatus(path) : getStatus(path)).pipe(
@@ -1259,5 +1466,246 @@ describe("AssetsApiLive", () => {
     )
 
     expect(status).toBe(401)
+  })
+
+  it("paginates exception rows without duplicating sub-millisecond timestamps", async () => {
+    const firstId = "00000000-0000-4000-8000-000000000711"
+    const secondId = "00000000-0000-4000-8000-000000000712"
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        yield* db.insert(schema.providerAssets).values([
+          {
+            id: firstId,
+            provider: "cursor-precision-provider",
+            providerAssetId: "cursor-precision-first",
+            currencyCode: "CURSOR1",
+            evidenceRevision: 1,
+            retrievedAt: new Date("2026-08-21T12:00:00.000Z"),
+          },
+          {
+            id: secondId,
+            provider: "cursor-precision-provider",
+            providerAssetId: "cursor-precision-second",
+            currencyCode: "CURSOR2",
+            evidenceRevision: 1,
+            retrievedAt: new Date("2026-08-21T12:00:00.000Z"),
+          },
+        ])
+        yield* db.insert(schema.assetResolutionJobs).values([
+          { providerAssetRowId: firstId, evidenceRevision: 1, status: "completed" },
+          { providerAssetRowId: secondId, evidenceRevision: 1, status: "completed" },
+        ])
+        yield* db.insert(schema.assetResolutionDecisions).values([
+          {
+            providerAssetRowId: firstId,
+            evidenceRevision: 1,
+            policyRevision: "cursor-precision.1",
+            outcome: "fail_closed",
+            reason: "ownership_conflict",
+            actor: "policy:cursor-precision.1",
+          },
+          {
+            providerAssetRowId: secondId,
+            evidenceRevision: 1,
+            policyRevision: "cursor-precision.1",
+            outcome: "fail_closed",
+            reason: "ownership_conflict",
+            actor: "policy:cursor-precision.1",
+          },
+        ])
+        yield* db.execute(sql`
+          update ${schema.assetResolutionDecisions}
+          set created_at = case
+            when provider_asset_row_id = ${firstId}::uuid then ${"2026-08-21T12:00:00.000900Z"}::timestamptz
+            else ${"2026-08-21T12:00:00.000100Z"}::timestamptz
+          end
+          where provider_asset_row_id in (${firstId}::uuid, ${secondId}::uuid)
+        `)
+      }).pipe(Effect.provide(TestPgClientLive))
+    )
+
+    const firstPage = await Effect.runPromise(
+      getAdminJson({
+        path: "/v1/assets/exceptions?limit=1",
+        responseSchema: AssetExceptionListResponse,
+      }).pipe(Effect.provide(HttpLive), Effect.scoped)
+    )
+    const cursor = firstPage.body.page.nextCursor
+    if (cursor === null) {
+      expect.unreachable("Expected a cursor for the second exception")
+    }
+    const secondPage = await Effect.runPromise(
+      getAdminJson({
+        path: `/v1/assets/exceptions?limit=1&cursor=${cursor}`,
+        responseSchema: AssetExceptionListResponse,
+      }).pipe(Effect.provide(HttpLive), Effect.scoped)
+    )
+
+    expect(firstPage.body.exceptions.map(({ providerAssetRowId }) => providerAssetRowId)).toEqual([
+      firstId,
+    ])
+    expect(secondPage.body.exceptions.map(({ providerAssetRowId }) => providerAssetRowId)).toEqual([
+      secondId,
+    ])
+    expect(secondPage.body.page).toEqual({ hasMore: false, nextCursor: null })
+  })
+
+  it("supports the complete admin asset-exception review flow without exposing it publicly", async () => {
+    const suffix = crypto.randomUUID()
+    const userId = crypto.randomUUID()
+    const principalId = crypto.randomUUID()
+    const sourceId = crypto.randomUUID()
+    const seeded = await Effect.runPromise(
+      Effect.gen(function* () {
+        yield* seedSyncEngineRepositoryFixture({ userId, principalId, sourceId })
+        const db = yield* drizzle
+        const observedAt = new Date("2026-08-21T12:00:00.000Z")
+        const [providerAsset] = yield* db
+          .insert(schema.providerAssets)
+          .values({
+            provider: `exception-api-${suffix}`,
+            providerAssetId: `provider-observation-${suffix}`,
+            naturalKey: `currency_code:EXC-${suffix}`,
+            currencyCode: "EXC",
+            name: "Exception API Asset",
+            exponent: 6,
+            providerType: "crypto",
+            rawProviderPayload: { id: `provider-observation-${suffix}` },
+            evidenceRevision: 3,
+            discoveredAt: observedAt,
+            retrievedAt: observedAt,
+          })
+          .returning({ id: schema.providerAssets.id })
+        if (providerAsset === undefined) {
+          return yield* Effect.die("Failed to seed API exception")
+        }
+        yield* db.insert(schema.assetResolutionJobs).values({
+          providerAssetRowId: providerAsset.id,
+          evidenceRevision: 3,
+          status: "completed",
+        })
+        const [decision] = yield* db
+          .insert(schema.assetResolutionDecisions)
+          .values({
+            providerAssetRowId: providerAsset.id,
+            evidenceRevision: 3,
+            policyRevision: "api-test-policy.1",
+            outcome: "fail_closed",
+            reason: "ownership_conflict",
+            actor: "policy:api-test-policy.1",
+          })
+          .returning({ id: schema.assetResolutionDecisions.id })
+        if (decision === undefined) {
+          return yield* Effect.die("Failed to seed API decision")
+        }
+        const [evidence] = yield* db
+          .insert(schema.assetResolutionEvidence)
+          .values({
+            decisionId: decision.id,
+            authority: "coingecko",
+            claimKind: "representation_owner",
+            sourceLocator: `coingecko:${suffix}`,
+            retrievedAt: observedAt,
+            evidenceRevision: 3,
+            decodedClaim: { coinId: `exception-${suffix}` },
+            rawPayload: { id: `exception-${suffix}` },
+          })
+          .returning({ id: schema.assetResolutionEvidence.id })
+        if (evidence === undefined) {
+          return yield* Effect.die("Failed to seed API evidence")
+        }
+        yield* db.insert(schema.providerAssetSourceUses).values({
+          providerAssetRowId: providerAsset.id,
+          sourceId,
+        })
+        return {
+          provider: `exception-api-${suffix}`,
+          providerAssetId: `provider-observation-${suffix}`,
+          rowId: providerAsset.id,
+          decisionId: decision.id,
+          evidenceId: evidence.id,
+        }
+      }).pipe(Effect.provide(TestPgClientLive))
+    )
+
+    const publicStatus = await Effect.runPromise(
+      getStatus("/v1/assets/exceptions").pipe(Effect.provide(HttpLive), Effect.scoped)
+    )
+    const userStatus = await Effect.runPromise(
+      getUserStatus("/v1/assets/exceptions").pipe(Effect.provide(HttpLive), Effect.scoped)
+    )
+    const list = await Effect.runPromise(
+      getAdminJson({
+        path: "/v1/assets/exceptions?limit=10",
+        responseSchema: AssetExceptionListResponse,
+      }).pipe(Effect.provide(HttpLive), Effect.scoped)
+    )
+    const lookup = await Effect.runPromise(
+      getAdminJson({
+        path: `/v1/assets/exceptions/lookup?provider=${encodeURIComponent(seeded.provider)}&providerAssetId=${encodeURIComponent(seeded.providerAssetId)}`,
+        responseSchema: AssetExceptionDetailResponse,
+      }).pipe(Effect.provide(HttpLive), Effect.scoped)
+    )
+    const payload = {
+      claim: { _tag: "exclusion", reason: "provider_artifact" },
+      evidenceRevision: 3,
+      activeDecisionRevision: seeded.decisionId,
+      evidenceSnapshotIds: [seeded.evidenceId],
+      rationale: "The immutable provider evidence shows an internal provider artifact.",
+    }
+    const preview = await Effect.runPromise(
+      postAdminJson({
+        path: `/v1/assets/exceptions/${seeded.rowId}/preview`,
+        payload,
+        responseSchema: AssetExceptionPreviewResponse,
+      }).pipe(Effect.provide(HttpLive), Effect.scoped)
+    )
+    const confirmationPayload = {
+      ...payload,
+      expectedResultingAssetId: preview.body.resultingAssetId,
+      expectedAssetOutcome: preview.body.assetOutcome,
+      expectedRepresentationOutcome: preview.body.representationOutcome,
+    }
+    const accepted = await Effect.runPromise(
+      postAdminJson({
+        path: `/v1/assets/exceptions/${seeded.rowId}/decisions`,
+        payload: confirmationPayload,
+        responseSchema: AssetExceptionDetailResponse,
+      }).pipe(Effect.provide(HttpLive), Effect.scoped)
+    )
+    const staleStatus = await Effect.runPromise(
+      postAdminStatus({
+        path: `/v1/assets/exceptions/${seeded.rowId}/decisions`,
+        payload: confirmationPayload,
+      }).pipe(Effect.provide(HttpLive), Effect.scoped)
+    )
+
+    expect(publicStatus).toBe(401)
+    expect(userStatus).toBe(403)
+    expect(list.body.exceptions).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          providerAssetRowId: seeded.rowId,
+          reason: "ownership_conflict",
+          severity: "critical",
+        }),
+      ])
+    )
+    expect(lookup.body).toMatchObject({
+      providerAssetRowId: seeded.rowId,
+      policyOutput: { outcome: "fail_closed", reason: "ownership_conflict" },
+    })
+    expect(preview.body).toMatchObject({
+      assetOutcome: "none",
+      representationOutcome: "none",
+      evidenceRevision: 3,
+    })
+    expect(accepted.body).toMatchObject({
+      reviewStatus: "excluded",
+      rematerialization: { status: "pending", affectedSourceCount: 1 },
+    })
+    expect(staleStatus).toBe(409)
   })
 })
