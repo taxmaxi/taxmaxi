@@ -76,6 +76,28 @@ export class TaxCalculationPendingObservationsError extends Schema.TaggedError<T
 }
 
 /**
+ * TaxCalculationPendingRecomputationError - Non-observation work must finish
+ * before the source's derived tax data is safe to read.
+ */
+export class TaxCalculationPendingRecomputationError extends Schema.TaggedError<TaxCalculationPendingRecomputationError>()(
+  "TaxCalculationPendingRecomputationError",
+  {
+    sourceId: Schema.String,
+    pendingOverrideReplay: Schema.Boolean,
+    pendingTransactionReview: Schema.Boolean,
+  },
+  { httpApiStatus: 422 }
+) {
+  override get message(): string {
+    const blockers = [
+      this.pendingOverrideReplay ? "asset override replay" : null,
+      this.pendingTransactionReview ? "transaction review" : null,
+    ].filter((blocker): blocker is string => blocker !== null)
+    return `Tax calculation for source ${this.sourceId} is pending: ${blockers.join(" and ")}`
+  }
+}
+
+/**
  * TaxCalculationUnsupportedCurrencyError - Source contains non-reporting-currency values.
  */
 export class TaxCalculationUnsupportedCurrencyError extends Schema.TaggedError<TaxCalculationUnsupportedCurrencyError>()(
@@ -101,6 +123,7 @@ export type TaxCalculationServiceError =
   | UnsupportedJurisdictionError
   | TaxCalculationIncompleteDataError
   | TaxCalculationPendingObservationsError
+  | TaxCalculationPendingRecomputationError
   | TaxCalculationUnsupportedCurrencyError
   | PersistenceError
 

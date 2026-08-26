@@ -31,7 +31,10 @@ import { drizzle } from "../../persistence/src/layers/PgClientLive.ts"
 import { RepositoriesLive } from "../../persistence/src/layers/RepositoriesLive.ts"
 import { TaxCalculationServiceLive } from "../../persistence/src/layers/TaxCalculationServiceLive.ts"
 import { schema } from "../../persistence/src/schema/index.ts"
-import { TaxCalculationService } from "../../persistence/src/services/index.ts"
+import {
+  TaxCalculationPendingRecomputationError,
+  TaxCalculationService,
+} from "../../persistence/src/services/index.ts"
 import { makeIntegrationTestDatabaseContext } from "../../persistence/tests/support/integration-test-kit.ts"
 import {
   seedSyncEngineAssets,
@@ -242,6 +245,28 @@ const TaxCalculationHttpLive = makeHttpLive(
   X402PaymentValidatorTestLive,
   TaxCalculationServiceLive
 )
+
+const makePendingTaxCalculationHttpLive = ({
+  pendingOverrideReplay,
+  pendingTransactionReview,
+}: {
+  readonly pendingOverrideReplay: boolean
+  readonly pendingTransactionReview: boolean
+}) =>
+  makeHttpLive(
+    SourceSyncQueueTestLive,
+    X402PaymentValidatorTestLive,
+    Layer.succeed(TaxCalculationService, {
+      calculateTax: ({ sourceId }) =>
+        Effect.fail(
+          new TaxCalculationPendingRecomputationError({
+            sourceId,
+            pendingOverrideReplay,
+            pendingTransactionReview,
+          })
+        ),
+    })
+  )
 
 const makeAuthenticatedClient = ({ userId }: { readonly userId: string }) =>
   Effect.gen(function* () {
@@ -3144,6 +3169,72 @@ describe("SourcesApiLive", () => {
           }
         }
       }).pipe(Effect.provide(TaxCalculationHttpLive), Effect.scoped)
+  )
+
+  it.effect("returns a typed 422 while an asset override replay is pending", () =>
+    Effect.gen(function* () {
+      const userId = crypto.randomUUID()
+      const principalId = crypto.randomUUID()
+      const sourceId = crypto.randomUUID()
+      yield* seedCoinbaseSource({ userId, principalId, sourceId })
+
+      const client = yield* makeAuthenticatedClient({ userId })
+      const result = yield* client.sources
+        .calculateTaxForSource({
+          params: { sourceId },
+          payload: { year: 2025, jurisdiction: "germany" },
+        })
+        .pipe(Effect.result)
+
+      expect(result._tag).toBe("Failure")
+      if (result._tag !== "Failure") return
+      expect(result.failure).toMatchObject({
+        _tag: "SourceTaxCalculationPendingError",
+        message: `Tax calculation for source ${sourceId} is pending: asset override replay`,
+        blockingObservations: [],
+      })
+    }).pipe(
+      Effect.provide(
+        makePendingTaxCalculationHttpLive({
+          pendingOverrideReplay: true,
+          pendingTransactionReview: false,
+        })
+      ),
+      Effect.scoped
+    )
+  )
+
+  it.effect("returns a typed 422 while transaction review is pending", () =>
+    Effect.gen(function* () {
+      const userId = crypto.randomUUID()
+      const principalId = crypto.randomUUID()
+      const sourceId = crypto.randomUUID()
+      yield* seedCoinbaseSource({ userId, principalId, sourceId })
+
+      const client = yield* makeAuthenticatedClient({ userId })
+      const result = yield* client.sources
+        .calculateTaxForSource({
+          params: { sourceId },
+          payload: { year: 2025, jurisdiction: "germany" },
+        })
+        .pipe(Effect.result)
+
+      expect(result._tag).toBe("Failure")
+      if (result._tag !== "Failure") return
+      expect(result.failure).toMatchObject({
+        _tag: "SourceTaxCalculationPendingError",
+        message: `Tax calculation for source ${sourceId} is pending: transaction review`,
+        blockingObservations: [],
+      })
+    }).pipe(
+      Effect.provide(
+        makePendingTaxCalculationHttpLive({
+          pendingOverrideReplay: false,
+          pendingTransactionReview: true,
+        })
+      ),
+      Effect.scoped
+    )
   )
 
   it.effect("resolves a cached wallet name through the resolve-name endpoint", () =>

@@ -27,6 +27,7 @@ import {
   SourceReplayDependencyError,
   SourceReplayDependencyCycleError,
   SourceReplayDependencyPendingError,
+  SourceReplaySchedulingPendingError,
   SourceReplayRepository,
   SourceRepository,
   type SourceRawRecord,
@@ -115,6 +116,7 @@ type SourceSyncExecutionError =
   | SourceReplayDependencyCycleError
   | SourceReplayDependencyError
   | SourceReplayDependencyPendingError
+  | SourceReplaySchedulingPendingError
   | SyncEngineStorageError
   | SourceSyncCreditExhaustedError
 
@@ -166,6 +168,7 @@ const errorMessage = (error: unknown): string => {
 
 const isRetryableExecutionError = (error: SourceSyncExecutionError): boolean =>
   error._tag === "SourceReplayDependencyPendingError" ||
+  error._tag === "SourceReplaySchedulingPendingError" ||
   (error._tag === "SourceSyncProviderFailureError" && "retryable" in error && error.retryable)
 
 const make = Effect.gen(function* () {

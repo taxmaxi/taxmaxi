@@ -480,6 +480,11 @@ export const SourcesApiLive = HttpApiBuilder.group(TaxMaxiApi, "sources", (handl
                         currencyCode: observation.currencyCode,
                       })),
                     })
+                  case "TaxCalculationPendingRecomputationError":
+                    return new SourceTaxCalculationPendingError({
+                      message: error.message,
+                      blockingObservations: [],
+                    })
                   case "SourceNotFoundError":
                     return new SourceNotFoundError({
                       message: sourceNotFoundMessage,

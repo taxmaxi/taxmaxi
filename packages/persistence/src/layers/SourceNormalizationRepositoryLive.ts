@@ -413,20 +413,6 @@ const make = Effect.gen(function* () {
     readonly providerTransfer: PersistedSourceProviderTransfer
   }) =>
     Effect.gen(function* () {
-      // A provider-asset target remains valid for the chainless source evidence
-      // that authorized it. Replay may later rebuild a transfer with observed
-      // representation fields, so consult both targets and prefer the exact
-      // representation when both have active choices.
-      const providerAssetCondition =
-        providerTransfer.providerAssetId === null
-          ? null
-          : and(
-              eq(schema.principalAssetOverrides.targetKind, "provider_asset"),
-              eq(
-                schema.principalAssetOverrides.providerAssetRowId,
-                providerTransfer.providerAssetId
-              )
-            )
       const representationCondition =
         providerTransfer.observedBlockchainId === null ||
         providerTransfer.observedRepresentationType === null
@@ -451,10 +437,19 @@ const make = Effect.gen(function* () {
                     providerTransfer.observedMintAddress
                   )
             )
-      const targetCondition =
-        representationCondition !== null && providerAssetCondition !== null
-          ? or(representationCondition, providerAssetCondition)
-          : (representationCondition ?? providerAssetCondition)
+      // Exact observations always use their representation key. The provider
+      // asset target is only the fallback while the observation is chainless.
+      const providerAssetCondition =
+        representationCondition !== null || providerTransfer.providerAssetId === null
+          ? null
+          : and(
+              eq(schema.principalAssetOverrides.targetKind, "provider_asset"),
+              eq(
+                schema.principalAssetOverrides.providerAssetRowId,
+                providerTransfer.providerAssetId
+              )
+            )
+      const targetCondition = representationCondition ?? providerAssetCondition
       if (targetCondition === null) return null
 
       const overrides = yield* executor
@@ -472,47 +467,37 @@ const make = Effect.gen(function* () {
           desc(schema.principalAssetOverrides.createdAt),
           desc(schema.principalAssetOverrides.id)
         )
-      // Each target keeps its own history; the newest entry per target decides.
-      // A representation-targeted "set" wins, a withdrawn representation history
-      // falls back to the provider-asset history.
-      const latestForKind = (kind: "identity" | "inclusion") => {
-        const representationLatest = overrides.find(
-          (override) => override.kind === kind && override.targetKind === "representation"
-        )
-        const providerAssetLatest = overrides.find(
-          (override) => override.kind === kind && override.targetKind === "provider_asset"
-        )
-        if (representationLatest?.action === "set") return representationLatest
-        if (providerAssetLatest?.action === "set") return providerAssetLatest
-        return representationLatest ?? providerAssetLatest
-      }
+      const latestForKind = (kind: "identity" | "inclusion") =>
+        overrides.find((override) => override.kind === kind)
       const latestIdentity = latestForKind("identity")
       const latestInclusion = latestForKind("inclusion")
-      if (providerTransfer.providerAssetId === null) return null
 
-      const [mapping] = yield* executor
-        .select({
-          assetId: schema.providerAssetMappings.canonicalAssetId,
-          assetRepresentationId: schema.providerAssetMappings.assetRepresentationId,
-          status: schema.providerAssetMappings.mappingStatus,
-          exponent: schema.providerAssets.exponent,
-          providerType: schema.providerAssets.providerType,
-        })
-        .from(schema.providerAssets)
-        .leftJoin(
-          schema.providerAssetMappings,
-          eq(schema.providerAssetMappings.providerAssetRowId, schema.providerAssets.id)
-        )
-        .where(
-          and(
-            eq(schema.providerAssets.id, providerTransfer.providerAssetId),
-            or(
-              eq(schema.providerAssetMappings.mappingKind, "asset"),
-              isNull(schema.providerAssetMappings.id)
-            )
-          )
-        )
-        .limit(1)
+      const [mapping] =
+        providerTransfer.providerAssetId === null
+          ? []
+          : yield* executor
+              .select({
+                assetId: schema.providerAssetMappings.canonicalAssetId,
+                assetRepresentationId: schema.providerAssetMappings.assetRepresentationId,
+                status: schema.providerAssetMappings.mappingStatus,
+                exponent: schema.providerAssets.exponent,
+                providerType: schema.providerAssets.providerType,
+              })
+              .from(schema.providerAssets)
+              .leftJoin(
+                schema.providerAssetMappings,
+                eq(schema.providerAssetMappings.providerAssetRowId, schema.providerAssets.id)
+              )
+              .where(
+                and(
+                  eq(schema.providerAssets.id, providerTransfer.providerAssetId),
+                  or(
+                    eq(schema.providerAssetMappings.mappingKind, "asset"),
+                    isNull(schema.providerAssetMappings.id)
+                  )
+                )
+              )
+              .limit(1)
 
       const representationTarget =
         providerTransfer.observedBlockchainId === null ||
@@ -522,6 +507,49 @@ const make = Effect.gen(function* () {
               blockchainId: providerTransfer.observedBlockchainId,
               representationType: providerTransfer.observedRepresentationType,
             }
+      const exactMappings =
+        representationTarget === null
+          ? []
+          : yield* executor
+              .select({
+                assetId: schema.providerAssetMappings.canonicalAssetId,
+                status: schema.providerAssetMappings.mappingStatus,
+              })
+              .from(schema.providerTransfers)
+              .innerJoin(schema.sources, eq(schema.sources.id, schema.providerTransfers.sourceId))
+              .leftJoin(
+                schema.providerAssets,
+                eq(schema.providerAssets.id, schema.providerTransfers.providerAssetId)
+              )
+              .leftJoin(
+                schema.providerAssetMappings,
+                and(
+                  eq(schema.providerAssetMappings.providerAssetRowId, schema.providerAssets.id),
+                  eq(schema.providerAssetMappings.mappingKind, "asset")
+                )
+              )
+              .where(
+                and(
+                  eq(schema.sources.principalId, principalId),
+                  eq(
+                    schema.providerTransfers.observedBlockchainId,
+                    representationTarget.blockchainId
+                  ),
+                  eq(
+                    schema.providerTransfers.observedRepresentationType,
+                    representationTarget.representationType
+                  ),
+                  providerTransfer.observedContractAddress === null
+                    ? isNull(schema.providerTransfers.observedContractAddress)
+                    : sql`lower(${schema.providerTransfers.observedContractAddress}) = lower(${providerTransfer.observedContractAddress})`,
+                  providerTransfer.observedMintAddress === null
+                    ? isNull(schema.providerTransfers.observedMintAddress)
+                    : eq(
+                        schema.providerTransfers.observedMintAddress,
+                        providerTransfer.observedMintAddress
+                      )
+                )
+              )
       const [representation] =
         representationTarget === null
           ? []
@@ -549,6 +577,20 @@ const make = Effect.gen(function* () {
                 )
               )
               .limit(1)
+      const exactRetainedAssetIds = [
+        ...new Set(exactMappings.flatMap(({ assetId }) => (assetId === null ? [] : [assetId]))),
+      ]
+      const exactApprovedAssetIds = [
+        ...new Set(
+          exactMappings.flatMap(({ assetId, status }) =>
+            status === "approved" && assetId !== null ? [assetId] : []
+          )
+        ),
+      ]
+      const exactRetainedAssetId =
+        exactRetainedAssetIds.length === 1 ? (exactRetainedAssetIds.at(0) ?? null) : null
+      const exactApprovedAssetId =
+        exactApprovedAssetIds.length === 1 ? (exactApprovedAssetIds.at(0) ?? null) : null
       const technicallyBlocked =
         representationTarget === null
           ? mapping?.exponent === null || mapping?.providerType === "unsupported"
@@ -558,15 +600,24 @@ const make = Effect.gen(function* () {
       // open question and keeps the observation blocked.
       const systemInclusion = technicallyBlocked
         ? "blocked"
-        : representation?.isSpam === true || mapping?.status === "excluded"
+        : representation?.isSpam === true ||
+            (representationTarget === null
+              ? mapping?.status === "excluded"
+              : exactMappings.some(({ status }) => status === "excluded"))
           ? "excluded"
-          : mapping?.status === "rejected"
-            ? "blocked"
-            : representation !== undefined || mapping?.status === "approved"
+          : representationTarget === null
+            ? mapping?.status === "approved"
+              ? "included"
+              : "blocked"
+            : representation !== undefined ||
+                (exactApprovedAssetId !== null && exactApprovedAssetId === exactRetainedAssetId)
               ? "included"
               : "blocked"
       const decision = resolveEffectiveAssetOverrideDecision({
-        systemAssetId: representation?.assetId ?? mapping?.assetId ?? null,
+        systemAssetId:
+          representationTarget === null
+            ? (mapping?.assetId ?? null)
+            : (representation?.assetId ?? exactRetainedAssetId),
         systemInclusionState: systemInclusion,
         technicalBlocker: technicallyBlocked,
         identityOverrideAssetId:
@@ -584,7 +635,9 @@ const make = Effect.gen(function* () {
         assetRepresentationId:
           latestIdentity?.action === "set"
             ? null
-            : (representation?.id ?? mapping?.assetRepresentationId ?? null),
+            : representationTarget === null
+              ? (mapping?.assetRepresentationId ?? null)
+              : (representation?.id ?? null),
         excluded: decision.inclusionState !== "included",
         overridden:
           latestInclusion?.action === "set" ||
@@ -2617,13 +2670,6 @@ const make = Effect.gen(function* () {
         const purpose = metadata.purpose
 
         if (feesOnly && purpose !== "fee") {
-          return yield* removeInventoryMovementForProviderTransfer({
-            executor,
-            providerTransferId: providerTransfer.id,
-          })
-        }
-
-        if (providerTransfer.providerAssetId === null) {
           return yield* removeInventoryMovementForProviderTransfer({
             executor,
             providerTransferId: providerTransfer.id,

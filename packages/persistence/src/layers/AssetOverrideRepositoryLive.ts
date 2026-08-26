@@ -207,10 +207,12 @@ const rowHistoryEntry = (row: PrincipalAssetOverrideRow): AssetOverrideHistoryEn
 const effectiveConclusion = ({
   activeOverride,
   identityOverrideAssetId,
+  systemAssetId,
   systemConclusion,
 }: {
   readonly activeOverride: AssetOverrideHistoryEntry | null
   readonly identityOverrideAssetId: string | null
+  readonly systemAssetId: string | null
   readonly systemConclusion: AssetOverrideSystemConclusion
 }): AssetOverrideSystemConclusion => {
   const replacement = activeOverride?.replacement
@@ -227,10 +229,10 @@ const effectiveConclusion = ({
     }
     if (
       replacement.state === "included" &&
-      systemConclusion.reason === "asset_identity_unresolved" &&
-      identityOverrideAssetId === null
+      identityOverrideAssetId === null &&
+      systemAssetId === null
     ) {
-      return systemConclusion
+      return { _tag: "inclusion", state: "blocked", reason: "asset_identity_unresolved" }
     }
     return { _tag: "inclusion", state: replacement.state, reason: null }
   }
@@ -291,10 +293,12 @@ const make = Effect.gen(function* () {
   const loadSystemConclusion = ({
     executor,
     kind,
+    principalId,
     target,
   }: {
     readonly executor: AssetOverrideExecutor
     readonly kind: AssetOverrideKind
+    readonly principalId: string
     readonly target: AssetOverrideTarget
   }) =>
     Effect.gen(function* () {
@@ -339,7 +343,7 @@ const make = Effect.gen(function* () {
               : row.mappingStatus === "excluded"
                 ? { _tag: "identity", state: "excluded", assetId: null }
                 : { _tag: "identity", state: "unresolved", assetId: null }
-          return { revision, conclusion }
+          return { revision, conclusion, systemAssetId: row.assetId }
         }
 
         const technicalBlocker =
@@ -356,7 +360,7 @@ const make = Effect.gen(function* () {
               : row.mappingStatus === "excluded"
                 ? { _tag: "inclusion", state: "excluded", reason: "taxmaxi_policy" }
                 : { _tag: "inclusion", state: "blocked", reason: "asset_identity_unresolved" }
-        return { revision, conclusion }
+        return { revision, conclusion, systemAssetId: row.assetId }
       }
 
       const [representation] = yield* executor
@@ -382,15 +386,21 @@ const make = Effect.gen(function* () {
           decimals: schema.providerTransfers.observedDecimals,
         })
         .from(schema.providerTransfers)
-        .innerJoin(
+        .innerJoin(schema.sources, eq(schema.sources.id, schema.providerTransfers.sourceId))
+        .leftJoin(
           schema.providerAssets,
           eq(schema.providerAssets.id, schema.providerTransfers.providerAssetId)
         )
         .leftJoin(
           schema.providerAssetMappings,
-          eq(schema.providerAssetMappings.providerAssetRowId, schema.providerAssets.id)
+          and(
+            eq(schema.providerAssetMappings.providerAssetRowId, schema.providerAssets.id),
+            eq(schema.providerAssetMappings.mappingKind, "asset")
+          )
         )
-        .where(providerTransferTargetPredicate(target))
+        .where(
+          and(eq(schema.sources.principalId, principalId), providerTransferTargetPredicate(target))
+        )
         .orderBy(
           asc(schema.providerAssets.id),
           asc(schema.providerAssets.evidenceRevision),
@@ -416,9 +426,24 @@ const make = Effect.gen(function* () {
           updatedAt: row.updatedAt?.toISOString() ?? null,
         })),
       })
-      const approved = mappings.find(
-        (mapping) => mapping.mappingStatus === "approved" && mapping.assetId !== null
-      )
+      const retainedAssetIds = [
+        ...new Set(
+          mappings.flatMap((mapping) => (mapping.assetId === null ? [] : [mapping.assetId]))
+        ),
+      ]
+      const approvedAssetIds = [
+        ...new Set(
+          mappings.flatMap((mapping) =>
+            mapping.mappingStatus === "approved" && mapping.assetId !== null
+              ? [mapping.assetId]
+              : []
+          )
+        ),
+      ]
+      const retainedAssetId =
+        retainedAssetIds.length === 1 ? (retainedAssetIds.at(0) ?? null) : null
+      const approvedAssetId =
+        approvedAssetIds.length === 1 ? (approvedAssetIds.at(0) ?? null) : null
       // "excluded" is a final mapping answer; "rejected" stays an open question
       // and therefore never counts as a settled exclusion.
       const excluded = mappings.some((mapping) => mapping.mappingStatus === "excluded")
@@ -427,12 +452,16 @@ const make = Effect.gen(function* () {
         const conclusion: AssetOverrideSystemConclusion =
           representation !== undefined
             ? { _tag: "identity", state: "resolved", assetId: representation.assetId }
-            : approved?.assetId !== null && approved?.assetId !== undefined
-              ? { _tag: "identity", state: "resolved", assetId: approved.assetId }
+            : approvedAssetId !== null && approvedAssetId === retainedAssetId
+              ? { _tag: "identity", state: "resolved", assetId: approvedAssetId }
               : excluded
                 ? { _tag: "identity", state: "excluded", assetId: null }
                 : { _tag: "identity", state: "unresolved", assetId: null }
-        return { revision, conclusion }
+        return {
+          revision,
+          conclusion,
+          systemAssetId: representation?.assetId ?? retainedAssetId,
+        }
       }
 
       const missingDecimals =
@@ -442,10 +471,15 @@ const make = Effect.gen(function* () {
         ? { _tag: "inclusion", state: "blocked", reason: "missing_decimals" }
         : representation?.isSpam === true || excluded
           ? { _tag: "inclusion", state: "excluded", reason: "taxmaxi_policy" }
-          : representation !== undefined || approved !== undefined
+          : representation !== undefined ||
+              (approvedAssetId !== null && approvedAssetId === retainedAssetId)
             ? { _tag: "inclusion", state: "included", reason: null }
             : { _tag: "inclusion", state: "blocked", reason: "asset_identity_unresolved" }
-      return { revision, conclusion }
+      return {
+        revision,
+        conclusion,
+        systemAssetId: representation?.assetId ?? retainedAssetId,
+      }
     })
 
   const loadCrossSourceDependencies = ({
@@ -578,11 +612,6 @@ const make = Effect.gen(function* () {
         )
   }
 
-  const loadReplaySourceIds = (params: {
-    readonly executor: AssetOverrideExecutor
-    readonly sourceIds: ReadonlyArray<string>
-  }) => loadReplayPlan(params).pipe(Effect.map(({ affectedSourceIds }) => affectedSourceIds))
-
   const loadHistory = ({
     executor,
     kind,
@@ -634,17 +663,18 @@ const make = Effect.gen(function* () {
 
   const loadRecomputationState = ({
     executor,
-    overrideId,
-    sourceIds,
+    overrideIds,
+    requiredSourceIds,
   }: {
     readonly executor: AssetOverrideExecutor
-    readonly overrideId: string | null
-    readonly sourceIds: ReadonlyArray<string>
+    readonly overrideIds: ReadonlyArray<string>
+    readonly requiredSourceIds: ReadonlyArray<string>
   }) =>
     Effect.gen(function* () {
-      if (sourceIds.length === 0 || overrideId === null) return "complete" as const
+      if (overrideIds.length === 0) return "complete" as const
       const rows = yield* executor
         .select({
+          overrideId: schema.principalAssetOverrideApplications.overrideId,
           sourceId: schema.principalAssetOverrideApplications.sourceId,
           replayJobId: schema.principalAssetOverrideApplications.replayJobId,
           status: schema.processingJobs.status,
@@ -657,47 +687,61 @@ const make = Effect.gen(function* () {
         )
         .where(
           and(
-            eq(schema.principalAssetOverrideApplications.overrideId, overrideId),
-            isNull(schema.principalAssetOverrideApplications.supersededAt),
-            inArray(schema.principalAssetOverrideApplications.sourceId, sourceIds)
+            inArray(schema.principalAssetOverrideApplications.overrideId, overrideIds),
+            isNull(schema.principalAssetOverrideApplications.supersededAt)
           )
         )
-      if (rows.length < sourceIds.length || rows.some((row) => row.replayJobId === null)) {
-        return "updating" as const
-      }
-      if (rows.some((row) => row.status === "pending" || row.status === "processing")) {
-        return "updating" as const
-      }
       const completedProgress = yield* Effect.forEach(rows, (row) =>
         decodeSourceSyncJobProgressSnapshot(row.progressDetails).pipe(
           Effect.map((progress) => ({ row, progress }))
         )
       )
-      return completedProgress.some(
-        ({ row, progress }) =>
-          row.status === "failed" ||
-          row.status === "credit_required" ||
-          (row.status === "completed" && (progress?.failedRecords ?? 0) > 0)
+      if (
+        completedProgress.some(
+          ({ row, progress }) =>
+            row.status === "failed" ||
+            row.status === "credit_required" ||
+            (row.status === "completed" && (progress?.failedRecords ?? 0) > 0)
+        )
+      ) {
+        return "failed" as const
+      }
+      const representedOverrideIds = new Set(rows.map((row) => row.overrideId))
+      const representedApplications = new Set(
+        rows.map((row) => `${row.overrideId}:${row.sourceId}`)
       )
-        ? ("failed" as const)
-        : ("complete" as const)
+      if (
+        overrideIds.some((overrideId) => !representedOverrideIds.has(overrideId)) ||
+        overrideIds.some((overrideId) =>
+          requiredSourceIds.some(
+            (sourceId) => !representedApplications.has(`${overrideId}:${sourceId}`)
+          )
+        ) ||
+        rows.some(
+          (row) =>
+            row.replayJobId === null || row.status === "pending" || row.status === "processing"
+        )
+      ) {
+        return "updating" as const
+      }
+      return "complete" as const
     })
 
   const buildProjection = ({
     executor,
     kind,
     principalId,
+    requiredSourceIds,
     target,
-    sourceIds,
   }: {
     readonly executor: AssetOverrideExecutor
     readonly kind: AssetOverrideKind
     readonly principalId: string
+    readonly requiredSourceIds: ReadonlyArray<string>
     readonly target: AssetOverrideTarget
-    readonly sourceIds: ReadonlyArray<string>
   }) =>
     Effect.gen(function* () {
-      const system = yield* loadSystemConclusion({ executor, kind, target })
+      const system = yield* loadSystemConclusion({ executor, kind, principalId, target })
       const history = yield* loadHistory({ executor, kind, principalId, target })
       const identityHistory =
         kind === "inclusion"
@@ -712,8 +756,10 @@ const make = Effect.gen(function* () {
           : null
       const recomputationState = yield* loadRecomputationState({
         executor,
-        overrideId: latest?.id ?? null,
-        sourceIds,
+        overrideIds: [latest?.id, kind === "inclusion" ? latestIdentity?.id : undefined].filter(
+          (overrideId): overrideId is string => overrideId !== undefined
+        ),
+        requiredSourceIds,
       })
 
       return {
@@ -725,6 +771,7 @@ const make = Effect.gen(function* () {
         effectiveConclusion: effectiveConclusion({
           activeOverride,
           identityOverrideAssetId,
+          systemAssetId: system.systemAssetId,
           systemConclusion: system.conclusion,
         }),
         staleSystemRevision:
@@ -748,14 +795,13 @@ const make = Effect.gen(function* () {
         target: canonicalTarget,
       })
       if (ownedSourceIds.length === 0) return Option.none<AssetOverrideProjection>()
-      const sourceIds = yield* loadReplaySourceIds({ executor: db, sourceIds: ownedSourceIds })
       return Option.some(
         yield* buildProjection({
           executor: db,
           kind,
           principalId,
+          requiredSourceIds: ownedSourceIds,
           target: canonicalTarget,
-          sourceIds,
         })
       )
     }).pipe(
@@ -778,11 +824,13 @@ const make = Effect.gen(function* () {
   const validateReplacement = ({
     executor,
     kind,
+    principalId,
     replacement,
     target,
   }: {
     readonly executor: AssetOverrideExecutor
     readonly kind: AssetOverrideKind
+    readonly principalId: string
     readonly replacement: AssetOverrideReplacement
     readonly target: AssetOverrideTarget
   }) =>
@@ -839,7 +887,12 @@ const make = Effect.gen(function* () {
         }
       }
       if (replacement._tag === "inclusion" && replacement.state === "included") {
-        const system = yield* loadSystemConclusion({ executor, kind: "inclusion", target })
+        const system = yield* loadSystemConclusion({
+          executor,
+          kind: "inclusion",
+          principalId,
+          target,
+        })
         if (
           system.conclusion._tag === "inclusion" &&
           (system.conclusion.reason === "missing_decimals" ||
@@ -887,8 +940,13 @@ const make = Effect.gen(function* () {
                     inArray(schema.processingJobs.status, ["pending", "processing"])
                   )
                 )
-                .returning({ id: schema.processingJobs.id })
-              if (active !== undefined) return { sourceId, replayJobId: null }
+                .returning({ id: schema.processingJobs.id, mode: schema.processingJobs.mode })
+              if (active !== undefined) {
+                return {
+                  sourceId,
+                  replayJobId: active.mode === "replay" ? active.id : null,
+                }
+              }
 
               const [created] = yield* executor
                 .insert(schema.processingJobs)
@@ -944,14 +1002,19 @@ const make = Effect.gen(function* () {
       if (ownedSourceIds.length === 0) return yield* new AssetOverrideTargetNotFoundError()
       const replayPlan = yield* loadReplayPlan({ executor: db, sourceIds: ownedSourceIds })
       yield* validateReplayPlan(replayPlan)
-      const sourceIds = replayPlan.affectedSourceIds
-      yield* validateReplacement({ executor: db, kind, replacement, target: canonicalTarget })
+      yield* validateReplacement({
+        executor: db,
+        kind,
+        principalId,
+        replacement,
+        target: canonicalTarget,
+      })
       return yield* buildProjection({
         executor: db,
         kind,
         principalId,
+        requiredSourceIds: ownedSourceIds,
         target: canonicalTarget,
-        sourceIds,
       })
     }).pipe(wrapAssetOverrideError("assetOverrideRepository.validateOverride"))
 
@@ -1014,8 +1077,8 @@ const make = Effect.gen(function* () {
             executor: tx,
             kind,
             principalId,
+            requiredSourceIds: ownedSourceIds,
             target: canonicalTarget,
-            sourceIds,
           })
           const currentActiveId = before.activeOverride?.id ?? null
           if (
@@ -1031,7 +1094,13 @@ const make = Effect.gen(function* () {
             })
           }
           if (replacement !== null) {
-            yield* validateReplacement({ executor: tx, kind, replacement, target: canonicalTarget })
+            yield* validateReplacement({
+              executor: tx,
+              kind,
+              principalId,
+              replacement,
+              target: canonicalTarget,
+            })
           }
 
           const latest = before.history.at(-1) ?? null
@@ -1080,8 +1149,8 @@ const make = Effect.gen(function* () {
             executor: tx,
             kind,
             principalId,
+            requiredSourceIds: confirmedOwnedSourceIds,
             target: canonicalTarget,
-            sourceIds: confirmedSourceIds,
           })
           if (
             confirmed.systemRevision !== before.systemRevision ||
@@ -1119,8 +1188,8 @@ const make = Effect.gen(function* () {
             executor: tx,
             kind,
             principalId,
+            requiredSourceIds: confirmedOwnedSourceIds,
             target: canonicalTarget,
-            sourceIds,
           })
           return { _tag: "accepted", projection } as const
         })
@@ -1138,16 +1207,12 @@ const make = Effect.gen(function* () {
                 target: canonicalTarget,
               })
               if (ownedSourceIds.length === 0) return yield* new AssetOverrideTargetNotFoundError()
-              const sourceIds = yield* loadReplaySourceIds({
-                executor: db,
-                sourceIds: ownedSourceIds,
-              })
               const projection = yield* buildProjection({
                 executor: db,
                 kind,
                 principalId,
+                requiredSourceIds: ownedSourceIds,
                 target: canonicalTarget,
-                sourceIds,
               })
               return { _tag: "conflict", projection } as const
             })

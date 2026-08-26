@@ -16,7 +16,9 @@ import {
   SourceProviderRecoverableNormalizationError,
   SourceProviderRegistry,
   SourceRawRecordRepository,
+  SourceReplayDependencyPendingError,
   SourceReplayRepository,
+  SourceReplaySchedulingPendingError,
   SourceRepository,
   SourceSyncJobExecutionRecordConflictError,
   SourceSyncJobExecutionRecordNotFoundError,
@@ -113,6 +115,8 @@ const makeExecutorLayer = ({
   fetchHighWatermark = null,
   replayCreditReference,
   failReplayReset = false,
+  failReplayDependencyPending = false,
+  failReplaySchedulingPending = false,
   holdReplayCreditReservation = false,
   holdReplayReset = false,
   heartbeatFailureAt,
@@ -140,6 +144,8 @@ const makeExecutorLayer = ({
   readonly fetchHighWatermark?: Date | null
   readonly replayCreditReference?: (sourceRawRecordId: string) => string
   readonly failReplayReset?: boolean
+  readonly failReplayDependencyPending?: boolean
+  readonly failReplaySchedulingPending?: boolean
   readonly holdReplayCreditReservation?: boolean
   readonly holdReplayReset?: boolean
   readonly heartbeatFailureAt?: number
@@ -509,6 +515,18 @@ const makeExecutorLayer = ({
           return yield* new SyncEngineStorageError({
             operation: "sourceReplayRepository.resetSourceDerivedState",
             cause: "Replay reset failed",
+          })
+        }
+        if (failReplayDependencyPending) {
+          return yield* new SourceReplayDependencyPendingError({
+            sourceId: source.id,
+            ownerSourceIds: ["owner-source-1"],
+          })
+        }
+        if (failReplaySchedulingPending) {
+          return yield* new SourceReplaySchedulingPendingError({
+            sourceId: source.id,
+            dependentSourceId: "dependent-source-1",
           })
         }
       }),
@@ -1113,6 +1131,115 @@ describe("SourceSyncJobExecutor", () => {
     expect(result.status).toBe("failed")
     expect(events).toContain("release-replay-credits:job-1:reserved-credit:raw-1")
     expect(events).not.toContain("mark-raw-normalized")
+  })
+
+  it("retries a replay while an inventory owner replay is pending", async () => {
+    const events: Array<string> = []
+    const nextRetryAt = new Date("2026-01-01T00:05:00.000Z")
+    const message = "Replay source source-1 after inventory owners owner-source-1"
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const executor = yield* SourceSyncJobExecutor
+        return yield* executor.execute({
+          jobId: "job-1",
+          workerId: "worker-1",
+          retryPolicy: {
+            attemptNumber: 1,
+            maxAttempts: 3,
+            nextRetryAt,
+          },
+        })
+      }).pipe(
+        Effect.result,
+        Effect.provide(
+          makeExecutorLayer({
+            mode: "replay",
+            replayRawRecords: [makeReplayRawRecord(1)],
+            prepareReplayTransactions: true,
+            failReplayDependencyPending: true,
+            events,
+          })
+        )
+      )
+    )
+
+    expect(result._tag).toBe("Failure")
+    if (result._tag === "Failure") {
+      expect(result.failure._tag).toBe("SourceSyncJobRetryableExecutionError")
+    }
+    expect(events).toContain(`failure-metadata:${message}`)
+    expect(events).toContain(`retry:${message}:1:${nextRetryAt.toISOString()}`)
+    expect(events).not.toContain(`fail:${message}`)
+  })
+
+  it("retries a replay while dependent job scheduling is contended", async () => {
+    const events: Array<string> = []
+    const nextRetryAt = new Date("2026-01-01T00:05:00.000Z")
+    const message =
+      "Replay source source-1 after scheduling settles for dependent source dependent-source-1"
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const executor = yield* SourceSyncJobExecutor
+        return yield* executor.execute({
+          jobId: "job-1",
+          workerId: "worker-1",
+          retryPolicy: { attemptNumber: 1, maxAttempts: 3, nextRetryAt },
+        })
+      }).pipe(
+        Effect.result,
+        Effect.provide(
+          makeExecutorLayer({
+            mode: "replay",
+            replayRawRecords: [makeReplayRawRecord(1)],
+            prepareReplayTransactions: true,
+            failReplaySchedulingPending: true,
+            events,
+          })
+        )
+      )
+    )
+
+    expect(result._tag).toBe("Failure")
+    if (result._tag === "Failure") {
+      expect(result.failure._tag).toBe("SourceSyncJobRetryableExecutionError")
+    }
+    expect(events).toContain(`retry:${message}:1:${nextRetryAt.toISOString()}`)
+    expect(events).not.toContain(`fail:${message}`)
+  })
+
+  it("fails a dependency-pending replay after its final attempt", async () => {
+    const events: Array<string> = []
+    const message = "Replay source source-1 after inventory owners owner-source-1"
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const executor = yield* SourceSyncJobExecutor
+        return yield* executor.execute({
+          jobId: "job-1",
+          workerId: "worker-1",
+          retryPolicy: {
+            attemptNumber: 3,
+            maxAttempts: 3,
+            nextRetryAt: new Date("2026-01-01T00:05:00.000Z"),
+          },
+        })
+      }).pipe(
+        Effect.provide(
+          makeExecutorLayer({
+            mode: "replay",
+            replayRawRecords: [makeReplayRawRecord(1)],
+            prepareReplayTransactions: true,
+            failReplayDependencyPending: true,
+            events,
+          })
+        )
+      )
+    )
+
+    expect(result.status).toBe("failed")
+    expect(result.message).toBe(message)
+    expect(events).toContain(`failure-metadata:${message}`)
+    expect(events).toContain(`fail:${message}`)
+    expect(events.some((event) => event.startsWith(`retry:${message}:`))).toBe(false)
   })
 
   it("releases only the replay credit whose prepared persistence fails", async () => {

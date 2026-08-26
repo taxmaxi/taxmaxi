@@ -1,4 +1,4 @@
-import { eq } from "drizzle-orm"
+import { and, eq, sql } from "drizzle-orm"
 import * as Deferred from "effect/Deferred"
 import * as Effect from "effect/Effect"
 import { beforeEach, describe, expect, it } from "vitest"
@@ -6,6 +6,7 @@ import { drizzle } from "../../src/layers/PgClientLive.ts"
 import { SourceNormalizationRepositoryLive } from "../../src/layers/SourceNormalizationRepositoryLive.ts"
 import { SourceRawRecordRepositoryLive } from "../../src/layers/SourceRawRecordRepositoryLive.ts"
 import { SourceReplayRepositoryLive } from "../../src/layers/SourceReplayRepositoryLive.ts"
+import { SourceSyncJobRepositoryLive } from "../../src/layers/SourceSyncJobRepositoryLive.ts"
 import { sourceInventoryLockQuery } from "../../src/layers/SourceInventoryLock.ts"
 import { schema } from "../../src/schema/index.ts"
 import {
@@ -22,6 +23,7 @@ import {
   SourceNormalizationRepository,
   SourceRawRecordRepository,
   SourceReplayRepository,
+  SourceSyncJobRepository,
 } from "@my/sync-engine/services"
 
 const context = makeIntegrationTestDatabaseContext({
@@ -40,6 +42,9 @@ const runRawRepository = <A, E>(effect: Effect.Effect<A, E, SourceRawRecordRepos
 
 const runReplayRepository = <A, E>(effect: Effect.Effect<A, E, SourceReplayRepository>) =>
   Effect.runPromise(context.runWithLayer({ effect, layer: SourceReplayRepositoryLive }))
+
+const runJobRepository = <A, E>(effect: Effect.Effect<A, E, SourceSyncJobRepository>) =>
+  Effect.runPromise(context.runWithLayer({ effect, layer: SourceSyncJobRepositoryLive }))
 
 const seedReplayRawRecord = () =>
   Effect.gen(function* () {
@@ -228,6 +233,63 @@ const holdSourceInventoryLock = ({
 
 describe("SourceReplayRepositoryLive", () => {
   let fixture: SyncEngineRepositoryFixture
+
+  const seedLateDependentApplication = ({
+    activeMode,
+    ownerSourceId,
+    suffix,
+  }: {
+    readonly activeMode: "replay" | "sync"
+    readonly ownerSourceId: string
+    readonly suffix: string
+  }) =>
+    runPg(
+      Effect.gen(function* () {
+        yield* seedUpstreamConsumption({
+          ownerSourceId,
+          relationshipKind: "disposal match",
+          suffix,
+        })
+        const db = yield* drizzle
+        const [override] = yield* db
+          .insert(schema.principalAssetOverrides)
+          .values({
+            principalId: TEST_PRINCIPAL_ID,
+            kind: "identity",
+            targetKind: "representation",
+            blockchainId: fixture.baseBlockchainId,
+            representationType: "token",
+            contractAddress: suffix,
+            mintAddress: null,
+            action: "set",
+            inspectedSystemRevision: `${suffix}-revision`,
+            inspectedIdentityState: "resolved",
+            inspectedAssetId: TEST_BTC_ASSET_ID,
+            replacementAssetId: TEST_BTC_ASSET_ID,
+            actorId: fixture.userId,
+            reason: "Track a dependent while another job is active.",
+          })
+          .returning({ id: schema.principalAssetOverrides.id })
+        const [activeJob] = yield* db
+          .insert(schema.processingJobs)
+          .values({
+            sourceId: TEST_SOURCE_ID,
+            principalId: TEST_PRINCIPAL_ID,
+            mode: activeMode,
+            status: activeMode === "sync" ? "processing" : "pending",
+          })
+          .returning({ id: schema.processingJobs.id })
+        if (override === undefined || activeJob === undefined) {
+          return yield* Effect.die("Failed to seed late dependent application")
+        }
+        yield* db.insert(schema.principalAssetOverrideApplications).values({
+          overrideId: override.id,
+          sourceId: ownerSourceId,
+          dependsOnSourceIds: [],
+        })
+        return { activeJobId: activeJob.id, overrideId: override.id }
+      })
+    )
 
   beforeEach(async () => {
     await Effect.runPromise(context.recreateTestDatabase())
@@ -438,6 +500,556 @@ describe("SourceReplayRepositoryLive", () => {
       ).pipe(Effect.result)
     )
     expect(replayed).toMatchObject({ _tag: "Success" })
+  })
+
+  it("records a durable application for a FIFO dependent discovered after acceptance", async () => {
+    const ownerSourceId = "00000000-0000-0000-0000-000000000298"
+    await runPg(
+      seedUpstreamConsumption({
+        ownerSourceId,
+        relationshipKind: "disposal match",
+        suffix: "late-override-dependent",
+      })
+    )
+    const overrideId = await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const [override] = yield* db
+          .insert(schema.principalAssetOverrides)
+          .values({
+            principalId: TEST_PRINCIPAL_ID,
+            kind: "identity",
+            targetKind: "representation",
+            blockchainId: fixture.baseBlockchainId,
+            representationType: "token",
+            contractAddress: "late-override-dependent",
+            mintAddress: null,
+            action: "set",
+            inspectedSystemRevision: "late-override-dependent-revision",
+            inspectedIdentityState: "resolved",
+            inspectedAssetId: TEST_BTC_ASSET_ID,
+            replacementAssetId: TEST_BTC_ASSET_ID,
+            actorId: fixture.userId,
+            reason: "Track dependents discovered when the owner replay starts.",
+          })
+          .returning({ id: schema.principalAssetOverrides.id })
+        if (override === undefined) return yield* Effect.die("Failed to seed late override")
+        yield* db.insert(schema.principalAssetOverrideApplications).values({
+          overrideId: override.id,
+          sourceId: ownerSourceId,
+          dependsOnSourceIds: [],
+        })
+        return override.id
+      })
+    )
+
+    await runReplayRepository(
+      Effect.flatMap(SourceReplayRepository, (repository) =>
+        repository.resetSourceDerivedState({ sourceId: ownerSourceId })
+      )
+    )
+
+    const dependent = await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const [application] = yield* db
+          .select({
+            replayJobId: schema.principalAssetOverrideApplications.replayJobId,
+            dependsOnSourceIds: schema.principalAssetOverrideApplications.dependsOnSourceIds,
+          })
+          .from(schema.principalAssetOverrideApplications)
+          .where(
+            and(
+              eq(schema.principalAssetOverrideApplications.overrideId, overrideId),
+              eq(schema.principalAssetOverrideApplications.sourceId, TEST_SOURCE_ID)
+            )
+          )
+          .limit(1)
+        return application
+      })
+    )
+    expect(dependent).toEqual({
+      replayJobId: expect.any(String),
+      dependsOnSourceIds: [ownerSourceId],
+    })
+  })
+
+  it("links a late FIFO-dependent application to an active replay", async () => {
+    const ownerSourceId = "00000000-0000-0000-0000-000000000299"
+    const { activeJobId, overrideId } = await seedLateDependentApplication({
+      activeMode: "replay",
+      ownerSourceId,
+      suffix: "late-active-replay",
+    })
+
+    await runReplayRepository(
+      Effect.flatMap(SourceReplayRepository, (repository) =>
+        repository.resetSourceDerivedState({ sourceId: ownerSourceId })
+      )
+    )
+
+    const application = await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const [row] = yield* db
+          .select({ replayJobId: schema.principalAssetOverrideApplications.replayJobId })
+          .from(schema.principalAssetOverrideApplications)
+          .where(
+            and(
+              eq(schema.principalAssetOverrideApplications.overrideId, overrideId),
+              eq(schema.principalAssetOverrideApplications.sourceId, TEST_SOURCE_ID)
+            )
+          )
+        return row
+      })
+    )
+
+    expect(application?.replayJobId).toBe(activeJobId)
+
+    await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        yield* db
+          .update(schema.processingJobs)
+          .set({ status: "processing" })
+          .where(eq(schema.processingJobs.id, activeJobId))
+      })
+    )
+    await runJobRepository(
+      Effect.flatMap(SourceSyncJobRepository, (repository) =>
+        repository.completeJob({
+          jobId: activeJobId,
+          state: {
+            phase: "completed",
+            processedRecords: 0,
+            totalRecords: 0,
+            fetchedRecords: 0,
+            normalizedRecords: 0,
+            failedRecords: 0,
+            cursorPayload: null,
+            highWatermark: null,
+            checkpointExternalId: null,
+            checkpointRawRecordId: null,
+          },
+        })
+      )
+    )
+
+    const afterCompletion = await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const [completedJob] = yield* db
+          .select({ followUpJobId: schema.processingJobs.followUpJobId })
+          .from(schema.processingJobs)
+          .where(eq(schema.processingJobs.id, activeJobId))
+        const [followUp] =
+          completedJob?.followUpJobId === null || completedJob?.followUpJobId === undefined
+            ? []
+            : yield* db
+                .select({ id: schema.processingJobs.id, mode: schema.processingJobs.mode })
+                .from(schema.processingJobs)
+                .where(eq(schema.processingJobs.id, completedJob.followUpJobId))
+        const [repointedApplication] = yield* db
+          .select({ replayJobId: schema.principalAssetOverrideApplications.replayJobId })
+          .from(schema.principalAssetOverrideApplications)
+          .where(
+            and(
+              eq(schema.principalAssetOverrideApplications.overrideId, overrideId),
+              eq(schema.principalAssetOverrideApplications.sourceId, TEST_SOURCE_ID)
+            )
+          )
+        return { followUp, repointedApplication }
+      })
+    )
+    expect(afterCompletion).toEqual({
+      followUp: { id: expect.any(String), mode: "replay" },
+      repointedApplication: { replayJobId: afterCompletion.followUp?.id },
+    })
+  })
+
+  it("links a late FIFO-dependent application when a replay wins the insertion race", async () => {
+    const ownerSourceId = "00000000-0000-0000-0000-000000000304"
+    const { activeJobId, overrideId } = await seedLateDependentApplication({
+      activeMode: "replay",
+      ownerSourceId,
+      suffix: "late-racing-replay",
+    })
+    await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        yield* db.delete(schema.processingJobs).where(eq(schema.processingJobs.id, activeJobId))
+        yield* db.execute(
+          sql.raw(`
+            CREATE FUNCTION test_insert_racing_dependency_replay()
+            RETURNS trigger AS $$
+            BEGIN
+              IF pg_trigger_depth() = 1 THEN
+                INSERT INTO processing_jobs (
+                  source_id,
+                  principal_id,
+                  mode,
+                  status,
+                  progress_details
+                ) VALUES (
+                  NEW.source_id,
+                  NEW.principal_id,
+                  'replay',
+                  'pending',
+                  '{"mode":"replay","reason":"race_test"}'::jsonb
+                );
+                RETURN NULL;
+              END IF;
+              RETURN NEW;
+            END;
+            $$ LANGUAGE plpgsql
+          `)
+        )
+        yield* db.execute(
+          sql.raw(`
+            CREATE TRIGGER test_insert_racing_dependency_replay
+            BEFORE INSERT ON processing_jobs
+            FOR EACH ROW
+            EXECUTE FUNCTION test_insert_racing_dependency_replay()
+          `)
+        )
+      })
+    )
+
+    try {
+      await runReplayRepository(
+        Effect.flatMap(SourceReplayRepository, (repository) =>
+          repository.resetSourceDerivedState({ sourceId: ownerSourceId })
+        )
+      )
+    } finally {
+      await runPg(
+        Effect.gen(function* () {
+          const db = yield* drizzle
+          yield* db.execute(
+            sql.raw(
+              "DROP TRIGGER IF EXISTS test_insert_racing_dependency_replay ON processing_jobs"
+            )
+          )
+          yield* db.execute(
+            sql.raw("DROP FUNCTION IF EXISTS test_insert_racing_dependency_replay()")
+          )
+        })
+      )
+    }
+
+    const state = await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const [application] = yield* db
+          .select({ replayJobId: schema.principalAssetOverrideApplications.replayJobId })
+          .from(schema.principalAssetOverrideApplications)
+          .where(
+            and(
+              eq(schema.principalAssetOverrideApplications.overrideId, overrideId),
+              eq(schema.principalAssetOverrideApplications.sourceId, TEST_SOURCE_ID)
+            )
+          )
+        const [job] = yield* db
+          .select({
+            id: schema.processingJobs.id,
+            progressDetails: schema.processingJobs.progressDetails,
+          })
+          .from(schema.processingJobs)
+          .where(eq(schema.processingJobs.sourceId, TEST_SOURCE_ID))
+        return { application, job }
+      })
+    )
+    expect(state).toEqual({
+      application: { replayJobId: state.job?.id },
+      job: {
+        id: expect.any(String),
+        progressDetails: { mode: "replay", reason: "race_test" },
+      },
+    })
+  })
+
+  it("returns a typed retryable error when dependent replay scheduling stays contended", async () => {
+    const ownerSourceId = "00000000-0000-0000-0000-000000000305"
+    await seedLateDependentApplication({
+      activeMode: "replay",
+      ownerSourceId,
+      suffix: "late-contended-replay",
+    })
+    await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        yield* db.execute(
+          sql.raw(`
+            CREATE FUNCTION test_block_dependent_replay_update()
+            RETURNS trigger AS $$
+            BEGIN
+              IF NEW.follow_up_mode = 'replay' THEN
+                RETURN NULL;
+              END IF;
+              RETURN NEW;
+            END;
+            $$ LANGUAGE plpgsql
+          `)
+        )
+        yield* db.execute(
+          sql.raw(`
+            CREATE TRIGGER test_block_dependent_replay_update
+            BEFORE UPDATE ON processing_jobs
+            FOR EACH ROW
+            EXECUTE FUNCTION test_block_dependent_replay_update()
+          `)
+        )
+      })
+    )
+
+    try {
+      const result = await Effect.runPromise(
+        context
+          .runWithLayer({
+            effect: Effect.flatMap(SourceReplayRepository, (repository) =>
+              repository.resetSourceDerivedState({ sourceId: ownerSourceId })
+            ),
+            layer: SourceReplayRepositoryLive,
+          })
+          .pipe(Effect.result)
+      )
+      expect(result._tag).toBe("Failure")
+      if (result._tag === "Failure") {
+        expect(result.failure._tag).toBe("SourceReplaySchedulingPendingError")
+      }
+    } finally {
+      await runPg(
+        Effect.gen(function* () {
+          const db = yield* drizzle
+          yield* db.execute(
+            sql.raw("DROP TRIGGER IF EXISTS test_block_dependent_replay_update ON processing_jobs")
+          )
+          yield* db.execute(sql.raw("DROP FUNCTION IF EXISTS test_block_dependent_replay_update()"))
+        })
+      )
+    }
+  })
+
+  it("repoints a late FIFO-dependent application after an active sync completes", async () => {
+    const ownerSourceId = "00000000-0000-0000-0000-000000000301"
+    const { activeJobId, overrideId } = await seedLateDependentApplication({
+      activeMode: "sync",
+      ownerSourceId,
+      suffix: "late-active-sync",
+    })
+
+    await runReplayRepository(
+      Effect.flatMap(SourceReplayRepository, (repository) =>
+        repository.resetSourceDerivedState({ sourceId: ownerSourceId })
+      )
+    )
+
+    const beforeCompletion = await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const [application] = yield* db
+          .select({ replayJobId: schema.principalAssetOverrideApplications.replayJobId })
+          .from(schema.principalAssetOverrideApplications)
+          .where(
+            and(
+              eq(schema.principalAssetOverrideApplications.overrideId, overrideId),
+              eq(schema.principalAssetOverrideApplications.sourceId, TEST_SOURCE_ID)
+            )
+          )
+        const [activeJob] = yield* db
+          .select({ followUpMode: schema.processingJobs.followUpMode })
+          .from(schema.processingJobs)
+          .where(eq(schema.processingJobs.id, activeJobId))
+        return { activeJob, application }
+      })
+    )
+    expect(beforeCompletion).toEqual({
+      activeJob: { followUpMode: "replay" },
+      application: { replayJobId: null },
+    })
+
+    await runJobRepository(
+      Effect.flatMap(SourceSyncJobRepository, (repository) =>
+        repository.completeJob({
+          jobId: activeJobId,
+          state: {
+            phase: "completed",
+            processedRecords: 0,
+            totalRecords: 0,
+            fetchedRecords: 0,
+            normalizedRecords: 0,
+            failedRecords: 0,
+            cursorPayload: null,
+            highWatermark: null,
+            checkpointExternalId: null,
+            checkpointRawRecordId: null,
+          },
+        })
+      )
+    )
+
+    const afterCompletion = await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const [application] = yield* db
+          .select({ replayJobId: schema.principalAssetOverrideApplications.replayJobId })
+          .from(schema.principalAssetOverrideApplications)
+          .where(
+            and(
+              eq(schema.principalAssetOverrideApplications.overrideId, overrideId),
+              eq(schema.principalAssetOverrideApplications.sourceId, TEST_SOURCE_ID)
+            )
+          )
+        const [completedJob] = yield* db
+          .select({ followUpJobId: schema.processingJobs.followUpJobId })
+          .from(schema.processingJobs)
+          .where(eq(schema.processingJobs.id, activeJobId))
+        const [followUp] =
+          completedJob?.followUpJobId === null || completedJob?.followUpJobId === undefined
+            ? []
+            : yield* db
+                .select({ id: schema.processingJobs.id, mode: schema.processingJobs.mode })
+                .from(schema.processingJobs)
+                .where(eq(schema.processingJobs.id, completedJob.followUpJobId))
+        return { application, followUp }
+      })
+    )
+    expect(afterCompletion).toEqual({
+      application: { replayJobId: afterCompletion.followUp?.id },
+      followUp: { id: expect.any(String), mode: "replay" },
+    })
+  })
+
+  it("merges durable dependencies when another inventory owner is discovered", async () => {
+    const firstOwnerSourceId = "00000000-0000-0000-0000-000000000302"
+    const secondOwnerSourceId = "00000000-0000-0000-0000-000000000303"
+    const overrideId = await runPg(
+      Effect.gen(function* () {
+        yield* seedUpstreamConsumption({
+          ownerSourceId: firstOwnerSourceId,
+          relationshipKind: "disposal match",
+          suffix: "merge-first-owner",
+        })
+        yield* seedUpstreamConsumption({
+          ownerSourceId: secondOwnerSourceId,
+          relationshipKind: "disposal match",
+          suffix: "merge-second-owner",
+        })
+        const db = yield* drizzle
+        const [override] = yield* db
+          .insert(schema.principalAssetOverrides)
+          .values({
+            principalId: TEST_PRINCIPAL_ID,
+            kind: "identity",
+            targetKind: "representation",
+            blockchainId: fixture.baseBlockchainId,
+            representationType: "token",
+            contractAddress: "merged-owner-dependencies",
+            mintAddress: null,
+            action: "set",
+            inspectedSystemRevision: "merged-owner-dependencies-revision",
+            inspectedIdentityState: "resolved",
+            inspectedAssetId: TEST_BTC_ASSET_ID,
+            replacementAssetId: TEST_BTC_ASSET_ID,
+            actorId: fixture.userId,
+            reason: "Preserve every FIFO owner dependency.",
+          })
+          .returning({ id: schema.principalAssetOverrides.id })
+        if (override === undefined) return yield* Effect.die("Failed to seed merged override")
+        yield* db.insert(schema.principalAssetOverrideApplications).values([
+          {
+            overrideId: override.id,
+            sourceId: firstOwnerSourceId,
+            dependsOnSourceIds: [],
+          },
+          {
+            overrideId: override.id,
+            sourceId: secondOwnerSourceId,
+            dependsOnSourceIds: [],
+          },
+        ])
+        return override.id
+      })
+    )
+
+    for (const ownerSourceId of [firstOwnerSourceId, secondOwnerSourceId]) {
+      await runReplayRepository(
+        Effect.flatMap(SourceReplayRepository, (repository) =>
+          repository.resetSourceDerivedState({ sourceId: ownerSourceId })
+        )
+      )
+    }
+
+    const application = await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const [row] = yield* db
+          .select({
+            dependsOnSourceIds: schema.principalAssetOverrideApplications.dependsOnSourceIds,
+          })
+          .from(schema.principalAssetOverrideApplications)
+          .where(
+            and(
+              eq(schema.principalAssetOverrideApplications.overrideId, overrideId),
+              eq(schema.principalAssetOverrideApplications.sourceId, TEST_SOURCE_ID)
+            )
+          )
+        return row
+      })
+    )
+    expect(application?.dependsOnSourceIds).toEqual([firstOwnerSourceId, secondOwnerSourceId])
+  })
+
+  it("rejects a cross-principal FIFO link from either replay direction", async () => {
+    const ownerSourceId = "00000000-0000-0000-0000-000000000305"
+    const otherPrincipalId = "00000000-0000-0000-0000-000000000306"
+    await runPg(
+      Effect.gen(function* () {
+        yield* seedUpstreamConsumption({
+          ownerSourceId,
+          relationshipKind: "disposal match",
+          suffix: "cross-principal-dependent",
+        })
+        const db = yield* drizzle
+        yield* db.insert(schema.principals).values({
+          id: otherPrincipalId,
+          kind: "anonymous_wallet",
+          userId: null,
+        })
+        yield* db
+          .update(schema.sources)
+          .set({ principalId: otherPrincipalId })
+          .where(eq(schema.sources.id, TEST_SOURCE_ID))
+      })
+    )
+
+    const ownerResult = await runReplayRepository(
+      Effect.flatMap(SourceReplayRepository, (repository) =>
+        repository.resetSourceDerivedState({ sourceId: ownerSourceId })
+      ).pipe(Effect.result)
+    )
+    expect(ownerResult).toMatchObject({
+      _tag: "Failure",
+      failure: {
+        _tag: "SourceReplayDependencyError",
+        dependentSourceIds: [TEST_SOURCE_ID],
+        affectedPrincipalIds: [otherPrincipalId],
+      },
+    })
+
+    const dependentResult = await runReplayRepository(
+      Effect.flatMap(SourceReplayRepository, (repository) =>
+        repository.resetSourceDerivedState({ sourceId: TEST_SOURCE_ID })
+      ).pipe(Effect.result)
+    )
+    expect(dependentResult).toMatchObject({
+      _tag: "Failure",
+      failure: {
+        _tag: "SourceReplayDependencyError",
+        dependentSourceIds: [TEST_SOURCE_ID],
+        affectedPrincipalIds: [TEST_PRINCIPAL_ID],
+      },
+    })
   })
 
   it("rejects a source replay whose cross-source inventory dependencies form a cycle", async () => {

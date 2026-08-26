@@ -178,7 +178,10 @@ const seedUnknownTypeRepresentation = () =>
 
 const seedCrossSourceFifoDependency = (
   providerAssetRowId: string,
-  { insertDependency = true }: { readonly insertDependency?: boolean } = {}
+  {
+    includeTargetUse = true,
+    insertDependency = true,
+  }: { readonly includeTargetUse?: boolean; readonly insertDependency?: boolean } = {}
 ) =>
   context.runPg(
     Effect.gen(function* () {
@@ -211,11 +214,13 @@ const seedCrossSourceFifoDependency = (
         cexAccountId: account.id,
         addressId: null,
       })
-      yield* db.insert(schema.providerAssetSourceUses).values({
-        providerAssetRowId,
-        sourceId: dependentSourceId,
-        hasChainlessObservation: true,
-      })
+      if (includeTargetUse) {
+        yield* db.insert(schema.providerAssetSourceUses).values({
+          providerAssetRowId,
+          sourceId: dependentSourceId,
+          hasChainlessObservation: true,
+        })
+      }
 
       const timestamp = new Date("2026-08-22T10:00:00.000Z")
       const [ownerTransaction, dependentTransaction] = yield* db
@@ -653,6 +658,113 @@ describe("AssetOverrideRepository", () => {
       )
     )
     expect(projection.recomputationState).toBe("failed")
+  })
+
+  it.each([
+    { status: "failed" as const, progressDetails: null },
+    { status: "completed" as const, progressDetails: { failedRecords: 1 } },
+  ])(
+    "reports a $status owner replay before its pending FIFO dependent",
+    async ({ status, progressDetails }) => {
+      const providerAssetRowId = await seedChainlessProviderAsset()
+      const { dependentSourceId } = await seedCrossSourceFifoDependency(providerAssetRowId, {
+        includeTargetUse: false,
+      })
+      const target = { _tag: "provider_asset" as const, providerAssetRowId }
+      const initial = await runRepository(
+        Effect.flatMap(AssetOverrideRepository, (repository) =>
+          repository.getProjection({ principalId: TEST_PRINCIPAL_ID, kind: "identity", target })
+        )
+      )
+      const created = await runRepository(
+        Effect.flatMap(AssetOverrideRepository, (repository) =>
+          repository.setOverride({
+            principalId: TEST_PRINCIPAL_ID,
+            actorId: "00000000-0000-0000-0000-000000000181",
+            kind: "identity",
+            target,
+            expectedSystemRevision: initial.systemRevision,
+            expectedActiveOverrideId: null,
+            replacement: { _tag: "identity", assetId: TEST_BTC_ASSET_ID },
+            reason: "Rebuild the owner before its FIFO consumer.",
+          })
+        )
+      )
+      expect(created._tag).toBe("accepted")
+
+      await context.runPg(
+        Effect.gen(function* () {
+          const db = yield* drizzle
+          yield* db
+            .update(schema.processingJobs)
+            .set({ status, progressDetails })
+            .where(eq(schema.processingJobs.sourceId, TEST_SOURCE_ID))
+          const [dependentJob] = yield* db
+            .select({ status: schema.processingJobs.status })
+            .from(schema.processingJobs)
+            .where(eq(schema.processingJobs.sourceId, dependentSourceId))
+          expect(dependentJob?.status).toBe("pending")
+        })
+      )
+
+      const projection = await runRepository(
+        Effect.flatMap(AssetOverrideRepository, (repository) =>
+          repository.getProjection({ principalId: TEST_PRINCIPAL_ID, kind: "identity", target })
+        )
+      )
+      expect(projection.recomputationState).toBe("failed")
+    }
+  )
+
+  it("keeps a durable FIFO dependent in the projection after its live edge is reset", async () => {
+    const providerAssetRowId = await seedChainlessProviderAsset()
+    const { dependentSourceId } = await seedCrossSourceFifoDependency(providerAssetRowId, {
+      includeTargetUse: false,
+    })
+    const target = { _tag: "provider_asset" as const, providerAssetRowId }
+    const initial = await runRepository(
+      Effect.flatMap(AssetOverrideRepository, (repository) =>
+        repository.getProjection({ principalId: TEST_PRINCIPAL_ID, kind: "identity", target })
+      )
+    )
+    const created = await runRepository(
+      Effect.flatMap(AssetOverrideRepository, (repository) =>
+        repository.setOverride({
+          principalId: TEST_PRINCIPAL_ID,
+          actorId: "00000000-0000-0000-0000-000000000181",
+          kind: "identity",
+          target,
+          expectedSystemRevision: initial.systemRevision,
+          expectedActiveOverrideId: null,
+          replacement: { _tag: "identity", assetId: TEST_BTC_ASSET_ID },
+          reason: "Keep the dependent replay visible after the owner resets.",
+        })
+      )
+    )
+    expect(created._tag).toBe("accepted")
+
+    await context.runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        yield* db
+          .update(schema.processingJobs)
+          .set({ status: "completed", progressDetails: { failedRecords: 0 } })
+          .where(eq(schema.processingJobs.sourceId, TEST_SOURCE_ID))
+        yield* db.delete(schema.disposalMatches)
+        const [dependentJob] = yield* db
+          .select({ status: schema.processingJobs.status })
+          .from(schema.processingJobs)
+          .where(eq(schema.processingJobs.sourceId, dependentSourceId))
+        expect(dependentJob?.status).toBe("pending")
+      })
+    )
+
+    const projection = await runRepository(
+      Effect.flatMap(AssetOverrideRepository, (repository) =>
+        repository.getProjection({ principalId: TEST_PRINCIPAL_ID, kind: "identity", target })
+      )
+    )
+    expect(projection.recomputationState).toBe("updating")
   })
 
   it("validates provider asset identity replacements against known NFT type hints", async () => {
@@ -1507,6 +1619,232 @@ describe("AssetOverrideRepository", () => {
     expect(Option.isNone(result)).toBe(true)
   })
 
+  it("scopes one cross-provider representation override to the owning principal", async () => {
+    const targetFixture = await context.runPg(
+      Effect.gen(function* () {
+        const fixture = yield* seedSyncEngineRepositoryFixture()
+        const db = yield* drizzle
+        yield* db.insert(schema.assets).values({
+          id: TEST_BTC_ASSET_ID,
+          name: "Cross-provider override asset",
+          symbol: "XPRO",
+          type: "fungible",
+        })
+        const samePrincipalAddressId = "00000000-0000-0000-0000-000000000285"
+        const samePrincipalSourceId = "00000000-0000-0000-0000-000000000286"
+        const otherUserId = "00000000-0000-0000-0000-000000000291"
+        const otherPrincipalId = "00000000-0000-0000-0000-000000000292"
+        const otherAddressId = "00000000-0000-0000-0000-000000000293"
+        const otherSourceId = "00000000-0000-0000-0000-000000000294"
+        yield* db.insert(schema.users).values({
+          id: otherUserId,
+          email: "other-cross-provider@example.com",
+          emailVerified: true,
+        })
+        yield* db.insert(schema.principals).values({
+          id: otherPrincipalId,
+          kind: "user",
+          userId: otherUserId,
+        })
+        yield* db.insert(schema.addresses).values([
+          {
+            id: samePrincipalAddressId,
+            principalId: TEST_PRINCIPAL_ID,
+            address: "0x0000000000000000000000000000000000000285",
+            type: "evm",
+            name: "Second owned wallet",
+          },
+          {
+            id: otherAddressId,
+            principalId: otherPrincipalId,
+            address: "0x0000000000000000000000000000000000000293",
+            type: "evm",
+            name: "Other principal wallet",
+          },
+        ])
+        yield* db.insert(schema.sources).values([
+          {
+            id: samePrincipalSourceId,
+            principalId: TEST_PRINCIPAL_ID,
+            name: "Second Helius source",
+            providerKey: "helius-solana",
+            sourceableType: "onchain",
+            addressId: samePrincipalAddressId,
+          },
+          {
+            id: otherSourceId,
+            principalId: otherPrincipalId,
+            name: "Other principal Helius source",
+            providerKey: "helius-solana",
+            sourceableType: "onchain",
+            addressId: otherAddressId,
+          },
+        ])
+        const [coinbaseAsset, heliusAsset] = yield* db
+          .insert(schema.providerAssets)
+          .values([
+            {
+              provider: "coinbase",
+              providerAssetId: "cross-provider-coinbase",
+              currencyCode: "XPRO",
+              exponent: 18,
+              providerType: "crypto",
+              retrievedAt: new Date("2026-08-21T00:00:00.000Z"),
+            },
+            {
+              provider: "helius",
+              providerAssetId: "cross-provider-helius",
+              currencyCode: "XPRO",
+              exponent: 18,
+              providerType: "crypto",
+              retrievedAt: new Date("2026-08-21T00:00:00.000Z"),
+            },
+          ])
+          .returning({ id: schema.providerAssets.id, provider: schema.providerAssets.provider })
+        if (coinbaseAsset === undefined || heliusAsset === undefined) {
+          return yield* Effect.die("Failed to seed cross-provider assets")
+        }
+        const providerAssetIdByProvider = new Map(
+          [coinbaseAsset, heliusAsset].map((asset) => [asset.provider, asset.id])
+        )
+        const coinbaseAssetId = providerAssetIdByProvider.get("coinbase")
+        const heliusAssetId = providerAssetIdByProvider.get("helius")
+        if (coinbaseAssetId === undefined || heliusAssetId === undefined) {
+          return yield* Effect.die("Failed to identify cross-provider assets")
+        }
+        yield* db.insert(schema.providerAssetMappings).values(
+          [coinbaseAssetId, heliusAssetId].map((providerAssetRowId) => ({
+            providerAssetRowId,
+            mappingKind: "asset" as const,
+            mappingStatus: "pending_review" as const,
+          }))
+        )
+        const contractAddress = "0x0000000000000000000000000000000000000c55"
+        const observedSources = [
+          { sourceId: TEST_SOURCE_ID, providerAssetId: coinbaseAssetId },
+          { sourceId: samePrincipalSourceId, providerAssetId: heliusAssetId },
+          { sourceId: otherSourceId, providerAssetId: heliusAssetId },
+        ]
+        const transactions = yield* db
+          .insert(schema.transactions)
+          .values(
+            observedSources.map(({ sourceId }, index) => ({
+              sourceId,
+              externalId: `cross-provider-transaction-${index}`,
+              timestamp: new Date(`2026-08-21T0${index + 1}:00:00.000Z`),
+              principalId: sourceId === otherSourceId ? otherPrincipalId : TEST_PRINCIPAL_ID,
+            }))
+          )
+          .returning({ id: schema.transactions.id, sourceId: schema.transactions.sourceId })
+        const transactionIdBySourceId = new Map(
+          transactions.map((transaction) => [transaction.sourceId, transaction.id])
+        )
+        const providerTransfers = []
+        for (const [index, { providerAssetId, sourceId }] of observedSources.entries()) {
+          const transactionId = transactionIdBySourceId.get(sourceId)
+          if (transactionId === undefined) {
+            return yield* Effect.die("Missing cross-provider transaction")
+          }
+          providerTransfers.push({
+            sourceId,
+            transactionId,
+            externalId: `cross-provider-transfer-${index}`,
+            timestamp: new Date(`2026-08-21T0${index + 1}:00:00.000Z`),
+            direction: "inbound" as const,
+            processingMode: "accounting_and_evidence" as const,
+            fromAddress: `0xexternal${index}`,
+            toAddress: `0xowned${index}`,
+            providerAssetId,
+            observedBlockchainId: fixture.baseBlockchainId,
+            observedRepresentationType: "token" as const,
+            observedContractAddress: contractAddress,
+            observedDecimals: 18,
+            amount: "1",
+          })
+        }
+        yield* db.insert(schema.providerTransfers).values(providerTransfers)
+        yield* db.insert(schema.sourceRepresentationUses).values(
+          observedSources.map(({ sourceId }) => ({
+            sourceId,
+            blockchainId: fixture.baseBlockchainId,
+            representationType: "token" as const,
+            contractAddress,
+            mintAddress: null,
+          }))
+        )
+        return {
+          otherPrincipalId,
+          otherSourceId,
+          samePrincipalSourceId,
+          target: {
+            _tag: "representation" as const,
+            blockchainId: fixture.baseBlockchainId,
+            representationType: "token" as const,
+            contractAddress,
+            mintAddress: null,
+          },
+        }
+      })
+    )
+    const initial = await runRepository(
+      Effect.flatMap(AssetOverrideRepository, (repository) =>
+        repository.getProjection({
+          principalId: TEST_PRINCIPAL_ID,
+          kind: "identity",
+          target: targetFixture.target,
+        })
+      )
+    )
+    const accepted = await runRepository(
+      Effect.flatMap(AssetOverrideRepository, (repository) =>
+        repository.setOverride({
+          principalId: TEST_PRINCIPAL_ID,
+          actorId: "00000000-0000-0000-0000-000000000181",
+          kind: "identity",
+          target: targetFixture.target,
+          expectedSystemRevision: initial.systemRevision,
+          expectedActiveOverrideId: null,
+          replacement: { _tag: "identity", assetId: TEST_BTC_ASSET_ID },
+          reason: "Use one representation choice across both owned providers.",
+        })
+      )
+    )
+    expect(accepted._tag).toBe("accepted")
+
+    const scope = await context.runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const applications = yield* db
+          .select({ sourceId: schema.principalAssetOverrideApplications.sourceId })
+          .from(schema.principalAssetOverrideApplications)
+        const jobs = yield* db
+          .select({ sourceId: schema.processingJobs.sourceId })
+          .from(schema.processingJobs)
+        return {
+          applicationSourceIds: new Set(applications.map(({ sourceId }) => sourceId)),
+          jobSourceIds: new Set(jobs.map(({ sourceId }) => sourceId)),
+        }
+      })
+    )
+    const ownedSourceIds = new Set([TEST_SOURCE_ID, targetFixture.samePrincipalSourceId])
+    expect(scope.applicationSourceIds).toEqual(ownedSourceIds)
+    expect(scope.jobSourceIds).toEqual(ownedSourceIds)
+    expect(scope.applicationSourceIds.has(targetFixture.otherSourceId)).toBe(false)
+
+    const otherProjection = await runRepository(
+      Effect.flatMap(AssetOverrideRepository, (repository) =>
+        repository.getProjection({
+          principalId: targetFixture.otherPrincipalId,
+          kind: "identity",
+          target: targetFixture.target,
+        })
+      )
+    )
+    expect(otherProjection.activeOverride).toBeNull()
+    expect(otherProjection.recomputationState).toBe("complete")
+    expect(otherProjection.effectiveConclusion).toEqual(otherProjection.systemConclusion)
+  })
+
   it("uses representation targets instead of provider targets for exact observations", async () => {
     const { baseBlockchainId } = await context.runPg(seedSyncEngineRepositoryFixture())
     const contractAddress = "0x0000000000000000000000000000000000000abc"
@@ -1717,6 +2055,527 @@ describe("AssetOverrideRepository", () => {
     })
   })
 
+  it("tracks the identity replay used by an inclusion projection", async () => {
+    const providerAssetRowId = await seedChainlessProviderAsset()
+    const target = { _tag: "provider_asset" as const, providerAssetRowId }
+    const identityBefore = await runRepository(
+      Effect.flatMap(AssetOverrideRepository, (repository) =>
+        repository.getProjection({ principalId: TEST_PRINCIPAL_ID, kind: "identity", target })
+      )
+    )
+    const identified = await runRepository(
+      Effect.flatMap(AssetOverrideRepository, (repository) =>
+        repository.setOverride({
+          principalId: TEST_PRINCIPAL_ID,
+          actorId: "00000000-0000-0000-0000-000000000181",
+          kind: "identity",
+          target,
+          expectedSystemRevision: identityBefore.systemRevision,
+          expectedActiveOverrideId: null,
+          replacement: { _tag: "identity", assetId: TEST_BTC_ASSET_ID },
+          reason: "Use this identity in the inclusion projection.",
+        })
+      )
+    )
+    expect(identified._tag).toBe("accepted")
+
+    const updating = await runRepository(
+      Effect.flatMap(AssetOverrideRepository, (repository) =>
+        repository.getProjection({ principalId: TEST_PRINCIPAL_ID, kind: "inclusion", target })
+      )
+    )
+    expect(updating.effectiveConclusion).toEqual({
+      _tag: "inclusion",
+      state: "included",
+      reason: null,
+    })
+    expect(updating.recomputationState).toBe("updating")
+
+    await context.runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        yield* db
+          .update(schema.processingJobs)
+          .set({ status: "failed" })
+          .where(eq(schema.processingJobs.sourceId, TEST_SOURCE_ID))
+      })
+    )
+    const failed = await runRepository(
+      Effect.flatMap(AssetOverrideRepository, (repository) =>
+        repository.getProjection({ principalId: TEST_PRINCIPAL_ID, kind: "inclusion", target })
+      )
+    )
+    expect(failed.recomputationState).toBe("failed")
+  })
+
+  it("completes an inclusion projection after every durable override application succeeds", async () => {
+    const providerAssetRowId = await seedChainlessProviderAsset()
+    const target = { _tag: "provider_asset" as const, providerAssetRowId }
+    const identityBefore = await runRepository(
+      Effect.flatMap(AssetOverrideRepository, (repository) =>
+        repository.getProjection({ principalId: TEST_PRINCIPAL_ID, kind: "identity", target })
+      )
+    )
+    const identified = await runRepository(
+      Effect.flatMap(AssetOverrideRepository, (repository) =>
+        repository.setOverride({
+          principalId: TEST_PRINCIPAL_ID,
+          actorId: "00000000-0000-0000-0000-000000000181",
+          kind: "identity",
+          target,
+          expectedSystemRevision: identityBefore.systemRevision,
+          expectedActiveOverrideId: null,
+          replacement: { _tag: "identity", assetId: TEST_BTC_ASSET_ID },
+          reason: "Resolve identity before replay convergence.",
+        })
+      )
+    )
+    expect(identified._tag).toBe("accepted")
+
+    const inclusionBefore = await runRepository(
+      Effect.flatMap(AssetOverrideRepository, (repository) =>
+        repository.getProjection({ principalId: TEST_PRINCIPAL_ID, kind: "inclusion", target })
+      )
+    )
+    const included = await runRepository(
+      Effect.flatMap(AssetOverrideRepository, (repository) =>
+        repository.setOverride({
+          principalId: TEST_PRINCIPAL_ID,
+          actorId: "00000000-0000-0000-0000-000000000181",
+          kind: "inclusion",
+          target,
+          expectedSystemRevision: inclusionBefore.systemRevision,
+          expectedActiveOverrideId: null,
+          replacement: { _tag: "inclusion", state: "included" },
+          reason: "Confirm inclusion before replay convergence.",
+        })
+      )
+    )
+    expect(included._tag).toBe("accepted")
+
+    const applicationCount = await context.runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const [count] = yield* db
+          .select({ value: sql<number>`count(*)` })
+          .from(schema.principalAssetOverrideApplications)
+        yield* db
+          .update(schema.processingJobs)
+          .set({
+            status: "completed",
+            completedAt: new Date("2026-08-21T03:00:00.000Z"),
+            progressDetails: { failedRecords: 0 },
+          })
+          .where(eq(schema.processingJobs.sourceId, TEST_SOURCE_ID))
+        return Number(count?.value ?? 0)
+      })
+    )
+    expect(applicationCount).toBe(2)
+
+    const complete = await runRepository(
+      Effect.flatMap(AssetOverrideRepository, (repository) =>
+        repository.getProjection({ principalId: TEST_PRINCIPAL_ID, kind: "inclusion", target })
+      )
+    )
+    expect(complete.recomputationState).toBe("complete")
+    expect(complete.effectiveConclusion).toEqual({
+      _tag: "inclusion",
+      state: "included",
+      reason: null,
+    })
+
+    await seedCrossSourceFifoDependency(providerAssetRowId, { insertDependency: false })
+
+    const expanded = await runRepository(
+      Effect.flatMap(AssetOverrideRepository, (repository) =>
+        repository.getProjection({ principalId: TEST_PRINCIPAL_ID, kind: "inclusion", target })
+      )
+    )
+    expect(expanded.recomputationState).toBe("updating")
+  })
+
+  it("uses a retained rejected identity in an included projection", async () => {
+    const providerAssetRowId = await seedChainlessProviderAsset()
+    await context.runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        yield* db
+          .update(schema.providerAssetMappings)
+          .set({ mappingStatus: "rejected", canonicalAssetId: TEST_BTC_ASSET_ID })
+          .where(eq(schema.providerAssetMappings.providerAssetRowId, providerAssetRowId))
+      })
+    )
+    const target = { _tag: "provider_asset" as const, providerAssetRowId }
+    const initial = await runRepository(
+      Effect.flatMap(AssetOverrideRepository, (repository) =>
+        repository.getProjection({ principalId: TEST_PRINCIPAL_ID, kind: "inclusion", target })
+      )
+    )
+    const included = await runRepository(
+      Effect.flatMap(AssetOverrideRepository, (repository) =>
+        repository.setOverride({
+          principalId: TEST_PRINCIPAL_ID,
+          actorId: "00000000-0000-0000-0000-000000000181",
+          kind: "inclusion",
+          target,
+          expectedSystemRevision: initial.systemRevision,
+          expectedActiveOverrideId: null,
+          replacement: { _tag: "inclusion", state: "included" },
+          reason: "Use the retained reviewed identity.",
+        })
+      )
+    )
+    expect(included._tag).toBe("accepted")
+    if (included._tag !== "accepted") return
+    expect(included.projection.systemConclusion).toEqual({
+      _tag: "inclusion",
+      state: "blocked",
+      reason: "asset_identity_unresolved",
+    })
+    expect(included.projection.effectiveConclusion).toEqual({
+      _tag: "inclusion",
+      state: "included",
+      reason: null,
+    })
+  })
+
+  it("uses a retained rejected identity for an included representation", async () => {
+    const target = await context.runPg(
+      Effect.gen(function* () {
+        const fixture = yield* seedSyncEngineRepositoryFixture()
+        const db = yield* drizzle
+        yield* db.insert(schema.assets).values({
+          id: TEST_BTC_ASSET_ID,
+          name: "Retained Representation Bitcoin",
+          symbol: "RRBTC",
+          type: "fungible",
+        })
+        const [providerAsset] = yield* db
+          .insert(schema.providerAssets)
+          .values({
+            provider: "coinbase",
+            providerAssetId: "retained-representation-asset",
+            currencyCode: "RRA",
+            exponent: 8,
+            providerType: "crypto",
+            retrievedAt: new Date("2026-08-21T02:00:00.000Z"),
+          })
+          .returning({ id: schema.providerAssets.id })
+        if (providerAsset === undefined) return yield* Effect.die("Failed to seed provider asset")
+        yield* db.insert(schema.providerAssetMappings).values({
+          providerAssetRowId: providerAsset.id,
+          mappingKind: "asset",
+          mappingStatus: "rejected",
+          canonicalAssetId: TEST_BTC_ASSET_ID,
+          assetRepresentationId: null,
+          canonicalFiatCurrency: null,
+        })
+        const contractAddress = "0x0000000000000000000000000000000000000211"
+        const timestamp = new Date("2026-08-21T02:05:00.000Z")
+        const [transaction] = yield* db
+          .insert(schema.transactions)
+          .values({
+            sourceId: TEST_SOURCE_ID,
+            externalId: "retained-representation-transaction",
+            timestamp,
+            principalId: TEST_PRINCIPAL_ID,
+          })
+          .returning({ id: schema.transactions.id })
+        if (transaction === undefined) return yield* Effect.die("Failed to seed transaction")
+        yield* db.insert(schema.providerTransfers).values({
+          sourceId: TEST_SOURCE_ID,
+          transactionId: transaction.id,
+          externalId: "retained-representation-transfer",
+          providerAssetId: providerAsset.id,
+          timestamp,
+          direction: "inbound",
+          processingMode: "accounting_and_evidence",
+          fromAddress: "0xretained-sender",
+          toAccountRef: "owned-account",
+          observedBlockchainId: fixture.baseBlockchainId,
+          observedRepresentationType: "token",
+          observedContractAddress: contractAddress,
+          observedMintAddress: null,
+          observedDecimals: 8,
+          amount: "1",
+        })
+        yield* db.insert(schema.sourceRepresentationUses).values({
+          sourceId: TEST_SOURCE_ID,
+          blockchainId: fixture.baseBlockchainId,
+          representationType: "token",
+          contractAddress,
+          mintAddress: null,
+        })
+        return {
+          _tag: "representation" as const,
+          blockchainId: fixture.baseBlockchainId,
+          representationType: "token" as const,
+          contractAddress,
+          mintAddress: null,
+        }
+      })
+    )
+
+    const initial = await runRepository(
+      Effect.flatMap(AssetOverrideRepository, (repository) =>
+        repository.getProjection({ principalId: TEST_PRINCIPAL_ID, kind: "inclusion", target })
+      )
+    )
+    const included = await runRepository(
+      Effect.flatMap(AssetOverrideRepository, (repository) =>
+        repository.setOverride({
+          principalId: TEST_PRINCIPAL_ID,
+          actorId: "00000000-0000-0000-0000-000000000181",
+          kind: "inclusion",
+          target,
+          expectedSystemRevision: initial.systemRevision,
+          expectedActiveOverrideId: null,
+          replacement: { _tag: "inclusion", state: "included" },
+          reason: "Use the retained exact-representation identity.",
+        })
+      )
+    )
+
+    expect(included._tag).toBe("accepted")
+    if (included._tag !== "accepted") return
+    expect(included.projection.systemConclusion).toEqual({
+      _tag: "inclusion",
+      state: "blocked",
+      reason: "asset_identity_unresolved",
+    })
+    expect(included.projection.effectiveConclusion).toEqual({
+      _tag: "inclusion",
+      state: "included",
+      reason: null,
+    })
+  })
+
+  it("keeps providerless missing decimals blocked after an identity override", async () => {
+    const target = await context.runPg(
+      Effect.gen(function* () {
+        const fixture = yield* seedSyncEngineRepositoryFixture()
+        const db = yield* drizzle
+        yield* db.insert(schema.assets).values({
+          id: TEST_BTC_ASSET_ID,
+          name: "Providerless Missing Decimals Bitcoin",
+          symbol: "PMDBTC",
+          type: "fungible",
+        })
+        const contractAddress = "0x0000000000000000000000000000000000000212"
+        const timestamp = new Date("2026-08-21T02:10:00.000Z")
+        const [transaction] = yield* db
+          .insert(schema.transactions)
+          .values({
+            sourceId: TEST_SOURCE_ID,
+            externalId: "providerless-missing-decimals-transaction",
+            timestamp,
+            principalId: TEST_PRINCIPAL_ID,
+          })
+          .returning({ id: schema.transactions.id })
+        if (transaction === undefined) return yield* Effect.die("Failed to seed transaction")
+        yield* db.insert(schema.providerTransfers).values({
+          sourceId: TEST_SOURCE_ID,
+          transactionId: transaction.id,
+          externalId: "providerless-missing-decimals-transfer",
+          providerAssetId: null,
+          timestamp,
+          direction: "inbound",
+          processingMode: "accounting_and_evidence",
+          fromAddress: "0xproviderless-sender",
+          toAccountRef: "owned-account",
+          observedBlockchainId: fixture.baseBlockchainId,
+          observedRepresentationType: "token",
+          observedContractAddress: contractAddress,
+          observedMintAddress: null,
+          observedDecimals: null,
+          amount: "1",
+        })
+        yield* db.insert(schema.sourceRepresentationUses).values({
+          sourceId: TEST_SOURCE_ID,
+          blockchainId: fixture.baseBlockchainId,
+          representationType: "token",
+          contractAddress,
+          mintAddress: null,
+        })
+        return {
+          _tag: "representation" as const,
+          blockchainId: fixture.baseBlockchainId,
+          representationType: "token" as const,
+          contractAddress,
+          mintAddress: null,
+        }
+      })
+    )
+
+    const identityBefore = await runRepository(
+      Effect.flatMap(AssetOverrideRepository, (repository) =>
+        repository.getProjection({ principalId: TEST_PRINCIPAL_ID, kind: "identity", target })
+      )
+    )
+    const identified = await runRepository(
+      Effect.flatMap(AssetOverrideRepository, (repository) =>
+        repository.setOverride({
+          principalId: TEST_PRINCIPAL_ID,
+          actorId: "00000000-0000-0000-0000-000000000181",
+          kind: "identity",
+          target,
+          expectedSystemRevision: identityBefore.systemRevision,
+          expectedActiveOverrideId: null,
+          replacement: { _tag: "identity", assetId: TEST_BTC_ASSET_ID },
+          reason: "Identify the asset without bypassing its missing decimals.",
+        })
+      )
+    )
+    expect(identified._tag).toBe("accepted")
+
+    const inclusion = await runRepository(
+      Effect.flatMap(AssetOverrideRepository, (repository) =>
+        repository.getProjection({ principalId: TEST_PRINCIPAL_ID, kind: "inclusion", target })
+      )
+    )
+    expect(inclusion.systemConclusion).toEqual({
+      _tag: "inclusion",
+      state: "blocked",
+      reason: "missing_decimals",
+    })
+    expect(inclusion.effectiveConclusion).toEqual(inclusion.systemConclusion)
+  })
+
+  it("requires one retained identity across matching provider mappings", async () => {
+    const target = await context.runPg(
+      Effect.gen(function* () {
+        const fixture = yield* seedSyncEngineRepositoryFixture()
+        const db = yield* drizzle
+        yield* db.insert(schema.assets).values([
+          {
+            id: TEST_BTC_ASSET_ID,
+            name: "Conflicting Retained Bitcoin",
+            symbol: "CRBTC",
+            type: "fungible",
+          },
+          {
+            id: TEST_EUR_ASSET_ID,
+            name: "Conflicting Retained Euro",
+            symbol: "CREUR",
+            type: "fungible",
+          },
+        ])
+        const providerAssets = yield* db
+          .insert(schema.providerAssets)
+          .values([
+            {
+              provider: "coinbase",
+              providerAssetId: "conflicting-retained-coinbase",
+              currencyCode: "CRC",
+              exponent: 8,
+              providerType: "crypto",
+              retrievedAt: new Date("2026-08-21T02:20:00.000Z"),
+            },
+            {
+              provider: "helius",
+              providerAssetId: "conflicting-retained-helius",
+              currencyCode: "CRH",
+              exponent: 8,
+              providerType: "crypto",
+              retrievedAt: new Date("2026-08-21T02:20:00.000Z"),
+            },
+          ])
+          .returning({ id: schema.providerAssets.id })
+        const firstProviderAsset = providerAssets[0]
+        const secondProviderAsset = providerAssets[1]
+        if (firstProviderAsset === undefined || secondProviderAsset === undefined) {
+          return yield* Effect.die("Failed to seed conflicting provider assets")
+        }
+        yield* db.insert(schema.providerAssetMappings).values([
+          {
+            providerAssetRowId: firstProviderAsset.id,
+            mappingKind: "asset",
+            mappingStatus: "approved",
+            canonicalAssetId: TEST_BTC_ASSET_ID,
+          },
+          {
+            providerAssetRowId: secondProviderAsset.id,
+            mappingKind: "asset",
+            mappingStatus: "rejected",
+            canonicalAssetId: TEST_EUR_ASSET_ID,
+          },
+        ])
+        const contractAddress = "0x0000000000000000000000000000000000000213"
+        const timestamp = new Date("2026-08-21T02:25:00.000Z")
+        const [transaction] = yield* db
+          .insert(schema.transactions)
+          .values({
+            sourceId: TEST_SOURCE_ID,
+            externalId: "conflicting-retained-transaction",
+            timestamp,
+            principalId: TEST_PRINCIPAL_ID,
+          })
+          .returning({ id: schema.transactions.id })
+        if (transaction === undefined) return yield* Effect.die("Failed to seed transaction")
+        yield* db.insert(schema.providerTransfers).values(
+          providerAssets.map(({ id }, index) => ({
+            sourceId: TEST_SOURCE_ID,
+            transactionId: transaction.id,
+            externalId: `conflicting-retained-transfer-${index}`,
+            providerAssetId: id,
+            timestamp,
+            direction: "inbound" as const,
+            processingMode: "accounting_and_evidence" as const,
+            fromAddress: `0xconflicting-sender-${index}`,
+            toAccountRef: "owned-account",
+            observedBlockchainId: fixture.baseBlockchainId,
+            observedRepresentationType: "token" as const,
+            observedContractAddress: contractAddress,
+            observedMintAddress: null,
+            observedDecimals: 8,
+            amount: "1",
+          }))
+        )
+        yield* db.insert(schema.sourceRepresentationUses).values({
+          sourceId: TEST_SOURCE_ID,
+          blockchainId: fixture.baseBlockchainId,
+          representationType: "token",
+          contractAddress,
+          mintAddress: null,
+        })
+        return {
+          _tag: "representation" as const,
+          blockchainId: fixture.baseBlockchainId,
+          representationType: "token" as const,
+          contractAddress,
+          mintAddress: null,
+        }
+      })
+    )
+
+    const initial = await runRepository(
+      Effect.flatMap(AssetOverrideRepository, (repository) =>
+        repository.getProjection({ principalId: TEST_PRINCIPAL_ID, kind: "inclusion", target })
+      )
+    )
+    const included = await runRepository(
+      Effect.flatMap(AssetOverrideRepository, (repository) =>
+        repository.setOverride({
+          principalId: TEST_PRINCIPAL_ID,
+          actorId: "00000000-0000-0000-0000-000000000181",
+          kind: "inclusion",
+          target,
+          expectedSystemRevision: initial.systemRevision,
+          expectedActiveOverrideId: null,
+          replacement: { _tag: "inclusion", state: "included" },
+          reason: "Do not choose between conflicting retained identities.",
+        })
+      )
+    )
+    expect(included._tag).toBe("accepted")
+    if (included._tag !== "accepted") return
+    expect(included.projection.effectiveConclusion).toEqual({
+      _tag: "inclusion",
+      state: "blocked",
+      reason: "asset_identity_unresolved",
+    })
+  })
+
   it("preserves a technical blocker that appears after an inclusion choice", async () => {
     const providerAssetRowId = await seedChainlessProviderAsset()
     await context.runPg(
@@ -1780,6 +2639,51 @@ describe("AssetOverrideRepository", () => {
       _tag: "inclusion",
       state: "blocked",
       reason: "missing_decimals",
+    })
+  })
+
+  it("keeps an included policy exclusion blocked until its identity is known", async () => {
+    const providerAssetRowId = await seedChainlessProviderAsset()
+    await context.runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        yield* db
+          .update(schema.providerAssetMappings)
+          .set({ mappingStatus: "excluded", canonicalAssetId: null })
+          .where(eq(schema.providerAssetMappings.providerAssetRowId, providerAssetRowId))
+      })
+    )
+    const target = { _tag: "provider_asset" as const, providerAssetRowId }
+    const initial = await runRepository(
+      Effect.flatMap(AssetOverrideRepository, (repository) =>
+        repository.getProjection({
+          principalId: TEST_PRINCIPAL_ID,
+          kind: "inclusion",
+          target,
+        })
+      )
+    )
+    const included = await runRepository(
+      Effect.flatMap(AssetOverrideRepository, (repository) =>
+        repository.setOverride({
+          principalId: TEST_PRINCIPAL_ID,
+          actorId: "00000000-0000-0000-0000-000000000181",
+          kind: "inclusion",
+          target,
+          expectedSystemRevision: initial.systemRevision,
+          expectedActiveOverrideId: null,
+          replacement: { _tag: "inclusion", state: "included" },
+          reason: "Include the policy-excluded asset once its identity is known.",
+        })
+      )
+    )
+
+    expect(included._tag).toBe("accepted")
+    if (included._tag !== "accepted") return
+    expect(included.projection.effectiveConclusion).toEqual({
+      _tag: "inclusion",
+      state: "blocked",
+      reason: "asset_identity_unresolved",
     })
   })
 

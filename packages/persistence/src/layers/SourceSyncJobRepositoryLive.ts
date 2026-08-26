@@ -264,6 +264,7 @@ const make = Effect.gen(function* () {
                 from ${schema.providerAssetSourceUses} source_use
                 where source_use.source_id = ${sourceId}
                   and source_use.provider_asset_row_id = asset_override.provider_asset_row_id
+                  and source_use.has_chainless_observation = true
               )
             )
             or (

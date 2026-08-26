@@ -40,6 +40,19 @@ export class SourceReplayDependencyPendingError extends Schema.TaggedError<Sourc
   }
 }
 
+/** A dependent replay could not be scheduled because active job ownership kept changing. */
+export class SourceReplaySchedulingPendingError extends Schema.TaggedError<SourceReplaySchedulingPendingError>()(
+  "SourceReplaySchedulingPendingError",
+  {
+    sourceId: Schema.String,
+    dependentSourceId: Schema.String,
+  }
+) {
+  override get message(): string {
+    return `Replay source ${this.sourceId} after scheduling settles for dependent source ${this.dependentSourceId}`
+  }
+}
+
 /** A source belongs to a cross-source FIFO cycle that cannot be replayed one source at a time. */
 export class SourceReplayDependencyCycleError extends Schema.TaggedError<SourceReplayDependencyCycleError>()(
   "SourceReplayDependencyCycleError",
@@ -65,6 +78,7 @@ export interface SourceReplayRepositoryShape {
     | SourceReplayDependencyCycleError
     | SourceReplayDependencyError
     | SourceReplayDependencyPendingError
+    | SourceReplaySchedulingPendingError
     | SyncEngineStorageError
   >
 }

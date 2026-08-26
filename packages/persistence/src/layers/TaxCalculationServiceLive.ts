@@ -21,6 +21,7 @@ import { schema } from "../schema/index.ts"
 import {
   TaxCalculationIncompleteDataError,
   TaxCalculationPendingObservationsError,
+  TaxCalculationPendingRecomputationError,
   TaxCalculationService,
   TaxCalculationUnsupportedCurrencyError,
   UnsupportedJurisdictionError,
@@ -92,6 +93,7 @@ const normalizeTaxCalculationError = (error: unknown): TaxCalculationServiceErro
   error instanceof UnsupportedJurisdictionError ||
   error instanceof TaxCalculationIncompleteDataError ||
   error instanceof TaxCalculationPendingObservationsError ||
+  error instanceof TaxCalculationPendingRecomputationError ||
   error instanceof TaxCalculationUnsupportedCurrencyError ||
   error instanceof PersistenceError
     ? error
@@ -267,7 +269,99 @@ const make = Effect.gen(function* () {
               and decision.status = 'active'
               and rematerialization.status <> 'complete'
           )`
-        )
+        ),
+        sql<boolean>`exists (
+          select 1
+          from ${schema.providerTransfers} conflicting_exact_transfer
+          where conflicting_exact_transfer.source_id = ${sourceId}
+            and conflicting_exact_transfer.provider_asset_id = ${schema.providerAssetSourceUses.providerAssetRowId}
+            and conflicting_exact_transfer.observed_blockchain_id is not null
+            and conflicting_exact_transfer.observed_representation_type is not null
+            and not exists (
+              select 1
+              from ${schema.assetRepresentations} representation
+              where representation.blockchain_id = conflicting_exact_transfer.observed_blockchain_id
+                and representation.type = conflicting_exact_transfer.observed_representation_type
+                and lower(representation.contract_address) is not distinct from lower(conflicting_exact_transfer.observed_contract_address)
+                and representation.mint_address is not distinct from conflicting_exact_transfer.observed_mint_address
+            )
+            and (
+              select count(distinct target_mapping.canonical_asset_id)
+              from ${schema.providerTransfers} identity_transfer
+              inner join ${schema.sources} identity_source
+                on identity_source.id = identity_transfer.source_id
+              inner join ${schema.providerAssetMappings} target_mapping
+                on target_mapping.provider_asset_row_id = identity_transfer.provider_asset_id
+                and target_mapping.mapping_kind = 'asset'
+              where identity_source.principal_id = (
+                  select source_owner.principal_id
+                  from ${schema.sources} source_owner
+                  where source_owner.id = ${sourceId}
+                )
+                and identity_transfer.observed_blockchain_id = conflicting_exact_transfer.observed_blockchain_id
+                and identity_transfer.observed_representation_type = conflicting_exact_transfer.observed_representation_type
+                and lower(identity_transfer.observed_contract_address) is not distinct from lower(conflicting_exact_transfer.observed_contract_address)
+                and identity_transfer.observed_mint_address is not distinct from conflicting_exact_transfer.observed_mint_address
+                and target_mapping.canonical_asset_id is not null
+            ) <> 1
+        )`,
+        sql<boolean>`exists (
+          select 1
+          from ${schema.principalAssetOverrides} inclusion_override
+          where inclusion_override.principal_id = (
+              select source_owner.principal_id
+              from ${schema.sources} source_owner
+              where source_owner.id = ${sourceId}
+            )
+            and inclusion_override.kind = 'inclusion'
+            and inclusion_override.target_kind = 'provider_asset'
+            and inclusion_override.provider_asset_row_id = ${schema.providerAssetSourceUses.providerAssetRowId}
+            and inclusion_override.action = 'set'
+            and inclusion_override.replacement_inclusion_state = 'included'
+            and inclusion_override.id = (
+              select latest_override.id
+              from ${schema.principalAssetOverrides} latest_override
+              where latest_override.principal_id = inclusion_override.principal_id
+                and latest_override.kind = inclusion_override.kind
+                and latest_override.target_kind = inclusion_override.target_kind
+                and latest_override.provider_asset_row_id = inclusion_override.provider_asset_row_id
+              order by latest_override.created_at desc, latest_override.id desc
+              limit 1
+            )
+        )`,
+        sql<boolean>`exists (
+          select 1
+          from ${schema.providerTransfers} exact_transfer
+          inner join ${schema.principalAssetOverrides} inclusion_override
+            on inclusion_override.principal_id = (
+                select source_owner.principal_id
+                from ${schema.sources} source_owner
+                where source_owner.id = ${sourceId}
+              )
+            and inclusion_override.kind = 'inclusion'
+            and inclusion_override.target_kind = 'representation'
+            and inclusion_override.blockchain_id = exact_transfer.observed_blockchain_id
+            and inclusion_override.representation_type = exact_transfer.observed_representation_type
+            and lower(inclusion_override.contract_address) is not distinct from lower(exact_transfer.observed_contract_address)
+            and inclusion_override.mint_address is not distinct from exact_transfer.observed_mint_address
+          where exact_transfer.source_id = ${sourceId}
+            and exact_transfer.provider_asset_id = ${schema.providerAssetSourceUses.providerAssetRowId}
+            and inclusion_override.action = 'set'
+            and inclusion_override.replacement_inclusion_state = 'included'
+            and inclusion_override.id = (
+              select latest_override.id
+              from ${schema.principalAssetOverrides} latest_override
+              where latest_override.principal_id = inclusion_override.principal_id
+                and latest_override.kind = inclusion_override.kind
+                and latest_override.target_kind = inclusion_override.target_kind
+                and latest_override.blockchain_id = inclusion_override.blockchain_id
+                and latest_override.representation_type = inclusion_override.representation_type
+                and lower(latest_override.contract_address) is not distinct from lower(inclusion_override.contract_address)
+                and latest_override.mint_address is not distinct from inclusion_override.mint_address
+              order by latest_override.created_at desc, latest_override.id desc
+              limit 1
+            )
+        )`
       ),
       sql`not (
         not exists (
@@ -309,6 +403,117 @@ const make = Effect.gen(function* () {
                   )
               )
               or (
+                not exists (
+                  select 1
+                  from principal_asset_overrides inclusion_override
+                  where inclusion_override.principal_id = (
+                      select ${schema.sources.principalId}
+                      from ${schema.sources}
+                      where ${schema.sources.id} = ${sourceId}
+                    )
+                    and inclusion_override.kind = 'inclusion'
+                    and inclusion_override.target_kind = 'representation'
+                    and inclusion_override.blockchain_id = exact_transfer.observed_blockchain_id
+                    and inclusion_override.representation_type = exact_transfer.observed_representation_type
+                    and lower(inclusion_override.contract_address) is not distinct from lower(exact_transfer.observed_contract_address)
+                    and inclusion_override.mint_address is not distinct from exact_transfer.observed_mint_address
+                    and inclusion_override.action = 'set'
+                    and inclusion_override.replacement_inclusion_state = 'included'
+                    and inclusion_override.id = (
+                      select latest_override.id
+                      from principal_asset_overrides latest_override
+                      where latest_override.principal_id = inclusion_override.principal_id
+                        and latest_override.kind = inclusion_override.kind
+                        and latest_override.target_kind = inclusion_override.target_kind
+                        and latest_override.blockchain_id = inclusion_override.blockchain_id
+                        and latest_override.representation_type = inclusion_override.representation_type
+                        and lower(latest_override.contract_address) is not distinct from lower(inclusion_override.contract_address)
+                        and latest_override.mint_address is not distinct from inclusion_override.mint_address
+                      order by latest_override.created_at desc, latest_override.id desc
+                      limit 1
+                    )
+                )
+                and (
+                (
+                  exists (
+                    select 1
+                    from ${schema.assetRepresentations} representation
+                    where representation.blockchain_id = exact_transfer.observed_blockchain_id
+                      and representation.type = exact_transfer.observed_representation_type
+                      and lower(representation.contract_address) is not distinct from lower(exact_transfer.observed_contract_address)
+                      and representation.mint_address is not distinct from exact_transfer.observed_mint_address
+                      and representation.decimals is not null
+                  )
+                  or not exists (
+                    select 1
+                    from ${schema.providerTransfers} target_transfer
+                    where target_transfer.source_id = exact_transfer.source_id
+                      and target_transfer.observed_blockchain_id = exact_transfer.observed_blockchain_id
+                      and target_transfer.observed_representation_type is not distinct from exact_transfer.observed_representation_type
+                      and lower(target_transfer.observed_contract_address) is not distinct from lower(exact_transfer.observed_contract_address)
+                      and target_transfer.observed_mint_address is not distinct from exact_transfer.observed_mint_address
+                      and target_transfer.observed_decimals is null
+                  )
+                )
+                and (
+                  exists (
+                    select 1
+                    from ${schema.assetRepresentations} representation
+                    where representation.blockchain_id = exact_transfer.observed_blockchain_id
+                      and representation.type = exact_transfer.observed_representation_type
+                      and lower(representation.contract_address) is not distinct from lower(exact_transfer.observed_contract_address)
+                      and representation.mint_address is not distinct from exact_transfer.observed_mint_address
+                  )
+                  or exists (
+                    select 1
+                    from ${schema.providerTransfers} target_transfer
+                    inner join ${schema.sources} target_source
+                      on target_source.id = target_transfer.source_id
+                    inner join ${schema.providerAssetMappings} target_mapping
+                      on target_mapping.provider_asset_row_id = target_transfer.provider_asset_id
+                      and target_mapping.mapping_kind = 'asset'
+                    where target_source.principal_id = (
+                        select source_owner.principal_id
+                        from ${schema.sources} source_owner
+                        where source_owner.id = ${sourceId}
+                      )
+                      and target_transfer.observed_blockchain_id = exact_transfer.observed_blockchain_id
+                      and target_transfer.observed_representation_type = exact_transfer.observed_representation_type
+                      and lower(target_transfer.observed_contract_address) is not distinct from lower(exact_transfer.observed_contract_address)
+                      and target_transfer.observed_mint_address is not distinct from exact_transfer.observed_mint_address
+                      and target_mapping.mapping_status = 'excluded'
+                  )
+                  or exists (
+                    select 1
+                    from ${schema.providerTransfers} target_transfer
+                    inner join ${schema.sources} target_source
+                      on target_source.id = target_transfer.source_id
+                    inner join ${schema.providerAssetMappings} target_mapping
+                      on target_mapping.provider_asset_row_id = target_transfer.provider_asset_id
+                      and target_mapping.mapping_kind = 'asset'
+                    where target_source.principal_id = (
+                        select source_owner.principal_id
+                        from ${schema.sources} source_owner
+                        where source_owner.id = ${sourceId}
+                      )
+                      and target_transfer.observed_blockchain_id = exact_transfer.observed_blockchain_id
+                      and target_transfer.observed_representation_type = exact_transfer.observed_representation_type
+                      and lower(target_transfer.observed_contract_address) is not distinct from lower(exact_transfer.observed_contract_address)
+                      and target_transfer.observed_mint_address is not distinct from exact_transfer.observed_mint_address
+                      and target_mapping.canonical_asset_id is not null
+                    group by
+                      target_transfer.observed_blockchain_id,
+                      target_transfer.observed_representation_type,
+                      lower(target_transfer.observed_contract_address),
+                      target_transfer.observed_mint_address
+                    having count(distinct target_mapping.canonical_asset_id) = 1
+                      and count(distinct target_mapping.canonical_asset_id)
+                        filter (where target_mapping.mapping_status = 'approved') = 1
+                  )
+                )
+                )
+              )
+              or (
                 (
                   exists (
                     select 1
@@ -340,6 +545,37 @@ const make = Effect.gen(function* () {
                         limit 1
                       )
                   )
+                  or exists (
+                    select 1
+                    from principal_asset_overrides identity_override
+                    where identity_override.principal_id = (
+                        select ${schema.sources.principalId}
+                        from ${schema.sources}
+                        where ${schema.sources.id} = ${sourceId}
+                      )
+                      and identity_override.kind = 'identity'
+                      and identity_override.target_kind = 'representation'
+                      and identity_override.blockchain_id = exact_transfer.observed_blockchain_id
+                      and identity_override.representation_type = exact_transfer.observed_representation_type
+                      and lower(identity_override.contract_address) is not distinct from lower(exact_transfer.observed_contract_address)
+                      and identity_override.mint_address is not distinct from exact_transfer.observed_mint_address
+                      and identity_override.action = 'set'
+                      and identity_override.replacement_asset_id is not null
+                      and identity_override.id = (
+                        select latest_identity.id
+                        from principal_asset_overrides latest_identity
+                        where latest_identity.principal_id = identity_override.principal_id
+                          and latest_identity.kind = identity_override.kind
+                          and latest_identity.target_kind = identity_override.target_kind
+                          and latest_identity.blockchain_id = identity_override.blockchain_id
+                          and latest_identity.representation_type = identity_override.representation_type
+                          and lower(latest_identity.contract_address) is not distinct from lower(identity_override.contract_address)
+                          and latest_identity.mint_address is not distinct from identity_override.mint_address
+                        order by latest_identity.created_at desc, latest_identity.id desc
+                        limit 1
+                      )
+                  )
+                )
                   and (
                     exists (
                       select 1
@@ -354,7 +590,6 @@ const make = Effect.gen(function* () {
                       select 1
                       from ${schema.providerTransfers} target_transfer
                       where target_transfer.source_id = exact_transfer.source_id
-                        and target_transfer.provider_asset_id = exact_transfer.provider_asset_id
                         and target_transfer.observed_blockchain_id = exact_transfer.observed_blockchain_id
                         and target_transfer.observed_representation_type is not distinct from exact_transfer.observed_representation_type
                         and lower(target_transfer.observed_contract_address) is not distinct from lower(exact_transfer.observed_contract_address)
@@ -362,9 +597,26 @@ const make = Effect.gen(function* () {
                         and target_transfer.observed_decimals is null
                     )
                   )
-                )
                 and (
-                  ${schema.providerAssetMappings.canonicalAssetId} is not null
+                  (
+                    select count(distinct target_mapping.canonical_asset_id)
+                    from ${schema.providerTransfers} identity_transfer
+                    inner join ${schema.sources} identity_source
+                      on identity_source.id = identity_transfer.source_id
+                    inner join ${schema.providerAssetMappings} target_mapping
+                      on target_mapping.provider_asset_row_id = identity_transfer.provider_asset_id
+                      and target_mapping.mapping_kind = 'asset'
+                    where identity_source.principal_id = (
+                        select source_owner.principal_id
+                        from ${schema.sources} source_owner
+                        where source_owner.id = ${sourceId}
+                      )
+                      and identity_transfer.observed_blockchain_id = exact_transfer.observed_blockchain_id
+                      and identity_transfer.observed_representation_type = exact_transfer.observed_representation_type
+                      and lower(identity_transfer.observed_contract_address) is not distinct from lower(exact_transfer.observed_contract_address)
+                      and identity_transfer.observed_mint_address is not distinct from exact_transfer.observed_mint_address
+                      and target_mapping.canonical_asset_id is not null
+                  ) = 1
                   or exists (
                     select 1
                     from ${schema.assetRepresentations} representation
@@ -482,9 +734,175 @@ const make = Effect.gen(function* () {
                 limit 1
               )
           )
+          or exists (
+            select 1
+            from principal_asset_overrides identity_override
+            inner join ${schema.providerAssets} provider_asset
+              on provider_asset.id = ${schema.providerAssetSourceUses.providerAssetRowId}
+            where identity_override.principal_id = (
+                select ${schema.sources.principalId}
+                from ${schema.sources}
+                where ${schema.sources.id} = ${sourceId}
+              )
+              and identity_override.kind = 'identity'
+              and identity_override.target_kind = 'provider_asset'
+              and identity_override.provider_asset_row_id = ${schema.providerAssetSourceUses.providerAssetRowId}
+              and identity_override.action = 'set'
+              and identity_override.replacement_asset_id is not null
+              and provider_asset.exponent is not null
+              and provider_asset.provider_type is distinct from 'unsupported'
+              and identity_override.id = (
+                select latest_identity.id
+                from principal_asset_overrides latest_identity
+                where latest_identity.principal_id = identity_override.principal_id
+                  and latest_identity.kind = identity_override.kind
+                  and latest_identity.target_kind = identity_override.target_kind
+                  and latest_identity.provider_asset_row_id = identity_override.provider_asset_row_id
+                order by latest_identity.created_at desc, latest_identity.id desc
+                limit 1
+              )
+          )
         )
       )`
     )
+
+  const countPendingProviderlessExactObservations = (sourceId: string) =>
+    db
+      .select({
+        pendingObservations: sql<number>`count(distinct (
+          ${schema.providerTransfers.observedBlockchainId},
+          ${schema.providerTransfers.observedRepresentationType},
+          lower(${schema.providerTransfers.observedContractAddress}),
+          ${schema.providerTransfers.observedMintAddress}
+        ))`,
+      })
+      .from(schema.providerTransfers)
+      .where(
+        and(
+          eq(schema.providerTransfers.sourceId, sourceId),
+          isNull(schema.providerTransfers.providerAssetId),
+          eq(schema.providerTransfers.processingMode, "accounting_and_evidence"),
+          sql`${schema.providerTransfers.observedBlockchainId} is not null`,
+          sql`${schema.providerTransfers.observedRepresentationType} is not null`,
+          sql`not exists (
+            select 1
+            from ${schema.inventoryMovements} movement
+            where movement.provider_transfer_id = ${schema.providerTransfers.id}
+          )`,
+          sql`not (
+            (
+              ${schema.providerTransfers.observedDecimals} is not null
+              or exists (
+                select 1
+                from ${schema.assetRepresentations} representation
+                where representation.blockchain_id = ${schema.providerTransfers.observedBlockchainId}
+                  and representation.type = ${schema.providerTransfers.observedRepresentationType}
+                  and lower(representation.contract_address) is not distinct from lower(${schema.providerTransfers.observedContractAddress})
+                  and representation.mint_address is not distinct from ${schema.providerTransfers.observedMintAddress}
+                  and representation.decimals is not null
+              )
+            )
+            and (
+              exists (
+                select 1
+                from ${schema.principalAssetOverrides} inclusion_override
+                where inclusion_override.principal_id = (
+                    select source_owner.principal_id
+                    from ${schema.sources} source_owner
+                    where source_owner.id = ${sourceId}
+                  )
+                  and inclusion_override.kind = 'inclusion'
+                  and inclusion_override.target_kind = 'representation'
+                  and inclusion_override.blockchain_id = ${schema.providerTransfers.observedBlockchainId}
+                  and inclusion_override.representation_type = ${schema.providerTransfers.observedRepresentationType}
+                  and lower(inclusion_override.contract_address) is not distinct from lower(${schema.providerTransfers.observedContractAddress})
+                  and inclusion_override.mint_address is not distinct from ${schema.providerTransfers.observedMintAddress}
+                  and inclusion_override.action = 'set'
+                  and inclusion_override.replacement_inclusion_state = 'excluded'
+                  and inclusion_override.id = (
+                    select latest_override.id
+                    from ${schema.principalAssetOverrides} latest_override
+                    where latest_override.principal_id = inclusion_override.principal_id
+                      and latest_override.kind = inclusion_override.kind
+                      and latest_override.target_kind = inclusion_override.target_kind
+                      and latest_override.blockchain_id = inclusion_override.blockchain_id
+                      and latest_override.representation_type = inclusion_override.representation_type
+                      and lower(latest_override.contract_address) is not distinct from lower(inclusion_override.contract_address)
+                      and latest_override.mint_address is not distinct from inclusion_override.mint_address
+                    order by latest_override.created_at desc, latest_override.id desc
+                    limit 1
+                  )
+              )
+              or (
+                not exists (
+                  select 1
+                  from ${schema.principalAssetOverrides} inclusion_override
+                  where inclusion_override.principal_id = (
+                      select source_owner.principal_id
+                      from ${schema.sources} source_owner
+                      where source_owner.id = ${sourceId}
+                    )
+                    and inclusion_override.kind = 'inclusion'
+                    and inclusion_override.target_kind = 'representation'
+                    and inclusion_override.blockchain_id = ${schema.providerTransfers.observedBlockchainId}
+                    and inclusion_override.representation_type = ${schema.providerTransfers.observedRepresentationType}
+                    and lower(inclusion_override.contract_address) is not distinct from lower(${schema.providerTransfers.observedContractAddress})
+                    and inclusion_override.mint_address is not distinct from ${schema.providerTransfers.observedMintAddress}
+                    and inclusion_override.action = 'set'
+                    and inclusion_override.replacement_inclusion_state = 'included'
+                    and inclusion_override.id = (
+                      select latest_override.id
+                      from ${schema.principalAssetOverrides} latest_override
+                      where latest_override.principal_id = inclusion_override.principal_id
+                        and latest_override.kind = inclusion_override.kind
+                        and latest_override.target_kind = inclusion_override.target_kind
+                        and latest_override.blockchain_id = inclusion_override.blockchain_id
+                        and latest_override.representation_type = inclusion_override.representation_type
+                        and lower(latest_override.contract_address) is not distinct from lower(inclusion_override.contract_address)
+                        and latest_override.mint_address is not distinct from inclusion_override.mint_address
+                      order by latest_override.created_at desc, latest_override.id desc
+                      limit 1
+                    )
+                )
+                and (
+                  exists (
+                    select 1
+                    from ${schema.assetRepresentations} representation
+                    where representation.blockchain_id = ${schema.providerTransfers.observedBlockchainId}
+                      and representation.type = ${schema.providerTransfers.observedRepresentationType}
+                      and lower(representation.contract_address) is not distinct from lower(${schema.providerTransfers.observedContractAddress})
+                      and representation.mint_address is not distinct from ${schema.providerTransfers.observedMintAddress}
+                      and representation.is_spam = true
+                  )
+                  or exists (
+                    select 1
+                    from ${schema.providerTransfers} target_transfer
+                    inner join ${schema.sources} target_source
+                      on target_source.id = target_transfer.source_id
+                    inner join ${schema.providerAssetMappings} target_mapping
+                      on target_mapping.provider_asset_row_id = target_transfer.provider_asset_id
+                      and target_mapping.mapping_kind = 'asset'
+                    where target_source.principal_id = (
+                        select source_owner.principal_id
+                        from ${schema.sources} source_owner
+                        where source_owner.id = ${sourceId}
+                      )
+                      and target_transfer.observed_blockchain_id = ${schema.providerTransfers.observedBlockchainId}
+                      and target_transfer.observed_representation_type = ${schema.providerTransfers.observedRepresentationType}
+                      and lower(target_transfer.observed_contract_address) is not distinct from lower(${schema.providerTransfers.observedContractAddress})
+                      and target_transfer.observed_mint_address is not distinct from ${schema.providerTransfers.observedMintAddress}
+                      and target_mapping.mapping_status = 'excluded'
+                  )
+                )
+              )
+            )
+          )`
+        )
+      )
+      .pipe(
+        Effect.map((rows) => Number(rows[0]?.pendingObservations ?? 0)),
+        wrapSqlError("taxCalculationService.countPendingProviderlessExactObservations")
+      )
 
   /**
    * Count provider asset observations used by the source whose transactions
@@ -497,20 +915,26 @@ const make = Effect.gen(function* () {
    */
   const countPendingObservations = (sourceId: string) =>
     Effect.gen(function* () {
-      const [row] = yield* db
-        .select({ pendingObservations: count() })
-        .from(schema.providerAssetSourceUses)
-        .leftJoin(
-          schema.providerAssetMappings,
-          eq(
-            schema.providerAssetMappings.providerAssetRowId,
-            schema.providerAssetSourceUses.providerAssetRowId
+      const [providerAssetCount, providerlessExactCount] = yield* Effect.all([
+        db
+          .select({ pendingObservations: count() })
+          .from(schema.providerAssetSourceUses)
+          .leftJoin(
+            schema.providerAssetMappings,
+            eq(
+              schema.providerAssetMappings.providerAssetRowId,
+              schema.providerAssetSourceUses.providerAssetRowId
+            )
           )
-        )
-        .where(blockingObservationFilter(sourceId))
-        .pipe(wrapSqlError("taxCalculationService.countPendingObservations"))
+          .where(blockingObservationFilter(sourceId))
+          .pipe(
+            Effect.map((rows) => rows[0]?.pendingObservations ?? 0),
+            wrapSqlError("taxCalculationService.countPendingObservations")
+          ),
+        countPendingProviderlessExactObservations(sourceId),
+      ])
 
-      return row?.pendingObservations ?? 0
+      return providerAssetCount + providerlessExactCount
     }).pipe(
       withObservedOperation({
         name: "persistence.tax-calculation.count-pending-observations",
@@ -594,6 +1018,7 @@ const make = Effect.gen(function* () {
                 where affecting_override.target_kind = 'provider_asset'
                   and source_use.source_id = ${sourceId}
                   and source_use.provider_asset_row_id = affecting_override.provider_asset_row_id
+                  and source_use.has_chainless_observation = true
 
                 union all
 
@@ -866,13 +1291,20 @@ const make = Effect.gen(function* () {
           hasPendingTransactionReview(sourceId),
         ])
 
-      if (pendingObservationCount > 0 || pendingOverrideReplay || pendingTransactionReview) {
+      if (pendingObservationCount > 0) {
         const blockingObservations = yield* loadBlockingObservations(sourceId)
 
         return yield* new TaxCalculationPendingObservationsError({
           sourceId,
-          pendingObservationCount: Math.max(pendingObservationCount, 1),
+          pendingObservationCount,
           blockingObservations,
+        })
+      }
+      if (pendingOverrideReplay || pendingTransactionReview) {
+        return yield* new TaxCalculationPendingRecomputationError({
+          sourceId,
+          pendingOverrideReplay,
+          pendingTransactionReview,
         })
       }
 

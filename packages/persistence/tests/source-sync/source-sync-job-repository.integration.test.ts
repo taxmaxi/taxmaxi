@@ -5,6 +5,7 @@ import { drizzle } from "../../src/layers/PgClientLive.ts"
 import { SourceSyncJobRepositoryLive } from "../../src/layers/SourceSyncJobRepositoryLive.ts"
 import { schema } from "../../src/schema/index.ts"
 import {
+  TEST_BTC_ASSET_ID,
   TEST_SOURCE_ID,
   TEST_PRINCIPAL_ID,
   TEST_USER_ID,
@@ -1235,6 +1236,242 @@ describe("SourceSyncJobRepositoryLive", () => {
     )
 
     expect(visibleJob).toMatchObject({ jobId: followUpJob?.id, status: "queued" })
+  })
+
+  it("does not attach a provider override to an exact-only source use", async () => {
+    const overrideId = await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const [providerAsset] = yield* db
+          .insert(schema.providerAssets)
+          .values({
+            provider: "coinbase",
+            providerAssetId: "exact-only-override-application",
+            currencyCode: "EXACT",
+            exponent: 8,
+            providerType: "crypto",
+            retrievedAt: new Date("2025-01-01T00:00:00.000Z"),
+          })
+          .returning({ id: schema.providerAssets.id })
+        if (providerAsset === undefined) return yield* Effect.die("Failed to seed provider asset")
+        yield* db
+          .insert(schema.assets)
+          .values({
+            id: TEST_BTC_ASSET_ID,
+            name: "Exact-only override asset",
+            symbol: "EXACT",
+            type: "fungible",
+          })
+          .onConflictDoNothing()
+        yield* db.insert(schema.providerAssetSourceUses).values({
+          providerAssetRowId: providerAsset.id,
+          sourceId: TEST_SOURCE_ID,
+          hasChainlessObservation: false,
+        })
+        const [override] = yield* db
+          .insert(schema.principalAssetOverrides)
+          .values({
+            principalId: TEST_PRINCIPAL_ID,
+            kind: "identity",
+            targetKind: "provider_asset",
+            providerAssetRowId: providerAsset.id,
+            action: "set",
+            inspectedSystemRevision: "exact-only-provider-override",
+            inspectedIdentityState: "unresolved",
+            replacementAssetId: TEST_BTC_ASSET_ID,
+            actorId: TEST_USER_ID,
+            reason: "Apply only to chainless observations.",
+          })
+          .returning({ id: schema.principalAssetOverrides.id })
+        if (override === undefined) return yield* Effect.die("Failed to seed provider override")
+        return override.id
+      })
+    )
+    const job = await createJob({ mode: "sync" })
+    await claimJob({ jobId: job.id })
+    await runRepository(
+      Effect.flatMap(SourceSyncJobRepository, (repository) =>
+        repository.completeJob({ jobId: job.id, state: successfulCompletedState })
+      )
+    )
+
+    const applicationCount = await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const applications = yield* db
+          .select({ id: schema.principalAssetOverrideApplications.id })
+          .from(schema.principalAssetOverrideApplications)
+          .where(eq(schema.principalAssetOverrideApplications.overrideId, overrideId))
+        return applications.length
+      })
+    )
+    expect(applicationCount).toBe(0)
+  })
+
+  it("attaches a provider override to a newly observed chainless source use", async () => {
+    const overrideId = await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const [providerAsset] = yield* db
+          .insert(schema.providerAssets)
+          .values({
+            provider: "coinbase",
+            providerAssetId: "chainless-future-override-application",
+            currencyCode: "CHAINLESS",
+            exponent: 8,
+            providerType: "crypto",
+            retrievedAt: new Date("2025-01-01T00:00:00.000Z"),
+          })
+          .returning({ id: schema.providerAssets.id })
+        if (providerAsset === undefined) return yield* Effect.die("Failed to seed provider asset")
+        yield* db
+          .insert(schema.assets)
+          .values({
+            id: TEST_BTC_ASSET_ID,
+            name: "Chainless future override asset",
+            symbol: "CHAINLESS",
+            type: "fungible",
+          })
+          .onConflictDoNothing()
+        yield* db.insert(schema.providerAssetSourceUses).values({
+          providerAssetRowId: providerAsset.id,
+          sourceId: TEST_SOURCE_ID,
+          hasChainlessObservation: true,
+        })
+        const [override] = yield* db
+          .insert(schema.principalAssetOverrides)
+          .values({
+            principalId: TEST_PRINCIPAL_ID,
+            kind: "identity",
+            targetKind: "provider_asset",
+            providerAssetRowId: providerAsset.id,
+            action: "set",
+            inspectedSystemRevision: "chainless-future-provider-override",
+            inspectedIdentityState: "unresolved",
+            replacementAssetId: TEST_BTC_ASSET_ID,
+            actorId: TEST_USER_ID,
+            reason: "Apply to future chainless observations.",
+          })
+          .returning({ id: schema.principalAssetOverrides.id })
+        if (override === undefined) return yield* Effect.die("Failed to seed provider override")
+        return override.id
+      })
+    )
+    const job = await createJob({ mode: "sync" })
+    await claimJob({ jobId: job.id })
+    await runRepository(
+      Effect.flatMap(SourceSyncJobRepository, (repository) =>
+        repository.completeJob({ jobId: job.id, state: successfulCompletedState })
+      )
+    )
+
+    const application = await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const [row] = yield* db
+          .select({
+            replayJobId: schema.principalAssetOverrideApplications.replayJobId,
+            requiresReplay: schema.principalAssetOverrideApplications.requiresReplay,
+          })
+          .from(schema.principalAssetOverrideApplications)
+          .where(eq(schema.principalAssetOverrideApplications.overrideId, overrideId))
+        return row
+      })
+    )
+    expect(application).toEqual({ replayJobId: job.id, requiresReplay: false })
+  })
+
+  it("links a successful replay created exactly at the override timestamp", async () => {
+    const baseBlockchainId = await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const [blockchain] = yield* db
+          .select({ id: schema.blockchains.id })
+          .from(schema.blockchains)
+          .where(eq(schema.blockchains.name, "base"))
+          .limit(1)
+        if (blockchain === undefined) return yield* Effect.die("Missing base blockchain fixture")
+        return blockchain.id
+      })
+    )
+    const { applicationId, jobId } = await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const contractAddress = "0x0000000000000000000000000000000000000148"
+        yield* db.insert(schema.sourceRepresentationUses).values({
+          sourceId: TEST_SOURCE_ID,
+          blockchainId: baseBlockchainId,
+          representationType: "token",
+          contractAddress,
+          mintAddress: null,
+        })
+        const [override] = yield* db
+          .insert(schema.principalAssetOverrides)
+          .values({
+            principalId: TEST_PRINCIPAL_ID,
+            kind: "inclusion",
+            targetKind: "representation",
+            blockchainId: baseBlockchainId,
+            representationType: "token",
+            contractAddress,
+            action: "set",
+            inspectedSystemRevision: "equal-replay-boundary",
+            inspectedInclusionState: "excluded",
+            inspectedInclusionReason: "taxmaxi_policy",
+            replacementInclusionState: "included",
+            actorId: TEST_USER_ID,
+            reason: "Accept a replay starting at the exact write boundary.",
+          })
+          .returning({ id: schema.principalAssetOverrides.id })
+        if (override === undefined) return yield* Effect.die("Failed to seed boundary override")
+        const [job] = yield* db
+          .insert(schema.processingJobs)
+          .values({
+            sourceId: TEST_SOURCE_ID,
+            principalId: TEST_PRINCIPAL_ID,
+            mode: "replay",
+            status: "processing",
+            createdAt: sql`(
+              select ${schema.principalAssetOverrides.createdAt}
+              from ${schema.principalAssetOverrides}
+              where ${schema.principalAssetOverrides.id} = ${override.id}
+            )`,
+          })
+          .returning({ id: schema.processingJobs.id })
+        if (job === undefined) return yield* Effect.die("Failed to seed boundary replay")
+        const [application] = yield* db
+          .insert(schema.principalAssetOverrideApplications)
+          .values({
+            overrideId: override.id,
+            sourceId: TEST_SOURCE_ID,
+            replayJobId: null,
+            requiresReplay: true,
+          })
+          .returning({ id: schema.principalAssetOverrideApplications.id })
+        if (application === undefined) {
+          return yield* Effect.die("Failed to seed boundary application")
+        }
+        return { applicationId: application.id, jobId: job.id }
+      })
+    )
+
+    await runRepository(
+      Effect.flatMap(SourceSyncJobRepository, (repository) =>
+        repository.completeJob({ jobId, state: successfulCompletedState })
+      )
+    )
+
+    const linkedReplayJobId = await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const [application] = yield* db
+          .select({ replayJobId: schema.principalAssetOverrideApplications.replayJobId })
+          .from(schema.principalAssetOverrideApplications)
+          .where(eq(schema.principalAssetOverrideApplications.id, applicationId))
+        return application?.replayJobId
+      })
+    )
+    expect(linkedReplayJobId).toBe(jobId)
   })
 
   it.each([
