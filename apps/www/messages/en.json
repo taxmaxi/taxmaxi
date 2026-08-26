@@ -173,6 +173,58 @@
       "bitcoinUnsupported": "No Bitcoin support yet.",
       "submit": "Add wallet",
       "error": "Couldn't add this wallet."
+    },
+    "dashboard": {
+      "tabs": {
+        "assets": "Assets",
+        "transactions": "Transactions",
+        "taxes": "Taxes"
+      },
+      "neverSynced": "Never synced",
+      "sources": {
+        "sync": "Sync",
+        "syncSource": "Sync {sourceName}",
+        "showAllSources": "Show all sources",
+        "showSource": "Show {sourceName}",
+        "kindExchange": "Exchange",
+        "kindWallet": "Wallet"
+      },
+      "assets": {
+        "headerAsset": "Asset",
+        "headerAmount": "Amount",
+        "headerPrice": "Price",
+        "headerTotalValue": "Total value",
+        "headerUnrealizedProfitLoss": "Unrealized P/L",
+        "loadError": "Asset values could not be loaded. Try again in a moment.",
+        "empty": "No assets with an open balance yet.",
+        "logoAlt": "{name} logo"
+      },
+      "transactions": {
+        "eyebrow": "Transaction activity",
+        "title": "Transactions",
+        "description": "Imported accounting transactions from all connected sources.",
+        "totalOne": "{count} transaction",
+        "totalMany": "{count} transactions",
+        "loading": "Loading transactions…",
+        "loadErrorTitle": "Transactions could not be loaded.",
+        "loadErrorHint": "Try the request again.",
+        "retry": "Retry",
+        "empty": "No transactions yet.",
+        "unclassified": "Unclassified",
+        "movementsPending": "Accounting details pending",
+        "movementsMore": "+{count} more",
+        "needsReview": "Needs review",
+        "realizedGainLoss": "Realized gain/loss",
+        "gainLossPending": "Pending",
+        "gainLossNotApplicable": "Not applicable",
+        "pageUnavailable": "Page unavailable",
+        "pageRange": "{start}–{end} of {total}",
+        "pagesLabel": "Transaction pages",
+        "previousPage": "Previous page",
+        "previous": "Previous",
+        "nextPage": "Next page",
+        "next": "Next"
+      }
     }
   },
   "assetCatalog": {

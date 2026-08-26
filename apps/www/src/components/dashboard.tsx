@@ -254,9 +254,11 @@ export function Dashboard({
 
           <Tabs defaultValue="assets" className="gap-y-8">
             <TabsList>
-              <TabsTrigger value="assets">Assets</TabsTrigger>
-              <TabsTrigger value="transactions">Transactions</TabsTrigger>
-              <TabsTrigger value="taxes">Taxes</TabsTrigger>
+              <TabsTrigger value="assets">{m["app.dashboard.tabs.assets"]()}</TabsTrigger>
+              <TabsTrigger value="transactions">
+                {m["app.dashboard.tabs.transactions"]()}
+              </TabsTrigger>
+              <TabsTrigger value="taxes">{m["app.dashboard.tabs.taxes"]()}</TabsTrigger>
             </TabsList>
             <TabsContent value="assets">
               <AssetsTable

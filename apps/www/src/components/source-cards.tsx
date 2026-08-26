@@ -4,6 +4,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react"
 import { RefreshCw } from "lucide-react"
 
 import { cn } from "#/lib/utils"
+import { m } from "#/paraglide/messages"
 
 import { AddWalletCard, type NameResolution } from "./add-wallet-card"
 import { SourceCard, type Source } from "./source-card"
@@ -432,7 +433,11 @@ function SourceCardStack({
 
           return (
             <FanCard
-              aria-label={`${active ? "Show all sources" : `Show ${source.name}`}`}
+              aria-label={
+                active
+                  ? m["app.dashboard.sources.showAllSources"]()
+                  : m["app.dashboard.sources.showSource"]({ sourceName: source.name })
+              }
               aria-pressed={active}
               className="cursor-pointer rounded-2xl outline-none focus-visible:ring-3 focus-visible:ring-ring/40"
               hoverPlacement={{
@@ -465,7 +470,9 @@ function SourceCardStack({
                 action={
                   onSourceSync && !isSyncing ? (
                     <button
-                      aria-label={`Sync ${source.name}`}
+                      aria-label={m["app.dashboard.sources.syncSource"]({
+                        sourceName: source.name,
+                      })}
                       className="relative inline-flex h-7 touch-manipulation items-center gap-1 rounded-full border border-white/24 bg-white/16 px-2.5 text-xs font-medium text-current shadow-sm backdrop-blur-md transition-[background-color,border-color,transform] duration-150 before:absolute before:-inset-y-2 before:inset-x-0 hover:bg-white/24 focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-white/35 [&_svg]:size-3"
                       onClick={(event) => {
                         event.stopPropagation()
@@ -474,7 +481,7 @@ function SourceCardStack({
                       type="button"
                     >
                       <RefreshCw aria-hidden="true" />
-                      <span>Sync</span>
+                      <span>{m["app.dashboard.sources.sync"]()}</span>
                     </button>
                   ) : undefined
                 }
