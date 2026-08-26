@@ -1017,6 +1017,30 @@ const make = Effect.gen(function* () {
     Effect.gen(function* () {
       const provider = source.providerKey ?? "unknown"
       const providerModule = yield* resolveProviderModule({ providerKey: provider })
+
+      // Replays re-normalize from stored mappings, so stale rows must be
+      // refreshed to the current defaults before any record is re-derived.
+      const referenceRefresh = yield* providerModule.refreshReferenceData().pipe(
+        sourceSyncSpan({
+          name: "source-replay.refresh-reference-data",
+          attributes: { sourceId: source.id, jobId, provider },
+          kind: "client",
+        })
+      )
+
+      yield* Effect.logInfo(
+        {
+          sourceId: source.id,
+          jobId,
+          provider,
+          transactionTypeCatalogCount: referenceRefresh.transactionTypeCatalogCount,
+          providerAssetCatalogCount: referenceRefresh.providerAssetCatalogCount,
+          defaultTransactionMappingCount: referenceRefresh.defaultTransactionMappingCount,
+          defaultProviderAssetMappingCount: referenceRefresh.defaultProviderAssetMappingCount,
+        },
+        "source-replay:reference-data-refreshed"
+      )
+
       const initialExecution = yield* sourceSyncStateRepository
         .getExecutionState({ sourceId: source.id })
         .pipe(

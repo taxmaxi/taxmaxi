@@ -493,6 +493,21 @@ const calculateTax = () =>
     })
   }).pipe(Effect.provide(TestLayer))
 
+const revertTxMappingToNoLeg = () =>
+  Effect.gen(function* () {
+    const db = yield* drizzle
+
+    yield* db
+      .update(schema.providerTransactionTypeMappings)
+      .set({ resolutionStrategy: "no_leg" })
+      .where(
+        and(
+          eq(schema.providerTransactionTypeMappings.provider, "coinbase"),
+          eq(schema.providerTransactionTypeMappings.providerTransactionType, "tx")
+        )
+      )
+  }).pipe(Effect.provide(TestPgClientLive))
+
 const makeReceiveSyncRecords = ({
   walletAddress,
   txHash,
@@ -2014,6 +2029,9 @@ describe("coinbase normalization persistence", () => {
         const taxAfterSync = yield* calculateTax()
         expect(taxAfterSync.taxableGains).toBe(7050)
 
+        // Simulate a source last synced while tx still mapped to no_leg: the
+        // replay must refresh the stored mapping before re-deriving legs.
+        yield* revertTxMappingToNoLeg()
         const replay = yield* replaySource()
         expect(replay.status).toBe("completed")
 
