@@ -5,7 +5,7 @@
  */
 
 import { SyncCreditReasonCode } from "@my/core/billing"
-import { and, asc, eq, inArray, isNotNull, isNull, lt, or } from "drizzle-orm"
+import { and, asc, eq, inArray, isNotNull, isNull, lt, ne, or } from "drizzle-orm"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import * as Schema from "effect/Schema"
@@ -161,7 +161,79 @@ const make = Effect.gen(function* () {
           Effect.asVoid,
           wrapSyncEngineSqlError("sourceSyncJobRepository.materializeFollowUpJob.link")
         )
+
+      // The follow-up replay now owns every unfinished rebuild for this
+      // source, including rows stuck at operator_attention from earlier
+      // failures. Repointing keeps rebuild tracking on the job that will
+      // actually run next.
+      if (followUpMode === "replay") {
+        yield* executor
+          .update(schema.assetDecisionRematerializations)
+          .set({
+            processingJobId: followUpJob.id,
+            status: "pending",
+            failureCode: null,
+            lastFailureAt: null,
+            updatedAt: createdAt,
+          })
+          .where(
+            and(
+              eq(schema.assetDecisionRematerializations.sourceId, sourceId),
+              ne(schema.assetDecisionRematerializations.status, "complete")
+            )
+          )
+          .pipe(
+            Effect.asVoid,
+            wrapSyncEngineSqlError("sourceSyncJobRepository.materializeFollowUpJob.repointRebuilds")
+          )
+      }
     })
+
+  /**
+   * Record the outcome of a finished replay on every unfinished decision
+   * rebuild for the source. A replay rebuilds the whole source from raw
+   * records, so one clean replay completes every tracked rebuild, and any
+   * failure parks them at operator_attention until a later replay succeeds.
+   * Rebuild readers (tax readiness, exception status) trust this stored
+   * status instead of re-deriving it from job chains.
+   */
+  const settleSourceRebuilds = ({
+    executor,
+    sourceId,
+    outcome,
+    at,
+  }: {
+    readonly executor: SourceSyncJobExecutor
+    readonly sourceId: string
+    readonly outcome:
+      | { readonly _tag: "complete" }
+      | { readonly _tag: "failed"; readonly failureCode: string }
+    readonly at: Date
+  }) =>
+    executor
+      .update(schema.assetDecisionRematerializations)
+      .set(
+        outcome._tag === "complete"
+          ? {
+              status: "complete",
+              failureCode: null,
+              lastFailureAt: null,
+              updatedAt: at,
+            }
+          : {
+              status: "operator_attention",
+              failureCode: outcome.failureCode,
+              lastFailureAt: at,
+              updatedAt: at,
+            }
+      )
+      .where(
+        and(
+          eq(schema.assetDecisionRematerializations.sourceId, sourceId),
+          ne(schema.assetDecisionRematerializations.status, "complete")
+        )
+      )
+      .pipe(Effect.asVoid, wrapSyncEngineSqlError("sourceSyncJobRepository.settleSourceRebuilds"))
 
   const selectActiveJobFields = {
     id: schema.processingJobs.id,
@@ -541,6 +613,7 @@ const make = Effect.gen(function* () {
               id: schema.processingJobs.id,
               sourceId: schema.processingJobs.sourceId,
               principalId: schema.processingJobs.principalId,
+              mode: schema.processingJobs.mode,
               followUpMode: schema.processingJobs.followUpMode,
             })
             .pipe(wrapSyncEngineSqlError("sourceSyncJobRepository.recoverStaleActiveJob.update"))
@@ -570,6 +643,15 @@ const make = Effect.gen(function* () {
             followUpMode: job.followUpMode,
             createdAt: completedAt,
           })
+
+          if (job.mode === "replay" && job.followUpMode !== "replay") {
+            yield* settleSourceRebuilds({
+              executor: tx,
+              sourceId: job.sourceId,
+              outcome: { _tag: "failed", failureCode: "replay_interrupted" },
+              at: completedAt,
+            })
+          }
 
           yield* Effect.logWarning(
             { sourceId, jobId, completedAt: completedAt.toISOString() },
@@ -601,6 +683,7 @@ const make = Effect.gen(function* () {
               id: schema.processingJobs.id,
               sourceId: schema.processingJobs.sourceId,
               principalId: schema.processingJobs.principalId,
+              mode: schema.processingJobs.mode,
               followUpMode: schema.processingJobs.followUpMode,
             })
             .pipe(wrapSyncEngineSqlError("sourceSyncJobRepository.failJob.update"))
@@ -621,6 +704,15 @@ const make = Effect.gen(function* () {
             followUpMode: job.followUpMode,
             createdAt: completedAt,
           })
+
+          if (job.mode === "replay" && job.followUpMode !== "replay") {
+            yield* settleSourceRebuilds({
+              executor: tx,
+              sourceId: job.sourceId,
+              outcome: { _tag: "failed", failureCode: "replay_failed" },
+              at: completedAt,
+            })
+          }
         })
       )
       .pipe(preserveExpectedExecutionError("sourceSyncJobRepository.failJob"))
@@ -660,6 +752,7 @@ const make = Effect.gen(function* () {
               id: schema.processingJobs.id,
               sourceId: schema.processingJobs.sourceId,
               principalId: schema.processingJobs.principalId,
+              mode: schema.processingJobs.mode,
               followUpMode: schema.processingJobs.followUpMode,
             })
             .pipe(wrapSyncEngineSqlError("sourceSyncJobRepository.failCreditRequiredJob.update"))
@@ -680,6 +773,15 @@ const make = Effect.gen(function* () {
             followUpMode: job.followUpMode,
             createdAt: completedAt,
           })
+
+          if (job.mode === "replay" && job.followUpMode !== "replay") {
+            yield* settleSourceRebuilds({
+              executor: tx,
+              sourceId: job.sourceId,
+              outcome: { _tag: "failed", failureCode: reasonCode },
+              at: completedAt,
+            })
+          }
         })
       )
       .pipe(preserveExpectedExecutionError("sourceSyncJobRepository.failCreditRequiredJob"))
@@ -719,6 +821,7 @@ const make = Effect.gen(function* () {
               id: schema.processingJobs.id,
               sourceId: schema.processingJobs.sourceId,
               principalId: schema.processingJobs.principalId,
+              mode: schema.processingJobs.mode,
               followUpMode: schema.processingJobs.followUpMode,
             })
             .pipe(wrapSyncEngineSqlError("sourceSyncJobRepository.completeJob.update"))
@@ -739,6 +842,21 @@ const make = Effect.gen(function* () {
             followUpMode: job.followUpMode,
             createdAt: completedAt,
           })
+
+          // A replay that skipped rows left derived accounting incomplete
+          // even though the job itself completed, so it must not count as a
+          // finished rebuild.
+          if (job.mode === "replay" && job.followUpMode !== "replay") {
+            yield* settleSourceRebuilds({
+              executor: tx,
+              sourceId: job.sourceId,
+              outcome:
+                state.failedRecords === 0
+                  ? { _tag: "complete" }
+                  : { _tag: "failed", failureCode: "replay_failed_records" },
+              at: completedAt,
+            })
+          }
         })
       )
       .pipe(preserveExpectedExecutionError("sourceSyncJobRepository.completeJob"))

@@ -1,4 +1,10 @@
-import { AuthValidationError, SourceCreditRequiredError } from "@my/rest-api/contracts"
+import {
+  AssetDecisionConflictError,
+  AssetDecisionValidationError,
+  AssetStaleRevisionError,
+  AuthValidationError,
+  SourceCreditRequiredError,
+} from "@my/rest-api/contracts"
 import * as Exit from "effect/Exit"
 import * as Option from "effect/Option"
 import * as Schema from "effect/Schema"
@@ -148,6 +154,42 @@ export const getTaxMaxiCreditRequired = (error: unknown): TaxMaxiCreditRequired 
     onFailure: () => null,
     onSuccess: ({ availableCredits, reasonCode }) => ({ availableCredits, reasonCode }),
   })
+}
+
+export type TaxMaxiAssetDecisionConflict =
+  | "stale_revision"
+  | "ambiguous_identity"
+  | "identity_changed"
+
+export type TaxMaxiAssetDecisionErrorCode =
+  | TaxMaxiAssetDecisionConflict
+  | "invalid_evidence"
+  | "invalid_claim"
+
+const decodeAssetDecisionError = Schema.decodeUnknownExit(
+  Schema.Union([AssetStaleRevisionError, AssetDecisionConflictError, AssetDecisionValidationError])
+)
+
+/** Extract the machine-readable code from an asset exception decision failure. */
+export const getTaxMaxiAssetDecisionErrorCode = (
+  error: unknown
+): TaxMaxiAssetDecisionErrorCode | null => {
+  const candidate = error instanceof TaxMaxiError ? error.cause : error
+
+  return Exit.match(decodeAssetDecisionError(candidate), {
+    onFailure: () => null,
+    onSuccess: ({ code }) => code,
+  })
+}
+
+/** Extract the machine-readable conflict from an asset exception decision failure. */
+export const getTaxMaxiAssetDecisionConflict = (
+  error: unknown
+): TaxMaxiAssetDecisionConflict | null => {
+  const code = getTaxMaxiAssetDecisionErrorCode(error)
+  return code === "stale_revision" || code === "ambiguous_identity" || code === "identity_changed"
+    ? code
+    : null
 }
 
 export const toTaxMaxiError = (error: unknown): TaxMaxiError => {

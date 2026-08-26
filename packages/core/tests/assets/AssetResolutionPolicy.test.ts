@@ -575,6 +575,52 @@ describe("AssetResolutionPolicy", () => {
       })
     })
 
+    it("lets a banned verdict win whenever registry evidence cannot attach", () => {
+      const banned = [AssetLegitimacyClaim.make({ authority: "jupiter", verdict: "banned" })]
+      const decisions = [
+        decide({
+          chain: ChainClaim.make({ ...solanaUsdcChainFact, decimals: 8 }),
+          registry: usdcCoinGeckoClaim(),
+          identity: { ...usdcIdentity(), representations: [] },
+          legitimacy: banned,
+        }),
+        decide({
+          chain: ChainClaim.make({ ...solanaUsdcChainFact, type: "nft" }),
+          registry: usdcCoinGeckoClaim(),
+          identity: { ...usdcIdentity(), representations: [] },
+          legitimacy: banned,
+        }),
+        decide({
+          chain: solanaUsdcChainClaim(),
+          registry: CoinGeckoClaim.make({
+            coinId: "usd-coin",
+            name: "USDC",
+            symbol: "usdc",
+            platforms: [
+              CoinGeckoPlatformMapping.make({
+                platformId: "ethereum",
+                contractAddress: ETHEREUM_USDC_CONTRACT,
+                decimals: 6,
+              }),
+            ],
+          }),
+          identity: { ...usdcIdentity(), representations: [] },
+          legitimacy: banned,
+        }),
+        decide({
+          chain: longTailChainClaim(),
+          registry: longTailCoinGeckoClaim({ decimals: 6 }),
+          legitimacy: banned,
+        }),
+      ]
+
+      expect(decisions).toEqual(
+        decisions.map(() =>
+          expect.objectContaining({ _tag: "excluded", reason: "authority_banned" })
+        )
+      )
+    })
+
     it("fails closed when the owned representation disagrees with the chain claim", () => {
       const incompatibleDecimals = decide({
         chain: ChainClaim.make({
@@ -643,10 +689,11 @@ describe("AssetResolutionPolicy", () => {
   })
 
   describe("decideAssetResolution create_standalone", () => {
-    it("creates a standalone asset for an exact unknown representation with no candidates", () => {
+    it("creates a standalone asset for a verified representation with no candidates", () => {
       const decision = decide({
         chain: longTailChainClaim(),
         registry: new RegistryLookupNotFound(),
+        legitimacy: [AssetLegitimacyClaim.make({ authority: "jupiter", verdict: "verified" })],
       })
 
       expect(decision).toMatchObject({
@@ -663,10 +710,31 @@ describe("AssetResolutionPolicy", () => {
       })
     })
 
-    it("creates without a coin id when the registry lookup was skipped", () => {
+    it("stays pending when no registry vouches for the token", () => {
+      const registryMiss = decide({
+        chain: longTailChainClaim(),
+        registry: new RegistryLookupNotFound(),
+      })
+      const lookupSkipped = decide({
+        chain: longTailChainClaim(),
+        registry: new RegistryLookupSkipped(),
+      })
+
+      expect(registryMiss).toMatchObject({
+        _tag: "pending",
+        reason: "unverified_asset",
+      })
+      expect(lookupSkipped).toMatchObject({
+        _tag: "pending",
+        reason: "unverified_asset",
+      })
+    })
+
+    it("creates without a coin id when the lookup was skipped but the token is verified", () => {
       const decision = decide({
         chain: longTailChainClaim(),
         registry: new RegistryLookupSkipped(),
+        legitimacy: [AssetLegitimacyClaim.make({ authority: "jupiter", verdict: "verified" })],
       })
 
       expect(decision).toMatchObject({
@@ -715,6 +783,7 @@ describe("AssetResolutionPolicy", () => {
     it("falls back to the provider symbol when no display name exists anywhere", () => {
       const decision = decide({
         chain: longTailChainClaim(),
+        legitimacy: [AssetLegitimacyClaim.make({ authority: "jupiter", verdict: "verified" })],
         display: { name: null, symbol: "ORB" },
       })
 
@@ -811,7 +880,7 @@ describe("AssetResolutionPolicy", () => {
       })
     })
 
-    it("pauses on suspicious signals but creates for non-decisive legitimacy signals", () => {
+    it("pauses on suspicious signals and treats weak legitimacy signals as no vouching", () => {
       const suspicious = decide({
         chain: longTailChainClaim(),
         legitimacy: [AssetLegitimacyClaim.make({ authority: "jupiter", verdict: "suspicious" })],
@@ -829,8 +898,21 @@ describe("AssetResolutionPolicy", () => {
         _tag: "pending",
         reason: "spam_evidence",
       })
-      expect(unverified).toMatchObject({ _tag: "create_standalone" })
-      expect(lowActivity).toMatchObject({ _tag: "create_standalone" })
+      expect(unverified).toMatchObject({ _tag: "pending", reason: "unverified_asset" })
+      expect(lowActivity).toMatchObject({ _tag: "pending", reason: "unverified_asset" })
+    })
+
+    it("lets a registry coin listing vouch even when legitimacy signals stay weak", () => {
+      const decision = decide({
+        chain: longTailChainClaim(),
+        registry: longTailCoinGeckoClaim(),
+        legitimacy: [AssetLegitimacyClaim.make({ authority: "jupiter", verdict: "unverified" })],
+      })
+
+      expect(decision).toMatchObject({
+        _tag: "create_standalone",
+        coingeckoCoinId: "orb-token",
+      })
     })
 
     it("fails closed when banned evidence conflicts with exact attach evidence", () => {
@@ -880,6 +962,7 @@ describe("AssetResolutionPolicy", () => {
     it("fails closed when no usable display metadata exists", () => {
       const decision = decide({
         chain: longTailChainClaim(),
+        legitimacy: [AssetLegitimacyClaim.make({ authority: "jupiter", verdict: "verified" })],
         display: { name: null, symbol: "   " },
       })
 
@@ -945,7 +1028,25 @@ describe("AssetResolutionPolicy", () => {
       })
     })
 
-    it("creates from a decoded chain payload and a definitive registry miss", () => {
+    it("creates from a decoded chain payload when a verified verdict vouches for a registry miss", () => {
+      const decision = Effect.runSync(
+        evaluateAssetResolution({
+          chain: { _tag: "payload", payload: longTailChainFact },
+          registry: new RegistryLookupNotFound(),
+          identity: emptyIdentity(),
+          legitimacy: [AssetLegitimacyClaim.make({ authority: "jupiter", verdict: "verified" })],
+          providerDisplay: providerDisplay,
+        })
+      )
+
+      expect(decision).toMatchObject({
+        _tag: "create_standalone",
+        mintAddress: LONG_TAIL_MINT,
+        coingeckoCoinId: null,
+      })
+    })
+
+    it("stays pending from a decoded chain payload when nothing vouches for the registry miss", () => {
       const decision = Effect.runSync(
         evaluateAssetResolution({
           chain: { _tag: "payload", payload: longTailChainFact },
@@ -957,9 +1058,8 @@ describe("AssetResolutionPolicy", () => {
       )
 
       expect(decision).toMatchObject({
-        _tag: "create_standalone",
-        mintAddress: LONG_TAIL_MINT,
-        coingeckoCoinId: null,
+        _tag: "pending",
+        reason: "unverified_asset",
       })
     })
 

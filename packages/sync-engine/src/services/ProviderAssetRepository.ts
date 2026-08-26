@@ -75,6 +75,7 @@ export interface ProviderAssetExclusionResult extends ProviderAssetApprovalResul
 export type AssetResolutionAuditOutcome =
   | "attach"
   | "create_standalone"
+  | "identity"
   | "excluded"
   | "pending"
   | "fail_closed"

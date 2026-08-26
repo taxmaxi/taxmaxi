@@ -4,6 +4,7 @@ import {
   foreignKey,
   index,
   jsonb,
+  numeric,
   pgTable,
   text,
   timestamp,
@@ -51,6 +52,9 @@ export const transactions = pgTable(
 
     metadata: jsonb("metadata"), // Provider-specific data that does not fit canonical columns.
 
+    providerFiatAmount: numeric("provider_fiat_amount"), // Provider-reported fiat value of the transaction.
+    providerFiatCurrency: text("provider_fiat_currency"), // Uppercase currency code of the provider-reported fiat value.
+
     principalId: uuid("principal_id")
       .notNull()
       .references(() => principals.id, { onDelete: "cascade" }),
@@ -62,6 +66,10 @@ export const transactions = pgTable(
     check(
       "transactions_identifier_present",
       sql`${table.externalId} is not null or ${table.sourceRawRecordId} is not null`
+    ),
+    check(
+      "transactions_provider_fiat_complete",
+      sql`(${table.providerFiatAmount} is null) = (${table.providerFiatCurrency} is null)`
     ),
 
     foreignKey({

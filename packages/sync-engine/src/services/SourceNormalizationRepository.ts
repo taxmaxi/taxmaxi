@@ -90,6 +90,10 @@ export interface SourceTransactionDraft {
   readonly providerCreatedAt: Date | null
   readonly providerUpdatedAt: Date | null
   readonly metadata: unknown
+  /** Provider-reported fiat value of the whole transaction, as a decimal string, or null. */
+  readonly providerFiatAmount: string | null
+  /** Uppercase currency code of the provider-reported fiat value, or null. */
+  readonly providerFiatCurrency: string | null
   readonly principalId: string
 }
 
@@ -359,6 +363,13 @@ export interface PersistNormalizedSourceArtifactsParamsBase {
   readonly onchainContext?: SourceOnchainContextDraft | null | undefined
   readonly providerTransfers: ReadonlyArray<SourceProviderTransferDraft>
   readonly canonicalTransfers: ReadonlyArray<SourceTransferDraft>
+  /**
+   * Provider asset rows this transaction depends on, including currencies
+   * that produce no provider transfer (for example exchange trade legs and
+   * fees). Persisted as transaction-level uses so exception impact can count
+   * every blocked transaction.
+   */
+  readonly providerAssetRowIds: ReadonlyArray<string>
   readonly transactionReview: SourceTransactionReviewDraft | null
   readonly resolvedTransactionType: ResolvedProviderTransactionTypeMapping
 }

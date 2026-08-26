@@ -2,6 +2,7 @@ import { infiniteQueryOptions, keepPreviousData, queryOptions } from "@tanstack/
 import {
   TaxMaxiError,
   type AssetCatalogListInput,
+  type AssetExceptionListInput,
   type PendingAssetListInput,
   type TransactionListInput,
   type TaxMaxi,
@@ -12,6 +13,7 @@ export const DEFAULT_TAXMAXI_PENDING_ASSET_LIMIT = 40
 
 type AssetCatalogPageInput = Omit<AssetCatalogListInput, "cursor">
 type PendingAssetPageInput = Omit<PendingAssetListInput, "cursor">
+type AssetExceptionPageInput = Omit<AssetExceptionListInput, "cursor">
 
 const getInitialPageCursor = (): string | null => null
 
@@ -30,6 +32,13 @@ const normalizePendingAssetListInput = (
   ...(input.limit !== undefined ? { limit: input.limit } : {}),
 })
 
+const normalizeAssetExceptionListInput = (
+  input: AssetExceptionPageInput = {}
+): AssetExceptionPageInput => ({
+  ...(input.query !== undefined ? { query: input.query } : {}),
+  ...(input.limit !== undefined ? { limit: input.limit } : {}),
+})
+
 export const queryKeys = {
   all: ["taxmaxi"] as const,
   account: () => [...queryKeys.all, "account"] as const,
@@ -42,6 +51,8 @@ export const queryKeys = {
   assetDetail: (assetId: string) => [...queryKeys.assets(), "detail", assetId] as const,
   pendingAssetList: (input: PendingAssetPageInput = {}) =>
     [...queryKeys.assets(), "pending", normalizePendingAssetListInput(input)] as const,
+  assetExceptionList: (input: AssetExceptionPageInput = {}) =>
+    [...queryKeys.assets(), "exceptions", normalizeAssetExceptionListInput(input)] as const,
   sources: () => [...queryKeys.all, "sources"] as const,
   sourceList: () => [...queryKeys.sources(), "list"] as const,
   sourceOverview: (sourceId: string) => [...queryKeys.sources(), sourceId, "overview"] as const,
@@ -105,6 +116,19 @@ export const queries = {
       getNextPageParam: (lastPage) => lastPage.page.nextCursor ?? undefined,
       placeholderData: keepPreviousData,
       staleTime: 60 * 1000,
+    })
+  },
+  assetExceptionList: (taxmaxi: TaxMaxi, input: AssetExceptionPageInput = {}) => {
+    const normalizedInput = normalizeAssetExceptionListInput(input)
+
+    return infiniteQueryOptions({
+      queryKey: queryKeys.assetExceptionList(normalizedInput),
+      queryFn: ({ pageParam, signal }) =>
+        taxmaxi.assets.listExceptions({ ...normalizedInput, cursor: pageParam }, { signal }),
+      initialPageParam: getInitialPageCursor(),
+      getNextPageParam: (lastPage) => lastPage.page.nextCursor ?? undefined,
+      placeholderData: keepPreviousData,
+      staleTime: 30 * 1000,
     })
   },
   sourceList: (taxmaxi: TaxMaxi) =>

@@ -63,6 +63,20 @@ const jsonResponse = (url: URL, body: unknown, status = 200) =>
     })
   )
 
+const stalledJsonResponse = (url: URL) =>
+  HttpClientResponse.fromWeb(
+    HttpClientRequest.get(url.toString()),
+    new Response(
+      new ReadableStream<Uint8Array>({
+        start: () => undefined,
+      }),
+      {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }
+    )
+  )
+
 describe("AssetResolutionJupiterClientLive", () => {
   it("returns the raw payload for a 2xx response", async () => {
     let requests = 0
@@ -253,6 +267,25 @@ describe("AssetResolutionJupiterClientLive", () => {
       expect(result.failure.status).toBeNull()
     }
   }, 10_000)
+
+  it("times out and retries when response headers arrive but the body stalls", async () => {
+    let requests = 0
+
+    const result = await runFetch({
+      handler: (_request, url) =>
+        Effect.sync(() => {
+          requests += 1
+          return stalledJsonResponse(url)
+        }),
+    })
+
+    expect(requests).toBe(3)
+    expect(result._tag).toBe("Failure")
+    if (result._tag === "Failure") {
+      expect(result.failure).toBeInstanceOf(AssetResolutionJupiterRetryableError)
+      expect(result.failure.status).toBeNull()
+    }
+  })
 
   it("fails retryable when a successful response stalls while reading the body", async () => {
     const testSafetyTimeout = Symbol("test-safety-timeout")

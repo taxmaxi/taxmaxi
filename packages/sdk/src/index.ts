@@ -92,6 +92,13 @@ export type {
   AssetCatalogDetailInput,
   AssetCatalogList,
   AssetCatalogListInput,
+  AssetExceptionDecisionConfirmationInput,
+  AssetExceptionDecisionInput,
+  AssetExceptionDetail,
+  AssetExceptionList,
+  AssetExceptionListInput,
+  AssetExceptionLookupInput,
+  AssetExceptionPreview,
   AssetRepresentation,
   AssetRequestOptions,
   AssetsEffectResource,
@@ -111,11 +118,18 @@ export type {
 } from "./auth/index.ts"
 export {
   TaxMaxiError,
+  getTaxMaxiAssetDecisionConflict,
+  getTaxMaxiAssetDecisionErrorCode,
   getTaxMaxiCreditRequired,
   isTaxMaxiUnauthorizedError,
   toTaxMaxiError,
 } from "./errors.ts"
-export type { TaxMaxiCreditRequired, TaxMaxiFieldError } from "./errors.ts"
+export type {
+  TaxMaxiAssetDecisionConflict,
+  TaxMaxiAssetDecisionErrorCode,
+  TaxMaxiCreditRequired,
+  TaxMaxiFieldError,
+} from "./errors.ts"
 export type {
   BillingCatalog,
   BillingEffectResource,

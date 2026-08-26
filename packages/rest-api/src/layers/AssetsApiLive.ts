@@ -11,11 +11,18 @@ import {
   type PendingAssetCatalogRecord,
 } from "@my/persistence/services"
 import {
+  AssetExceptionRepository,
   ProviderAssetRepository,
   TransferReconciliationRepository,
+  type AssetExceptionDecisionHistory,
+  type AssetExceptionDetail,
+  type AssetExceptionImpact,
+  type AssetExceptionListRow,
+  type AssetExceptionRematerializationSummary,
   type ProviderAssetReviewRecord,
   type UnresolvedTransferReconciliationRecord,
 } from "@my/sync-engine/services"
+import * as DateTime from "effect/DateTime"
 import * as Effect from "effect/Effect"
 import * as Option from "effect/Option"
 import * as Schema from "effect/Schema"
@@ -24,6 +31,17 @@ import {
   AssetCatalogAssetResponse,
   AssetCatalogListResponse,
   AssetBadRequestError,
+  AssetDecisionConflictError,
+  AssetDecisionValidationError,
+  AssetExceptionDecisionHistoryResponse,
+  AssetExceptionDetailResponse,
+  AssetExceptionEvidenceResponse,
+  AssetExceptionImpactResponse,
+  AssetExceptionListResponse,
+  AssetExceptionListRowResponse,
+  AssetExceptionPreviewResponse,
+  AssetExceptionRematerializationResponse,
+  AssetStaleRevisionError,
   AssetCanonicalizationEvidenceResponse,
   AssetCanonicalizationResponse,
   AssetNotFoundError,
@@ -36,11 +54,14 @@ import {
   UnresolvedTransferReconciliationListResponse,
   UnresolvedTransferReconciliationRow,
 } from "../definitions/AssetsApi.ts"
+import { CurrentUser } from "../definitions/AuthMiddleware.ts"
 import { TaxMaxiApi } from "../definitions/TaxMaxiApi.ts"
 import { AssetCanonicalizationService } from "../services/AssetCanonicalizationService.ts"
 
 const defaultLimit = 50
 const defaultAssetLimit = 500
+
+const toDateTimeUtc = (date: Date): DateTime.Utc => DateTime.makeUnsafe(date)
 
 const toInternalServerError = (message: string) =>
   new InternalServerError({ requestId: Option.none(), message })
@@ -60,11 +81,28 @@ const TransferReconciliationCursorPayload = Schema.Struct({
   reconciliationId: Schema.String.check(Schema.isUUID()),
 })
 
+const AssetExceptionValueEur = Schema.String.check(
+  Schema.isPattern(/^(?:0|[1-9][0-9]*)(?:\.[0-9]+)?$/)
+)
+
+const AssetExceptionCursorPayload = Schema.Struct({
+  version: Schema.Literal(1),
+  blockedReports: Schema.Number,
+  affectedPrincipals: Schema.Number,
+  affectedTransactions: Schema.Number,
+  affectedSources: Schema.Number,
+  affectedTransactionValueEur: Schema.NullOr(AssetExceptionValueEur),
+  severity: Schema.Literals(["critical", "high", "medium", "low"]),
+  oldestAt: Schema.DateTimeUtcFromString,
+  providerAssetRowId: Schema.String.check(Schema.isUUID()),
+})
+
 const EncodedAssetCursorPayload = Schema.fromJsonString(AssetCursorPayload)
 const EncodedProviderAssetCursorPayload = Schema.fromJsonString(ProviderAssetCursorPayload)
 const EncodedTransferReconciliationCursorPayload = Schema.fromJsonString(
   TransferReconciliationCursorPayload
 )
+const EncodedAssetExceptionCursorPayload = Schema.fromJsonString(AssetExceptionCursorPayload)
 
 const encodeCursor = (payload: Record<string, unknown>): string =>
   Buffer.from(JSON.stringify(payload)).toString("base64url")
@@ -97,6 +135,24 @@ const decodeTransferReconciliationCursor = (cursor: string | undefined) =>
     ? Effect.succeed(null)
     : decodeCursor(cursor, EncodedTransferReconciliationCursorPayload)
 
+const decodeAssetExceptionCursor = (cursor: string | undefined) =>
+  Effect.gen(function* () {
+    if (cursor === undefined) {
+      return null
+    }
+    const value = yield* decodeCursor(cursor, EncodedAssetExceptionCursorPayload)
+    return {
+      blockedReports: value.blockedReports,
+      affectedPrincipals: value.affectedPrincipals,
+      affectedTransactions: value.affectedTransactions,
+      affectedSources: value.affectedSources,
+      affectedTransactionValueEur: value.affectedTransactionValueEur,
+      severity: value.severity,
+      oldestAt: DateTime.toDateUtc(value.oldestAt),
+      providerAssetRowId: value.providerAssetRowId,
+    }
+  })
+
 const assetCursorFor = (asset: AssetCatalogAssetRecord): string =>
   encodeCursor({
     version: 2,
@@ -113,6 +169,19 @@ const transferReconciliationCursorFor = (reconciliationId: string): string =>
   encodeCursor({
     version: 1,
     reconciliationId,
+  })
+
+const assetExceptionCursorFor = (row: AssetExceptionListRow): string =>
+  encodeCursor({
+    version: 1,
+    blockedReports: row.blockedReports,
+    affectedPrincipals: row.affectedPrincipals,
+    affectedTransactions: row.affectedTransactions,
+    affectedSources: row.affectedSources,
+    affectedTransactionValueEur: row.affectedTransactionValueEur,
+    severity: row.severity,
+    oldestAt: row.oldestAt.toISOString(),
+    providerAssetRowId: row.providerAssetRowId,
   })
 
 const toProviderAssetReviewRow = (row: ProviderAssetReviewRecord) =>
@@ -165,9 +234,118 @@ const toAssetCatalogAssetResponse = (row: AssetCatalogAssetRecord) =>
     ),
   })
 
+const toAssetExceptionImpactResponse = (impact: AssetExceptionImpact) =>
+  AssetExceptionImpactResponse.make(impact)
+
+const toAssetExceptionDecisionHistoryResponse = (decision: AssetExceptionDecisionHistory) =>
+  AssetExceptionDecisionHistoryResponse.make({
+    ...decision,
+    evidenceSnapshotIds: [...decision.evidenceSnapshotIds],
+    createdAt: toDateTimeUtc(decision.createdAt),
+  })
+
+const toAssetExceptionRematerializationResponse = (
+  rematerialization: AssetExceptionRematerializationSummary
+) =>
+  AssetExceptionRematerializationResponse.make({
+    ...rematerialization,
+    lastFailureAt:
+      rematerialization.lastFailureAt === null
+        ? null
+        : toDateTimeUtc(rematerialization.lastFailureAt),
+  })
+
+const toAssetExceptionListRowResponse = (row: AssetExceptionListRow) =>
+  AssetExceptionListRowResponse.make({
+    ...row,
+    oldestAt: toDateTimeUtc(row.oldestAt),
+  })
+
+const toAssetExceptionDetailResponse = (detail: AssetExceptionDetail) =>
+  AssetExceptionDetailResponse.make({
+    providerAssetRowId: detail.providerAssetRowId,
+    provider: detail.provider,
+    providerAssetId: detail.providerAssetId,
+    naturalKey: detail.naturalKey,
+    currencyCode: detail.currencyCode,
+    name: detail.name,
+    exponent: detail.exponent,
+    providerType: detail.providerType,
+    rawProviderPayload: detail.rawProviderPayload,
+    evidenceRevision: detail.evidenceRevision,
+    policyRevision: detail.policyRevision,
+    activeDecisionRevision: detail.activeDecisionRevision,
+    reviewStatus: detail.reviewStatus,
+    policyOutput: detail.policyOutput,
+    activeDecision:
+      detail.activeDecision === null
+        ? null
+        : toAssetExceptionDecisionHistoryResponse(detail.activeDecision),
+    decisionHistory: detail.decisionHistory.map(toAssetExceptionDecisionHistoryResponse),
+    evidence: detail.evidence.map((evidence) =>
+      AssetExceptionEvidenceResponse.make({
+        ...evidence,
+        retrievedAt: toDateTimeUtc(evidence.retrievedAt),
+      })
+    ),
+    impact: toAssetExceptionImpactResponse(detail.impact),
+    rematerialization: toAssetExceptionRematerializationResponse(detail.rematerialization),
+  })
+
+const staleRevisionError = ({
+  evidenceRevision,
+  activeDecisionRevision,
+}: {
+  readonly evidenceRevision: number
+  readonly activeDecisionRevision: string
+}) =>
+  new AssetStaleRevisionError({
+    code: "stale_revision",
+    evidenceRevision,
+    activeDecisionRevision,
+  })
+
+const mapDecisionResultError = (
+  result:
+    | { readonly _tag: "not_found" }
+    | {
+        readonly _tag: "stale_revision"
+        readonly evidenceRevision: number
+        readonly activeDecisionRevision: string
+      }
+    | { readonly _tag: "ambiguous_identity" }
+    | { readonly _tag: "identity_changed" }
+    | { readonly _tag: "invalid_evidence" }
+    | { readonly _tag: "invalid_claim" }
+) => {
+  switch (result._tag) {
+    case "not_found":
+      return new AssetNotFoundError({ message: "Asset observation not found." })
+    case "stale_revision":
+      return staleRevisionError(result)
+    case "ambiguous_identity":
+      return new AssetDecisionConflictError({
+        code: "ambiguous_identity",
+      })
+    case "identity_changed":
+      return new AssetDecisionConflictError({
+        code: "identity_changed",
+      })
+    case "invalid_evidence":
+      return new AssetDecisionValidationError({
+        code: "invalid_evidence",
+      })
+    case "invalid_claim":
+      return new AssetDecisionValidationError({
+        code: "invalid_claim",
+      })
+  }
+}
+
 export const AssetsApiLive = HttpApiBuilder.group(TaxMaxiApi, "assets", (handlers) =>
   Effect.gen(function* () {
     const assetCatalogRepository = yield* AssetCatalogRepository
+    const assetExceptionRepository = yield* AssetExceptionRepository
     const providerAssetRepository = yield* ProviderAssetRepository
     const transferReconciliationRepository = yield* TransferReconciliationRepository
     const assetCanonicalizationService = yield* AssetCanonicalizationService
@@ -235,6 +413,132 @@ export const AssetsApiLive = HttpApiBuilder.group(TaxMaxiApi, "assets", (handler
               hasMore,
             },
           })
+        })
+      )
+      .handle("listAssetExceptions", ({ query: urlParams }) =>
+        Effect.gen(function* () {
+          const limit = urlParams.limit ?? defaultLimit
+          const cursor = yield* decodeAssetExceptionCursor(urlParams.cursor)
+          const exceptions = yield* assetExceptionRepository
+            .listExceptions({ cursor, query: urlParams.q ?? null, limit: limit + 1 })
+            .pipe(Effect.mapError(() => toInternalServerError("Failed to list asset exceptions.")))
+          const visibleExceptions = exceptions.slice(0, limit)
+          const lastException = visibleExceptions.at(-1)
+          const hasMore = exceptions.length > limit
+
+          return AssetExceptionListResponse.make({
+            exceptions: visibleExceptions.map(toAssetExceptionListRowResponse),
+            page: {
+              nextCursor:
+                hasMore && lastException !== undefined
+                  ? assetExceptionCursorFor(lastException)
+                  : null,
+              hasMore,
+            },
+          })
+        })
+      )
+      .handle("lookupAssetException", ({ query: urlParams }) =>
+        Effect.gen(function* () {
+          const lookup = (() => {
+            if (urlParams.providerAssetId !== undefined && urlParams.naturalKey === undefined) {
+              return {
+                _tag: "provider_asset_id" as const,
+                provider: urlParams.provider,
+                providerAssetId: urlParams.providerAssetId,
+              }
+            }
+            if (urlParams.naturalKey !== undefined && urlParams.providerAssetId === undefined) {
+              return {
+                _tag: "natural_key" as const,
+                provider: urlParams.provider,
+                naturalKey: urlParams.naturalKey,
+              }
+            }
+            return null
+          })()
+          if (lookup === null) {
+            return yield* new AssetBadRequestError({
+              message: "Provide exactly one of providerAssetId or naturalKey.",
+            })
+          }
+
+          const detail = yield* assetExceptionRepository
+            .findDetail(lookup)
+            .pipe(
+              Effect.mapError(() => toInternalServerError("Failed to look up asset observation."))
+            )
+          return yield* Option.match(detail, {
+            onNone: () =>
+              Effect.fail(new AssetNotFoundError({ message: "Asset observation not found." })),
+            onSome: (value) => Effect.succeed(toAssetExceptionDetailResponse(value)),
+          })
+        })
+      )
+      .handle("getAssetException", ({ params: path }) =>
+        Effect.gen(function* () {
+          const detail = yield* assetExceptionRepository
+            .findDetail({ _tag: "row_id", providerAssetRowId: path.id })
+            .pipe(Effect.mapError(() => toInternalServerError("Failed to load asset exception.")))
+          return yield* Option.match(detail, {
+            onNone: () =>
+              Effect.fail(new AssetNotFoundError({ message: "Asset observation not found." })),
+            onSome: (value) => Effect.succeed(toAssetExceptionDetailResponse(value)),
+          })
+        })
+      )
+      .handle("previewAssetExceptionDecision", ({ params: path, payload }) =>
+        assetExceptionRepository
+          .previewDecision({
+            providerAssetRowId: path.id,
+            claim: payload.claim,
+            evidenceRevision: payload.evidenceRevision,
+            activeDecisionRevision: payload.activeDecisionRevision,
+            evidenceSnapshotIds: payload.evidenceSnapshotIds,
+            rationale: payload.rationale,
+          })
+          .pipe(
+            Effect.mapError(() => toInternalServerError("Failed to preview asset decision.")),
+            Effect.flatMap((result) => {
+              if (result._tag !== "ready") {
+                return Effect.fail(mapDecisionResultError(result))
+              }
+              return Effect.succeed(
+                AssetExceptionPreviewResponse.make({
+                  ...result.preview,
+                  supersededDecision:
+                    result.preview.supersededDecision === null
+                      ? null
+                      : toAssetExceptionDecisionHistoryResponse(result.preview.supersededDecision),
+                  impact: toAssetExceptionImpactResponse(result.preview.impact),
+                })
+              )
+            })
+          )
+      )
+      .handle("submitAssetExceptionDecision", ({ params: path, payload }) =>
+        Effect.gen(function* () {
+          const currentUser = yield* CurrentUser
+          const result = yield* assetExceptionRepository
+            .submitDecision({
+              input: {
+                providerAssetRowId: path.id,
+                claim: payload.claim,
+                evidenceRevision: payload.evidenceRevision,
+                activeDecisionRevision: payload.activeDecisionRevision,
+                evidenceSnapshotIds: payload.evidenceSnapshotIds,
+                rationale: payload.rationale,
+                expectedResultingAssetId: payload.expectedResultingAssetId,
+                expectedAssetOutcome: payload.expectedAssetOutcome,
+                expectedRepresentationOutcome: payload.expectedRepresentationOutcome,
+              },
+              actorId: currentUser.userId,
+            })
+            .pipe(Effect.mapError(() => toInternalServerError("Failed to accept asset decision.")))
+          if (result._tag !== "accepted") {
+            return yield* mapDecisionResultError(result)
+          }
+          return toAssetExceptionDetailResponse(result.detail)
         })
       )
       .handle("listProviderAssetReviews", ({ query: urlParams }) =>

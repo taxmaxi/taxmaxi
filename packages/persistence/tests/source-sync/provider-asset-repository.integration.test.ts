@@ -1,4 +1,4 @@
-import { eq, sql } from "drizzle-orm"
+import { and, eq, sql } from "drizzle-orm"
 import * as Deferred from "effect/Deferred"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
@@ -848,11 +848,7 @@ describe("ProviderAssetRepositoryLive", () => {
         Effect.gen(function* () {
           const db = yield* drizzle
           return yield* db
-            .select({
-              followUpMode: schema.processingJobs.followUpMode,
-              mode: schema.processingJobs.mode,
-              status: schema.processingJobs.status,
-            })
+            .select({ id: schema.processingJobs.id, mode: schema.processingJobs.mode })
             .from(schema.processingJobs)
             .where(eq(schema.processingJobs.sourceId, TEST_SOURCE_ID))
         })
@@ -860,7 +856,402 @@ describe("ProviderAssetRepositoryLive", () => {
 
       expect(recorded).toBe(1)
       expect(recordedAgain).toBe(0)
-      expect(jobs).toEqual([{ followUpMode: null, mode: "replay", status: "pending" }])
+      expect(jobs).toHaveLength(1)
+      expect(jobs[0]?.mode).toBe("replay")
+    })
+
+    it("requests replay when a source use is recorded after exclusion", async () => {
+      const providerAsset = await seedPendingApprovalAsset("exclusion-before-source-use", {
+        withProviderTransfer: false,
+      })
+
+      await runRepository(
+        Effect.flatMap(ProviderAssetRepository, (repository) =>
+          repository.excludeProviderAssetMappingAndRequestReplay({
+            providerAssetRowId: providerAsset.id,
+            decision: makeExcludedDecision(providerAsset.id),
+            sourceNotes: "Excluded before source use was recorded",
+            expectedObservedRepresentations: [],
+            expectedProviderAssetRetrievedAt: providerAsset.retrievedAt,
+          })
+        )
+      )
+
+      const recorded = await runRepository(
+        Effect.flatMap(ProviderAssetRepository, (repository) =>
+          repository.recordProviderAssetSourceUses({
+            sourceId: TEST_SOURCE_ID,
+            providerAssetRowIds: [providerAsset.id],
+            observations: [],
+          })
+        )
+      )
+      const recordedAgain = await runRepository(
+        Effect.flatMap(ProviderAssetRepository, (repository) =>
+          repository.recordProviderAssetSourceUses({
+            sourceId: TEST_SOURCE_ID,
+            providerAssetRowIds: [providerAsset.id],
+            observations: [],
+          })
+        )
+      )
+      const jobs = await runPg(
+        Effect.gen(function* () {
+          const db = yield* drizzle
+          const replayJobs = yield* db
+            .select({
+              id: schema.processingJobs.id,
+              followUpMode: schema.processingJobs.followUpMode,
+              mode: schema.processingJobs.mode,
+              status: schema.processingJobs.status,
+            })
+            .from(schema.processingJobs)
+            .where(eq(schema.processingJobs.sourceId, TEST_SOURCE_ID))
+          const rematerializations = yield* db
+            .select({
+              decisionOutcome: schema.assetResolutionDecisions.outcome,
+              decisionStatus: schema.assetResolutionDecisions.status,
+              processingJobId: schema.assetDecisionRematerializations.processingJobId,
+              sourceId: schema.assetDecisionRematerializations.sourceId,
+            })
+            .from(schema.assetDecisionRematerializations)
+            .innerJoin(
+              schema.assetResolutionDecisions,
+              eq(
+                schema.assetResolutionDecisions.id,
+                schema.assetDecisionRematerializations.decisionId
+              )
+            )
+          return { rematerializations, replayJobs }
+        })
+      )
+
+      expect(recorded).toBe(1)
+      expect(recordedAgain).toBe(0)
+      expect(jobs.replayJobs).toHaveLength(1)
+      expect(jobs.replayJobs[0]).toMatchObject({
+        followUpMode: null,
+        mode: "replay",
+        status: "pending",
+      })
+      expect(jobs.rematerializations).toEqual([
+        {
+          decisionOutcome: "excluded",
+          decisionStatus: "active",
+          processingJobId: jobs.replayJobs[0]?.id,
+          sourceId: TEST_SOURCE_ID,
+        },
+      ])
+    })
+
+    it("tracks automatic exclusion replay work against the active decision", async () => {
+      const providerAsset = await seedPendingApprovalAsset("tracked-automatic-exclusion")
+
+      await runRepository(
+        Effect.flatMap(ProviderAssetRepository, (repository) =>
+          repository.excludeProviderAssetMappingAndRequestReplay({
+            providerAssetRowId: providerAsset.id,
+            decision: makeExcludedDecision(providerAsset.id),
+            sourceNotes: "Automatic exclusion with tracked replay",
+            expectedObservedRepresentations: [],
+            expectedProviderAssetRetrievedAt: providerAsset.retrievedAt,
+          })
+        )
+      )
+
+      const work = await runPg(
+        Effect.gen(function* () {
+          const db = yield* drizzle
+          return yield* db
+            .select({
+              decisionStatus: schema.assetResolutionDecisions.status,
+              decisionOutcome: schema.assetResolutionDecisions.outcome,
+              sourceId: schema.assetDecisionRematerializations.sourceId,
+              jobStatus: schema.processingJobs.status,
+            })
+            .from(schema.assetDecisionRematerializations)
+            .innerJoin(
+              schema.assetResolutionDecisions,
+              eq(
+                schema.assetResolutionDecisions.id,
+                schema.assetDecisionRematerializations.decisionId
+              )
+            )
+            .innerJoin(
+              schema.processingJobs,
+              eq(schema.processingJobs.id, schema.assetDecisionRematerializations.processingJobId)
+            )
+        })
+      )
+
+      expect(work).toEqual([
+        {
+          decisionStatus: "active",
+          decisionOutcome: "excluded",
+          sourceId: TEST_SOURCE_ID,
+          jobStatus: "pending",
+        },
+      ])
+    })
+
+    it("rolls back the exclusion decision when the mapping transition fails", async () => {
+      const providerAsset = await seedPendingApprovalAsset("atomic-exclusion-rollback", {
+        withProviderTransfer: false,
+      })
+      await runPg(
+        Effect.gen(function* () {
+          const db = yield* drizzle
+          yield* db.execute(sql`
+            create function reject_excluded_mapping_update() returns trigger
+            language plpgsql as $trigger$
+            begin
+              if new.mapping_status = 'excluded' then
+                raise exception 'injected exclusion mapping failure';
+              end if;
+              return new;
+            end
+            $trigger$
+          `)
+          yield* db.execute(sql`
+            create trigger reject_excluded_mapping_update_before_update
+            before update on provider_asset_mappings
+            for each row execute function reject_excluded_mapping_update()
+          `)
+        })
+      )
+
+      const result = await runRepository(
+        Effect.flatMap(ProviderAssetRepository, (repository) =>
+          repository.excludeProviderAssetMappingAndRequestReplay({
+            providerAssetRowId: providerAsset.id,
+            decision: makeExcludedDecision(providerAsset.id),
+            sourceNotes: "This transaction must roll back",
+            expectedObservedRepresentations: [],
+            expectedProviderAssetRetrievedAt: providerAsset.retrievedAt,
+          })
+        ).pipe(Effect.result)
+      )
+      await runPg(
+        Effect.gen(function* () {
+          const db = yield* drizzle
+          yield* db.execute(sql`
+            drop trigger reject_excluded_mapping_update_before_update
+            on provider_asset_mappings
+          `)
+          yield* db.execute(sql`drop function reject_excluded_mapping_update()`)
+        })
+      )
+      const state = await runPg(
+        Effect.gen(function* () {
+          const db = yield* drizzle
+          const [mapping] = yield* db
+            .select({ status: schema.providerAssetMappings.mappingStatus })
+            .from(schema.providerAssetMappings)
+            .where(eq(schema.providerAssetMappings.providerAssetRowId, providerAsset.id))
+          const decisions = yield* db
+            .select({ id: schema.assetResolutionDecisions.id })
+            .from(schema.assetResolutionDecisions)
+            .where(eq(schema.assetResolutionDecisions.providerAssetRowId, providerAsset.id))
+          return { decisions, mapping }
+        })
+      )
+
+      expect(result._tag).toBe("Failure")
+      expect(state.mapping?.status).toBe("pending_review")
+      expect(state.decisions).toEqual([])
+    })
+
+    it("atomically reverses a chainless exclusion after the provider evidence revision advances", async () => {
+      const providerAssetId = "btc-approval-manual-exclusion-reversal"
+      const providerAsset = await seedPendingApprovalAsset("manual-exclusion-reversal")
+      await runRepository(
+        Effect.flatMap(ProviderAssetRepository, (repository) =>
+          repository.excludeProviderAssetMappingAndRequestReplay({
+            providerAssetRowId: providerAsset.id,
+            decision: makeExcludedDecision(providerAsset.id),
+            sourceNotes: "Excluded by automatic policy",
+            expectedObservedRepresentations: [],
+            expectedProviderAssetRetrievedAt: providerAsset.retrievedAt,
+          })
+        )
+      )
+      const reviewedEvidenceIds = await runPg(
+        Effect.gen(function* () {
+          const db = yield* drizzle
+          const [exclusionDecision] = yield* db
+            .select({ id: schema.assetResolutionDecisions.id })
+            .from(schema.assetResolutionDecisions)
+            .where(
+              and(
+                eq(schema.assetResolutionDecisions.providerAssetRowId, providerAsset.id),
+                eq(schema.assetResolutionDecisions.status, "active")
+              )
+            )
+            .limit(1)
+          const [linkedEvidenceOwner] = yield* db
+            .insert(schema.providerAssets)
+            .values({
+              provider: "coinbase",
+              providerAssetId: "linked-reversal-evidence-owner",
+              currencyCode: "LINKED",
+              evidenceRevision: 1,
+              retrievedAt: new Date("2026-08-21T12:00:00.000Z"),
+            })
+            .returning({ id: schema.providerAssets.id })
+          if (exclusionDecision === undefined || linkedEvidenceOwner === undefined) {
+            return yield* Effect.die("Failed to seed exclusion reversal evidence owners")
+          }
+          const [linkedEvidenceDecision] = yield* db
+            .insert(schema.assetResolutionDecisions)
+            .values({
+              providerAssetRowId: linkedEvidenceOwner.id,
+              evidenceRevision: 1,
+              policyRevision: "linked-evidence.1",
+              outcome: "excluded",
+              reason: "explicit_banned_verdict",
+              actor: "system:asset-resolution-policy",
+            })
+            .returning({ id: schema.assetResolutionDecisions.id })
+          if (linkedEvidenceDecision === undefined) {
+            return yield* Effect.die("Failed to seed linked evidence decision")
+          }
+          const [ownedEvidence] = yield* db
+            .insert(schema.assetResolutionEvidence)
+            .values({
+              decisionId: exclusionDecision.id,
+              authority: "owned-authority",
+              claimKind: "spam",
+              retrievedAt: new Date("2026-08-21T12:01:00.000Z"),
+              evidenceRevision: 1,
+              decodedClaim: { verdict: "excluded" },
+              rawPayload: { source: "owned" },
+            })
+            .returning({ id: schema.assetResolutionEvidence.id })
+          const [linkedEvidence] = yield* db
+            .insert(schema.assetResolutionEvidence)
+            .values({
+              decisionId: linkedEvidenceDecision.id,
+              authority: "linked-authority",
+              claimKind: "spam",
+              retrievedAt: new Date("2026-08-21T12:02:00.000Z"),
+              evidenceRevision: 1,
+              decodedClaim: { verdict: "excluded" },
+              rawPayload: { source: "linked" },
+            })
+            .returning({ id: schema.assetResolutionEvidence.id })
+          if (ownedEvidence === undefined || linkedEvidence === undefined) {
+            return yield* Effect.die("Failed to seed exclusion reversal evidence")
+          }
+          yield* db.insert(schema.assetResolutionDecisionEvidenceLinks).values([
+            { decisionId: exclusionDecision.id, evidenceId: ownedEvidence.id },
+            { decisionId: exclusionDecision.id, evidenceId: linkedEvidence.id },
+          ])
+          return [ownedEvidence.id, linkedEvidence.id].sort()
+        })
+      )
+      const revisedProviderAsset = await runRepository(
+        Effect.gen(function* () {
+          const repository = yield* ProviderAssetRepository
+          yield* repository.upsertProviderAssets({
+            providerKey: "coinbase",
+            entries: [
+              {
+                providerAssetId,
+                naturalKey: null,
+                currencyCode: "BTC",
+                name: "Bitcoin with revised metadata",
+                exponent: 8,
+                providerType: "crypto",
+                payload: { source: "test", revision: 2 },
+              },
+            ],
+          })
+          const revised = yield* repository.findProviderAssetByProviderAssetId({
+            providerKey: "coinbase",
+            providerAssetId,
+          })
+          if (Option.isNone(revised)) {
+            return yield* Effect.die("Expected revised approval provider asset")
+          }
+          return revised.value
+        })
+      )
+
+      const result = await runRepository(
+        Effect.flatMap(ProviderAssetRepository, (repository) =>
+          repository.approveProviderAssetMappingAndRequestReplay({
+            mapping: {
+              providerAssetRowId: providerAsset.id,
+              mappingKind: "asset",
+              canonicalAssetId: TEST_BTC_ASSET_ID,
+              assetRepresentationId: null,
+              canonicalFiatCurrency: null,
+              mappingStatus: "approved",
+              reviewerNotes: "Human reversed a false exclusion",
+              sourceNotes: "Manual approval",
+            },
+            expectedObservedRepresentations: [],
+            expectedProviderAssetRetrievedAt: revisedProviderAsset.retrievedAt,
+            exclusionReversal: {
+              actor: "human:admin",
+              policyRevision: "manual-approval.1",
+            },
+          })
+        )
+      )
+      const state = await runRepository(
+        Effect.gen(function* () {
+          const repository = yield* ProviderAssetRepository
+          const mapping = yield* repository.findProviderAssetMapping({
+            providerAssetRowId: providerAsset.id,
+          })
+          const history = yield* repository.listAssetResolutionDecisions({
+            providerAssetRowId: providerAsset.id,
+          })
+          return { mapping, history }
+        })
+      )
+
+      expect(result).toEqual({ mappingChanged: true })
+      expect(Option.getOrNull(state.mapping)).toMatchObject({
+        mappingStatus: "approved",
+        canonicalAssetId: TEST_BTC_ASSET_ID,
+        assetRepresentationId: null,
+      })
+      expect(state.history).toHaveLength(2)
+      expect(state.history[0]).toMatchObject({
+        evidenceRevision: 1,
+        outcome: "excluded",
+        status: "superseded",
+      })
+      expect(state.history[1]).toMatchObject({
+        evidenceRevision: 2,
+        policyRevision: "manual-approval.1",
+        outcome: "attach",
+        status: "active",
+        supersedesDecisionId: state.history[0]?.id,
+        assetId: TEST_BTC_ASSET_ID,
+        assetRepresentationId: null,
+        reason: "manual_exclusion_reversal",
+        actor: "human:admin",
+      })
+      const reversalEvidenceIds = await runPg(
+        Effect.gen(function* () {
+          const db = yield* drizzle
+          return (yield* db
+            .select({ evidenceId: schema.assetResolutionDecisionEvidenceLinks.evidenceId })
+            .from(schema.assetResolutionDecisionEvidenceLinks)
+            .where(
+              eq(
+                schema.assetResolutionDecisionEvidenceLinks.decisionId,
+                state.history[1]?.id ?? "00000000-0000-0000-0000-000000000000"
+              )
+            ))
+            .map(({ evidenceId }) => evidenceId)
+            .sort()
+        })
+      )
+      expect(reversalEvidenceIds).toEqual(reviewedEvidenceIds)
     })
 
     it("requests replay when a source use is recorded after exclusion", async () => {
@@ -1355,6 +1746,8 @@ describe("ProviderAssetRepositoryLive", () => {
                   providerCreatedAt: null,
                   providerUpdatedAt: null,
                   metadata: null,
+                  providerFiatAmount: null,
+                  providerFiatCurrency: null,
                   principalId: TEST_PRINCIPAL_ID,
                 },
                 venueContext: {
@@ -1396,6 +1789,7 @@ describe("ProviderAssetRepositoryLive", () => {
                   },
                 ],
                 canonicalTransfers: [],
+                providerAssetRowIds: [],
                 legs: [],
                 transactionReview: null,
                 resolvedTransactionType: {
@@ -1490,6 +1884,8 @@ describe("ProviderAssetRepositoryLive", () => {
                 providerCreatedAt: null,
                 providerUpdatedAt: null,
                 metadata: null,
+                providerFiatAmount: null,
+                providerFiatCurrency: null,
                 principalId: TEST_PRINCIPAL_ID,
               },
               venueContext: {
@@ -1531,6 +1927,7 @@ describe("ProviderAssetRepositoryLive", () => {
                 },
               ],
               canonicalTransfers: [],
+              providerAssetRowIds: [],
               legs: [],
               transactionReview: null,
               resolvedTransactionType: {
@@ -1724,6 +2121,74 @@ describe("ProviderAssetRepositoryLive", () => {
       if (result._tag === "Failure") {
         expect(result.failure).toBeInstanceOf(SyncEngineStorageError)
       }
+    })
+
+    it("holds exclusion snapshot locks until the decision commits", async () => {
+      const providerAsset = await seedPendingApprovalAsset("exclusion-holds-snapshot-locks")
+      const advisoryLockAcquired = await Effect.runPromise(Deferred.make<void>())
+      const releaseAdvisoryLock = await Effect.runPromise(Deferred.make<void>())
+      const heldAdvisoryLock = runPg(
+        Effect.gen(function* () {
+          const db = yield* drizzle
+          yield* db.transaction((tx) =>
+            Effect.gen(function* () {
+              yield* tx.execute(sql`select pg_advisory_xact_lock(147173)`)
+              yield* Deferred.succeed(advisoryLockAcquired, undefined)
+              yield* Deferred.await(releaseAdvisoryLock)
+            })
+          )
+        })
+      )
+      await Effect.runPromise(Deferred.await(advisoryLockAcquired))
+      await runPg(
+        Effect.gen(function* () {
+          const db = yield* drizzle
+          yield* db.execute(sql`
+            create function pause_exclusion_decision() returns trigger
+            language plpgsql as $trigger$
+            begin
+              perform pg_advisory_xact_lock(147173);
+              return new;
+            end
+            $trigger$
+          `)
+          yield* db.execute(sql`
+            create trigger pause_exclusion_decision_before_insert
+            before insert on asset_resolution_decisions
+            for each row execute function pause_exclusion_decision()
+          `)
+        })
+      )
+
+      const exclusion = runRepository(
+        Effect.flatMap(ProviderAssetRepository, (repository) =>
+          repository.excludeProviderAssetMappingAndRequestReplay({
+            providerAssetRowId: providerAsset.id,
+            decision: makeExcludedDecision(providerAsset.id),
+            sourceNotes: "Snapshot locks must cover the decision",
+            expectedObservedRepresentations: [],
+            expectedProviderAssetRetrievedAt: providerAsset.retrievedAt,
+          })
+        )
+      )
+      await context.waitForQueryBlockedOnLock({
+        queryIncludes: 'insert into "asset_resolution_decisions"',
+      })
+      const sourceLock = runPg(
+        Effect.gen(function* () {
+          const db = yield* drizzle
+          yield* db
+            .select({ id: schema.sources.id })
+            .from(schema.sources)
+            .where(eq(schema.sources.id, TEST_SOURCE_ID))
+            .for("update")
+        })
+      )
+      await context.waitForQueryBlockedOnLock({ queryIncludes: 'from "sources"' })
+      await Effect.runPromise(Deferred.succeed(releaseAdvisoryLock, undefined))
+      const [, result] = await Promise.all([heldAdvisoryLock, exclusion, sourceLock])
+
+      expect(result).toEqual({ mappingChanged: true, decisionRecorded: true })
     })
 
     it("reattaches replay when another active owner wins the insert race", async () => {

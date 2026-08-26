@@ -106,6 +106,8 @@ const HeliusSolanaSourceSyncProviderTestLive = Layer.succeed(
           providerCreatedAt: new Date("2026-01-01T00:00:00.000Z"),
           providerUpdatedAt: null,
           metadata: { provider: HELIUS_SOLANA_PROVIDER_KEY },
+          providerFiatAmount: null,
+          providerFiatCurrency: null,
           principalId: source.principalId,
         },
         venueContext: {

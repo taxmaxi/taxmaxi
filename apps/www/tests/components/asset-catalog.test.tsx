@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react"
+import * as DateTime from "effect/DateTime"
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest"
 
 import {
@@ -10,6 +11,8 @@ import {
 } from "#/lib/assets"
 import { m } from "#/paraglide/messages"
 import { AssetCatalog as AssetCatalogView } from "#/components/asset-catalog"
+import type { AssetExceptionActions } from "#/components/asset-catalog-context"
+import type { TaxMaxiAssetException } from "#/components/asset-catalog-model"
 
 function AssetCatalog({
   approvedAssetsUnavailable = false,
@@ -18,6 +21,8 @@ function AssetCatalog({
   canLoadMorePending = false,
   isLoadingApproved = false,
   isLoadingPending = false,
+  exceptions,
+  exceptionActions,
   onClose,
   onLoadMoreApproved,
   onLoadMorePending,
@@ -33,6 +38,8 @@ function AssetCatalog({
   readonly canLoadMorePending?: boolean
   readonly isLoadingApproved?: boolean
   readonly isLoadingPending?: boolean
+  readonly exceptions?: ReadonlyArray<TaxMaxiAssetException>
+  readonly exceptionActions?: AssetExceptionActions
   readonly onClose: () => void
   readonly onLoadMoreApproved?: () => Promise<unknown> | void
   readonly onLoadMorePending?: () => Promise<unknown> | void
@@ -44,6 +51,7 @@ function AssetCatalog({
 }) {
   return (
     <AssetCatalogView
+      exceptionActions={exceptionActions}
       feeds={{
         approved: {
           canLoadMore: canLoadMoreApproved,
@@ -61,6 +69,13 @@ function AssetCatalog({
           retry: onRetryPending,
           unavailable: pendingAssetsUnavailable,
         },
+        ...(exceptions === undefined
+          ? {}
+          : {
+              exceptions: {
+                items: exceptions,
+              },
+            }),
       }}
       onClose={onClose}
       onQueryChange={onQueryChange}
@@ -172,6 +187,38 @@ describe("AssetCatalog", () => {
     desktopViewport = false
     pixelDesktopViewport = undefined
     desktopChangeListeners.clear()
+  })
+
+  it("shows the Exceptions scope only when the admin feed is present", () => {
+    const { rerender } = render(<AssetCatalog assets={[]} onClose={vi.fn()} pendingAssets={[]} />)
+
+    expect(screen.queryByRole("button", { name: "Exceptions" })).toBeNull()
+
+    rerender(
+      <AssetCatalog
+        assets={[]}
+        exceptions={[
+          {
+            providerAssetRowId: "00000000-0000-4000-8000-000000000701",
+            provider: "coinbase",
+            providerAssetId: "exception-token",
+            naturalKey: null,
+            currencyCode: "EXC",
+            name: "Exception Token",
+            reason: "ownership_conflict",
+            severity: "critical",
+            oldestAt: DateTime.makeUnsafe("2026-08-24T09:53:00.000Z"),
+          },
+        ]}
+        onClose={vi.fn()}
+        pendingAssets={[]}
+      />
+    )
+
+    fireEvent.click(screen.getByRole("button", { name: "Exceptions" }))
+
+    expect(screen.getByRole("option", { name: /EXC/ })).toBeTruthy()
+    expect(screen.getByText("Critical")).toBeTruthy()
   })
 
   it("moves focus to search when the catalog opens", () => {

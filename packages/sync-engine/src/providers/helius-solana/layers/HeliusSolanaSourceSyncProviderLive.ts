@@ -2642,6 +2642,8 @@ const make = ({
         activityFacts,
         transferEvidenceContradictions: contradictions,
       },
+      providerFiatAmount: null,
+      providerFiatCurrency: null,
       principalId,
     })
 
@@ -2852,7 +2854,10 @@ const make = ({
               position: solMovements.length + index,
             })),
           ]
-          const canonicalMovements = [...rawSolMovements, ...joinedCanonicalSplMovements]
+          const canonicalMovements = [
+            ...rawSolMovements.filter((movement) => movement.asset.kind !== "excluded"),
+            ...joinedCanonicalSplMovements,
+          ]
           const conflictingApprovedMovement = canonicalMovements.find(
             (movement) =>
               movement.asset.mappingStatus === "approved" &&
