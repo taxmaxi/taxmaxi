@@ -352,6 +352,22 @@ const dispatchLinkedFollowUp = ({
   Effect.gen(function* () {
     if (visibleJob.jobId === params.jobId || executionJob.status !== "pending") return
 
+    const [dispatchableJob] = yield* repository
+      .listPendingJobsNeedingDispatch({
+        jobId: executionJob.id,
+        staleBefore: now,
+        limit: 1,
+      })
+      .pipe(
+        Effect.mapError((cause) =>
+          toRepairError({
+            operation: "workerSourceSyncStartupRepair.dispatchFollowUp.checkReadiness",
+            cause,
+          })
+        )
+      )
+    if (dispatchableJob === undefined) return
+
     const queueJobId = yield* enqueuePendingJob({
       job: {
         ...executionJob,

@@ -2680,6 +2680,103 @@ describe("SourceNormalizationRepositoryLive", () => {
     ])
   })
 
+  it("keeps a chainless provider override effective after replay adds representation fields", async () => {
+    const occurredAt = new Date("2025-01-01T11:05:00.000Z")
+    const providerAssetRowId = await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const [providerAsset] = yield* db
+          .insert(schema.providerAssets)
+          .values({
+            provider: "coinbase",
+            providerAssetId: "represented-provider-override",
+            currencyCode: "REPRESENTED",
+            exponent: 8,
+            providerType: "crypto",
+            retrievedAt: occurredAt,
+          })
+          .returning({ id: schema.providerAssets.id })
+        if (providerAsset === undefined) return yield* Effect.die("Failed to seed provider asset")
+        yield* db.insert(schema.providerAssetMappings).values({
+          providerAssetRowId: providerAsset.id,
+          mappingKind: "asset",
+          mappingStatus: "rejected",
+          canonicalAssetId: TEST_BTC_ASSET_ID,
+          assetRepresentationId: null,
+          canonicalFiatCurrency: null,
+        })
+        yield* db.insert(schema.providerAssetSourceUses).values({
+          providerAssetRowId: providerAsset.id,
+          sourceId: TEST_SOURCE_ID,
+          hasChainlessObservation: true,
+        })
+        yield* db.insert(schema.principalAssetOverrides).values({
+          principalId: TEST_PRINCIPAL_ID,
+          kind: "inclusion",
+          targetKind: "provider_asset",
+          providerAssetRowId: providerAsset.id,
+          action: "set",
+          inspectedSystemRevision: "represented-provider-override-revision",
+          inspectedInclusionState: "blocked",
+          inspectedInclusionReason: "asset_identity_unresolved",
+          replacementInclusionState: "included",
+          actorId: TEST_USER_ID,
+          reason: "Keep the custody override after represented transfers are rebuilt.",
+        })
+        return providerAsset.id
+      })
+    )
+
+    const result = await runRepository(
+      Effect.flatMap(SourceNormalizationRepository, (repository) =>
+        repository.persistNormalizedArtifacts({
+          ...buildBuyArtifacts({
+            externalId: "tx-represented-provider-override",
+            occurredAt,
+            sourceRawRecordId: TEST_RAW_RECORD_ID,
+          }),
+          providerAssetRowIds: [providerAssetRowId],
+          providerTransfers: [
+            {
+              sourceId: TEST_SOURCE_ID,
+              sourceRawRecordId: TEST_RAW_RECORD_ID,
+              externalId: "represented-provider-transfer",
+              externalGroupId: "represented-provider-group",
+              providerAssetId: providerAssetRowId,
+              timestamp: occurredAt,
+              direction: "inbound",
+              processingMode: "accounting_and_evidence",
+              fromAccountRef: "external-account",
+              toAccountRef: "coinbase-account-1",
+              fromAddress: null,
+              toAddress: null,
+              networkName: "base",
+              networkHash: "represented-provider-hash",
+              observedBlockchainId: fixture.baseBlockchainId,
+              observedRepresentationType: "token",
+              observedContractAddress: "0x0000000000000000000000000000000000000abc",
+              observedMintAddress: null,
+              observedDecimals: 8,
+              amount: "1",
+              metadata: null,
+            },
+          ],
+        })
+      )
+    )
+
+    const movements = await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        return yield* db
+          .select({ assetId: schema.inventoryMovements.assetId })
+          .from(schema.inventoryMovements)
+          .where(eq(schema.inventoryMovements.transactionId, result.transaction.id))
+      })
+    )
+    expect(movements).toEqual([{ assetId: TEST_BTC_ASSET_ID }])
+  })
+
   it("does not fabricate an accounting leg for override-owned evidence-only movement", async () => {
     const occurredAt = new Date("2025-01-01T11:10:00.000Z")
     const providerAssetRowId = await runPg(

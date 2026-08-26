@@ -206,9 +206,11 @@ const rowHistoryEntry = (row: PrincipalAssetOverrideRow): AssetOverrideHistoryEn
 
 const effectiveConclusion = ({
   activeOverride,
+  identityOverrideAssetId,
   systemConclusion,
 }: {
   readonly activeOverride: AssetOverrideHistoryEntry | null
+  readonly identityOverrideAssetId: string | null
   readonly systemConclusion: AssetOverrideSystemConclusion
 }): AssetOverrideSystemConclusion => {
   const replacement = activeOverride?.replacement
@@ -216,7 +218,29 @@ const effectiveConclusion = ({
     return { _tag: "identity", state: "resolved", assetId: replacement.assetId }
   }
   if (replacement?._tag === "inclusion") {
+    if (systemConclusion._tag !== "inclusion") return systemConclusion
+    if (
+      systemConclusion.state === "blocked" &&
+      systemConclusion.reason !== "asset_identity_unresolved"
+    ) {
+      return systemConclusion
+    }
+    if (
+      replacement.state === "included" &&
+      systemConclusion.reason === "asset_identity_unresolved" &&
+      identityOverrideAssetId === null
+    ) {
+      return systemConclusion
+    }
     return { _tag: "inclusion", state: replacement.state, reason: null }
+  }
+  if (
+    systemConclusion._tag === "inclusion" &&
+    systemConclusion.state === "blocked" &&
+    systemConclusion.reason === "asset_identity_unresolved" &&
+    identityOverrideAssetId !== null
+  ) {
+    return { _tag: "inclusion", state: "included", reason: null }
   }
   return systemConclusion
 }
@@ -675,8 +699,17 @@ const make = Effect.gen(function* () {
     Effect.gen(function* () {
       const system = yield* loadSystemConclusion({ executor, kind, target })
       const history = yield* loadHistory({ executor, kind, principalId, target })
+      const identityHistory =
+        kind === "inclusion"
+          ? yield* loadHistory({ executor, kind: "identity", principalId, target })
+          : []
       const latest = history.at(-1) ?? null
       const activeOverride = latest?.action === "set" ? latest : null
+      const latestIdentity = identityHistory.at(-1) ?? null
+      const identityOverrideAssetId =
+        latestIdentity?.action === "set" && latestIdentity.replacement?._tag === "identity"
+          ? latestIdentity.replacement.assetId
+          : null
       const recomputationState = yield* loadRecomputationState({
         executor,
         overrideId: latest?.id ?? null,
@@ -691,6 +724,7 @@ const make = Effect.gen(function* () {
         activeOverride,
         effectiveConclusion: effectiveConclusion({
           activeOverride,
+          identityOverrideAssetId,
           systemConclusion: system.conclusion,
         }),
         staleSystemRevision:

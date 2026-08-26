@@ -115,6 +115,11 @@ export interface CalculateTaxParams {
 
 /**
  * CalculateTaxResult - Tax calculation aggregate values.
+ *
+ * A `partial` result omits one or more disposal or income events whose required
+ * valuation is unavailable, so its totals are not complete. `unpricedEventCount`
+ * counts each omitted income event and each distinct omitted disposal once,
+ * even when a disposal has more than one unmatched or unpriced lot allocation.
  */
 export interface CalculateTaxResult {
   readonly year: number

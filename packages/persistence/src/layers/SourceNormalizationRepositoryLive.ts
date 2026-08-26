@@ -413,6 +413,20 @@ const make = Effect.gen(function* () {
     readonly providerTransfer: PersistedSourceProviderTransfer
   }) =>
     Effect.gen(function* () {
+      // A provider-asset target remains valid for the chainless source evidence
+      // that authorized it. Replay may later rebuild a transfer with observed
+      // representation fields, so consult both targets and prefer the exact
+      // representation when both have active choices.
+      const providerAssetCondition =
+        providerTransfer.providerAssetId === null
+          ? null
+          : and(
+              eq(schema.principalAssetOverrides.targetKind, "provider_asset"),
+              eq(
+                schema.principalAssetOverrides.providerAssetRowId,
+                providerTransfer.providerAssetId
+              )
+            )
       const representationCondition =
         providerTransfer.observedBlockchainId === null ||
         providerTransfer.observedRepresentationType === null
@@ -437,19 +451,10 @@ const make = Effect.gen(function* () {
                     providerTransfer.observedMintAddress
                   )
             )
-      // Exact representation evidence is the durable cross-provider target.
-      // Provider-asset overrides are only a fallback for chainless observations.
-      const providerAssetCondition =
-        representationCondition !== null || providerTransfer.providerAssetId === null
-          ? null
-          : and(
-              eq(schema.principalAssetOverrides.targetKind, "provider_asset"),
-              eq(
-                schema.principalAssetOverrides.providerAssetRowId,
-                providerTransfer.providerAssetId
-              )
-            )
-      const targetCondition = representationCondition ?? providerAssetCondition
+      const targetCondition =
+        representationCondition !== null && providerAssetCondition !== null
+          ? or(representationCondition, providerAssetCondition)
+          : (representationCondition ?? providerAssetCondition)
       if (targetCondition === null) return null
 
       const overrides = yield* executor

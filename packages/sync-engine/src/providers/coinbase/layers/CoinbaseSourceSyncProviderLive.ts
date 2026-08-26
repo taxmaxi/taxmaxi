@@ -1259,7 +1259,7 @@ const make = Effect.gen(function* () {
         effectivePrimaryAsset === undefined ? prepared.primaryAsset : effectivePrimaryAsset.asset
       const primaryIncluded =
         effectivePrimaryAsset === undefined || effectivePrimaryAsset.inclusionState === "included"
-      const deriveMainLeg = prepared.deriveMainLeg && primaryIncluded
+      const deriveMainLeg = primaryIncluded
       const canDerive =
         (!deriveMainLeg || primaryAsset !== null) &&
         (prepared.legDerivationStrategy === "derive" || prepared.canDeriveWithAssetOverrides)

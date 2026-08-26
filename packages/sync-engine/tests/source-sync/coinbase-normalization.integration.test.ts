@@ -1746,6 +1746,88 @@ describe("coinbase normalization persistence", () => {
     )
   })
 
+  it("restores an excluded Coinbase main leg after identity and inclusion overrides", async () => {
+    activeSyncRecords = makeHypeWithBtcFeeSyncRecords()
+    activeCryptoCurrencies = [...defaultCryptoCurrencies, hypeCryptoCurrency]
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        yield* seedPendingProviderAssetMapping({
+          currencyCode: "HYPE",
+          providerAssetId: "hype-provider-asset",
+          providerType: "crypto",
+        })
+        yield* excludeProviderAssetMapping({ currencyCode: "HYPE" })
+        yield* runSync()
+
+        const providerAssetState = yield* fetchProviderAssetState({ currencyCode: "HYPE" })
+        const providerAssetRowId = providerAssetState.providerAsset?.id
+        if (providerAssetRowId === undefined)
+          return yield* Effect.die("Missing HYPE provider asset")
+        const assetId = yield* seedCanonicalAsset({ symbol: "HYPE" })
+        const repository = yield* AssetOverrideRepository
+        const target = { _tag: "provider_asset" as const, providerAssetRowId }
+
+        const identityBefore = yield* repository.getProjection({
+          principalId,
+          kind: "identity",
+          target,
+        })
+        const identity = yield* repository.setOverride({
+          principalId,
+          actorId: userId,
+          kind: "identity",
+          target,
+          expectedSystemRevision: identityBefore.systemRevision,
+          expectedActiveOverrideId: null,
+          replacement: { _tag: "identity", assetId },
+          reason: "The Coinbase statement identifies the excluded HYPE holding.",
+        })
+        expect(identity._tag).toBe("accepted")
+        if (identity._tag !== "accepted" || identity.projection.activeOverride === null) return
+
+        activeSyncRecords = []
+        const identityReplay = yield* executeOverrideReplay({
+          overrideId: identity.projection.activeOverride.id,
+        })
+        expect(identityReplay.status).toBe("completed")
+
+        const inclusionBefore = yield* repository.getProjection({
+          principalId,
+          kind: "inclusion",
+          target,
+        })
+        const inclusion = yield* repository.setOverride({
+          principalId,
+          actorId: userId,
+          kind: "inclusion",
+          target,
+          expectedSystemRevision: inclusionBefore.systemRevision,
+          expectedActiveOverrideId: null,
+          replacement: { _tag: "inclusion", state: "included" },
+          reason: "Include the identified HYPE holding in this principal's calculation.",
+        })
+        expect(inclusion._tag).toBe("accepted")
+        if (inclusion._tag !== "accepted" || inclusion.projection.activeOverride === null) return
+
+        const inclusionReplay = yield* executeOverrideReplay({
+          overrideId: inclusion.projection.activeOverride.id,
+        })
+        expect(inclusionReplay.status).toBe("completed")
+        expect((yield* fetchCounts()).legs).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({
+              assetId,
+              kind: "acquisition",
+              derivationRule: "coinbase_buy",
+            }),
+            expect.objectContaining({ kind: "fee", derivationRule: "coinbase_network_fee" }),
+          ])
+        )
+      }).pipe(Effect.provide(TestLayer))
+    )
+  })
+
   it("does not create mapping review work for an excluded secondary currency", async () => {
     activeSyncRecords = [
       makeCoinbaseRecord({

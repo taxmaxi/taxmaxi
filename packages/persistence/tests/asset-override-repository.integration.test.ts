@@ -1640,6 +1640,149 @@ describe("AssetOverrideRepository", () => {
     })
   })
 
+  it("keeps an included choice blocked until the target has an effective identity", async () => {
+    const providerAssetRowId = await seedChainlessProviderAsset()
+    const target = { _tag: "provider_asset" as const, providerAssetRowId }
+    const inclusionBefore = await runRepository(
+      Effect.flatMap(AssetOverrideRepository, (repository) =>
+        repository.getProjection({
+          principalId: TEST_PRINCIPAL_ID,
+          kind: "inclusion",
+          target,
+        })
+      )
+    )
+
+    const included = await runRepository(
+      Effect.flatMap(AssetOverrideRepository, (repository) =>
+        repository.setOverride({
+          principalId: TEST_PRINCIPAL_ID,
+          actorId: "00000000-0000-0000-0000-000000000181",
+          kind: "inclusion",
+          target,
+          expectedSystemRevision: inclusionBefore.systemRevision,
+          expectedActiveOverrideId: null,
+          replacement: { _tag: "inclusion", state: "included" },
+          reason: "Include this holding once its economic identity is settled.",
+        })
+      )
+    )
+
+    expect(included._tag).toBe("accepted")
+    if (included._tag !== "accepted") return
+    expect(included.projection.effectiveConclusion).toEqual({
+      _tag: "inclusion",
+      state: "blocked",
+      reason: "asset_identity_unresolved",
+    })
+
+    const identityBefore = await runRepository(
+      Effect.flatMap(AssetOverrideRepository, (repository) =>
+        repository.getProjection({
+          principalId: TEST_PRINCIPAL_ID,
+          kind: "identity",
+          target,
+        })
+      )
+    )
+    const identified = await runRepository(
+      Effect.flatMap(AssetOverrideRepository, (repository) =>
+        repository.setOverride({
+          principalId: TEST_PRINCIPAL_ID,
+          actorId: "00000000-0000-0000-0000-000000000181",
+          kind: "identity",
+          target,
+          expectedSystemRevision: identityBefore.systemRevision,
+          expectedActiveOverrideId: null,
+          replacement: { _tag: "identity", assetId: TEST_BTC_ASSET_ID },
+          reason: "Identify the included holding as the existing Bitcoin asset.",
+        })
+      )
+    )
+    expect(identified._tag).toBe("accepted")
+
+    const inclusionAfter = await runRepository(
+      Effect.flatMap(AssetOverrideRepository, (repository) =>
+        repository.getProjection({
+          principalId: TEST_PRINCIPAL_ID,
+          kind: "inclusion",
+          target,
+        })
+      )
+    )
+    expect(inclusionAfter.effectiveConclusion).toEqual({
+      _tag: "inclusion",
+      state: "included",
+      reason: null,
+    })
+  })
+
+  it("preserves a technical blocker that appears after an inclusion choice", async () => {
+    const providerAssetRowId = await seedChainlessProviderAsset()
+    await context.runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        yield* db
+          .update(schema.providerAssetMappings)
+          .set({
+            mappingStatus: "excluded",
+            canonicalAssetId: TEST_BTC_ASSET_ID,
+          })
+          .where(eq(schema.providerAssetMappings.providerAssetRowId, providerAssetRowId))
+      })
+    )
+    const target = { _tag: "provider_asset" as const, providerAssetRowId }
+    const initial = await runRepository(
+      Effect.flatMap(AssetOverrideRepository, (repository) =>
+        repository.getProjection({
+          principalId: TEST_PRINCIPAL_ID,
+          kind: "inclusion",
+          target,
+        })
+      )
+    )
+    const included = await runRepository(
+      Effect.flatMap(AssetOverrideRepository, (repository) =>
+        repository.setOverride({
+          principalId: TEST_PRINCIPAL_ID,
+          actorId: "00000000-0000-0000-0000-000000000181",
+          kind: "inclusion",
+          target,
+          expectedSystemRevision: initial.systemRevision,
+          expectedActiveOverrideId: null,
+          replacement: { _tag: "inclusion", state: "included" },
+          reason: "Include the policy-excluded asset while its facts are complete.",
+        })
+      )
+    )
+    expect(included._tag).toBe("accepted")
+
+    await context.runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        yield* db
+          .update(schema.providerAssets)
+          .set({ exponent: null })
+          .where(eq(schema.providerAssets.id, providerAssetRowId))
+      })
+    )
+    const blocked = await runRepository(
+      Effect.flatMap(AssetOverrideRepository, (repository) =>
+        repository.getProjection({
+          principalId: TEST_PRINCIPAL_ID,
+          kind: "inclusion",
+          target,
+        })
+      )
+    )
+
+    expect(blocked.effectiveConclusion).toEqual({
+      _tag: "inclusion",
+      state: "blocked",
+      reason: "missing_decimals",
+    })
+  })
+
   it("gives unknown-type observations exactly one provider-asset identity", async () => {
     const { blockchainId, providerAssetRowId } = await seedUnknownTypeRepresentation()
     const target = { _tag: "provider_asset" as const, providerAssetRowId }

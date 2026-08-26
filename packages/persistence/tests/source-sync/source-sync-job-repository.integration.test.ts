@@ -944,6 +944,16 @@ describe("SourceSyncJobRepositoryLive", () => {
 
     expect(await listPendingJobIds()).toEqual(expect.arrayContaining([ownerJob.id]))
     expect(await listPendingJobIds()).not.toContain(dependentJob.id)
+    const [blockedDependent] = await runRepository(
+      Effect.flatMap(SourceSyncJobRepository, (repository) =>
+        repository.listPendingJobsNeedingDispatch({
+          jobId: dependentJob.id,
+          staleBefore,
+          limit: 1,
+        })
+      )
+    )
+    expect(blockedDependent).toBeUndefined()
 
     await claimJob({ jobId: ownerJob.id })
     await runRepository(
@@ -969,6 +979,16 @@ describe("SourceSyncJobRepositoryLive", () => {
     )
 
     expect(await listPendingJobIds()).toContain(dependentJob.id)
+    const [readyDependent] = await runRepository(
+      Effect.flatMap(SourceSyncJobRepository, (repository) =>
+        repository.listPendingJobsNeedingDispatch({
+          jobId: dependentJob.id,
+          staleBefore,
+          limit: 1,
+        })
+      )
+    )
+    expect(readyDependent?.id).toBe(dependentJob.id)
   })
 
   it("recovers a stale active job and allows a fresh job to start", async () => {

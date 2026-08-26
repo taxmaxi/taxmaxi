@@ -135,22 +135,43 @@ const make = Effect.gen(function* () {
     readonly principalId: string
     readonly mode: SourceSyncJobMode
   }): Effect.Effect<void, SourceSyncQueueError> =>
-    sourceSyncQueue
-      .enqueueSourceSyncJob(
-        SourceSyncQueuePayload.make({
-          jobId,
-          sourceId,
-          principalId,
-          mode,
-        })
-      )
-      .pipe(
-        sourceSyncSpan({
-          name: "source-sync.enqueue-job",
-          attributes: { jobId, sourceId, principalId, mode },
-          kind: "producer",
-        })
-      )
+    sourceSyncQueue.enqueueSourceSyncJob(
+      SourceSyncQueuePayload.make({
+        jobId,
+        sourceId,
+        principalId,
+        mode,
+      })
+    )
+
+  const enqueuePendingJobIfReady = ({
+    jobId,
+    sourceId,
+    principalId,
+    mode,
+  }: {
+    readonly jobId: string
+    readonly sourceId: string
+    readonly principalId: string
+    readonly mode: SourceSyncJobMode
+  }) =>
+    Effect.gen(function* () {
+      const [dispatchableJob] = yield* sourceSyncJobRepository.listPendingJobsNeedingDispatch({
+        jobId,
+        staleBefore: nowDate(),
+        limit: 1,
+      })
+      if (dispatchableJob === undefined) return false
+
+      yield* enqueuePendingJob({ jobId, sourceId, principalId, mode })
+      return true
+    }).pipe(
+      sourceSyncSpan({
+        name: "source-sync.enqueue-job",
+        attributes: { jobId, sourceId, principalId, mode },
+        kind: "producer",
+      })
+    )
 
   const runSourceJob = ({
     principalId,
@@ -209,7 +230,7 @@ const make = Effect.gen(function* () {
           if (replayRequest?._tag === "CreatedSourceSyncJob") {
             // The active job may finish after findActiveJob. In that race, the
             // repository creates the replay directly, so it must be queued here.
-            yield* enqueuePendingJob({
+            yield* enqueuePendingJobIfReady({
               jobId: replayRequest.id,
               sourceId: source.id,
               principalId,
@@ -236,7 +257,7 @@ const make = Effect.gen(function* () {
                 queueJobId: jobToReuse.queueJobId,
               })
             ) {
-              yield* enqueuePendingJob({
+              yield* enqueuePendingJobIfReady({
                 jobId: jobToReuse.id,
                 sourceId: jobToReuse.sourceId,
                 principalId: jobToReuse.principalId,
@@ -273,7 +294,7 @@ const make = Effect.gen(function* () {
             queueJobId: job.queueJobId,
           })
         ) {
-          yield* enqueuePendingJob({
+          yield* enqueuePendingJobIfReady({
             jobId: job.id,
             sourceId: job.sourceId,
             principalId: job.principalId,
@@ -290,7 +311,7 @@ const make = Effect.gen(function* () {
         })
       }
 
-      yield* enqueuePendingJob({
+      yield* enqueuePendingJobIfReady({
         jobId: job.id,
         sourceId: source.id,
         principalId,

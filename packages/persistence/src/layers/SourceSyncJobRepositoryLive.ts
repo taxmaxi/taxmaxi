@@ -1233,7 +1233,7 @@ const make = Effect.gen(function* () {
       )
 
   const listPendingJobsNeedingDispatch: SourceSyncJobRepositoryShape["listPendingJobsNeedingDispatch"] =
-    ({ staleBefore, limit }) =>
+    ({ staleBefore, limit, jobId }) =>
       db
         .select({
           id: schema.processingJobs.id,
@@ -1252,6 +1252,7 @@ const make = Effect.gen(function* () {
           and(
             isNotNull(schema.processingJobs.principalId),
             eq(schema.processingJobs.status, "pending"),
+            jobId === undefined ? undefined : eq(schema.processingJobs.id, jobId),
             sql`not exists (
               select 1
               from ${schema.principalAssetOverrideApplications} dependent_application

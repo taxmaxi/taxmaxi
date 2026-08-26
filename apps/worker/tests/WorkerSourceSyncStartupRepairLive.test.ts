@@ -73,6 +73,7 @@ const makeRepositoryLayer = ({
   recoverFailureJobId,
   recoverFailureKind = "conflict",
   materializedOnRecover,
+  blockedDispatchJobIds = new Set(),
   visibleJob,
   executionJob,
 }: {
@@ -84,6 +85,7 @@ const makeRepositoryLayer = ({
   readonly recoverFailureJobId?: string
   readonly recoverFailureKind?: RepairFailureKind
   readonly materializedOnRecover?: SourceSyncRepairableActiveJob
+  readonly blockedDispatchJobIds?: ReadonlySet<string>
   readonly visibleJob?: SourceSyncJobDetails
   readonly executionJob?: SourceSyncExecutionJob
 }) => {
@@ -151,8 +153,14 @@ const makeRepositoryLayer = ({
         : Effect.succeed(executionJob),
     listStaleActiveJobs: () => Effect.die(new Error("listStaleActiveJobs should not be called")),
     listRepairableActiveJobs: ({ limit }) => Effect.sync(() => remainingJobs.slice(0, limit)),
-    listPendingJobsNeedingDispatch: ({ limit }) =>
-      Effect.sync(() => remainingJobs.filter(isPendingDispatchJob).slice(0, limit)),
+    listPendingJobsNeedingDispatch: ({ jobId, limit }) =>
+      Effect.sync(() =>
+        remainingJobs
+          .filter(isPendingDispatchJob)
+          .filter((job) => jobId === undefined || job.id === jobId)
+          .filter((job) => !blockedDispatchJobIds.has(job.id))
+          .slice(0, limit)
+      ),
   } satisfies SourceSyncJobRepositoryShape)
 }
 
@@ -261,9 +269,11 @@ const runPendingDispatch = ({
   )
 
 const runDispatchFollowUp = ({
+  blocked = false,
   enqueued,
   attached,
 }: {
+  readonly blocked?: boolean
   readonly enqueued: Array<SourceSyncQueuePayload>
   readonly attached: Array<AttachSourceSyncQueueMetadataParams>
 }) => {
@@ -307,9 +317,10 @@ const runDispatchFollowUp = ({
           }).pipe(
             Layer.provideMerge(
               makeRepositoryLayer({
-                repairableJobs: [],
+                repairableJobs: [makeRepairableJob({ id: "job-follow-up", status: "pending" })],
                 attached,
                 recovered: [],
+                blockedDispatchJobIds: blocked ? new Set(["job-follow-up"]) : new Set(),
                 visibleJob,
                 executionJob,
               })
@@ -404,6 +415,16 @@ describe("WorkerSourceSyncStartupRepairLive", () => {
         queueJobId: "job-follow-up",
       }),
     ])
+  })
+
+  it("does not dispatch a linked follow-up while an owner replay is pending", async () => {
+    const enqueued: Array<SourceSyncQueuePayload> = []
+    const attached: Array<AttachSourceSyncQueueMetadataParams> = []
+
+    await runDispatchFollowUp({ blocked: true, enqueued, attached })
+
+    expect(enqueued).toEqual([])
+    expect(attached).toEqual([])
   })
 
   it("requeues a pending job without queue metadata and records durable metadata", async () => {

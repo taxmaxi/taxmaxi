@@ -187,6 +187,8 @@ export interface ListRepairableActiveSourceSyncJobsParams {
 export interface ListPendingSourceSyncJobsNeedingDispatchParams {
   readonly staleBefore: Date
   readonly limit: number
+  /** Restrict readiness checking to one pending job. */
+  readonly jobId?: string
 }
 
 /**

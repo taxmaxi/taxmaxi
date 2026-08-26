@@ -63,12 +63,14 @@ const makeActiveJob = ({
 
 const makeServiceLayer = ({
   activeJobs = [],
+  blockedDispatchJobIds = new Set(),
   createResult,
   enqueued,
   repositoryEvents,
   enqueueFailure = false,
 }: {
   readonly activeJobs?: ReadonlyArray<SourceSyncActiveJob>
+  readonly blockedDispatchJobIds?: ReadonlySet<string>
   readonly createResult?: CreateOrReuseSourceSyncJobResult
   readonly enqueued: Array<SourceSyncQueuePayload>
   readonly repositoryEvents: Array<string>
@@ -101,7 +103,24 @@ const makeServiceLayer = ({
     recordRetryableFailure: unusedJobLifecycleMethods.recordRetryableFailure,
     listStaleActiveJobs: unusedJobLifecycleMethods.listStaleActiveJobs,
     listRepairableActiveJobs: unusedJobLifecycleMethods.listRepairableActiveJobs,
-    listPendingJobsNeedingDispatch: unusedJobLifecycleMethods.listPendingJobsNeedingDispatch,
+    listPendingJobsNeedingDispatch: ({ jobId }) =>
+      jobId === undefined || blockedDispatchJobIds.has(jobId)
+        ? Effect.succeed([])
+        : Effect.succeed([
+            {
+              id: jobId,
+              sourceId: source.id,
+              principalId: source.principalId,
+              mode: "sync",
+              status: "pending",
+              startedAt: null,
+              heartbeatAt: null,
+              updatedAt: new Date(),
+              workerId: null,
+              queueName: null,
+              queueJobId: null,
+            },
+          ]),
     failJob: () => Effect.die("failJob should not be called"),
     failCreditRequiredJob: () => Effect.die("failCreditRequiredJob should not be called"),
     completeJob: () => Effect.die("completeJob should not be called"),
@@ -238,6 +257,24 @@ describe("SourceSyncService queue orchestration", () => {
       principalId: source.principalId,
       mode: "sync",
     })
+  })
+
+  it("does not enqueue a dependency-blocked reused pending replay", async () => {
+    const enqueued: Array<SourceSyncQueuePayload> = []
+    const repositoryEvents: Array<string> = []
+
+    const result = await runStart({
+      mode: "replay",
+      layer: makeServiceLayer({
+        activeJobs: [makeActiveJob({ id: "job-dependent", mode: "replay" })],
+        blockedDispatchJobIds: new Set(["job-dependent"]),
+        enqueued,
+        repositoryEvents,
+      }),
+    })
+
+    expect(result).toMatchObject({ jobId: "job-dependent", status: "queued" })
+    expect(enqueued).toEqual([])
   })
 
   it("does not enqueue a reused processing job", async () => {
