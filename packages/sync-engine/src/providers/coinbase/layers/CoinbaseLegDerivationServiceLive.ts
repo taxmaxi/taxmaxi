@@ -17,6 +17,7 @@ import {
   parseAmount,
   subtractFeeFromDebit,
 } from "../shared/CoinbaseDecimal.ts"
+import { feeIsPartOfDebit } from "../shared/CoinbaseNetworkFee.ts"
 import {
   CoinbaseLegDerivationError,
   CoinbaseLegDerivationService,
@@ -79,6 +80,7 @@ const CoinbaseMetadataSchema = Schema.Struct({
 })
 
 type CoinbaseMetadata = Schema.Schema.Type<typeof CoinbaseMetadataSchema>
+type CoinbaseMoney = Schema.Schema.Type<typeof CoinbaseMoneySchema>
 
 const CoinbaseNetworkFeeSchema = Schema.Struct({
   transaction_fee: Schema.optional(CoinbaseMoneySchema),
@@ -97,16 +99,16 @@ const invalidDecimalError = (value: string) =>
  * primary amount; fees in another currency or in the native fiat currency are
  * tracked outside the debit and return none.
  */
-const sameCurrencyNetworkFee = (
-  metadata: CoinbaseMetadata
-): Option.Option<{ readonly amount: string; readonly currency: string }> =>
+const sameCurrencyNetworkFee = (metadata: CoinbaseMetadata): Option.Option<CoinbaseMoney> =>
   Option.flatMap(decodeNetworkFee(metadata.network ?? undefined), (network) => {
     const fee = network.transaction_fee
-    const feeCurrency = fee?.currency.toUpperCase()
 
     return fee !== undefined &&
-      feeCurrency === metadata.amount.currency.toUpperCase() &&
-      feeCurrency !== metadata.nativeAmount.currency.toUpperCase()
+      feeIsPartOfDebit({
+        feeCurrency: fee.currency,
+        amountCurrency: metadata.amount.currency,
+        nativeCurrency: metadata.nativeAmount.currency,
+      })
       ? Option.some(fee)
       : Option.none()
   })
@@ -314,7 +316,7 @@ const deriveCarvedDisposalAmounts = ({
   networkFee,
 }: {
   readonly metadata: CoinbaseMetadata
-  readonly networkFee: { readonly amount: string; readonly currency: string }
+  readonly networkFee: CoinbaseMoney
 }): Effect.Effect<
   {
     readonly amount: string
@@ -364,11 +366,11 @@ const deriveCarvedDisposalAmounts = ({
 const deriveMainLegAmounts = ({
   params,
   metadata,
-  kind,
+  networkFee,
 }: {
   readonly params: DeriveCoinbaseLegsParams
   readonly metadata: CoinbaseMetadata
-  readonly kind: "acquisition" | "disposal" | "income" | "fee"
+  readonly networkFee: Option.Option<CoinbaseMoney>
 }): Effect.Effect<
   {
     readonly amount: string
@@ -379,8 +381,6 @@ const deriveMainLegAmounts = ({
 > =>
   Effect.gen(function* () {
     if (metadata.coinbaseReferenceMapping.resolutionStrategy !== "paired_spread_fee") {
-      const networkFee = kind === "disposal" ? sameCurrencyNetworkFee(metadata) : Option.none()
-
       if (Option.isSome(networkFee)) {
         return yield* deriveCarvedDisposalAmounts({
           metadata,
@@ -452,14 +452,16 @@ const buildMainLeg = (
       })
     }
 
+    const networkFee =
+      classification.kind === "disposal" ? sameCurrencyNetworkFee(metadata) : Option.none()
     const amounts = yield* deriveMainLegAmounts({
       params,
       metadata,
-      kind: classification.kind,
+      networkFee,
     })
     const coversNoInventory =
       metadata.coinbaseReferenceMapping.resolutionStrategy === "paired_spread_fee" ||
-      (classification.kind === "disposal" && Option.isSome(sameCurrencyNetworkFee(metadata)))
+      Option.isSome(networkFee)
     if (coversNoInventory && isZeroAmount(amounts.amount)) {
       return Option.none()
     }

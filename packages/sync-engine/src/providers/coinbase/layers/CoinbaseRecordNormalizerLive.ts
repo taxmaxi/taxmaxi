@@ -9,6 +9,7 @@ import * as Layer from "effect/Layer"
 import * as Option from "effect/Option"
 import * as Schema from "effect/Schema"
 import { isZeroAmount, subtractFeeFromDebit } from "../shared/CoinbaseDecimal.ts"
+import { feeIsPartOfDebit } from "../shared/CoinbaseNetworkFee.ts"
 import {
   type CoinbaseRecordNormalizationResult,
   CoinbaseRecordNormalizationError,
@@ -238,12 +239,14 @@ const deriveOutboundPrincipalAmount = (
   transaction: CoinbaseTransaction
 ): Effect.Effect<string, CoinbaseRecordNormalizationError> => {
   const fee = transaction.network?.transaction_fee
-  const feeCurrency = fee?.currency.toUpperCase()
 
   if (
     fee === undefined ||
-    feeCurrency !== transaction.amount.currency.toUpperCase() ||
-    feeCurrency === transaction.native_amount.currency.toUpperCase()
+    !feeIsPartOfDebit({
+      feeCurrency: fee.currency,
+      amountCurrency: transaction.amount.currency,
+      nativeCurrency: transaction.native_amount.currency,
+    })
   ) {
     return Effect.succeed(normalizeUnsignedAmount(transaction.amount.amount))
   }
