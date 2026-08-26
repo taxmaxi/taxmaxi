@@ -1,10 +1,11 @@
 /** State, parsing, and display helpers for asset exception review. */
 import { AlertTriangle, Check, Copy } from "lucide-react"
 import { useEffect, useRef, useState } from "react"
-import type {
-  AssetExceptionDecisionInput,
-  AssetExceptionDetail,
-  AssetExceptionPreview,
+import {
+  getTaxMaxiAssetDecisionErrorCode,
+  type AssetExceptionDecisionInput,
+  type AssetExceptionDetail,
+  type AssetExceptionPreview,
 } from "taxmaxi"
 import { z } from "zod"
 
@@ -417,6 +418,44 @@ export function useDecisionDraft({
     }
   }
 
+  const handleDecisionError = async (error: unknown, fallback: string) => {
+    const code = getTaxMaxiAssetDecisionErrorCode(error)
+    if (code === "stale_revision") {
+      // The reviewed revisions are gone, so the preview and the detail it
+      // was built from are both unusable. Refresh before the next attempt.
+      setPreview(null)
+      try {
+        onDetailChange(await actions.get(detail.providerAssetRowId))
+        setMessage({ kind: "error", text: m["assetCatalog.exceptions.errors.stale"]() })
+      } catch {
+        setMessage({
+          kind: "error",
+          text: m["assetCatalog.exceptions.errors.staleRefresh"](),
+        })
+      }
+      return
+    }
+    if (code === "identity_changed") {
+      setPreview(null)
+      setMessage({
+        kind: "error",
+        text: m["assetCatalog.exceptions.errors.identityChanged"](),
+      })
+      return
+    }
+    setMessage({
+      kind: "error",
+      text:
+        code === "ambiguous_identity"
+          ? m["assetCatalog.exceptions.errors.ambiguousIdentity"]()
+          : code === "invalid_evidence"
+            ? m["assetCatalog.exceptions.errors.invalidEvidence"]()
+            : code === "invalid_claim"
+              ? m["assetCatalog.exceptions.errors.invalidClaim"]()
+              : fallback,
+    })
+  }
+
   const previewDecision = async () => {
     const request = makeRequest()
     if (request === null) {
@@ -430,8 +469,8 @@ export function useDecisionDraft({
     setMessage(null)
     try {
       setPreview({ request, response: await actions.preview(request) })
-    } catch {
-      setMessage({ kind: "error", text: m["assetCatalog.exceptions.reviewUi.errors.preview"]() })
+    } catch (error) {
+      await handleDecisionError(error, m["assetCatalog.exceptions.reviewUi.errors.preview"]())
     } finally {
       setBusy(false)
     }
@@ -458,11 +497,8 @@ export function useDecisionDraft({
       onDetailChange(nextDetail)
       setPreview(null)
       setMessage({ kind: "success", text: m["assetCatalog.exceptions.success"]() })
-    } catch {
-      setMessage({
-        kind: "error",
-        text: m["assetCatalog.exceptions.reviewUi.errors.submit"](),
-      })
+    } catch (error) {
+      await handleDecisionError(error, m["assetCatalog.exceptions.reviewUi.errors.submit"]())
     } finally {
       setBusy(false)
     }

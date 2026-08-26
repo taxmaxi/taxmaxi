@@ -11,7 +11,11 @@ import {
   useAssetCatalogFeeds,
 } from "#/hooks/use-asset-catalog-feeds"
 import { queries } from "#/integrations/taxmaxi/queries"
-import { closeAssetCatalog, loadAssetCatalogFeeds } from "#/lib/asset-catalog-route"
+import {
+  closeAssetCatalog,
+  loadAssetCatalogFeeds,
+  retryAssetCatalogFeed,
+} from "#/lib/asset-catalog-route"
 import { seo } from "#/lib/seo"
 import { m } from "#/paraglide/messages"
 
@@ -93,6 +97,20 @@ function AssetsIndexRoute() {
     [assetExceptionPages]
   )
 
+  const retryExceptions = useCallback(
+    () =>
+      retryAssetCatalogFeed({
+        fetchNextPage: assetExceptionQuery.fetchNextPage,
+        isFetchNextPageError: assetExceptionQuery.isFetchNextPageError,
+        refetch: assetExceptionQuery.refetch,
+      }),
+    [
+      assetExceptionQuery.fetchNextPage,
+      assetExceptionQuery.isFetchNextPageError,
+      assetExceptionQuery.refetch,
+    ]
+  )
+
   const feeds = useMemo<AssetCatalogFeeds>(
     () =>
       isAdmin
@@ -103,7 +121,7 @@ function AssetsIndexRoute() {
               isLoading: assetExceptionQuery.isFetching,
               items: assetExceptions,
               loadMore: assetExceptionQuery.fetchNextPage,
-              retry: assetExceptionQuery.refetch,
+              retry: retryExceptions,
               unavailable: assetExceptionQuery.isError || assetExceptionQuery.isFetchNextPageError,
             },
           }
@@ -114,10 +132,10 @@ function AssetsIndexRoute() {
       assetExceptionQuery.isError,
       assetExceptionQuery.isFetchNextPageError,
       assetExceptionQuery.isFetching,
-      assetExceptionQuery.refetch,
       assetExceptions,
       baseFeeds,
       isAdmin,
+      retryExceptions,
     ]
   )
 

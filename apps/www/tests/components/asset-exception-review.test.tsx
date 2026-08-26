@@ -277,4 +277,37 @@ describe("AssetExceptionReview", () => {
       screen.getByText("Decision accepted. Rebuilding affected data is now tracked separately.")
     ).toBeTruthy()
   })
+
+  it("refreshes the detail and clears the preview after a stale decision conflict", async () => {
+    const actions = makeActions()
+    actions.submit = vi.fn(async () => {
+      throw {
+        _tag: "AssetStaleRevisionError",
+        code: "stale_revision",
+        evidenceRevision: 2,
+        activeDecisionRevision: POLICY_DECISION_ID,
+      }
+    })
+    const { onDetailChange } = renderReview(actions)
+
+    fireEvent.click(screen.getByRole("radio", { name: /Exclude from reports/ }))
+    fireEvent.click(screen.getByRole("button", { name: "Review exclusion" }))
+    await waitFor(() => expect(actions.preview).toHaveBeenCalledOnce())
+    fireEvent.click(screen.getByRole("button", { name: "Confirm exclusion" }))
+
+    // The stale preview cannot be retried; the latest detail is fetched so
+    // the next preview starts from the current revisions.
+    await waitFor(() =>
+      expect(
+        screen.getByText(
+          "Evidence or the active decision changed. Detail was refreshed; preview again."
+        )
+      ).toBeTruthy()
+    )
+    expect(actions.get).toHaveBeenCalledWith(OBSERVATION_ID)
+    expect(onDetailChange).toHaveBeenCalledWith(detail)
+    await waitFor(() =>
+      expect(screen.queryByRole("region", { name: "Decision preview" })).toBeNull()
+    )
+  })
 })

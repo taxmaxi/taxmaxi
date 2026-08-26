@@ -145,6 +145,23 @@ export function ClaimFields({
   return null
 }
 
+const HEX_ADDRESS_PATTERN = /^0x[0-9a-fA-F]+$/
+
+/**
+ * The catalog stores EVM addresses lowercased while chain evidence often
+ * carries checksummed ones, so hex addresses compare case-insensitively.
+ * Case stays significant for chains such as Solana, where base58 addresses
+ * differing only in case are different accounts.
+ */
+function isSameAddress(candidate: string | null, observed: string): boolean {
+  if (candidate === null) {
+    return false
+  }
+  return HEX_ADDRESS_PATTERN.test(candidate) && HEX_ADDRESS_PATTERN.test(observed)
+    ? candidate.toLowerCase() === observed.toLowerCase()
+    : candidate === observed
+}
+
 /**
  * Candidate search for "attach to existing asset": shows matching catalog
  * assets with their mint and trust signals instead of asking for a UUID.
@@ -201,7 +218,10 @@ function CandidatePicker({ draft }: { readonly draft: DecisionDraft }) {
     const sameIdentity = networkRepresentations.some(
       (representation) =>
         observationAddress !== null &&
-        (representation.mintAddress ?? representation.contractAddress) === observationAddress
+        isSameAddress(
+          representation.mintAddress ?? representation.contractAddress,
+          observationAddress
+        )
     )
     const registryMatch =
       trustedCoinId !== null &&
@@ -654,10 +674,23 @@ export function PreviewCard({ draft }: { readonly draft: DecisionDraft }) {
         </p>
       </div>
       <div className="mt-4 flex flex-wrap gap-2">
-        <Button disabled={draft.busy} onClick={() => void draft.confirmDecision()} size="sm">
+        {/* Explicit type: inside the review form these would otherwise
+            submit it and re-run the preview on every confirmation. */}
+        <Button
+          disabled={draft.busy}
+          onClick={() => void draft.confirmDecision()}
+          size="sm"
+          type="button"
+        >
           {confirmLabel}
         </Button>
-        <Button disabled={draft.busy} onClick={draft.clearPreview} size="sm" variant="outline">
+        <Button
+          disabled={draft.busy}
+          onClick={draft.clearPreview}
+          size="sm"
+          type="button"
+          variant="outline"
+        >
           {m["assetCatalog.exceptions.reviewUi.preview.keepEditing"]()}
         </Button>
       </div>
