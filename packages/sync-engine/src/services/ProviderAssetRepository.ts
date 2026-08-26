@@ -43,6 +43,7 @@ export interface ProviderAssetRecord {
   readonly exponent: number | null
   readonly providerType: string | null
   readonly rawProviderPayload: unknown
+  readonly evidenceRevision: number
   readonly discoveredAt: Date
   readonly retrievedAt: Date
 }

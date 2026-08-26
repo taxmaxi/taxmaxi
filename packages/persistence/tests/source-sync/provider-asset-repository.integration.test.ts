@@ -428,6 +428,256 @@ describe("ProviderAssetRepositoryLive", () => {
       expect(afterChanged).toEqual({ evidenceRevision: 2 })
     })
 
+    it("does not downgrade a settled mapping when a late pending write arrives", async () => {
+      const providerAsset = await seedPendingApprovalAsset("late-pending", {
+        withProviderTransfer: false,
+      })
+      const writeMapping = (mappingStatus: "approved" | "pending_review") =>
+        runRepository(
+          Effect.flatMap(ProviderAssetRepository, (repository) =>
+            repository.upsertProviderAssetMappings({
+              mappings: [
+                {
+                  providerAssetRowId: providerAsset.id,
+                  mappingKind: "asset",
+                  canonicalAssetId: mappingStatus === "approved" ? TEST_BTC_ASSET_ID : null,
+                  assetRepresentationId: null,
+                  canonicalFiatCurrency: null,
+                  mappingStatus,
+                  reviewerNotes: mappingStatus === "approved" ? "Accepted" : null,
+                  sourceNotes: "Concurrent missing-mapping path",
+                },
+              ],
+            })
+          )
+        )
+
+      await writeMapping("approved")
+      await writeMapping("pending_review")
+
+      const mapping = await runRepository(
+        Effect.flatMap(ProviderAssetRepository, (repository) =>
+          repository.findProviderAssetMapping({ providerAssetRowId: providerAsset.id })
+        )
+      )
+
+      expect(Option.getOrNull(mapping)).toMatchObject({
+        mappingStatus: "approved",
+        canonicalAssetId: TEST_BTC_ASSET_ID,
+      })
+    })
+
+    it("locks provider rows before racing trusted seeds with manual mapping writes", async () => {
+      const providerAsset = await runRepository(
+        Effect.gen(function* () {
+          const repository = yield* ProviderAssetRepository
+          yield* repository.upsertProviderAssets({
+            providerKey: "coinbase",
+            entries: [
+              {
+                providerAssetId: "trusted-seed-manual-race",
+                naturalKey: null,
+                currencyCode: "BTC",
+                name: "Bitcoin",
+                exponent: 8,
+                providerType: "crypto",
+                payload: { source: "lock-order-test" },
+              },
+            ],
+          })
+          const found = yield* repository.findProviderAssetByProviderAssetId({
+            providerKey: "coinbase",
+            providerAssetId: "trusted-seed-manual-race",
+          })
+          if (Option.isNone(found)) {
+            return yield* Effect.die("Expected seed/manual race provider asset")
+          }
+          return found.value
+        })
+      )
+      const providerLocked = await Effect.runPromise(Deferred.make<void>())
+      const releaseManualMapping = await Effect.runPromise(Deferred.make<void>())
+      const manualMapping = runPg(
+        Effect.gen(function* () {
+          const db = yield* drizzle
+          yield* db.transaction((tx) =>
+            Effect.gen(function* () {
+              yield* tx
+                .select({ id: schema.providerAssets.id })
+                .from(schema.providerAssets)
+                .where(eq(schema.providerAssets.id, providerAsset.id))
+                .for("no key update")
+              yield* Deferred.succeed(providerLocked, undefined)
+              yield* Deferred.await(releaseManualMapping)
+              yield* tx.insert(schema.providerAssetMappings).values({
+                providerAssetRowId: providerAsset.id,
+                mappingKind: "asset",
+                canonicalAssetId: TEST_BTC_ASSET_ID,
+                assetRepresentationId: TEST_BTC_REPRESENTATION_ID,
+                mappingStatus: "approved",
+                reviewerNotes: "Manual mapping won the race.",
+                sourceNotes: "Manual lock-order regression.",
+              })
+            })
+          )
+        })
+      )
+      await Effect.runPromise(Deferred.await(providerLocked))
+      const trustedSeed = runRepository(
+        Effect.flatMap(ProviderAssetRepository, (repository) =>
+          repository.seedProviderAssetMappingsIfMissing({
+            mappings: [
+              {
+                providerAssetRowId: providerAsset.id,
+                mappingKind: "asset",
+                canonicalAssetId: TEST_BTC_ASSET_ID,
+                assetRepresentationId: TEST_BTC_REPRESENTATION_ID,
+                canonicalFiatCurrency: null,
+                mappingStatus: "approved",
+                reviewerNotes: null,
+                sourceNotes: "Trusted seed racing manual review.",
+              },
+            ],
+          })
+        )
+      )
+
+      await context.waitForQueryBlockedOnLock({ queryIncludes: "provider_assets" })
+      await Effect.runPromise(Deferred.succeed(releaseManualMapping, undefined))
+      await manualMapping
+      expect(await trustedSeed).toBe(0)
+
+      const mapping = await runRepository(
+        Effect.flatMap(ProviderAssetRepository, (repository) =>
+          repository.findProviderAssetMapping({ providerAssetRowId: providerAsset.id })
+        )
+      )
+      expect(Option.getOrNull(mapping)).toMatchObject({
+        mappingStatus: "approved",
+        canonicalAssetId: TEST_BTC_ASSET_ID,
+      })
+    })
+
+    it("reevaluates later evidence without replacing a trusted mapping conclusion", async () => {
+      const providerAsset = await runRepository(
+        Effect.gen(function* () {
+          const repository = yield* ProviderAssetRepository
+          yield* repository.upsertProviderAssets({
+            providerKey: "coinbase",
+            entries: [
+              {
+                providerAssetId: "trusted-reevaluation",
+                naturalKey: null,
+                currencyCode: "BTC",
+                name: "Bitcoin",
+                exponent: 8,
+                providerType: "crypto",
+                payload: { version: 1 },
+              },
+            ],
+          })
+          const found = yield* repository.findProviderAssetByProviderAssetId({
+            providerKey: "coinbase",
+            providerAssetId: "trusted-reevaluation",
+          })
+          if (Option.isNone(found)) {
+            return yield* Effect.die("Expected trusted provider asset")
+          }
+          yield* repository.seedProviderAssetMappingsIfMissing({
+            mappings: [
+              {
+                providerAssetRowId: found.value.id,
+                mappingKind: "asset",
+                canonicalAssetId: TEST_BTC_ASSET_ID,
+                assetRepresentationId: TEST_BTC_REPRESENTATION_ID,
+                canonicalFiatCurrency: null,
+                mappingStatus: "approved",
+                reviewerNotes: null,
+                sourceNotes: "Trusted reference mapping",
+              },
+            ],
+          })
+          return found.value
+        })
+      )
+      const [before] = await runPg(
+        Effect.gen(function* () {
+          const db = yield* drizzle
+          return yield* db
+            .select({
+              currentConclusionId: schema.assetResolutionCurrentState.currentConclusionId,
+              currentPolicyEvaluationId:
+                schema.assetResolutionCurrentState.currentPolicyEvaluationId,
+            })
+            .from(schema.assetResolutionCurrentState)
+            .where(eq(schema.assetResolutionCurrentState.providerAssetRowId, providerAsset.id))
+        })
+      )
+
+      await runRepository(
+        Effect.flatMap(ProviderAssetRepository, (repository) =>
+          repository.upsertProviderAssets({
+            providerKey: "coinbase",
+            entries: [
+              {
+                providerAssetId: "trusted-reevaluation",
+                naturalKey: null,
+                currencyCode: "BTC",
+                name: "Bitcoin",
+                exponent: 8,
+                providerType: "crypto",
+                payload: { version: 2 },
+              },
+            ],
+          })
+        )
+      )
+
+      const state = await runPg(
+        Effect.gen(function* () {
+          const db = yield* drizzle
+          const jobs = yield* db
+            .select({ evidenceRevision: schema.assetResolutionJobs.evidenceRevision })
+            .from(schema.assetResolutionJobs)
+            .where(eq(schema.assetResolutionJobs.providerAssetRowId, providerAsset.id))
+          const [current] = yield* db
+            .select({
+              currentConclusionId: schema.assetResolutionCurrentState.currentConclusionId,
+              currentPolicyEvaluationId:
+                schema.assetResolutionCurrentState.currentPolicyEvaluationId,
+            })
+            .from(schema.assetResolutionCurrentState)
+            .where(eq(schema.assetResolutionCurrentState.providerAssetRowId, providerAsset.id))
+          const evidence = yield* db
+            .select({
+              authority: schema.assetResolutionEvidence.authority,
+              claimKind: schema.assetResolutionEvidence.claimKind,
+              evidenceRevision: schema.assetResolutionEvidence.evidenceRevision,
+            })
+            .from(schema.assetResolutionEvidence)
+            .where(
+              eq(
+                schema.assetResolutionEvidence.decisionId,
+                current?.currentConclusionId ?? "00000000-0000-0000-0000-000000000000"
+              )
+            )
+          return { jobs, current, evidence }
+        })
+      )
+
+      expect(before?.currentConclusionId).not.toBeNull()
+      expect(before?.currentPolicyEvaluationId).toBe(before?.currentConclusionId)
+      expect(state.jobs).toEqual([{ evidenceRevision: 2 }])
+      expect(state.current).toEqual(before)
+      expect(state.evidence).toEqual([
+        {
+          authority: "trusted_provider_mapping",
+          claimKind: "mapping_conclusion",
+          evidenceRevision: 1,
+        },
+      ])
+    })
+
     it("approves once and attaches replay to an active job under concurrent retries", async () => {
       const providerAsset = await runRepository(
         Effect.gen(function* () {
@@ -3107,9 +3357,29 @@ describe("ProviderAssetRepositoryLive", () => {
           return state
         })
       )
+      const history = await runRepository(
+        Effect.flatMap(ProviderAssetRepository, (repository) =>
+          repository.listAssetResolutionDecisions({ providerAssetRowId })
+        )
+      )
 
       expect(after).toEqual(before)
       expect(after?.currentConclusionId).toBeNull()
+      expect(history).toHaveLength(2)
+      expect(history).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            evidenceRevision: 2,
+            isCurrentConclusion: false,
+            isCurrentPolicyEvaluation: true,
+          }),
+          expect.objectContaining({
+            evidenceRevision: 1,
+            isCurrentConclusion: false,
+            isCurrentPolicyEvaluation: false,
+          }),
+        ])
+      )
     })
 
     it("appends a new policy revision without changing the prior evaluation", async () => {

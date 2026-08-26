@@ -84,8 +84,8 @@ export const assetResolutionDecisions = pgTable(
     ),
     index("idx_asset_resolution_decisions_asset_id").on(table.assetId),
     foreignKey({
-      columns: [table.supersedesDecisionId],
-      foreignColumns: [table.id],
+      columns: [table.providerAssetRowId, table.supersedesDecisionId],
+      foreignColumns: [table.providerAssetRowId, table.id],
       name: "asset_resolution_decisions_supersedes_decision_id_fk",
     }),
     check(
@@ -94,7 +94,7 @@ export const assetResolutionDecisions = pgTable(
     ),
     check(
       "asset_resolution_decisions_approval_requires_target",
-      sql`${table.outcome}::text not in ('attach', 'create_standalone') or (${table.assetId} is not null and (${table.blockchain} is null or ${table.assetRepresentationId} is not null))`
+      sql`${table.outcome}::text not in ('attach', 'create_standalone') or (${table.assetId} is not null and (${table.blockchain} is null or ${table.assetRepresentationId} is not null)) or (${table.humanClaim} is null and ${table.actor} = 'system:asset-resolution-policy')`
     ),
   ]
 )

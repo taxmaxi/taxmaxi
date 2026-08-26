@@ -37,6 +37,8 @@ import { coinGeckoAssetPlatformSnapshot } from "../services/coingecko/CoinGeckoA
 
 const COINGECKO_SOURCE_NOTES = "Approved with CoinGecko asset/platform metadata."
 const MANUAL_SOURCE_NOTES = "Approved by an admin with an existing canonical asset."
+const COINGECKO_CONCLUSION_POLICY_REVISION = "2026-08-26.coingecko-canonicalization.1"
+const MANUAL_CONCLUSION_POLICY_REVISION = "2026-08-26.manual-canonicalization.1"
 
 const appendSourceNote = ({
   existing,
@@ -641,11 +643,14 @@ const make = Effect.gen(function* () {
     providerAssetReview: ProviderAssetReviewRecord
   ): Effect.Effect<void, AssetCanonicalizationBadRequestError> => {
     const mappingStatus = providerAssetReview.mapping?.mappingStatus
-    if (
-      mappingStatus !== "pending_review" &&
-      mappingStatus !== "approved" &&
-      mappingStatus !== "excluded"
-    ) {
+    if (mappingStatus === "excluded") {
+      return Effect.fail(
+        makeBadRequest(
+          "Excluded provider asset mappings must be changed through revision-bound exception review."
+        )
+      )
+    }
+    if (mappingStatus !== "pending_review" && mappingStatus !== "approved") {
       return Effect.fail(
         makeBadRequest("Provider asset mapping cannot be approved from its current state.")
       )
@@ -789,6 +794,55 @@ const make = Effect.gen(function* () {
                 })
               }
 
+              if (providerAssetReview.mapping?.mappingStatus === "pending_review") {
+                const reviewedAt = new Date()
+                yield* providerAssetRepository
+                  .recordAssetResolutionPolicyEvaluation({
+                    decision: {
+                      providerAssetRowId,
+                      evidenceRevision: providerAssetReview.providerAsset.evidenceRevision,
+                      policyRevision: MANUAL_CONCLUSION_POLICY_REVISION,
+                      outcome: "attach",
+                      assetId: canonicalAssetId,
+                      assetRepresentationId,
+                      blockchain: null,
+                      representationType: null,
+                      contractAddress: null,
+                      mintAddress: null,
+                      decimals: null,
+                      reason: null,
+                      evidence: [
+                        {
+                          authority: "human_admin",
+                          claimKind: "canonical_asset_selection",
+                          sourceLocator: `taxmaxi://provider-assets/${providerAssetRowId}/manual-canonicalization`,
+                          retrievedAt: reviewedAt,
+                          evidenceRevision: providerAssetReview.providerAsset.evidenceRevision,
+                          decodedClaim: {
+                            canonicalAssetId,
+                            assetRepresentationId,
+                            reviewerNotes,
+                          },
+                          rawPayload: {
+                            providerAsset: providerAssetReview.providerAsset,
+                            observedRepresentations,
+                            selectedTarget: { canonicalAssetId, assetRepresentationId },
+                          },
+                        },
+                      ],
+                      actor: "system:manual-asset-canonicalization",
+                    },
+                  })
+                  .pipe(
+                    Effect.mapError(
+                      () =>
+                        new AssetCanonicalizationInternalError({
+                          message: "Failed to record the manual mapping conclusion.",
+                        })
+                    )
+                  )
+              }
+
               yield* providerAssetRepository
                 .approveProviderAssetMappingAndRequestReplay({
                   mapping: {
@@ -899,6 +953,7 @@ const make = Effect.gen(function* () {
             platformName: nativePlatform.name,
             contractAddress: null,
           },
+          rawEvidence: coin,
         }
       }
 
@@ -954,6 +1009,7 @@ const make = Effect.gen(function* () {
           platformName: tokenPlatform.name,
           contractAddress,
         },
+        rawEvidence: coin,
       }
     })
 
@@ -1114,6 +1170,47 @@ const make = Effect.gen(function* () {
                     "Asset representation type does not match the selected economic asset type."
                   )
                 }
+              }
+
+              if (providerAssetReview.mapping?.mappingStatus === "pending_review") {
+                const reviewedAt = new Date()
+                yield* providerAssetRepository
+                  .recordAssetResolutionPolicyEvaluation({
+                    decision: {
+                      providerAssetRowId,
+                      evidenceRevision: providerAssetReview.providerAsset.evidenceRevision,
+                      policyRevision: COINGECKO_CONCLUSION_POLICY_REVISION,
+                      outcome: "attach",
+                      assetId: canonicalAsset.id,
+                      assetRepresentationId,
+                      blockchain: null,
+                      representationType: null,
+                      contractAddress: null,
+                      mintAddress: null,
+                      decimals: null,
+                      reason: null,
+                      evidence: [
+                        {
+                          authority: "coingecko",
+                          claimKind: "canonical_asset_selection",
+                          sourceLocator: `coingecko://coins/${resolved.evidence.coinId}`,
+                          retrievedAt: reviewedAt,
+                          evidenceRevision: providerAssetReview.providerAsset.evidenceRevision,
+                          decodedClaim: resolved.evidence,
+                          rawPayload: resolved.rawEvidence,
+                        },
+                      ],
+                      actor: "system:coingecko-asset-canonicalization",
+                    },
+                  })
+                  .pipe(
+                    Effect.mapError(
+                      () =>
+                        new AssetCanonicalizationInternalError({
+                          message: "Failed to record the CoinGecko mapping conclusion.",
+                        })
+                    )
+                  )
               }
 
               yield* providerAssetRepository

@@ -1,6 +1,9 @@
 import { and, eq } from "drizzle-orm"
+import * as Deferred from "effect/Deferred"
 import * as Effect from "effect/Effect"
+import * as Fiber from "effect/Fiber"
 import * as Layer from "effect/Layer"
+import * as Option from "effect/Option"
 import { beforeEach, describe, expect, it } from "vitest"
 import {
   AssetResolutionUpstreamFailure,
@@ -20,10 +23,13 @@ import { CoinbaseSourceSyncProviderLive } from "../../src/providers/coinbase/lay
 import { CoinbaseSyncClient } from "../../src/providers/coinbase/services/CoinbaseSyncClient.ts"
 import {
   AssetResolutionCoinGeckoClient,
+  AssetExceptionRepository,
   AssetResolutionCoinGeckoRetryableError,
   AssetResolutionJobExecutor,
   AssetResolutionJobRepository,
+  ProviderAssetRepository,
   SourceSyncService,
+  SyncEngineTransaction,
 } from "@my/sync-engine/services"
 import {
   AssetResolutionJupiterClient,
@@ -52,6 +58,7 @@ const userId = "00000000-0000-0000-0000-000000000161"
 const principalId = "00000000-0000-0000-0000-000000000162"
 const sourceId = "00000000-0000-0000-0000-000000000261"
 const ORB_ASSET_ID = "00000000-0000-0000-0000-000000000561"
+const ORB_CORRECTION_ASSET_ID = "00000000-0000-4000-8000-000000000562"
 const ORB_MINT = "OrbTestMint1111111111111111111111111111111"
 const ORB_COINGECKO_ID = "orb-test-coin"
 
@@ -172,40 +179,50 @@ const orbCoinGeckoUpstreamFailure = new AssetResolutionUpstreamFailure({ source:
 type FakeCoinGeckoMode = "success" | "retryable" | "terminal" | "not_found"
 
 let coinGeckoMode: FakeCoinGeckoMode = "success"
+let coinGeckoFetchGate: {
+  readonly started: Deferred.Deferred<void>
+  readonly release: Deferred.Deferred<void>
+} | null = null
 
 const FakeAssetResolutionCoinGeckoClientLive = Layer.succeed(AssetResolutionCoinGeckoClient, {
   fetchCoinByContract: ({
     platformId,
     address,
-  }): Effect.Effect<AssetResolutionRegistryEvidence, AssetResolutionCoinGeckoRetryableError> => {
-    if (coinGeckoMode === "retryable") {
-      return Effect.fail(
-        new AssetResolutionCoinGeckoRetryableError({ status: 429, cause: "rate limited" })
-      )
-    }
-
-    if (coinGeckoMode === "terminal") {
-      return Effect.succeed(orbCoinGeckoUpstreamFailure)
-    }
-
-    if (coinGeckoMode === "not_found") {
-      return Effect.succeed(new RegistryLookupNotFound())
-    }
-
-    return platformId === "solana" && address === ORB_MINT
-      ? Effect.succeed({
-          _tag: "payload" as const,
-          payload: {
-            id: ORB_COINGECKO_ID,
-            symbol: "orb",
-            name: "Orb Test Coin",
-            asset_platform_id: "solana",
-            platforms: { solana: ORB_MINT },
-            detail_platforms: { solana: { decimal_place: 8, contract_address: ORB_MINT } },
-          },
+  }): Effect.Effect<AssetResolutionRegistryEvidence, AssetResolutionCoinGeckoRetryableError> =>
+    Effect.gen(function* () {
+      if (coinGeckoFetchGate !== null) {
+        yield* Deferred.succeed(coinGeckoFetchGate.started, undefined)
+        yield* Deferred.await(coinGeckoFetchGate.release)
+      }
+      if (coinGeckoMode === "retryable") {
+        return yield* new AssetResolutionCoinGeckoRetryableError({
+          status: 429,
+          cause: "rate limited",
         })
-      : Effect.succeed(new RegistryLookupNotFound())
-  },
+      }
+
+      if (coinGeckoMode === "terminal") {
+        return orbCoinGeckoUpstreamFailure
+      }
+
+      if (coinGeckoMode === "not_found") {
+        return new RegistryLookupNotFound()
+      }
+
+      return platformId === "solana" && address === ORB_MINT
+        ? {
+            _tag: "payload" as const,
+            payload: {
+              id: ORB_COINGECKO_ID,
+              symbol: "orb",
+              name: "Orb Test Coin",
+              asset_platform_id: "solana",
+              platforms: { solana: ORB_MINT },
+              detail_platforms: { solana: { decimal_place: 8, contract_address: ORB_MINT } },
+            },
+          }
+        : new RegistryLookupNotFound()
+    }),
 })
 
 type FakeJupiterMode =
@@ -580,17 +597,24 @@ const fetchAttachState = () =>
 
     const decisions = yield* db
       .select({
+        id: schema.assetResolutionDecisions.id,
         outcome: schema.assetResolutionDecisions.outcome,
         assetId: schema.assetResolutionDecisions.assetId,
         assetRepresentationId: schema.assetResolutionDecisions.assetRepresentationId,
         policyRevision: schema.assetResolutionDecisions.policyRevision,
         actor: schema.assetResolutionDecisions.actor,
         reason: schema.assetResolutionDecisions.reason,
+        currentConclusionId: schema.assetResolutionCurrentState.currentConclusionId,
+        currentPolicyEvaluationId: schema.assetResolutionCurrentState.currentPolicyEvaluationId,
       })
       .from(schema.assetResolutionDecisions)
       .innerJoin(
         schema.providerAssets,
         eq(schema.assetResolutionDecisions.providerAssetRowId, schema.providerAssets.id)
+      )
+      .leftJoin(
+        schema.assetResolutionCurrentState,
+        eq(schema.assetResolutionCurrentState.providerAssetRowId, schema.providerAssets.id)
       )
       .where(eq(schema.providerAssets.currencyCode, "ORB"))
 
@@ -678,6 +702,7 @@ const fetchAccountingState = () =>
 
     const legs = yield* db
       .select({
+        assetId: schema.transactionLegs.assetId,
         kind: schema.transactionLegs.kind,
         derivationRule: schema.transactionLegs.derivationRule,
       })
@@ -685,7 +710,7 @@ const fetchAccountingState = () =>
       .where(eq(schema.transactionLegs.sourceId, sourceId))
 
     const fifoLots = yield* db
-      .select({ sourceId: schema.fifoLots.sourceId })
+      .select({ assetId: schema.fifoLots.assetId, sourceId: schema.fifoLots.sourceId })
       .from(schema.fifoLots)
       .where(eq(schema.fifoLots.sourceId, sourceId))
 
@@ -723,6 +748,7 @@ describe("asset resolution attach and rebuild", () => {
     Effect.gen(function* () {
       providerFetchCount = 0
       coinGeckoMode = "success"
+      coinGeckoFetchGate = null
       jupiterMode = "not_indexed"
       yield* context.recreateTestDatabase()
       yield* seedCoinbaseSource()
@@ -816,6 +842,215 @@ describe("asset resolution attach and rebuild", () => {
         const taxAfterAttach = yield* calculateTax()
         expect(taxAfterAttach.taxableGains).toBe(0)
       })
+    )
+  })
+
+  it("keeps an approved conclusion while later evidence reopens policy review", async () => {
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        yield* runSync()
+        yield* insertOrbAsset()
+        yield* recordOrbSolanaObservation()
+        const firstJobId = yield* fetchPendingResolutionJobId()
+        expect((yield* runResolutionJob({ jobId: firstJobId })).outcome).toBe("attached")
+
+        const before = yield* fetchAttachState()
+        const firstDecision = before.decisions[0]
+        if (firstDecision === undefined) {
+          return yield* Effect.die("Missing approved conclusion")
+        }
+
+        const laterJobId = "00000000-4000-4000-8000-000000000773"
+        const providerAssetRowId = yield* Effect.gen(function* () {
+          const db = yield* drizzle
+          const [providerAsset] = yield* db
+            .select({ id: schema.providerAssets.id })
+            .from(schema.providerAssets)
+            .where(
+              and(
+                eq(schema.providerAssets.provider, "coinbase"),
+                eq(schema.providerAssets.currencyCode, "ORB")
+              )
+            )
+            .limit(1)
+          if (providerAsset === undefined) {
+            return yield* Effect.die("Missing approved ORB observation")
+          }
+          yield* db
+            .update(schema.providerAssets)
+            .set({ evidenceRevision: 2 })
+            .where(eq(schema.providerAssets.id, providerAsset.id))
+          yield* db
+            .update(schema.providerTransfers)
+            .set({ observedDecimals: 9 })
+            .where(eq(schema.providerTransfers.providerAssetId, providerAsset.id))
+          yield* db.insert(schema.assetResolutionJobs).values({
+            id: laterJobId,
+            providerAssetRowId: providerAsset.id,
+            evidenceRevision: 2,
+            status: "pending",
+          })
+          return providerAsset.id
+        })
+
+        expect((yield* runResolutionJob({ jobId: laterJobId })).outcome).toBe("fail_closed")
+        const after = yield* fetchAttachState()
+        expect(after.mapping).toEqual(before.mapping)
+        expect(after.decisions).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({ outcome: "attach", assetId: ORB_ASSET_ID }),
+            expect.objectContaining({ outcome: "fail_closed", reason: "incompatible_decimals" }),
+          ])
+        )
+
+        const repository = yield* AssetExceptionRepository
+        const detail = yield* repository.findDetail({
+          _tag: "row_id",
+          providerAssetRowId,
+        })
+        expect(Option.getOrNull(detail)).toMatchObject({
+          reviewStatus: "unresolved",
+          currentConclusion: { outcome: "attach", evidenceRevision: 1 },
+          currentPolicyEvaluation: { outcome: "fail_closed", evidenceRevision: 2 },
+        })
+      }).pipe(Effect.provide(TestLayer))
+    )
+  })
+
+  it("keeps a manual approval settled when in-flight policy research finishes", async () => {
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        yield* runSync()
+        yield* insertOrbAsset()
+        yield* recordOrbSolanaObservation()
+        const jobId = yield* fetchPendingResolutionJobId()
+
+        coinGeckoMode = "terminal"
+        const researchStarted = yield* Deferred.make<void>()
+        const releaseResearch = yield* Deferred.make<void>()
+        coinGeckoFetchGate = { started: researchStarted, release: releaseResearch }
+        const worker = yield* Effect.forkChild(runResolutionJob({ jobId }))
+        yield* Deferred.await(researchStarted)
+
+        const providerAssetRepository = yield* ProviderAssetRepository
+        const transaction = yield* SyncEngineTransaction
+        const review = yield* providerAssetRepository.findProviderAssetReviewById({
+          providerAssetRowId: yield* Effect.gen(function* () {
+            const db = yield* drizzle
+            const [providerAsset] = yield* db
+              .select({ id: schema.providerAssets.id })
+              .from(schema.providerAssets)
+              .where(
+                and(
+                  eq(schema.providerAssets.provider, "coinbase"),
+                  eq(schema.providerAssets.currencyCode, "ORB")
+                )
+              )
+              .limit(1)
+            if (providerAsset === undefined) {
+              return yield* Effect.die("Missing ORB provider asset fixture")
+            }
+            return providerAsset.id
+          }),
+        })
+        if (Option.isNone(review)) {
+          return yield* Effect.die("Missing ORB provider asset review")
+        }
+        const providerAssetRowId = review.value.providerAsset.id
+        const observations =
+          yield* providerAssetRepository.listProviderAssetObservedRepresentations({
+            providerAssetRowId,
+          })
+        const manualConclusionRecorded = yield* Deferred.make<void>()
+        const finishManualApproval = yield* Deferred.make<void>()
+
+        const approval = yield* Effect.forkChild(
+          transaction.run(
+            Effect.gen(function* () {
+              yield* providerAssetRepository.recordAssetResolutionPolicyEvaluation({
+                decision: {
+                  providerAssetRowId,
+                  evidenceRevision: review.value.providerAsset.evidenceRevision,
+                  policyRevision: "2026-08-26.manual-canonicalization.1",
+                  outcome: "attach",
+                  assetId: ORB_ASSET_ID,
+                  assetRepresentationId: null,
+                  blockchain: null,
+                  representationType: null,
+                  contractAddress: null,
+                  mintAddress: null,
+                  decimals: null,
+                  reason: null,
+                  evidence: [
+                    {
+                      authority: "human_admin",
+                      claimKind: "canonical_asset_selection",
+                      sourceLocator: `taxmaxi://provider-assets/${providerAssetRowId}/manual-canonicalization`,
+                      retrievedAt: review.value.providerAsset.retrievedAt,
+                      evidenceRevision: review.value.providerAsset.evidenceRevision,
+                      decodedClaim: { canonicalAssetId: ORB_ASSET_ID },
+                      rawPayload: review.value.providerAsset.rawProviderPayload,
+                    },
+                  ],
+                  actor: "system:manual-asset-canonicalization",
+                },
+              })
+              yield* Deferred.succeed(manualConclusionRecorded, undefined)
+              yield* Deferred.await(finishManualApproval)
+              yield* providerAssetRepository.approveProviderAssetMappingAndRequestReplay({
+                mapping: {
+                  providerAssetRowId,
+                  mappingKind: "asset",
+                  canonicalAssetId: ORB_ASSET_ID,
+                  assetRepresentationId: null,
+                  canonicalFiatCurrency: null,
+                  mappingStatus: "approved",
+                  reviewerNotes: "Approved while policy research was in flight.",
+                  sourceNotes: "Manual approval race regression.",
+                },
+                expectedObservedRepresentations: observations,
+                expectedProviderAssetRetrievedAt: review.value.providerAsset.retrievedAt,
+              })
+            })
+          )
+        )
+
+        yield* Deferred.await(manualConclusionRecorded)
+        yield* Deferred.succeed(releaseResearch, undefined)
+        yield* Effect.promise(() =>
+          context.waitForQueryBlockedOnLock({ queryIncludes: "provider_assets" })
+        )
+        yield* Deferred.succeed(finishManualApproval, undefined)
+        yield* Fiber.join(approval)
+        expect((yield* Fiber.join(worker)).outcome).toBe("fail_closed")
+
+        const state = yield* fetchAttachState()
+        const manualConclusion = state.decisions.find(
+          ({ actor }) => actor === "system:manual-asset-canonicalization"
+        )
+        const staleEvaluation = state.decisions.find(({ outcome }) => outcome === "fail_closed")
+        expect(state.mapping).toMatchObject({
+          mappingStatus: "approved",
+          canonicalAssetId: ORB_ASSET_ID,
+        })
+        expect(manualConclusion).toMatchObject({
+          assetId: ORB_ASSET_ID,
+          id: manualConclusion?.currentConclusionId,
+          currentPolicyEvaluationId: manualConclusion?.id,
+        })
+        expect(staleEvaluation?.id).not.toBe(staleEvaluation?.currentPolicyEvaluationId)
+
+        const repository = yield* AssetExceptionRepository
+        const detail = yield* repository.findDetail({
+          _tag: "row_id",
+          providerAssetRowId,
+        })
+        expect(Option.getOrNull(detail)).toMatchObject({
+          reviewStatus: "approved",
+          currentConclusion: { id: manualConclusion?.id, outcome: "attach" },
+          currentPolicyEvaluation: { id: manualConclusion?.id, outcome: "attach" },
+        })
+      }).pipe(Effect.provide(TestLayer))
     )
   })
 
@@ -1403,6 +1638,122 @@ describe("asset resolution attach and rebuild", () => {
     )
   })
 
+  it("supersedes an exclusion, replays stored data, and calculates from the replacement identity", async () => {
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        coinGeckoMode = "not_found"
+        jupiterMode = "banned"
+        yield* runSync()
+        yield* recordOrbSolanaObservation()
+        const jobId = yield* fetchPendingResolutionJobId()
+        expect((yield* runResolutionJob({ jobId })).outcome).toBe("excluded")
+        yield* insertOrbAsset({
+          id: ORB_CORRECTION_ASSET_ID,
+          name: "Orb Replacement",
+          coingeckoCoinId: null,
+        })
+
+        const repository = yield* AssetExceptionRepository
+        const observation = yield* Effect.gen(function* () {
+          const db = yield* drizzle
+          const [row] = yield* db
+            .select({ id: schema.providerAssets.id })
+            .from(schema.providerAssets)
+            .where(
+              and(
+                eq(schema.providerAssets.provider, "coinbase"),
+                eq(schema.providerAssets.currencyCode, "ORB")
+              )
+            )
+            .limit(1)
+          return row
+        })
+        if (observation === undefined) {
+          return yield* Effect.die("Missing ORB observation")
+        }
+        const before = yield* repository.findDetail({
+          _tag: "row_id",
+          providerAssetRowId: observation.id,
+        })
+        if (Option.isNone(before) || before.value.currentConclusion === null) {
+          return yield* Effect.die("Missing settled exclusion detail")
+        }
+        const exclusionId = before.value.currentConclusion.id
+        const input = {
+          providerAssetRowId: observation.id,
+          claim: {
+            _tag: "identity" as const,
+            assetId: ORB_CORRECTION_ASSET_ID,
+            newAsset: null,
+            representation: {
+              blockchain: "solana",
+              type: "token" as const,
+              contractAddress: null,
+              mintAddress: ORB_MINT,
+              decimals: 8,
+            },
+          },
+          evidenceRevision: before.value.evidenceRevision,
+          currentConclusionRevision: before.value.currentConclusionRevision,
+          currentPolicyEvaluationRevision: before.value.currentPolicyEvaluationRevision,
+          evidenceSnapshotIds: before.value.evidence.map(({ id }) => id),
+          rationale: "The mint is a legitimate standalone asset despite the registry verdict.",
+        }
+        const preview = yield* repository.previewDecision(input)
+        if (preview._tag !== "ready") {
+          return yield* Effect.die(`Expected correction preview, received ${preview._tag}`)
+        }
+        const accepted = yield* repository.submitDecision({
+          input: {
+            ...input,
+            expectedResultingAssetId: preview.preview.resultingAssetId,
+            expectedAssetOutcome: preview.preview.assetOutcome,
+            expectedRepresentationOutcome: preview.preview.representationOutcome,
+          },
+          actorId: userId,
+        })
+        expect(accepted._tag).toBe("accepted")
+
+        const blockedTax = yield* calculateTax().pipe(Effect.result)
+        expect(blockedTax._tag).toBe("Failure")
+        expect((yield* replaySource()).status).toBe("completed")
+
+        const after = yield* repository.findDetail({
+          _tag: "row_id",
+          providerAssetRowId: observation.id,
+        })
+        if (Option.isNone(after)) {
+          return yield* Effect.die("Missing corrected observation detail")
+        }
+        expect(after.value.currentConclusion).toMatchObject({
+          assetId: ORB_CORRECTION_ASSET_ID,
+          outcome: "identity",
+          supersedesConclusionId: exclusionId,
+        })
+        expect(after.value.decisionHistory).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({ id: exclusionId, outcome: "excluded" }),
+            expect.objectContaining({ outcome: "identity", supersedesConclusionId: exclusionId }),
+          ])
+        )
+        expect(after.value.rematerialization).toMatchObject({ status: "complete" })
+
+        const accountingState = yield* fetchAccountingState()
+        expect(accountingState.legs).toEqual([
+          expect.objectContaining({
+            assetId: ORB_CORRECTION_ASSET_ID,
+            kind: "acquisition",
+            derivationRule: "coinbase_buy",
+          }),
+        ])
+        expect(accountingState.fifoLots).toEqual([
+          expect.objectContaining({ assetId: ORB_CORRECTION_ASSET_ID }),
+        ])
+        expect((yield* calculateTax()).taxableGains).toBe(0)
+      }).pipe(Effect.provide(TestLayer))
+    )
+  })
+
   it("keeps an exclusion settled when a later job runs at a new evidence revision", async () => {
     await Effect.runPromise(
       Effect.gen(function* () {
@@ -1419,9 +1770,9 @@ describe("asset resolution attach and rebuild", () => {
         const duplicate = yield* runResolutionJob({ jobId })
         expect(duplicate.outcome).toBe("already_claimed")
 
-        // Jupiter un-bans the mint and the observation's evidence changes:
-        // the new job completes without touching the recorded exclusion,
-        // because reversal requires a human-approved superseding decision.
+        // Jupiter un-bans the mint and the observation's evidence changes.
+        // The new policy evaluation reopens review without touching the
+        // recorded exclusion, because reversal still requires a human.
         jupiterMode = "unverified"
         const secondJobId = "00000000-4000-4000-8000-000000000771"
         yield* Effect.gen(function* () {
@@ -1453,15 +1804,73 @@ describe("asset resolution attach and rebuild", () => {
         }).pipe(Effect.provide(TestPgClientLive))
 
         const second = yield* runResolutionJob({ jobId: secondJobId })
-        expect(second.outcome).toBe("excluded")
+        expect(second.outcome).toBe("pending")
 
         const state = yield* fetchAttachState()
         expect(state.mapping).toMatchObject({ mappingStatus: "excluded" })
-        expect(state.decisions).toHaveLength(1)
+        expect(state.decisions).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({ outcome: "excluded" }),
+            expect.objectContaining({ outcome: "pending" }),
+          ])
+        )
+        expect(state.decisions).toHaveLength(2)
         expect(state.representations).toEqual([])
 
         const secondJob = yield* fetchResolutionJobState({ jobId: secondJobId })
         expect(secondJob.status).toBe("completed")
+
+        // Compatible registry evidence at another later revision is still
+        // only a policy evaluation. It must not replace the settled human
+        // conclusion or mutate its mapping projection automatically.
+        yield* insertOrbAsset()
+        coinGeckoMode = "success"
+        const thirdJobId = "00000000-4000-4000-8000-000000000773"
+        yield* Effect.gen(function* () {
+          const db = yield* drizzle
+          const [providerAsset] = yield* db
+            .select({ id: schema.providerAssets.id })
+            .from(schema.providerAssets)
+            .where(
+              and(
+                eq(schema.providerAssets.provider, "coinbase"),
+                eq(schema.providerAssets.currencyCode, "ORB")
+              )
+            )
+            .limit(1)
+          if (providerAsset === undefined) {
+            return yield* Effect.die("Missing ORB provider asset fixture")
+          }
+
+          yield* db
+            .update(schema.providerAssets)
+            .set({ evidenceRevision: 3 })
+            .where(eq(schema.providerAssets.id, providerAsset.id))
+          yield* db.insert(schema.assetResolutionJobs).values({
+            id: thirdJobId,
+            providerAssetRowId: providerAsset.id,
+            evidenceRevision: 3,
+            status: "pending",
+          })
+        }).pipe(Effect.provide(TestPgClientLive))
+
+        const third = yield* runResolutionJob({ jobId: thirdJobId })
+        expect(third.outcome).toBe("evaluated")
+
+        const conclusiveState = yield* fetchAttachState()
+        expect(conclusiveState.mapping).toMatchObject({ mappingStatus: "excluded" })
+        expect(conclusiveState.representations).toEqual([])
+        const exclusion = conclusiveState.decisions.find(({ outcome }) => outcome === "excluded")
+        const laterAttach = conclusiveState.decisions.find(({ outcome }) => outcome === "attach")
+        expect(exclusion).toMatchObject({
+          id: exclusion?.currentConclusionId,
+        })
+        expect(laterAttach).toMatchObject({
+          assetId: ORB_ASSET_ID,
+          assetRepresentationId: null,
+          id: laterAttach?.currentPolicyEvaluationId,
+        })
+        expect(laterAttach?.id).not.toBe(laterAttach?.currentConclusionId)
       })
     )
   })

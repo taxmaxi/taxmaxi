@@ -22,7 +22,7 @@ import { PgClient } from "@effect/sql-pg"
 import { drizzle } from "./PgClientLive.ts"
 import {
   OBSERVED_UNRESOLVED_STATUSES,
-  insertUnresolvedResolutionJobs,
+  insertResolutionJobsForMappings,
   nowDate,
   wrapSyncEngineSqlError,
   wrapSyncEngineStorageError,
@@ -75,11 +75,11 @@ const make = Effect.gen(function* () {
                 })
               }
 
-              const inserted = yield* insertUnresolvedResolutionJobs({
+              const inserted = yield* insertResolutionJobsForMappings({
                 tx,
                 providerAssetRowIds: [providerAssetRowId],
                 now: nowDate(),
-                unresolvedStatuses: OBSERVED_UNRESOLVED_STATUSES,
+                mappingStatuses: OBSERVED_UNRESOLVED_STATUSES,
               })
               const created = inserted.some((job) => job.providerAssetRowId === providerAssetRowId)
 

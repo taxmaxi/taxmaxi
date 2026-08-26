@@ -374,6 +374,14 @@ function DataUpdateEvent({ detail }: { readonly detail: AssetExceptionDetail }) 
       : m["assetCatalog.exceptions.reviewUi.dataUpdate.sources"]({
           count: update.affectedSourceCount,
         })
+  const progress = m["assetCatalog.exceptions.reviewUi.dataUpdate.progress"]({
+    remaining: update.remainingSourceCount,
+    complete: update.completedSourceCount,
+    running: update.runningSourceCount,
+    pending: update.pendingSourceCount,
+    retrying: update.retryingSourceCount,
+    failed: update.failedSourceCount,
+  })
   switch (update.status) {
     case "pending":
       return (
@@ -385,6 +393,7 @@ function DataUpdateEvent({ detail }: { readonly detail: AssetExceptionDetail }) 
           <p className="text-sm text-muted-foreground">
             {m["assetCatalog.exceptions.reviewUi.dataUpdate.queuedDescription"]()}
           </p>
+          <p className="text-xs text-muted-foreground">{progress}</p>
         </TimelineEvent>
       )
     case "running":
@@ -397,6 +406,7 @@ function DataUpdateEvent({ detail }: { readonly detail: AssetExceptionDetail }) 
           <p className="text-sm text-muted-foreground">
             {m["assetCatalog.exceptions.reviewUi.dataUpdate.runningDescription"]()}
           </p>
+          <p className="text-xs text-muted-foreground">{progress}</p>
         </TimelineEvent>
       )
     case "complete":
@@ -410,6 +420,7 @@ function DataUpdateEvent({ detail }: { readonly detail: AssetExceptionDetail }) 
           <p className="text-sm text-muted-foreground">
             {m["assetCatalog.exceptions.reviewUi.dataUpdate.completeDescription"]()}
           </p>
+          <p className="text-xs text-muted-foreground">{progress}</p>
         </TimelineEvent>
       )
     case "operator_attention":
@@ -429,6 +440,7 @@ function DataUpdateEvent({ detail }: { readonly detail: AssetExceptionDetail }) 
                   count: update.failedSourceCount,
                 })}
           </p>
+          <p className="text-xs text-muted-foreground">{progress}</p>
         </TimelineEvent>
       )
   }

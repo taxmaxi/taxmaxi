@@ -92,14 +92,19 @@ type SyncEngineDb = Effect.Success<typeof drizzle>
 /** One drizzle transaction handle as passed to `db.transaction` callbacks. */
 export type SyncEngineDbTransaction = Parameters<Parameters<SyncEngineDb["transaction"]>[0]>[0]
 
-/** Mapping status of an observation that still needs resolution; null means no mapping row. */
-export type UnresolvedMappingStatus = "pending_review" | null
+/** Mapping status considered when scheduling an asset-resolution job. */
+export type ResolutionJobMappingStatus =
+  | "approved"
+  | "pending_review"
+  | "rejected"
+  | "excluded"
+  | null
 
 /**
  * An observed asset with no mapping row or a pending_review mapping is
  * unresolved; approved and rejected are not.
  */
-export const OBSERVED_UNRESOLVED_STATUSES: ReadonlyArray<UnresolvedMappingStatus> = [
+export const OBSERVED_UNRESOLVED_STATUSES: ReadonlyArray<ResolutionJobMappingStatus> = [
   null,
   "pending_review",
 ]
@@ -107,30 +112,34 @@ export const OBSERVED_UNRESOLVED_STATUSES: ReadonlyArray<UnresolvedMappingStatus
 /**
  * The catalog path deliberately skips assets with no mapping row: a mapping
  * row appears once an asset is actually observed, so a bare catalog entry
- * has never been seen in a transaction and must not trigger research.
+ * has never been seen in a transaction and must not trigger research. Settled
+ * mappings are reevaluated at later evidence revisions without replacing the
+ * current conclusion, so actionable evidence can reopen review.
  */
-export const CATALOG_REVIEWABLE_STATUSES: ReadonlyArray<UnresolvedMappingStatus> = [
+export const CATALOG_REVIEWABLE_STATUSES: ReadonlyArray<ResolutionJobMappingStatus> = [
   "pending_review",
+  "approved",
+  "excluded",
 ]
 
 /**
- * Insert one pending resolution job per unresolved provider asset at its
- * current evidence revision, inside the caller's transaction. Existing jobs
+ * Insert one pending resolution job per eligible provider asset at its current
+ * evidence revision, inside the caller's transaction. Existing jobs
  * for the same (observation, revision) pair are left untouched. Shared by
  * AssetResolutionJobRepositoryLive (the standalone scheduling API) and
  * ProviderAssetRepositoryLive (scheduling inside observation transactions)
  * so both paths follow the same unresolved-status and conflict rules.
  */
-export const insertUnresolvedResolutionJobs = ({
+export const insertResolutionJobsForMappings = ({
   tx,
   providerAssetRowIds,
   now,
-  unresolvedStatuses,
+  mappingStatuses,
 }: {
   readonly tx: SyncEngineDbTransaction
   readonly providerAssetRowIds: ReadonlyArray<string>
   readonly now: Date
-  readonly unresolvedStatuses: ReadonlyArray<UnresolvedMappingStatus>
+  readonly mappingStatuses: ReadonlyArray<ResolutionJobMappingStatus>
 }) =>
   Effect.gen(function* () {
     if (providerAssetRowIds.length === 0) {
@@ -144,27 +153,51 @@ export const insertUnresolvedResolutionJobs = ({
       .select({
         providerAssetRowId: schema.providerAssets.id,
         evidenceRevision: schema.providerAssets.evidenceRevision,
+        mappingKind: schema.providerAssetMappings.mappingKind,
         mappingStatus: schema.providerAssetMappings.mappingStatus,
+        currentPolicyEvidenceRevision: schema.assetResolutionDecisions.evidenceRevision,
       })
       .from(schema.providerAssets)
       .leftJoin(
         schema.providerAssetMappings,
         eq(schema.providerAssetMappings.providerAssetRowId, schema.providerAssets.id)
       )
+      .leftJoin(
+        schema.assetResolutionCurrentState,
+        eq(schema.assetResolutionCurrentState.providerAssetRowId, schema.providerAssets.id)
+      )
+      .leftJoin(
+        schema.assetResolutionDecisions,
+        eq(
+          schema.assetResolutionDecisions.id,
+          schema.assetResolutionCurrentState.currentPolicyEvaluationId
+        )
+      )
       .where(inArray(schema.providerAssets.id, providerAssetRowIds))
       .pipe(wrapSyncEngineSqlError("assetResolutionJobScheduling.load"))
 
-    const unresolved = candidates.filter((candidate) =>
-      unresolvedStatuses.some((status) => status === candidate.mappingStatus)
-    )
-    if (unresolved.length === 0) {
+    const eligible = candidates.filter((candidate) => {
+      if (!mappingStatuses.some((status) => status === candidate.mappingStatus)) {
+        return false
+      }
+      const settled =
+        candidate.mappingStatus === "approved" || candidate.mappingStatus === "excluded"
+      if (!settled) {
+        return true
+      }
+      return (
+        candidate.mappingKind === "asset" &&
+        candidate.currentPolicyEvidenceRevision !== candidate.evidenceRevision
+      )
+    })
+    if (eligible.length === 0) {
       return []
     }
 
     const inserted = yield* tx
       .insert(schema.assetResolutionJobs)
       .values(
-        unresolved.map((candidate) => ({
+        eligible.map((candidate) => ({
           providerAssetRowId: candidate.providerAssetRowId,
           evidenceRevision: candidate.evidenceRevision,
           status: "pending" as const,
@@ -212,6 +245,45 @@ export const insertAssetResolutionDecision = ({
   readonly operation: string
 }): Effect.Effect<{ readonly id: string } | null, SyncEngineStorageError> =>
   Effect.gen(function* () {
+    // Serialize decision writers and mapping approvals before inserting rows
+    // that take a provider-asset FK lock. NO KEY UPDATE is compatible with
+    // source-use FK writes while still preventing stale policy pointer moves.
+    const [providerAsset] = yield* tx
+      .select({ evidenceRevision: schema.providerAssets.evidenceRevision })
+      .from(schema.providerAssets)
+      .where(eq(schema.providerAssets.id, decision.providerAssetRowId))
+      .for("no key update")
+      .limit(1)
+      .pipe(wrapSyncEngineSqlError(operation))
+
+    // Read joined state in a new statement after any lock wait. Under READ
+    // COMMITTED, the lock statement's join snapshot may predate the approval
+    // that released the provider row.
+    const [settledState] = yield* tx
+      .select({
+        mappingStatus: schema.providerAssetMappings.mappingStatus,
+        currentConclusionEvidenceRevision: schema.assetResolutionDecisions.evidenceRevision,
+      })
+      .from(schema.providerAssets)
+      .leftJoin(
+        schema.providerAssetMappings,
+        eq(schema.providerAssetMappings.providerAssetRowId, schema.providerAssets.id)
+      )
+      .leftJoin(
+        schema.assetResolutionCurrentState,
+        eq(schema.assetResolutionCurrentState.providerAssetRowId, schema.providerAssets.id)
+      )
+      .leftJoin(
+        schema.assetResolutionDecisions,
+        eq(
+          schema.assetResolutionDecisions.id,
+          schema.assetResolutionCurrentState.currentConclusionId
+        )
+      )
+      .where(eq(schema.providerAssets.id, decision.providerAssetRowId))
+      .limit(1)
+      .pipe(wrapSyncEngineSqlError(operation))
+
     const insert = tx.insert(schema.assetResolutionDecisions).values({
       providerAssetRowId: decision.providerAssetRowId,
       evidenceRevision: decision.evidenceRevision,
@@ -277,18 +349,24 @@ export const insertAssetResolutionDecision = ({
         .pipe(wrapSyncEngineSqlError(operation))
     }
 
-    const [providerAsset] = yield* tx
-      .select({ evidenceRevision: schema.providerAssets.evidenceRevision })
-      .from(schema.providerAssets)
-      .where(eq(schema.providerAssets.id, decision.providerAssetRowId))
-      .for("update")
-      .limit(1)
-      .pipe(wrapSyncEngineSqlError(operation))
     if (providerAsset?.evidenceRevision !== decision.evidenceRevision) {
       return inserted
     }
 
-    const establishesConclusion = !["pending", "fail_closed"].includes(decision.outcome)
+    const settledAtSameOrNewerEvidence =
+      settledState !== undefined &&
+      (settledState.mappingStatus === "approved" || settledState.mappingStatus === "excluded") &&
+      settledState.currentConclusionEvidenceRevision !== null &&
+      settledState.currentConclusionEvidenceRevision >= decision.evidenceRevision
+    if (settledAtSameOrNewerEvidence) {
+      return inserted
+    }
+
+    const establishesConclusion =
+      decision.outcome === "excluded" ||
+      (!["pending", "fail_closed"].includes(decision.outcome) &&
+        decision.assetId !== null &&
+        (decision.blockchain === null || decision.assetRepresentationId !== null))
     yield* tx
       .insert(schema.assetResolutionCurrentState)
       .values({

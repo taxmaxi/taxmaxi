@@ -20,7 +20,7 @@ import {
   CATALOG_REVIEWABLE_STATUSES,
   OBSERVED_UNRESOLVED_STATUSES,
   insertAssetResolutionDecision,
-  insertUnresolvedResolutionJobs,
+  insertResolutionJobsForMappings,
   nowDate,
   wrapSyncEngineSqlError,
   wrapSyncEngineStorageError,
@@ -32,6 +32,8 @@ class ApprovalObservationSourceSetChanged extends Data.TaggedError(
 )<{
   readonly sourceIds: ReadonlyArray<string>
 }> {}
+
+const TRUSTED_MAPPING_POLICY_REVISION = "2026-08-26.trusted-provider-mapping.1"
 
 const observationKey = (observation: ProviderAssetObservedRepresentationRecord) =>
   JSON.stringify([
@@ -339,11 +341,11 @@ const make = Effect.gen(function* () {
             })
           })
 
-          yield* insertUnresolvedResolutionJobs({
+          yield* insertResolutionJobsForMappings({
             tx,
             providerAssetRowIds: upserted.flatMap((rows) => rows.map((row) => row.id)),
             now,
-            unresolvedStatuses: CATALOG_REVIEWABLE_STATUSES,
+            mappingStatuses: CATALOG_REVIEWABLE_STATUSES,
           })
 
           return entries.length
@@ -388,6 +390,7 @@ const make = Effect.gen(function* () {
               sourceNotes: sql.raw("excluded.source_notes"),
               updatedAt: now,
             },
+            setWhere: sql`${schema.providerAssetMappings.mappingStatus} not in ('approved', 'excluded')`,
           })
           .pipe(wrapSyncEngineSqlError("providerAssetRepository.upsertProviderAssetMappings"))
 
@@ -396,39 +399,138 @@ const make = Effect.gen(function* () {
 
   const seedProviderAssetMappingsIfMissing: ProviderAssetRepositoryShape["seedProviderAssetMappingsIfMissing"] =
     ({ mappings }) =>
-      Effect.gen(function* () {
-        if (mappings.length === 0) {
-          return 0
-        }
+      db
+        .transaction((tx) =>
+          Effect.gen(function* () {
+            if (mappings.length === 0) {
+              return 0
+            }
 
-        const now = nowDate()
+            const now = nowDate()
+            const providerAssetRowIds = [
+              ...new Set(mappings.map(({ providerAssetRowId }) => providerAssetRowId)),
+            ].sort((left, right) => left.localeCompare(right))
+            const lockedProviderAssets = yield* tx
+              .select({
+                id: schema.providerAssets.id,
+                evidenceRevision: schema.providerAssets.evidenceRevision,
+              })
+              .from(schema.providerAssets)
+              .where(inArray(schema.providerAssets.id, providerAssetRowIds))
+              .orderBy(asc(schema.providerAssets.id))
+              .for("no key update")
+            if (lockedProviderAssets.length !== providerAssetRowIds.length) {
+              return yield* new SyncEngineStorageError({
+                operation: "providerAssetRepository.seedProviderAssetMappingsIfMissing.lock",
+                cause: { providerAssetRowIds, message: "A provider asset is missing." },
+              })
+            }
+            const evidenceRevisionByProviderAssetId = new Map(
+              lockedProviderAssets.map(({ id, evidenceRevision }) => [id, evidenceRevision])
+            )
+            const insertedRows = yield* tx
+              .insert(schema.providerAssetMappings)
+              .values(
+                mappings.map((mapping) => ({
+                  providerAssetRowId: mapping.providerAssetRowId,
+                  mappingKind: mapping.mappingKind,
+                  canonicalAssetId: mapping.canonicalAssetId,
+                  assetRepresentationId: mapping.assetRepresentationId,
+                  canonicalFiatCurrency: mapping.canonicalFiatCurrency,
+                  mappingStatus: mapping.mappingStatus,
+                  reviewerNotes: mapping.reviewerNotes,
+                  sourceNotes: mapping.sourceNotes,
+                  createdAt: now,
+                  updatedAt: now,
+                }))
+              )
+              .onConflictDoNothing({
+                target: schema.providerAssetMappings.providerAssetRowId,
+              })
+              .returning({
+                id: schema.providerAssetMappings.id,
+                providerAssetRowId: schema.providerAssetMappings.providerAssetRowId,
+              })
+              .pipe(
+                wrapSyncEngineSqlError("providerAssetRepository.seedProviderAssetMappingsIfMissing")
+              )
 
-        const insertedRows = yield* db
-          .insert(schema.providerAssetMappings)
-          .values(
-            mappings.map((mapping) => ({
-              providerAssetRowId: mapping.providerAssetRowId,
-              mappingKind: mapping.mappingKind,
-              canonicalAssetId: mapping.canonicalAssetId,
-              assetRepresentationId: mapping.assetRepresentationId,
-              canonicalFiatCurrency: mapping.canonicalFiatCurrency,
-              mappingStatus: mapping.mappingStatus,
-              reviewerNotes: mapping.reviewerNotes,
-              sourceNotes: mapping.sourceNotes,
-              createdAt: now,
-              updatedAt: now,
-            }))
-          )
-          .onConflictDoNothing({
-            target: schema.providerAssetMappings.providerAssetRowId,
+            yield* Effect.forEach(
+              insertedRows,
+              ({ providerAssetRowId }) => {
+                const mapping = mappings.find(
+                  (candidate) => candidate.providerAssetRowId === providerAssetRowId
+                )
+                if (
+                  mapping === undefined ||
+                  mapping.mappingKind !== "asset" ||
+                  (mapping.mappingStatus !== "excluded" &&
+                    (mapping.mappingStatus !== "approved" || mapping.canonicalAssetId === null))
+                ) {
+                  return Effect.void
+                }
+
+                return Effect.gen(function* () {
+                  const evidenceRevision = evidenceRevisionByProviderAssetId.get(providerAssetRowId)
+                  if (evidenceRevision === undefined) {
+                    return yield* new SyncEngineStorageError({
+                      operation:
+                        "providerAssetRepository.seedProviderAssetMappingsIfMissing.conclusion",
+                      cause: { providerAssetRowId, message: "Provider asset is missing." },
+                    })
+                  }
+
+                  const retrievedAt = nowDate()
+
+                  yield* insertAssetResolutionDecision({
+                    tx,
+                    decision: {
+                      providerAssetRowId,
+                      evidenceRevision,
+                      policyRevision: TRUSTED_MAPPING_POLICY_REVISION,
+                      outcome: mapping.mappingStatus === "excluded" ? "excluded" : "attach",
+                      assetId: mapping.canonicalAssetId,
+                      assetRepresentationId: mapping.assetRepresentationId,
+                      blockchain: null,
+                      representationType: null,
+                      contractAddress: null,
+                      mintAddress: null,
+                      decimals: null,
+                      reason:
+                        mapping.mappingStatus === "excluded" ? "trusted_provider_exclusion" : null,
+                      evidence: [
+                        {
+                          authority: "trusted_provider_mapping",
+                          claimKind: "mapping_conclusion",
+                          sourceLocator: `taxmaxi://provider-assets/${providerAssetRowId}/trusted-mapping`,
+                          retrievedAt,
+                          evidenceRevision,
+                          decodedClaim: {
+                            mappingKind: mapping.mappingKind,
+                            mappingStatus: mapping.mappingStatus,
+                            canonicalAssetId: mapping.canonicalAssetId,
+                            assetRepresentationId: mapping.assetRepresentationId,
+                            sourceNotes: mapping.sourceNotes,
+                          },
+                          rawPayload: mapping,
+                        },
+                      ],
+                      actor: "system:trusted-provider-mapping",
+                    },
+                    operation:
+                      "providerAssetRepository.seedProviderAssetMappingsIfMissing.conclusion",
+                  })
+                })
+              },
+              { discard: true }
+            )
+
+            return insertedRows.length
           })
-          .returning({ id: schema.providerAssetMappings.id })
-          .pipe(
-            wrapSyncEngineSqlError("providerAssetRepository.seedProviderAssetMappingsIfMissing")
-          )
-
-        return insertedRows.length
-      })
+        )
+        .pipe(
+          wrapSyncEngineStorageError("providerAssetRepository.seedProviderAssetMappingsIfMissing")
+        )
 
   const lockProviderAssetApprovalSnapshotInTransaction = ({
     tx,
@@ -932,11 +1034,11 @@ const make = Effect.gen(function* () {
             const newlyRecordedProviderAssetRowIds = new Set(
               rows.map(({ providerAssetRowId }) => providerAssetRowId)
             )
-            yield* insertUnresolvedResolutionJobs({
+            yield* insertResolutionJobsForMappings({
               tx,
               providerAssetRowIds: distinctProviderAssetRowIds,
               now,
-              unresolvedStatuses: OBSERVED_UNRESOLVED_STATUSES,
+              mappingStatuses: OBSERVED_UNRESOLVED_STATUSES,
             })
             const settledProviderAssetRowIds = mappings.flatMap(
               ({ mappingStatus, providerAssetRowId }) =>
@@ -947,7 +1049,10 @@ const make = Effect.gen(function* () {
             )
             if (settledProviderAssetRowIds.length > 0) {
               const activeDecisions = yield* tx
-                .select({ id: schema.assetResolutionDecisions.id })
+                .select({
+                  id: schema.assetResolutionDecisions.id,
+                  actor: schema.assetResolutionDecisions.actor,
+                })
                 .from(schema.assetResolutionCurrentState)
                 .innerJoin(
                   schema.assetResolutionDecisions,
@@ -969,15 +1074,23 @@ const make = Effect.gen(function* () {
                   )
                 )
 
-              yield* requestReplayForSource({
-                tx,
-                sourceId,
-                principalId: source.principalId,
-                now,
-                reason: "settled_asset_use_discovered",
-                operation: "providerAssetRepository.recordProviderAssetSourceUses",
-                decisionIds: activeDecisions.map(({ id }) => id),
-              })
+              const replayDecisions = activeDecisions.filter(
+                ({ actor }) => !actor.startsWith("system:trusted-provider-mapping")
+              )
+              // Trusted defaults are already applied by the sync that first
+              // records their source use. Other settled decisions can predate
+              // that use, so the newly affected source still needs a replay.
+              if (activeDecisions.length === 0 || replayDecisions.length > 0) {
+                yield* requestReplayForSource({
+                  tx,
+                  sourceId,
+                  principalId: source.principalId,
+                  now,
+                  reason: "settled_asset_use_discovered",
+                  operation: "providerAssetRepository.recordProviderAssetSourceUses",
+                  decisionIds: replayDecisions.map(({ id }) => id),
+                })
+              }
             }
 
             return rows.length
@@ -1000,6 +1113,7 @@ const make = Effect.gen(function* () {
             exponent: schema.providerAssets.exponent,
             providerType: schema.providerAssets.providerType,
             rawProviderPayload: schema.providerAssets.rawProviderPayload,
+            evidenceRevision: schema.providerAssets.evidenceRevision,
             discoveredAt: schema.providerAssets.discoveredAt,
             retrievedAt: schema.providerAssets.retrievedAt,
           })
@@ -1032,6 +1146,7 @@ const make = Effect.gen(function* () {
             exponent: schema.providerAssets.exponent,
             providerType: schema.providerAssets.providerType,
             rawProviderPayload: schema.providerAssets.rawProviderPayload,
+            evidenceRevision: schema.providerAssets.evidenceRevision,
             discoveredAt: schema.providerAssets.discoveredAt,
             retrievedAt: schema.providerAssets.retrievedAt,
           })
@@ -1062,6 +1177,7 @@ const make = Effect.gen(function* () {
             exponent: schema.providerAssets.exponent,
             providerType: schema.providerAssets.providerType,
             rawProviderPayload: schema.providerAssets.rawProviderPayload,
+            evidenceRevision: schema.providerAssets.evidenceRevision,
             discoveredAt: schema.providerAssets.discoveredAt,
             retrievedAt: schema.providerAssets.retrievedAt,
           })
@@ -1104,6 +1220,7 @@ const make = Effect.gen(function* () {
       exponent: schema.providerAssets.exponent,
       providerType: schema.providerAssets.providerType,
       rawProviderPayload: schema.providerAssets.rawProviderPayload,
+      evidenceRevision: schema.providerAssets.evidenceRevision,
       discoveredAt: schema.providerAssets.discoveredAt,
       retrievedAt: schema.providerAssets.retrievedAt,
     },
@@ -1230,8 +1347,14 @@ const make = Effect.gen(function* () {
     policyRevision: schema.assetResolutionDecisions.policyRevision,
     outcome: schema.assetResolutionDecisions.outcome,
     supersedesConclusionId: schema.assetResolutionDecisions.supersedesDecisionId,
-    isCurrentConclusion: sql<boolean>`${schema.assetResolutionCurrentState.currentConclusionId} = ${schema.assetResolutionDecisions.id}`,
-    isCurrentPolicyEvaluation: sql<boolean>`${schema.assetResolutionCurrentState.currentPolicyEvaluationId} = ${schema.assetResolutionDecisions.id}`,
+    isCurrentConclusion: sql<boolean>`coalesce(
+      ${schema.assetResolutionCurrentState.currentConclusionId} = ${schema.assetResolutionDecisions.id},
+      false
+    )`,
+    isCurrentPolicyEvaluation: sql<boolean>`coalesce(
+      ${schema.assetResolutionCurrentState.currentPolicyEvaluationId} = ${schema.assetResolutionDecisions.id},
+      false
+    )`,
     assetId: schema.assetResolutionDecisions.assetId,
     assetRepresentationId: schema.assetResolutionDecisions.assetRepresentationId,
     reason: schema.assetResolutionDecisions.reason,

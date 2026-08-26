@@ -494,7 +494,7 @@ const make = Effect.gen(function* () {
   }: {
     readonly jobId: string
     readonly record: AssetResolutionPolicyEvaluationRecord
-  }): Effect.Effect<void, SyncEngineStorageError> =>
+  }): Effect.Effect<boolean, SyncEngineStorageError> =>
     Effect.gen(function* () {
       const { recorded } = yield* providerAssetRepository.recordAssetResolutionPolicyEvaluation({
         decision: record,
@@ -510,6 +510,7 @@ const make = Effect.gen(function* () {
           "asset-resolution:decision-replay-detected"
         )
       }
+      return recorded
     })
 
   const settleApprovedResolution = ({
@@ -587,18 +588,6 @@ const make = Effect.gen(function* () {
 
       const { providerAsset } = reviewOption.value
 
-      // An exclusion is settled. New registry evidence alone must never
-      // resurrect an excluded observation; reversal requires a human-approved
-      // superseding decision. Later jobs complete without a new decision.
-      if (reviewOption.value.mapping?.mappingStatus === "excluded") {
-        yield* assetResolutionJobRepository.finishResolutionJob({ jobId, status: "completed" })
-        return {
-          outcome: "excluded",
-          providerAssetRowId,
-          evidenceRevision,
-        } satisfies AssetResolutionJobExecutionResult
-      }
-
       const observations = yield* providerAssetRepository.listProviderAssetObservedRepresentations({
         providerAssetRowId,
       })
@@ -617,6 +606,31 @@ const make = Effect.gen(function* () {
         decision,
         evidence,
       })
+
+      const settledMapping =
+        reviewOption.value.mapping?.mappingStatus === "approved" ||
+        reviewOption.value.mapping?.mappingStatus === "excluded"
+      if (settledMapping) {
+        // New evidence can reopen review, but automatic policy work must not
+        // replace a settled global conclusion. Record the policy evaluation
+        // and leave the mapping projection untouched for human supersession.
+        const recorded = yield* recordDecision({ jobId, record: decisionRecord })
+        yield* assetResolutionJobRepository.finishResolutionJob({ jobId, status: "completed" })
+        return {
+          outcome:
+            !recorded && decision._tag === "attach"
+              ? "attached"
+              : !recorded && decision._tag === "create_standalone"
+                ? "created"
+                : !recorded && decision._tag === "excluded"
+                  ? "excluded"
+                  : decision._tag === "pending" || decision._tag === "fail_closed"
+                    ? decision._tag
+                    : "evaluated",
+          providerAssetRowId,
+          evidenceRevision,
+        } satisfies AssetResolutionJobExecutionResult
+      }
 
       if (decision._tag === "attach") {
         return yield* syncEngineTransaction.run(

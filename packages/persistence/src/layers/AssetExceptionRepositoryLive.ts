@@ -418,7 +418,9 @@ const make = Effect.gen(function* () {
         affectedPrincipals: affectedPrincipalsSql,
         affectedTransactions: affectedTransactionsSql,
         affectedSources: affectedSourcesSql,
-        affectedCalculations: sql<number>`0`,
+        affectedCalculations: affectedSourcesSql,
+        // Reports are calculated on demand; there is no persisted report
+        // snapshot surface to invalidate in the current product.
         existingGeneratedReportSnapshots: sql<number>`0`,
         affectedTransactionValueEur: affectedValueEurSql,
         severityRank: severityRankSql,
@@ -559,7 +561,9 @@ const make = Effect.gen(function* () {
         affectedPrincipals: affectedPrincipalsSql,
         affectedTransactions: affectedTransactionsSql,
         affectedSources: affectedSourcesSql,
-        affectedCalculations: sql<number>`0`,
+        // Tax calculations are source-scoped and computed on demand, so each
+        // affected source represents one current calculation result.
+        affectedCalculations: affectedSourcesSql,
         existingGeneratedReportSnapshots: sql<number>`0`,
         affectedTransactionValueEur: affectedValueEurSql,
       })
@@ -599,9 +603,11 @@ const make = Effect.gen(function* () {
           .from(schema.providerAssetMappings)
           .where(eq(schema.providerAssetMappings.assetRepresentationId, representationId))
           .pipe(
-            Effect.map((rows) => [
-              ...new Set([providerAssetRowId, ...rows.map(({ providerAssetRowId: id }) => id)]),
-            ])
+            Effect.map((rows) =>
+              [
+                ...new Set([providerAssetRowId, ...rows.map(({ providerAssetRowId: id }) => id)]),
+              ].sort((left, right) => left.localeCompare(right))
+            )
           )
 
   const loadImpactForProviderAssets = (
@@ -650,7 +656,10 @@ const make = Effect.gen(function* () {
           select count(distinct affected_sources.source_id)::int
           from ${affectedSourceIds} affected_sources
         )`,
-        affectedCalculations: sql<number>`0`,
+        affectedCalculations: sql<number>`(
+          select count(distinct affected_sources.source_id)::int
+          from ${affectedSourceIds} affected_sources
+        )`,
         existingGeneratedReportSnapshots: sql<number>`0`,
         affectedTransactionValueEur: sql<string | null>`(
           select sum(abs(${schema.transactions.providerFiatAmount}))::text
@@ -800,6 +809,7 @@ const make = Effect.gen(function* () {
         failureCode: schema.assetDecisionRematerializations.failureCode,
         lastFailureAt: schema.assetDecisionRematerializations.lastFailureAt,
         jobStatus: schema.processingJobs.status,
+        jobAttemptCount: schema.processingJobs.attemptCount,
       })
       .from(schema.assetDecisionRematerializations)
       .innerJoin(
@@ -817,7 +827,12 @@ const make = Effect.gen(function* () {
             return {
               status: "complete",
               affectedSourceCount: 0,
+              pendingSourceCount: 0,
+              runningSourceCount: 0,
+              completedSourceCount: 0,
               failedSourceCount: 0,
+              retryingSourceCount: 0,
+              remainingSourceCount: 0,
               lastFailureAt: null,
               failureCode: null,
             }
@@ -830,11 +845,66 @@ const make = Effect.gen(function* () {
             row.storedStatus === "pending" && row.jobStatus === "processing"
               ? ("running" as const)
               : row.storedStatus
-          const failed = rows.filter((row) => effectiveStatus(row) === "operator_attention")
-          const affectedSourceCount = new Set(rows.map((row) => row.sourceId)).size
-          const failedSourceCount = new Set(failed.map((row) => row.sourceId)).size
-          const running = rows.some((row) => effectiveStatus(row) === "running")
-          const pending = rows.some((row) => effectiveStatus(row) === "pending")
+          const statusRank = {
+            complete: 0,
+            pending: 1,
+            running: 2,
+            operator_attention: 3,
+          } as const
+          const sources = new Map<
+            string,
+            {
+              readonly status: keyof typeof statusRank
+              readonly retrying: boolean
+              readonly failureCode: string | null
+              readonly lastFailureAt: Date | null
+            }
+          >()
+          for (const row of rows) {
+            const status = effectiveStatus(row)
+            const existing = sources.get(row.sourceId)
+            const candidate = {
+              status,
+              retrying:
+                status !== "complete" &&
+                status !== "operator_attention" &&
+                (row.jobAttemptCount ?? 0) > 0,
+              failureCode: row.failureCode,
+              lastFailureAt: row.lastFailureAt,
+            }
+            if (
+              existing === undefined ||
+              statusRank[candidate.status] > statusRank[existing.status]
+            ) {
+              sources.set(row.sourceId, candidate)
+            } else if (statusRank[candidate.status] === statusRank[existing.status]) {
+              const failureDates = [existing.lastFailureAt, candidate.lastFailureAt].filter(
+                (date): date is Date => date !== null
+              )
+              sources.set(row.sourceId, {
+                ...existing,
+                retrying: existing.retrying || candidate.retrying,
+                failureCode: candidate.failureCode ?? existing.failureCode,
+                lastFailureAt:
+                  failureDates.sort((left, right) => right.getTime() - left.getTime())[0] ?? null,
+              })
+            }
+          }
+          const sourceStates = [...sources.values()]
+          const affectedSourceCount = sourceStates.length
+          const pendingSourceCount = sourceStates.filter(
+            ({ status }) => status === "pending"
+          ).length
+          const runningSourceCount = sourceStates.filter(
+            ({ status }) => status === "running"
+          ).length
+          const completedSourceCount = sourceStates.filter(
+            ({ status }) => status === "complete"
+          ).length
+          const failed = sourceStates.filter(({ status }) => status === "operator_attention")
+          const failedSourceCount = failed.length
+          const retryingSourceCount = sourceStates.filter(({ retrying }) => retrying).length
+          const remainingSourceCount = affectedSourceCount - completedSourceCount
           const lastFailureAt =
             failed
               .flatMap((row) => (row.lastFailureAt === null ? [] : [row.lastFailureAt]))
@@ -842,18 +912,23 @@ const make = Effect.gen(function* () {
 
           return {
             status:
-              failed.length > 0
+              failedSourceCount > 0
                 ? "operator_attention"
-                : running
+                : runningSourceCount > 0
                   ? "running"
-                  : pending
+                  : pendingSourceCount > 0
                     ? "pending"
                     : "complete",
             affectedSourceCount,
+            pendingSourceCount,
+            runningSourceCount,
+            completedSourceCount,
             failedSourceCount,
+            retryingSourceCount,
+            remainingSourceCount,
             lastFailureAt,
             failureCode:
-              failed[0]?.failureCode ?? (failed.length > 0 ? "rematerialization_failed" : null),
+              failed[0]?.failureCode ?? (failedSourceCount > 0 ? "rematerialization_failed" : null),
           }
         })
       )
@@ -965,6 +1040,15 @@ const make = Effect.gen(function* () {
       })
 
       const reviewStatus = (() => {
+        if (
+          currentPolicyEvaluation !== null &&
+          ["pending", "fail_closed"].includes(currentPolicyEvaluation.outcome) &&
+          (currentConclusion === null ||
+            currentConclusion.claim === null ||
+            currentConclusion.evidenceRevision < currentPolicyEvaluation.evidenceRevision)
+        ) {
+          return "unresolved" as const
+        }
         if (currentConclusion?.outcome === "excluded") {
           return "excluded" as const
         }
@@ -1539,14 +1623,86 @@ const make = Effect.gen(function* () {
     const persisted: Effect.Effect<SubmitTransactionResult, SyncEngineStorageError, never> = db
       .transaction((tx) =>
         Effect.gen(function* () {
-          const [lockedProviderAsset] = yield* tx
+          const maybeInitialDetail = yield* loadDetail(tx, {
+            _tag: "row_id",
+            providerAssetRowId: input.providerAssetRowId,
+          })
+          if (Option.isNone(maybeInitialDetail)) {
+            return { _tag: "not_found" as const }
+          }
+          const initialDetail = maybeInitialDetail.value
+          const initialValidation = yield* validateInput({
+            client: tx,
+            detail: initialDetail,
+            input,
+          })
+          if (initialValidation._tag !== "valid") {
+            return initialValidation
+          }
+
+          const preparedIdentityClaim =
+            input.claim._tag === "identity" ? yield* prepareIdentityClaim(tx, input.claim) : null
+          if (preparedIdentityClaim?._tag === "invalid_claim") {
+            return preparedIdentityClaim
+          }
+
+          if (input.claim._tag === "identity" && preparedIdentityClaim?._tag === "prepared") {
+            if (
+              !(yield* isClaimCompatibleWithObservedRepresentation({
+                client: tx,
+                detail: initialDetail,
+                claim: input.claim,
+              }))
+            ) {
+              return { _tag: "invalid_claim" as const }
+            }
+          }
+          const identityResolutionBeforeLocks =
+            preparedIdentityClaim?._tag === "prepared"
+              ? yield* resolvePreparedIdentity(tx, preparedIdentityClaim)
+              : null
+          if (
+            identityResolutionBeforeLocks !== null &&
+            identityResolutionBeforeLocks._tag !== "resolved"
+          ) {
+            return identityResolutionBeforeLocks
+          }
+          const lockedProviderAssetRowIds =
+            identityResolutionBeforeLocks?._tag === "resolved"
+              ? yield* loadAffectedProviderAssetIds({
+                  client: tx,
+                  providerAssetRowId: initialDetail.providerAssetRowId,
+                  representationId: identityResolutionBeforeLocks.representationId,
+                  representationOutcome: identityResolutionBeforeLocks.representationOutcome,
+                })
+              : [initialDetail.providerAssetRowId]
+          yield* tx
             .select({ id: schema.providerAssets.id })
             .from(schema.providerAssets)
-            .where(eq(schema.providerAssets.id, input.providerAssetRowId))
-            .for("update")
-            .limit(1)
-          if (lockedProviderAsset === undefined) {
-            return { _tag: "not_found" as const }
+            .where(inArray(schema.providerAssets.id, lockedProviderAssetRowIds))
+            .orderBy(asc(schema.providerAssets.id))
+            .for("no key update")
+
+          if (input.claim._tag === "identity" && preparedIdentityClaim?._tag === "prepared") {
+            yield* lockIdentityResolution({ claim: preparedIdentityClaim.claim, tx })
+          }
+
+          if (
+            identityResolutionBeforeLocks?._tag === "resolved" &&
+            identityResolutionBeforeLocks.representationOutcome === "reassign" &&
+            identityResolutionBeforeLocks.representationId !== null
+          ) {
+            const [lockedRepresentation] = yield* tx
+              .select({ id: schema.assetRepresentations.id })
+              .from(schema.assetRepresentations)
+              .where(
+                eq(schema.assetRepresentations.id, identityResolutionBeforeLocks.representationId)
+              )
+              .for("update")
+              .limit(1)
+            if (lockedRepresentation === undefined) {
+              return { _tag: "identity_changed" as const }
+            }
           }
 
           const maybeDetail = yield* loadDetail(tx, {
@@ -1561,24 +1717,15 @@ const make = Effect.gen(function* () {
           if (validation._tag !== "valid") {
             return validation
           }
-
-          const preparedIdentityClaim =
-            input.claim._tag === "identity" ? yield* prepareIdentityClaim(tx, input.claim) : null
-          if (preparedIdentityClaim?._tag === "invalid_claim") {
-            return preparedIdentityClaim
-          }
-
-          if (input.claim._tag === "identity" && preparedIdentityClaim?._tag === "prepared") {
-            if (
-              !(yield* isClaimCompatibleWithObservedRepresentation({
-                client: tx,
-                detail,
-                claim: input.claim,
-              }))
-            ) {
-              return { _tag: "invalid_claim" as const }
-            }
-            yield* lockIdentityResolution({ claim: preparedIdentityClaim.claim, tx })
+          if (
+            input.claim._tag === "identity" &&
+            !(yield* isClaimCompatibleWithObservedRepresentation({
+              client: tx,
+              detail,
+              claim: input.claim,
+            }))
+          ) {
+            return { _tag: "invalid_claim" as const }
           }
           const identityResolution =
             preparedIdentityClaim?._tag === "prepared"
@@ -1596,12 +1743,14 @@ const make = Effect.gen(function* () {
                   representationOutcome: identityResolution.representationOutcome,
                 })
               : [detail.providerAssetRowId]
-          yield* tx
-            .select({ id: schema.providerAssets.id })
-            .from(schema.providerAssets)
-            .where(inArray(schema.providerAssets.id, affectedProviderAssetRowIds))
-            .orderBy(asc(schema.providerAssets.id))
-            .for("update")
+          if (
+            affectedProviderAssetRowIds.length !== lockedProviderAssetRowIds.length ||
+            affectedProviderAssetRowIds.some(
+              (providerAssetRowId, index) => providerAssetRowId !== lockedProviderAssetRowIds[index]
+            )
+          ) {
+            return { _tag: "identity_changed" as const }
+          }
           const actualResultingAssetId = identityResolution?.assetId ?? null
           const actualAssetOutcome = identityResolution?.assetOutcome ?? "none"
           const actualRepresentationOutcome = identityResolution?.representationOutcome ?? "none"
@@ -1685,6 +1834,16 @@ const make = Effect.gen(function* () {
               representationId !== null &&
               assetId !== null
             ) {
+              const [currentRepresentation] = yield* tx
+                .select({ assetId: schema.assetRepresentations.assetId })
+                .from(schema.assetRepresentations)
+                .where(eq(schema.assetRepresentations.id, representationId))
+                .for("update")
+                .limit(1)
+              if (currentRepresentation === undefined) {
+                return { _tag: "invalid_claim" as const }
+              }
+
               const [currentOwnership] = yield* tx
                 .select({ id: schema.assetRepresentationOwnershipDecisions.id })
                 .from(schema.assetRepresentationOwnershipDecisions)
@@ -1707,6 +1866,30 @@ const make = Effect.gen(function* () {
                 )
                 .for("update")
                 .limit(1)
+
+              const currentOwnershipId =
+                currentOwnership?.id ??
+                (yield* tx
+                  .insert(schema.assetRepresentationOwnershipDecisions)
+                  .values({
+                    assetRepresentationId: representationId,
+                    assetId: currentRepresentation.assetId,
+                    policyRevision: HUMAN_POLICY_REVISION,
+                    reason: "ownership_projection_baseline",
+                    actor: "system:ownership-history-backfill",
+                    createdAt: now,
+                  })
+                  .returning({ id: schema.assetRepresentationOwnershipDecisions.id })
+                  .pipe(
+                    Effect.flatMap(([baseline]) =>
+                      baseline === undefined
+                        ? toStorageError(
+                            "assetExceptionRepository.submitDecision.ownershipBaseline",
+                            { representationId }
+                          )
+                        : Effect.succeed(baseline.id)
+                    )
+                  ))
 
               yield* tx
                 .update(schema.transfers)
@@ -1741,7 +1924,7 @@ const make = Effect.gen(function* () {
               yield* tx.insert(schema.assetRepresentationOwnershipDecisions).values({
                 assetRepresentationId: representationId,
                 assetId,
-                supersedesDecisionId: currentOwnership?.id ?? null,
+                supersedesDecisionId: currentOwnershipId,
                 policyRevision: HUMAN_POLICY_REVISION,
                 reason: "human_ownership_correction",
                 actor: actorId,

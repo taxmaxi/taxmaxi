@@ -502,7 +502,7 @@ describe("AssetResolutionJobRepositoryLive", () => {
       expect(jobs).toContainEqual({ status: "pending", evidenceRevision: 2 })
     })
 
-    it("does not schedule for an observation with an approved mapping", async () => {
+    it("schedules an approved mapping that has no current policy evaluation", async () => {
       const providerAssetRowId = await upsertCatalogAsset({
         providerAssetId: "schedule-approved-asset",
       })
@@ -526,15 +526,15 @@ describe("AssetResolutionJobRepositoryLive", () => {
         )
       )
 
-      // A catalog refresh with changed provider data bumps the evidence
-      // revision, but an approved observation must not be re-scheduled.
+      // A mapping projection without a revision-bound conclusion is not a
+      // complete settled state, so changed evidence must schedule evaluation.
       await upsertCatalogAsset({
         providerAssetId: "schedule-approved-asset",
         payload: { source: "test", refreshed: true },
       })
 
       const jobs = await selectJobsFor(providerAssetRowId)
-      expect(jobs.filter((job) => job.evidenceRevision > 1)).toEqual([])
+      expect(jobs).toContainEqual({ status: "pending", evidenceRevision: 2 })
     })
 
     it("keeps a scheduled job when the transaction around scheduling rolls back", async () => {

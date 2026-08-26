@@ -33,6 +33,10 @@ export const assetRepresentationOwnershipDecisions = pgTable(
     uniqueIndex("asset_representation_ownership_supersedes_unique")
       .on(table.supersedesDecisionId)
       .where(sql`${table.supersedesDecisionId} is not null`),
+    uniqueIndex("asset_representation_ownership_representation_id_unique").on(
+      table.assetRepresentationId,
+      table.id
+    ),
     index("idx_asset_representation_ownership_asset_id").on(table.assetId),
     foreignKey({
       columns: [table.assetId],
@@ -40,8 +44,8 @@ export const assetRepresentationOwnershipDecisions = pgTable(
       name: "asset_representation_ownership_asset_id_fk",
     }),
     foreignKey({
-      columns: [table.supersedesDecisionId],
-      foreignColumns: [table.id],
+      columns: [table.assetRepresentationId, table.supersedesDecisionId],
+      foreignColumns: [table.assetRepresentationId, table.id],
       name: "asset_representation_ownership_supersedes_fk",
     }),
   ]

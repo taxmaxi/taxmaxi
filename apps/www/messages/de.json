@@ -367,6 +367,7 @@
           "queuedDescription": "TaxMaxi verarbeitet die betroffenen Quelldaten mit dieser Entscheidung erneut.",
           "runningTitle": "Betroffene Daten werden aktualisiert",
           "runningDescription": "TaxMaxi verarbeitet die betroffenen Quelldaten mit dieser Entscheidung erneut.",
+          "progress": "{remaining} verbleibend · {complete} abgeschlossen · {running} laufend · {pending} eingeplant · {retrying} in Wiederholung · {failed} fehlgeschlagen",
           "completeTitle": "Betroffene Daten aktualisiert",
           "completeDescription": "Berichte verwenden jetzt die erfasste Asset-Entscheidung.",
           "attentionTitle": "Datenaktualisierung erfordert Aufmerksamkeit",
@@ -604,7 +605,10 @@
         "naturalKey": "Natürlicher Schlüssel",
         "key": "Exakter Wert",
         "open": "Exakte Suche öffnen",
-        "action": "Suchen"
+        "action": "Suchen",
+        "loading": "Wird geöffnet…",
+        "invalid": "Gib einen Provider und genau eine Beobachtungs-ID oder einen natürlichen Schlüssel ein.",
+        "error": "Die geprüfte Beobachtung konnte nicht geöffnet werden."
       },
       "impact": {
         "blockedReports": "Blockierte Berichte",

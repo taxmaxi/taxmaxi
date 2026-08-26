@@ -25,6 +25,7 @@ describe("AssetCanonicalizationService", () => {
     exponent: 6,
     providerType: "crypto",
     rawProviderPayload: {},
+    evidenceRevision: 1,
     discoveredAt: new Date("2025-01-01T00:00:00.000Z"),
     retrievedAt: new Date("2025-01-01T00:00:00.000Z"),
     ...overrides,

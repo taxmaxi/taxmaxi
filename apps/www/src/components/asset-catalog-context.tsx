@@ -20,6 +20,7 @@ import type {
   AssetExceptionDecisionInput,
   AssetExceptionDecisionConfirmationInput,
   AssetExceptionDetail,
+  AssetExceptionLookupInput,
   AssetExceptionPreview,
 } from "taxmaxi"
 
@@ -40,6 +41,7 @@ export type AssetCatalogFeeds = {
 
 export type AssetExceptionActions = {
   readonly get: (id: string) => Promise<AssetExceptionDetail>
+  readonly lookup: (input: AssetExceptionLookupInput) => Promise<AssetExceptionDetail>
   readonly preview: (input: AssetExceptionDecisionInput) => Promise<AssetExceptionPreview>
   readonly submit: (input: AssetExceptionDecisionConfirmationInput) => Promise<AssetExceptionDetail>
   readonly searchAssets: (query: string) => Promise<AssetCatalogList>

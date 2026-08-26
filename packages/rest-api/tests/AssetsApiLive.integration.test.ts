@@ -1513,7 +1513,7 @@ describe("AssetsApiLive", () => {
           providerAssetRowId: seeded.rowId,
           reason: "ownership_conflict",
           severity: "critical",
-          affectedCalculations: 0,
+          affectedCalculations: 1,
           existingGeneratedReportSnapshots: 0,
         }),
       ])

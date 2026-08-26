@@ -152,7 +152,12 @@ export class AssetExceptionRematerializationResponse extends Schema.Class<AssetE
 )({
   status: AssetExceptionRematerializationStatus,
   affectedSourceCount: Schema.Number,
+  pendingSourceCount: Schema.Number,
+  runningSourceCount: Schema.Number,
+  completedSourceCount: Schema.Number,
   failedSourceCount: Schema.Number,
+  retryingSourceCount: Schema.Number,
+  remainingSourceCount: Schema.Number,
   lastFailureAt: Schema.NullOr(Schema.DateTimeUtcFromString),
   failureCode: Schema.NullOr(Schema.String),
 }) {}

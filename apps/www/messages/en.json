@@ -367,6 +367,7 @@
           "queuedDescription": "TaxMaxi will replay the affected source data using this decision.",
           "runningTitle": "Updating affected data",
           "runningDescription": "TaxMaxi is replaying the affected source data using this decision.",
+          "progress": "{remaining} remaining · {complete} complete · {running} running · {pending} queued · {retrying} retrying · {failed} failed",
           "completeTitle": "Affected data updated",
           "completeDescription": "Reports now use the recorded asset decision.",
           "attentionTitle": "Data update needs attention",
@@ -604,7 +605,10 @@
         "naturalKey": "Natural key",
         "key": "Exact value",
         "open": "Open exact lookup",
-        "action": "Look up"
+        "action": "Look up",
+        "loading": "Opening…",
+        "invalid": "Enter a provider and exactly one observation ID or natural key.",
+        "error": "The reviewed observation could not be opened."
       },
       "impact": {
         "blockedReports": "Blocked reports",

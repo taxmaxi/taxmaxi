@@ -87,7 +87,12 @@ export interface AssetExceptionDecisionHistory {
 export interface AssetExceptionRematerializationSummary {
   readonly status: AssetExceptionRematerializationStatus
   readonly affectedSourceCount: number
+  readonly pendingSourceCount: number
+  readonly runningSourceCount: number
+  readonly completedSourceCount: number
   readonly failedSourceCount: number
+  readonly retryingSourceCount: number
+  readonly remainingSourceCount: number
   readonly lastFailureAt: Date | null
   readonly failureCode: string | null
 }

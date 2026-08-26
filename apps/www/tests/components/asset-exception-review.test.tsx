@@ -12,6 +12,7 @@ import type {
 
 import type { AssetExceptionActions } from "#/components/asset-catalog-context"
 import type { TaxMaxiAssetException } from "#/components/asset-catalog-model"
+import { AssetExceptionDetailPane } from "#/components/asset-exception-detail"
 import { AssetExceptionReview } from "#/components/asset-exception-review"
 
 const OBSERVATION_ID = "00000000-0000-4000-8000-000000000801"
@@ -108,7 +109,12 @@ const detail = {
   rematerialization: {
     status: "complete",
     affectedSourceCount: 0,
+    pendingSourceCount: 0,
+    runningSourceCount: 0,
+    completedSourceCount: 0,
     failedSourceCount: 0,
+    retryingSourceCount: 0,
+    remainingSourceCount: 0,
     lastFailureAt: null,
     failureCode: null,
   },
@@ -168,6 +174,7 @@ const makePreview = (input: AssetExceptionDecisionInput): AssetExceptionPreview 
 
 const makeActions = (): AssetExceptionActions => ({
   get: vi.fn(async () => detail),
+  lookup: vi.fn(async () => detail),
   preview: vi.fn(async (input) => makePreview(input)),
   searchAssets: vi.fn(async () => ({
     assets: [conflictingAsset],
@@ -193,6 +200,83 @@ const renderReview = (actions: AssetExceptionActions = makeActions()) => {
 afterEach(cleanup)
 
 describe("AssetExceptionReview", () => {
+  it("opens a settled observation by its provider identity", async () => {
+    const actions = makeActions()
+    render(<AssetExceptionDetailPane actions={actions} />)
+
+    fireEvent.change(screen.getByLabelText("Provider"), { target: { value: "coinbase" } })
+    fireEvent.change(screen.getByLabelText("Provider observation ID"), {
+      target: { value: "btc" },
+    })
+    fireEvent.click(screen.getByRole("button", { name: "Look up" }))
+
+    await waitFor(() =>
+      expect(actions.lookup).toHaveBeenCalledWith({ provider: "coinbase", providerAssetId: "btc" })
+    )
+    expect(await screen.findByText("Melea Initiative · helius-solana")).toBeTruthy()
+  })
+
+  it("opens a settled observation by its provider natural key", async () => {
+    const actions = makeActions()
+    render(<AssetExceptionDetailPane actions={actions} />)
+
+    fireEvent.change(screen.getByLabelText("Provider"), { target: { value: "coinbase" } })
+    fireEvent.change(screen.getByLabelText("Natural key"), {
+      target: { value: "currency_code:BTC" },
+    })
+    fireEvent.click(screen.getByRole("button", { name: "Look up" }))
+
+    await waitFor(() =>
+      expect(actions.lookup).toHaveBeenCalledWith({
+        provider: "coinbase",
+        naturalKey: "currency_code:BTC",
+      })
+    )
+  })
+
+  it("requires a provider and exactly one lookup identifier", () => {
+    const actions = makeActions()
+    render(<AssetExceptionDetailPane actions={actions} />)
+
+    fireEvent.click(screen.getByRole("button", { name: "Look up" }))
+    expect(
+      screen.getByText("Enter a provider and exactly one observation ID or natural key.")
+    ).toBeTruthy()
+    expect(actions.lookup).not.toHaveBeenCalled()
+
+    fireEvent.change(screen.getByLabelText("Provider"), { target: { value: "coinbase" } })
+    fireEvent.change(screen.getByLabelText("Provider observation ID"), {
+      target: { value: "btc" },
+    })
+    fireEvent.change(screen.getByLabelText("Natural key"), {
+      target: { value: "currency_code:BTC" },
+    })
+    fireEvent.click(screen.getByRole("button", { name: "Look up" }))
+
+    expect(
+      screen.getByText("Enter a provider and exactly one observation ID or natural key.")
+    ).toBeTruthy()
+    expect(actions.lookup).not.toHaveBeenCalled()
+  })
+
+  it("shows a lookup failure and keeps the form available", async () => {
+    const actions: AssetExceptionActions = {
+      ...makeActions(),
+      lookup: vi.fn(async () => Promise.reject(new Error("lookup failed"))),
+    }
+    render(<AssetExceptionDetailPane actions={actions} />)
+
+    fireEvent.change(screen.getByLabelText("Provider"), { target: { value: "coinbase" } })
+    fireEvent.change(screen.getByLabelText("Provider observation ID"), {
+      target: { value: "missing" },
+    })
+    fireEvent.click(screen.getByRole("button", { name: "Look up" }))
+
+    expect(await screen.findByText("The reviewed observation could not be opened.")).toBeTruthy()
+    expect(screen.getByRole("button", { name: "Look up" })).toBeTruthy()
+    expect(screen.getByLabelText("Provider observation ID")).toHaveProperty("value", "missing")
+  })
+
   it("renders one review request and hides empty lookup and rebuild states", () => {
     renderReview()
 
@@ -203,6 +287,116 @@ describe("AssetExceptionReview", () => {
     expect(screen.queryByText(/Affected data updated/)).toBeNull()
     expect(screen.getByText("Needs decision")).toBeTruthy()
     expect(screen.getAllByText("Display identity collision")).toHaveLength(2)
+  })
+
+  it("shows the settled conclusion, later policy request, and rebuild progress separately", () => {
+    const conclusionId = "00000000-0000-4000-8000-000000000806"
+    const currentConclusion = {
+      id: conclusionId,
+      supersedesConclusionId: null,
+      isCurrentConclusion: true,
+      isCurrentPolicyEvaluation: false,
+      outcome: "excluded" as const,
+      claim: { _tag: "exclusion" as const, reason: "confirmed_spam" as const },
+      rationale: "Confirmed by an administrator.",
+      reason: "confirmed_spam",
+      assetId: null,
+      assetRepresentationId: null,
+      actorId: "admin:test",
+      policyRevision: "human.1",
+      evidenceRevision: 1,
+      evidenceSnapshotIds: [EVIDENCE_ID],
+      createdAt: DateTime.makeUnsafe("2026-08-24T10:00:00.000Z"),
+    }
+    const splitDetail = {
+      ...detail,
+      evidenceRevision: 2,
+      currentConclusionRevision: conclusionId,
+      currentConclusion,
+      decisionHistory: [currentConclusion, ...detail.decisionHistory],
+      rematerialization: {
+        status: "operator_attention" as const,
+        affectedSourceCount: 5,
+        pendingSourceCount: 1,
+        runningSourceCount: 1,
+        completedSourceCount: 2,
+        failedSourceCount: 1,
+        retryingSourceCount: 1,
+        remainingSourceCount: 3,
+        lastFailureAt: DateTime.makeUnsafe("2026-08-24T10:05:00.000Z"),
+        failureCode: "replay_failed",
+      },
+    } satisfies AssetExceptionDetail
+
+    render(
+      <AssetExceptionReview
+        actions={makeActions()}
+        detail={splitDetail}
+        exception={exception}
+        onDetailChange={vi.fn()}
+        stale={false}
+      />
+    )
+
+    expect(screen.getByText("Excluded")).toBeTruthy()
+    expect(screen.getByText("Review requested")).toBeTruthy()
+    expect(screen.getByText("Data update needs attention")).toBeTruthy()
+    expect(
+      screen.getByText("3 remaining · 2 complete · 1 running · 1 queued · 1 retrying · 1 failed")
+    ).toBeTruthy()
+  })
+
+  it("keeps settled detail visible after its exception leaves the queue", async () => {
+    const conclusionId = "00000000-0000-4000-8000-000000000807"
+    const currentConclusion = {
+      id: conclusionId,
+      supersedesConclusionId: null,
+      isCurrentConclusion: true,
+      isCurrentPolicyEvaluation: true,
+      outcome: "excluded" as const,
+      claim: { _tag: "exclusion" as const, reason: "confirmed_spam" as const },
+      rationale: "Confirmed by an administrator.",
+      reason: "confirmed_spam",
+      assetId: null,
+      assetRepresentationId: null,
+      actorId: "admin:test",
+      policyRevision: "human.1",
+      evidenceRevision: 1,
+      evidenceSnapshotIds: [EVIDENCE_ID],
+      createdAt: DateTime.makeUnsafe("2026-08-24T10:00:00.000Z"),
+    }
+    const settledDetail = {
+      ...detail,
+      currentConclusionRevision: conclusionId,
+      currentPolicyEvaluationRevision: conclusionId,
+      reviewStatus: "resolved" as const,
+      currentConclusion,
+      currentPolicyEvaluation: currentConclusion,
+      decisionHistory: [currentConclusion],
+      rematerialization: {
+        status: "pending" as const,
+        affectedSourceCount: 1,
+        pendingSourceCount: 1,
+        runningSourceCount: 0,
+        completedSourceCount: 0,
+        failedSourceCount: 0,
+        retryingSourceCount: 0,
+        remainingSourceCount: 1,
+        lastFailureAt: null,
+        failureCode: null,
+      },
+    } satisfies AssetExceptionDetail
+    const actions: AssetExceptionActions = {
+      ...makeActions(),
+      get: vi.fn(async () => settledDetail),
+    }
+    const view = render(<AssetExceptionDetailPane actions={actions} exception={exception} />)
+
+    expect(await screen.findByText("Data update queued")).toBeTruthy()
+    view.rerender(<AssetExceptionDetailPane actions={actions} />)
+
+    expect(screen.getByText("Melea Initiative · helius-solana")).toBeTruthy()
+    expect(screen.getByText("Data update queued")).toBeTruthy()
   })
 
   it("blocks a conflicting attachment before preview and offers safe alternatives", async () => {

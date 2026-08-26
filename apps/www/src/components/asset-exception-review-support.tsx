@@ -91,7 +91,6 @@ export function useAssetExceptionDetail(
   useEffect(() => {
     requestId.current += 1
     if (exceptionRowId === undefined) {
-      setDetail(null)
       setLoading(false)
       setLoadError(null)
       return

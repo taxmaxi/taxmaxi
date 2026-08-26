@@ -908,10 +908,12 @@ describe("AssetRepositoryLive", () => {
         })
       )
 
-      const decisions = await runPg(
+      await runPg(seedData)
+
+      const persisted = await runPg(
         Effect.gen(function* () {
           const db = yield* drizzle
-          return yield* db
+          const decisions = yield* db
             .select({ assetId: schema.assetRepresentationOwnershipDecisions.assetId })
             .from(schema.assetRepresentationOwnershipDecisions)
             .where(
@@ -920,13 +922,19 @@ describe("AssetRepositoryLive", () => {
                 TEST_BTC_REPRESENTATION_ID
               )
             )
+          const [representation] = yield* db
+            .select({ assetId: schema.assetRepresentations.assetId })
+            .from(schema.assetRepresentations)
+            .where(eq(schema.assetRepresentations.id, TEST_BTC_REPRESENTATION_ID))
+          return { decisions, representation }
         })
       )
 
-      expect(decisions).toHaveLength(2)
-      expect(decisions.map(({ assetId }) => assetId)).toEqual(
+      expect(persisted.decisions).toHaveLength(2)
+      expect(persisted.decisions.map(({ assetId }) => assetId)).toEqual(
         expect.arrayContaining([TEST_BTC_ASSET_ID, TEST_EUR_ASSET_ID])
       )
+      expect(persisted.representation).toEqual({ assetId: TEST_EUR_ASSET_ID })
     })
 
     it("keeps a representation referenced by a decision from being deleted", async () => {
