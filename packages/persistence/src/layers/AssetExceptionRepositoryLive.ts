@@ -166,47 +166,32 @@ const make = Effect.gen(function* () {
       if (!isClaimCompatibleWithHeliusObservation({ detail, claim })) {
         return false
       }
-      if (detail.provider === "helius-solana") {
-        // The latest provider metadata is overwritten on every sync, so it
-        // alone cannot vouch for older stored rows. Replay re-validates each
-        // row's observed values against the approved mapping and fails on
-        // any non-null mismatch, so an accepted claim must already be
-        // consistent with every stored observation or the rebuild is
-        // guaranteed to fail.
-        const representation = claim.representation
-        if (representation === null) {
-          return false
-        }
-        const storedObservations = yield* client
-          .select({
-            blockchain: schema.blockchains.name,
-            type: schema.providerTransfers.observedRepresentationType,
-            contractAddress: schema.providerTransfers.observedContractAddress,
-            mintAddress: schema.providerTransfers.observedMintAddress,
-            decimals: schema.providerTransfers.observedDecimals,
-          })
-          .from(schema.providerTransfers)
-          .innerJoin(
-            schema.blockchains,
-            eq(schema.blockchains.id, schema.providerTransfers.observedBlockchainId)
-          )
-          .where(eq(schema.providerTransfers.providerAssetId, detail.providerAssetRowId))
 
-        return storedObservations.every(
-          (observation) =>
-            observation.blockchain.toLowerCase() === representation.blockchain.toLowerCase() &&
-            (observation.type === null || observation.type === representation.type) &&
-            (observation.contractAddress === null ||
-              observation.contractAddress.trim().toLowerCase() ===
-                representation.contractAddress?.trim().toLowerCase()) &&
-            (observation.mintAddress === null ||
-              observation.mintAddress === representation.mintAddress) &&
-            (observation.decimals === null || observation.decimals === representation.decimals)
+      const observations = yield* client
+        .select({
+          blockchain: schema.blockchains.name,
+          type: schema.providerTransfers.observedRepresentationType,
+          contractAddress: schema.providerTransfers.observedContractAddress,
+          mintAddress: schema.providerTransfers.observedMintAddress,
+          decimals: schema.providerTransfers.observedDecimals,
+        })
+        .from(schema.providerTransfers)
+        .innerJoin(
+          schema.blockchains,
+          eq(schema.blockchains.id, schema.providerTransfers.observedBlockchainId)
         )
-      }
-      if (claim.representation === null) {
+        .where(eq(schema.providerTransfers.providerAssetId, detail.providerAssetRowId))
+
+      const representation = claim.representation
+      if (representation === null) {
         if (detail.provider !== "coinbase") {
           return true
+        }
+        // A stored chain observation contradicts a chainless claim: replay
+        // re-validates every observed row against the approved mapping, and
+        // a mapping without a representation cannot satisfy any of them.
+        if (observations.length > 0) {
+          return false
         }
 
         const claimedAssetType =
@@ -223,31 +208,29 @@ const make = Effect.gen(function* () {
         )
       }
 
-      const representation = claim.representation
-      const observations = yield* client
-        .select({
-          blockchain: schema.blockchains.name,
-          type: schema.providerTransfers.observedRepresentationType,
-          contractAddress: schema.providerTransfers.observedContractAddress,
-          mintAddress: schema.providerTransfers.observedMintAddress,
-          decimals: schema.providerTransfers.observedDecimals,
-        })
-        .from(schema.providerTransfers)
-        .innerJoin(
-          schema.blockchains,
-          eq(schema.blockchains.id, schema.providerTransfers.observedBlockchainId)
-        )
-        .where(eq(schema.providerTransfers.providerAssetId, detail.providerAssetRowId))
-
-      return observations.some(
+      // Replay re-validates each stored row's observed values against the
+      // approved mapping and fails on any non-null mismatch, so every stored
+      // observation must be compatible with the claim; a partial match would
+      // guarantee a failed rebuild. The latest Helius provider metadata is
+      // overwritten on every sync, so it alone cannot vouch for older stored
+      // rows either.
+      const compatible = observations.every(
         (observation) =>
           observation.blockchain.toLowerCase() === representation.blockchain.toLowerCase() &&
-          observation.type === representation.type &&
-          observation.contractAddress?.toLowerCase() ===
-            representation.contractAddress?.toLowerCase() &&
-          observation.mintAddress === representation.mintAddress &&
-          observation.decimals === representation.decimals
+          (observation.type === null || observation.type === representation.type) &&
+          (observation.contractAddress === null ||
+            observation.contractAddress.trim().toLowerCase() ===
+              representation.contractAddress?.trim().toLowerCase()) &&
+          (observation.mintAddress === null ||
+            observation.mintAddress === representation.mintAddress) &&
+          (observation.decimals === null || observation.decimals === representation.decimals)
       )
+      if (detail.provider === "helius-solana") {
+        return compatible
+      }
+      // A chainless observation history cannot vouch for an on-chain
+      // representation claim.
+      return observations.length > 0 && compatible
     })
 
   const affectedSourcesSql = sql<number>`(
@@ -318,43 +301,40 @@ const make = Effect.gen(function* () {
   )`
 
   const affectedValueEurSql = sql<string | null>`(
-    select sum(abs((affected_transactions.metadata -> 'nativeAmount' ->> 'amount')::numeric))::text
+    select sum(abs(${schema.transactions.providerFiatAmount}))::text
     from (
-      select distinct ${schema.transactions.id}, ${schema.transactions.metadata}
-      from (
-        select ${schema.providerTransfers.transactionId} as transaction_id
-        from ${schema.providerTransfers}
-        where ${schema.providerTransfers.providerAssetId} = ${schema.providerAssets.id}
-        union
-        select ${schema.providerAssetTransactionUses.transactionId} as transaction_id
-        from ${schema.providerAssetTransactionUses}
-        where ${schema.providerAssetTransactionUses.providerAssetRowId} = ${schema.providerAssets.id}
-      ) affected_transaction_ids
-      inner join ${schema.transactions}
-        on ${schema.transactions.id} = affected_transaction_ids.transaction_id
-      where upper(${schema.transactions.metadata} -> 'nativeAmount' ->> 'currency') = 'EUR'
-        and (${schema.transactions.metadata} -> 'nativeAmount' ->> 'amount') ~ '^-?[0-9]+(\\.[0-9]+)?$'
-    ) affected_transactions
+      select ${schema.providerTransfers.transactionId} as transaction_id
+      from ${schema.providerTransfers}
+      where ${schema.providerTransfers.providerAssetId} = ${schema.providerAssets.id}
+      union
+      select ${schema.providerAssetTransactionUses.transactionId} as transaction_id
+      from ${schema.providerAssetTransactionUses}
+      where ${schema.providerAssetTransactionUses.providerAssetRowId} = ${schema.providerAssets.id}
+    ) affected_transaction_ids
+    inner join ${schema.transactions}
+      on ${schema.transactions.id} = affected_transaction_ids.transaction_id
+    where ${schema.transactions.providerFiatCurrency} = 'EUR'
   )`
 
-  const severityRankSql = sql<number>`case ${schema.assetResolutionDecisions.reason}
-    when 'ownership_conflict' then 0
-    when 'conflicting_evidence' then 0
-    when 'incompatible_decimals' then 1
-    when 'incompatible_type' then 1
-    when 'display_collision' then 2
-    when 'non_exact_platform_match' then 2
-    when 'spam_evidence' then 3
-    when 'unsupported_representation_type' then 3
-    when 'unverified_asset' then 3
-    else 4 end`
+  // The reasons are compile-time literals from ACTIONABLE_REASONS, so raw
+  // interpolation is safe and the ranking numbers stay single-sourced in the
+  // core severity mapping.
+  const severityRankCases = sql.raw(
+    ACTIONABLE_REASONS.map(
+      (reason) => `when '${reason}' then ${severityRank(assetExceptionSeverityForReason(reason))}`
+    ).join(" ")
+  )
+  const severityRankSql = sql<number>`case ${schema.assetResolutionDecisions.reason} ${severityRankCases} else 4 end`
 
+  // "Oldest case first" ranks by the age of the current actionable
+  // evaluation, not the provider observation: a later actionable evidence
+  // revision creates a new case with a fresh age.
   const oldestAtSql =
-    sql`date_trunc('milliseconds', ${schema.providerAssets.discoveredAt})`.mapWith(
-      schema.providerAssets.discoveredAt
+    sql`date_trunc('milliseconds', ${schema.assetResolutionDecisions.createdAt})`.mapWith(
+      schema.assetResolutionDecisions.createdAt
     )
   const oldestAtRankSql = sql<number>`floor(
-    extract(epoch from ${schema.providerAssets.discoveredAt}) * 1000
+    extract(epoch from ${schema.assetResolutionDecisions.createdAt}) * 1000
   )::bigint`
 
   const rankAfterCursor = (cursor: AssetExceptionRankCursor) => sql`row(
@@ -1033,25 +1013,36 @@ const make = Effect.gen(function* () {
         return { _tag: "ambiguous_identity" as const }
       }
 
-      // Same canonical form as the automatic resolver's duplicate brake, so
-      // NFKC lookalikes collide here too instead of creating a second asset.
-      const displayMatches = yield* client
-        .select({ id: schema.assets.id })
-        .from(schema.assets)
-        .where(
-          and(
-            eq(
-              sql`btrim(lower(normalize(${schema.assets.name}, NFKC)))`,
-              canonicalizeDisplayText(newAsset.name)
-            ),
-            eq(
-              sql`btrim(lower(normalize(${schema.assets.symbol}, NFKC)))`,
-              canonicalizeDisplayText(newAsset.symbol)
-            ),
-            eq(schema.assets.type, newAsset.type)
+      // Same canonical form and cross-match rule as the automatic resolver's
+      // duplicate brake: either display value colliding with either stored
+      // display value blocks the new asset, so NFKC lookalikes and reused
+      // names or symbols collide here too instead of creating a duplicate.
+      const displayKeys = [
+        ...new Set(
+          [canonicalizeDisplayText(newAsset.name), canonicalizeDisplayText(newAsset.symbol)].filter(
+            (key) => key !== ""
           )
-        )
-        .limit(2)
+        ),
+      ]
+      const displayMatches =
+        displayKeys.length === 0
+          ? []
+          : yield* client
+              .select({ id: schema.assets.id })
+              .from(schema.assets)
+              .where(
+                or(
+                  inArray(
+                    sql<string>`btrim(lower(normalize(${schema.assets.name}, NFKC)))`,
+                    displayKeys
+                  ),
+                  inArray(
+                    sql<string>`btrim(lower(normalize(${schema.assets.symbol}, NFKC)))`,
+                    displayKeys
+                  )
+                )
+              )
+              .limit(1)
       if (displayMatches.length > 0) {
         return { _tag: "ambiguous_identity" as const }
       }
@@ -1095,17 +1086,25 @@ const make = Effect.gen(function* () {
     readonly tx: DbTransactionClient
   }): Effect.Effect<void, unknown> => {
     const representation = claim.representation
+    // The name and symbol keys are locked independently to mirror the
+    // cross-match duplicate brake: two claims sharing either display value
+    // must serialize, not just claims sharing the full pair.
     const keys = [
-      claim.assetId === null ? null : `asset:${claim.assetId}`,
-      claim.newAsset === null
-        ? null
-        : `display:${canonicalizeDisplayText(claim.newAsset.name)}:${canonicalizeDisplayText(claim.newAsset.symbol)}:${claim.newAsset.type}`,
-      representation === null
-        ? null
-        : `representation:${representation.blockchain.toLowerCase()}:${representation.contractAddress ?? ""}:${representation.mintAddress ?? ""}`,
-    ]
-      .filter((key): key is string => key !== null)
-      .sort((left, right) => left.localeCompare(right))
+      ...new Set(
+        [
+          claim.assetId === null ? null : `asset:${claim.assetId}`,
+          claim.newAsset === null
+            ? null
+            : `display:${canonicalizeDisplayText(claim.newAsset.name)}`,
+          claim.newAsset === null
+            ? null
+            : `display:${canonicalizeDisplayText(claim.newAsset.symbol)}`,
+          representation === null
+            ? null
+            : `representation:${representation.blockchain.toLowerCase()}:${representation.contractAddress ?? ""}:${representation.mintAddress ?? ""}`,
+        ].filter((key): key is string => key !== null)
+      ),
+    ].sort((left, right) => left.localeCompare(right))
 
     return Effect.forEach(
       keys,
@@ -1225,6 +1224,31 @@ const make = Effect.gen(function* () {
         Effect.gen(function* () {
           const requestReplay = (attemptsRemaining: number): Effect.Effect<string, unknown> =>
             Effect.gen(function* () {
+              // A pending replay has not started, so it already rebuilds
+              // everything this decision changed once it runs; reuse it
+              // directly. Marking it for a follow-up instead would skip
+              // settling its rebuild rows on completion and park them on a
+              // redundant second replay. The row update locks it against a
+              // concurrent worker claim inside this transaction.
+              const [pendingReplay] = yield* tx
+                .update(schema.processingJobs)
+                .set({ updatedAt: now })
+                .where(
+                  and(
+                    eq(schema.processingJobs.sourceId, sourceId),
+                    eq(schema.processingJobs.principalId, principalId),
+                    eq(schema.processingJobs.mode, "replay"),
+                    eq(schema.processingJobs.status, "pending")
+                  )
+                )
+                .returning({ id: schema.processingJobs.id })
+              if (pendingReplay !== undefined) {
+                return pendingReplay.id
+              }
+
+              // Any other active job either already runs (its replay may have
+              // passed this decision's data) or is a pending sync, so a
+              // follow-up replay after it is required.
               const [activeJob] = yield* tx
                 .update(schema.processingJobs)
                 .set({ followUpMode: "replay", updatedAt: now })
@@ -1444,6 +1468,21 @@ const make = Effect.gen(function* () {
               }
             }
           }
+
+          // A human conclusion can stay active at an older evidence revision
+          // while a later policy evaluation is active at the current one. The
+          // new human decision replaces the global conclusion, so close every
+          // remaining active row before inserting into the partial unique
+          // active slot for this observation and revision.
+          yield* tx
+            .update(schema.assetResolutionDecisions)
+            .set({ status: "superseded" })
+            .where(
+              and(
+                eq(schema.assetResolutionDecisions.providerAssetRowId, detail.providerAssetRowId),
+                eq(schema.assetResolutionDecisions.status, "active")
+              )
+            )
 
           const [decision] = yield* tx
             .insert(schema.assetResolutionDecisions)

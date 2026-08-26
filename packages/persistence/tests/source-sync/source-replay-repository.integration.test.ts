@@ -134,6 +134,8 @@ describe("SourceReplayRepositoryLive", () => {
             providerCreatedAt: new Date("2025-01-01T10:00:00.000Z"),
             providerUpdatedAt: new Date("2025-01-01T10:00:00.000Z"),
             metadata: { provider: "coinbase" },
+            providerFiatAmount: null,
+            providerFiatCurrency: null,
             principalId: TEST_PRINCIPAL_ID,
           },
           venueContext: {

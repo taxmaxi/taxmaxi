@@ -95,6 +95,18 @@ const extractCoinbaseTransaction = (payload: CoinbasePayload): CoinbaseTransacti
 
 const toNullable = (value: string | undefined): string | null => value ?? null
 
+const PROVIDER_FIAT_AMOUNT_PATTERN = /^-?[0-9]+(\.[0-9]+)?$/
+
+/**
+ * Coinbase reports every transaction's value in the account's native fiat
+ * currency. Keep only well-formed decimal amounts so the typed columns never
+ * carry values the database cannot aggregate.
+ */
+const toProviderFiat = (money: CoinbaseMoney): { amount: string; currency: string } | null =>
+  PROVIDER_FIAT_AMOUNT_PATTERN.test(money.amount)
+    ? { amount: money.amount, currency: money.currency.toUpperCase() }
+    : null
+
 /**
  * Parse and validate required timestamp fields.
  */
@@ -470,6 +482,8 @@ const normalizeCoinbaseRecord = (params: NormalizeCoinbaseRecordParams) =>
       )
     )
 
+    const providerFiat = toProviderFiat(transactionPayload.native_amount)
+
     const result: CoinbaseRecordNormalizationResult = {
       transaction: {
         sourceId: params.source.id,
@@ -495,6 +509,8 @@ const normalizeCoinbaseRecord = (params: NormalizeCoinbaseRecordParams) =>
           from: transactionPayload.from ?? null,
           to: transactionPayload.to ?? null,
         },
+        providerFiatAmount: providerFiat?.amount ?? null,
+        providerFiatCurrency: providerFiat?.currency ?? null,
         principalId: params.source.principalId,
       },
       venueContext: {

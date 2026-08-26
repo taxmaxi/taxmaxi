@@ -140,6 +140,7 @@ export const providerTransfers = pgTable(
       .where(sql`${table.externalId} is not null`),
     index("idx_provider_transfers_source_timestamp").on(table.sourceId, table.timestamp),
     index("idx_provider_transfers_transaction").on(table.transactionId),
+    index("idx_provider_transfers_provider_asset").on(table.providerAssetId),
     index("idx_provider_transfers_external_group").on(table.sourceId, table.externalGroupId),
     index("idx_provider_transfers_network_hash").on(table.networkHash),
   ]

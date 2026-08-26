@@ -210,7 +210,9 @@ describe("AssetExceptionReview", () => {
     expect(within(unavailable).getByText("No compatible existing asset found")).toBeTruthy()
     expect(within(unavailable).getByText(OBSERVED_MINT)).toBeTruthy()
     expect(within(unavailable).getByText("ac2bb14wpyQ85JLoiLK1U2SE76CsAobPw1uGR4PkDi")).toBeTruthy()
-    expect(screen.queryByLabelText("Search catalog assets")).toBeNull()
+    // The search stays available so the reviewer can refine or retry even
+    // though every current candidate is ineligible.
+    expect(screen.getByLabelText("Search catalog assets")).toBeTruthy()
     await waitFor(() => {
       expect(screen.queryByText("Representation that will be recorded")).toBeNull()
       expect(screen.queryByRole("textbox", { name: "Rationale" })).toBeNull()

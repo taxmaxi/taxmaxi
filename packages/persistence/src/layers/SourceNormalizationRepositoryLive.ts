@@ -492,6 +492,8 @@ const make = Effect.gen(function* () {
         providerCreatedAt: sql.raw("excluded.provider_created_at"),
         providerUpdatedAt: sql.raw("excluded.provider_updated_at"),
         metadata: sql.raw("excluded.metadata"),
+        providerFiatAmount: sql.raw("excluded.provider_fiat_amount"),
+        providerFiatCurrency: sql.raw("excluded.provider_fiat_currency"),
         principalId: sql.raw("excluded.principal_id"),
         updatedAt: now,
       } as const

@@ -1337,12 +1337,12 @@ describe("AssetsApiLive", () => {
           },
         ])
         yield* db.execute(sql`
-          update ${schema.providerAssets}
-          set discovered_at = case
-            when id = ${firstId}::uuid then ${"2026-08-21T12:00:00.000900Z"}::timestamptz
+          update ${schema.assetResolutionDecisions}
+          set created_at = case
+            when provider_asset_row_id = ${firstId}::uuid then ${"2026-08-21T12:00:00.000900Z"}::timestamptz
             else ${"2026-08-21T12:00:00.000100Z"}::timestamptz
           end
-          where id in (${firstId}::uuid, ${secondId}::uuid)
+          where provider_asset_row_id in (${firstId}::uuid, ${secondId}::uuid)
         `)
       }).pipe(Effect.provide(TestPgClientLive))
     )

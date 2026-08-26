@@ -330,6 +330,8 @@ describe("SourceNormalizationRepositoryLive", () => {
         providerCreatedAt: occurredAt,
         providerUpdatedAt: occurredAt,
         metadata: null,
+        providerFiatAmount: null,
+        providerFiatCurrency: null,
         principalId: TEST_PRINCIPAL_ID,
       },
       venueContext: {
@@ -401,6 +403,8 @@ describe("SourceNormalizationRepositoryLive", () => {
       providerCreatedAt: new Date("2025-01-01T10:00:00.000Z"),
       providerUpdatedAt: new Date("2025-01-01T10:00:00.000Z"),
       metadata: { provider: "coinbase" },
+      providerFiatAmount: null,
+      providerFiatCurrency: null,
       principalId: TEST_PRINCIPAL_ID,
     } as const
     const venueContext = {
@@ -500,6 +504,8 @@ describe("SourceNormalizationRepositoryLive", () => {
               providerCreatedAt: timestamp,
               providerUpdatedAt: timestamp,
               metadata: { provider: "test" },
+              providerFiatAmount: null,
+              providerFiatCurrency: null,
               principalId: TEST_PRINCIPAL_ID,
             },
             venueContext: {
@@ -577,6 +583,8 @@ describe("SourceNormalizationRepositoryLive", () => {
               providerCreatedAt: timestamp,
               providerUpdatedAt: timestamp,
               metadata: { provider: "test" },
+              providerFiatAmount: null,
+              providerFiatCurrency: null,
               principalId: TEST_PRINCIPAL_ID,
             },
             venueContext: {
@@ -756,6 +764,8 @@ describe("SourceNormalizationRepositoryLive", () => {
       providerCreatedAt: occurredAt,
       providerUpdatedAt: occurredAt,
       metadata: null,
+      providerFiatAmount: null,
+      providerFiatCurrency: null,
       principalId: TEST_PRINCIPAL_ID,
     } as const
     await runPg(
@@ -962,6 +972,8 @@ describe("SourceNormalizationRepositoryLive", () => {
         providerCreatedAt: occurredAt,
         providerUpdatedAt: occurredAt,
         metadata: null,
+        providerFiatAmount: null,
+        providerFiatCurrency: null,
         principalId: TEST_PRINCIPAL_ID,
       },
       venueContext: {
@@ -1294,6 +1306,8 @@ describe("SourceNormalizationRepositoryLive", () => {
             providerCreatedAt: occurredAt,
             providerUpdatedAt: occurredAt,
             metadata: null,
+            providerFiatAmount: null,
+            providerFiatCurrency: null,
             principalId: TEST_PRINCIPAL_ID,
           },
           venueContext: {
@@ -1355,6 +1369,8 @@ describe("SourceNormalizationRepositoryLive", () => {
           providerCreatedAt: occurredAt,
           providerUpdatedAt: occurredAt,
           metadata: null,
+          providerFiatAmount: null,
+          providerFiatCurrency: null,
           principalId: TEST_PRINCIPAL_ID,
         },
         venueContext: {
@@ -1455,6 +1471,8 @@ describe("SourceNormalizationRepositoryLive", () => {
           providerCreatedAt: occurredAt,
           providerUpdatedAt: occurredAt,
           metadata: null,
+          providerFiatAmount: null,
+          providerFiatCurrency: null,
           principalId: TEST_PRINCIPAL_ID,
         },
         venueContext: {
@@ -1635,6 +1653,8 @@ describe("SourceNormalizationRepositoryLive", () => {
         providerCreatedAt: occurredAt,
         providerUpdatedAt: occurredAt,
         metadata: null,
+        providerFiatAmount: null,
+        providerFiatCurrency: null,
         principalId: TEST_PRINCIPAL_ID,
       },
       venueContext: {
@@ -1732,6 +1752,8 @@ describe("SourceNormalizationRepositoryLive", () => {
         providerCreatedAt: occurredAt,
         providerUpdatedAt: occurredAt,
         metadata: null,
+        providerFiatAmount: null,
+        providerFiatCurrency: null,
         principalId: TEST_PRINCIPAL_ID,
       },
       venueContext: {
@@ -1874,6 +1896,8 @@ describe("SourceNormalizationRepositoryLive", () => {
               providerCreatedAt: occurredAt,
               providerUpdatedAt: occurredAt,
               metadata: null,
+              providerFiatAmount: null,
+              providerFiatCurrency: null,
               principalId: TEST_PRINCIPAL_ID,
             },
             venueContext: {
@@ -1992,6 +2016,8 @@ describe("SourceNormalizationRepositoryLive", () => {
         providerCreatedAt: occurredAt,
         providerUpdatedAt: occurredAt,
         metadata: { provider: "test-onchain-adapter" },
+        providerFiatAmount: null,
+        providerFiatCurrency: null,
         principalId: TEST_PRINCIPAL_ID,
       },
       venueContext: {
@@ -2495,6 +2521,8 @@ describe("SourceNormalizationRepositoryLive", () => {
             providerCreatedAt: new Date("2025-01-01T10:00:00.000Z"),
             providerUpdatedAt: new Date("2025-01-01T10:00:00.000Z"),
             metadata: { provider: "coinbase" },
+            providerFiatAmount: null,
+            providerFiatCurrency: null,
             principalId: TEST_PRINCIPAL_ID,
           },
           venueContext: {
@@ -2600,6 +2628,8 @@ describe("SourceNormalizationRepositoryLive", () => {
             providerCreatedAt: new Date("2025-01-01T10:00:00.000Z"),
             providerUpdatedAt: new Date("2025-01-01T10:00:00.000Z"),
             metadata: { provider: "coinbase" },
+            providerFiatAmount: null,
+            providerFiatCurrency: null,
             principalId: TEST_PRINCIPAL_ID,
           },
           venueContext: {
@@ -2710,6 +2740,8 @@ describe("SourceNormalizationRepositoryLive", () => {
             providerCreatedAt: new Date("2025-02-01T10:00:00.000Z"),
             providerUpdatedAt: new Date("2025-02-01T10:00:00.000Z"),
             metadata: { provider: "coinbase" },
+            providerFiatAmount: null,
+            providerFiatCurrency: null,
             principalId: TEST_PRINCIPAL_ID,
           },
           venueContext: {
@@ -2815,6 +2847,8 @@ describe("SourceNormalizationRepositoryLive", () => {
             providerCreatedAt: timestamp,
             providerUpdatedAt: timestamp,
             metadata: { provider: "test" },
+            providerFiatAmount: null,
+            providerFiatCurrency: null,
             principalId: TEST_PRINCIPAL_ID,
           },
           venueContext: {
@@ -2905,6 +2939,8 @@ describe("SourceNormalizationRepositoryLive", () => {
             providerCreatedAt: timestamp,
             providerUpdatedAt: timestamp,
             metadata: { provider: "test" },
+            providerFiatAmount: null,
+            providerFiatCurrency: null,
             principalId: TEST_PRINCIPAL_ID,
           },
           venueContext: {
@@ -2993,6 +3029,8 @@ describe("SourceNormalizationRepositoryLive", () => {
             providerCreatedAt: new Date("2025-01-01T10:00:00.000Z"),
             providerUpdatedAt: new Date("2025-01-01T10:00:00.000Z"),
             metadata: { provider: "coinbase" },
+            providerFiatAmount: null,
+            providerFiatCurrency: null,
             principalId: TEST_PRINCIPAL_ID,
           },
           venueContext: {
@@ -3067,6 +3105,8 @@ describe("SourceNormalizationRepositoryLive", () => {
             providerCreatedAt: new Date("2025-02-01T10:00:00.000Z"),
             providerUpdatedAt: new Date("2025-02-01T10:00:00.000Z"),
             metadata: { provider: "coinbase" },
+            providerFiatAmount: null,
+            providerFiatCurrency: null,
             principalId: TEST_PRINCIPAL_ID,
           },
           venueContext: {
@@ -3257,6 +3297,8 @@ describe("SourceNormalizationRepositoryLive", () => {
             providerCreatedAt: null,
             providerUpdatedAt: null,
             metadata: null,
+            providerFiatAmount: null,
+            providerFiatCurrency: null,
             principalId: TEST_PRINCIPAL_ID,
           },
           venueContext: {
@@ -3411,6 +3453,8 @@ describe("SourceNormalizationRepositoryLive", () => {
               providerCreatedAt: occurredAt,
               providerUpdatedAt: occurredAt,
               metadata: { provider: "fixture" },
+              providerFiatAmount: null,
+              providerFiatCurrency: null,
               principalId: TEST_PRINCIPAL_ID,
             },
             venueContext: {
@@ -3511,6 +3555,8 @@ describe("SourceNormalizationRepositoryLive", () => {
             providerCreatedAt: new Date("2025-01-15T10:00:00.000Z"),
             providerUpdatedAt: new Date("2025-01-15T10:00:00.000Z"),
             metadata: { provider: "coinbase", partial: true },
+            providerFiatAmount: null,
+            providerFiatCurrency: null,
             principalId: TEST_PRINCIPAL_ID,
           },
           venueContext: {
@@ -4928,6 +4974,8 @@ describe("SourceNormalizationRepositoryLive", () => {
             providerCreatedAt: occurredAt,
             providerUpdatedAt: occurredAt,
             metadata: { provider: "coinbase" },
+            providerFiatAmount: null,
+            providerFiatCurrency: null,
             principalId: TEST_PRINCIPAL_ID,
           },
           venueContext: {

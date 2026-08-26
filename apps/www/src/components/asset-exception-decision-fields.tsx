@@ -1,6 +1,6 @@
 /** Form controls for reviewing and confirming an asset exception decision. */
 import { AlertTriangle, BadgeCheck, Check, Database, Search } from "lucide-react"
-import { useEffect, useState } from "react"
+import { useEffect, useRef, useState } from "react"
 import type { AssetCatalogAsset } from "taxmaxi"
 
 import { Button } from "#/components/ui/button"
@@ -155,17 +155,33 @@ function CandidatePicker({ draft }: { readonly draft: DecisionDraft }) {
   const [candidates, setCandidates] = useState<ReadonlyArray<AssetCatalogAsset> | null>(null)
   const [busy, setBusy] = useState(false)
   const search = draft.searchAssets
+  // Searches can overlap when the reviewer refines the query before the
+  // previous request settles; only the latest request may update the list.
+  const latestSearchId = useRef(0)
 
   const runSearch = (value: string) => {
     if (value.trim().length === 0) {
       return
     }
     draft.setAssetId("")
+    const searchId = ++latestSearchId.current
     setBusy(true)
     search(value.trim())
-      .then((result) => setCandidates(result.assets))
-      .catch(() => setCandidates([]))
-      .finally(() => setBusy(false))
+      .then((result) => {
+        if (latestSearchId.current === searchId) {
+          setCandidates(result.assets)
+        }
+      })
+      .catch(() => {
+        if (latestSearchId.current === searchId) {
+          setCandidates([])
+        }
+      })
+      .finally(() => {
+        if (latestSearchId.current === searchId) {
+          setBusy(false)
+        }
+      })
   }
 
   useEffect(() => {
@@ -208,7 +224,14 @@ function CandidatePicker({ draft }: { readonly draft: DecisionDraft }) {
     draft.setAttachmentUnavailable(attachmentUnavailable)
   }, [attachmentUnavailable, draft.setAttachmentUnavailable])
 
-  if (attachmentUnavailable && candidates !== null) {
+  // The notice offers the safe alternatives but never replaces the search
+  // controls: the right asset may match by address or a different name, or
+  // the empty result may come from a transient search failure, so the
+  // reviewer must always be able to refine or retry.
+  const attachmentUnavailableNotice = (() => {
+    if (!attachmentUnavailable || candidates === null) {
+      return null
+    }
     const conflictingAsset =
       candidates.find((asset) => candidateState(asset).conflictingNetworkIdentity) ?? candidates[0]
     const catalogRepresentation = conflictingAsset?.representations.find(
@@ -289,10 +312,11 @@ function CandidatePicker({ draft }: { readonly draft: DecisionDraft }) {
         </div>
       </section>
     )
-  }
+  })()
 
   return (
     <div className="grid gap-2">
+      {attachmentUnavailableNotice}
       <FieldLabel error={claimError}>
         {m["assetCatalog.exceptions.reviewUi.form.whichAsset"]()} *
       </FieldLabel>

@@ -1746,6 +1746,8 @@ describe("ProviderAssetRepositoryLive", () => {
                   providerCreatedAt: null,
                   providerUpdatedAt: null,
                   metadata: null,
+                  providerFiatAmount: null,
+                  providerFiatCurrency: null,
                   principalId: TEST_PRINCIPAL_ID,
                 },
                 venueContext: {
@@ -1882,6 +1884,8 @@ describe("ProviderAssetRepositoryLive", () => {
                 providerCreatedAt: null,
                 providerUpdatedAt: null,
                 metadata: null,
+                providerFiatAmount: null,
+                providerFiatCurrency: null,
                 principalId: TEST_PRINCIPAL_ID,
               },
               venueContext: {

@@ -194,6 +194,8 @@ const seedProviderTransfer = ({
         providerCreatedAt: timestamp,
         providerUpdatedAt: timestamp,
         metadata: { provider: "coinbase" },
+        providerFiatAmount: null,
+        providerFiatCurrency: null,
         principalId: TEST_PRINCIPAL_ID,
       })
       .returning({ id: schema.transactions.id })
@@ -350,6 +352,8 @@ const seedOnchainReceipt = ({
         providerCreatedAt: timestamp,
         providerUpdatedAt: timestamp,
         metadata: { provider: "bitcoin" },
+        providerFiatAmount: null,
+        providerFiatCurrency: null,
         principalId: TEST_PRINCIPAL_ID,
       })
       .returning({ id: schema.transactions.id })
@@ -509,6 +513,8 @@ const seedObservedOnchainReceipt = ({
         providerCreatedAt: timestamp,
         providerUpdatedAt: timestamp,
         metadata: { provider: observedAsset.provider },
+        providerFiatAmount: null,
+        providerFiatCurrency: null,
         principalId: TEST_PRINCIPAL_ID,
       })
       .returning({ id: schema.transactions.id })
@@ -591,6 +597,8 @@ describe("TransferReconciliationServiceLive", () => {
             providerCreatedAt: timestamp,
             providerUpdatedAt: timestamp,
             metadata: { provider: "helius-solana" },
+            providerFiatAmount: null,
+            providerFiatCurrency: null,
             principalId: TEST_PRINCIPAL_ID,
           },
           venueContext: {
@@ -4669,6 +4677,8 @@ describe("TransferReconciliationServiceLive", () => {
             providerCreatedAt: null,
             providerUpdatedAt: null,
             metadata: null,
+            providerFiatAmount: null,
+            providerFiatCurrency: null,
             principalId: TEST_PRINCIPAL_ID,
           },
           venueContext: {
@@ -6226,6 +6236,8 @@ describe("TransferReconciliationServiceLive", () => {
             providerCreatedAt: null,
             providerUpdatedAt: null,
             metadata: null,
+            providerFiatAmount: null,
+            providerFiatCurrency: null,
             principalId: TEST_PRINCIPAL_ID,
           },
           venueContext: {
@@ -7997,6 +8009,8 @@ describe("TransferReconciliationServiceLive", () => {
             providerCreatedAt: timestamp,
             providerUpdatedAt: timestamp,
             metadata: { provider: "coinbase" },
+            providerFiatAmount: null,
+            providerFiatCurrency: null,
             principalId: TEST_PRINCIPAL_ID,
           })
           .returning({ id: schema.transactions.id })
@@ -8016,6 +8030,8 @@ describe("TransferReconciliationServiceLive", () => {
             providerCreatedAt: timestamp,
             providerUpdatedAt: timestamp,
             metadata: { provider: "helius-solana" },
+            providerFiatAmount: null,
+            providerFiatCurrency: null,
             principalId: TEST_PRINCIPAL_ID,
           })
           .returning({ id: schema.transactions.id })

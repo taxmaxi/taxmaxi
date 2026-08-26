@@ -90,6 +90,10 @@ export interface SourceTransactionDraft {
   readonly providerCreatedAt: Date | null
   readonly providerUpdatedAt: Date | null
   readonly metadata: unknown
+  /** Provider-reported fiat value of the whole transaction, as a decimal string, or null. */
+  readonly providerFiatAmount: string | null
+  /** Uppercase currency code of the provider-reported fiat value, or null. */
+  readonly providerFiatCurrency: string | null
   readonly principalId: string
 }
 

@@ -25,6 +25,10 @@ export interface AssetExceptionImpact {
 
 export interface AssetExceptionRankCursor extends AssetExceptionImpact {
   readonly severity: AssetExceptionSeverity
+  /**
+   * Creation time of the current actionable evaluation. A later actionable
+   * evidence revision creates a new case, so its age starts over.
+   */
   readonly oldestAt: Date
   readonly providerAssetRowId: string
 }

@@ -536,21 +536,20 @@ export function useDecisionDraft({
 
 /* ── Formatting ── */
 
+const TimestampSchema = z.union([z.date(), z.string(), z.object({ epochMilliseconds: z.number() })])
+
 function toDate(value: unknown): Date | null {
-  if (value instanceof Date) {
-    return value
+  const parsed = TimestampSchema.safeParse(value)
+  if (!parsed.success) {
+    return null
   }
-  if (typeof value === "string") {
-    const parsed = new Date(value)
-    return Number.isNaN(parsed.getTime()) ? null : parsed
-  }
-  if (typeof value === "object" && value !== null && "epochMilliseconds" in value) {
-    const millis = (value as { readonly epochMilliseconds: unknown }).epochMilliseconds
-    if (typeof millis === "number") {
-      return new Date(millis)
-    }
-  }
-  return null
+  const date =
+    parsed.data instanceof Date
+      ? parsed.data
+      : typeof parsed.data === "string"
+        ? new Date(parsed.data)
+        : new Date(parsed.data.epochMilliseconds)
+  return Number.isNaN(date.getTime()) ? null : date
 }
 
 export function formatWhen(value: unknown): string | null {

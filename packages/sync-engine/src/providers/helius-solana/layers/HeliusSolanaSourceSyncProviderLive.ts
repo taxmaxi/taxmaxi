@@ -2642,6 +2642,8 @@ const make = ({
         activityFacts,
         transferEvidenceContradictions: contradictions,
       },
+      providerFiatAmount: null,
+      providerFiatCurrency: null,
       principalId,
     })
 
