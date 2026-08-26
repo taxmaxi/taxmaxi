@@ -292,15 +292,6 @@ const buildPrincipalProviderTransfers = ({
   readonly timestamp: Date
 }): ReadonlyArray<CoinbaseRecordNormalizationResult["providerTransfers"][number]> => {
   switch (transaction.type) {
-    case "send":
-      return [
-        buildPrincipalProviderTransfer({
-          normalizeParams,
-          transaction,
-          timestamp,
-          direction: "outbound",
-        }),
-      ]
     case "receive":
       return [
         buildPrincipalProviderTransfer({
@@ -310,6 +301,9 @@ const buildPrincipalProviderTransfers = ({
           direction: "inbound",
         }),
       ]
+    // Coinbase reports send deposits with a positive amount and send
+    // withdrawals with a negative amount, so the sign decides the direction.
+    case "send":
     case "intx_deposit":
     case "intx_withdrawal":
     case "transfer": {
