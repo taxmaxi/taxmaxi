@@ -369,7 +369,7 @@ describe("AssetExceptionReview", () => {
       ...detail,
       currentConclusionRevision: conclusionId,
       currentPolicyEvaluationRevision: conclusionId,
-      reviewStatus: "resolved" as const,
+      reviewStatus: "excluded" as const,
       currentConclusion,
       currentPolicyEvaluation: currentConclusion,
       decisionHistory: [currentConclusion],
