@@ -629,7 +629,6 @@ const fetchAttachState = () =>
       .select({
         assetRepresentationId: schema.assetRepresentationOwnershipDecisions.assetRepresentationId,
         assetId: schema.assetRepresentationOwnershipDecisions.assetId,
-        status: schema.assetRepresentationOwnershipDecisions.status,
         actor: schema.assetRepresentationOwnershipDecisions.actor,
       })
       .from(schema.assetRepresentationOwnershipDecisions)
@@ -793,7 +792,6 @@ describe("asset resolution attach and rebuild", () => {
         expect(attachState.ownershipDecisions).toEqual([
           expect.objectContaining({
             assetId: ORB_ASSET_ID,
-            status: "active",
             actor: "system:asset-resolution-policy",
           }),
         ])
@@ -896,7 +894,6 @@ describe("asset resolution attach and rebuild", () => {
         expect(state.ownershipDecisions).toEqual([
           expect.objectContaining({
             assetId: createdAssetId,
-            status: "active",
             actor: "system:asset-resolution-policy",
           }),
         ])

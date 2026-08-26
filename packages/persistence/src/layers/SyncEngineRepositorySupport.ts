@@ -13,7 +13,7 @@ import {
   SourceSyncJobModeSchema,
   SourceSyncPhaseSchema,
   SyncEngineStorageError,
-  type AssetResolutionDecisionRecord,
+  type AssetResolutionPolicyEvaluationRecord,
   type SourceSyncJobProgressSnapshot,
 } from "@my/sync-engine/services"
 import { drizzle } from "./PgClientLive.ts"
@@ -188,28 +188,27 @@ export const insertUnresolvedResolutionJobs = ({
   })
 
 /**
- * Insert one automatic resolution decision and its evidence snapshots as the
- * active decision for its provider asset and evidence revision, inside the
- * caller's transaction. Shared by ProviderAssetRepositoryLive (decision
- * recording and supersession) and AssetRepositoryLive (standalone asset
- * creation, which records its decision in the same transaction) so every
- * writer follows the same row shape and active-decision rules.
+ * Insert one immutable automatic policy evaluation and its evidence snapshots
+ * inside the caller's transaction. Shared by ProviderAssetRepositoryLive and
+ * AssetRepositoryLive so every automatic writer follows the same history and
+ * current-role rules.
  *
- * With skipOnActiveConflict, an existing active decision for the pair leaves
- * history untouched and returns null, so replays never rewrite it. Without
- * it, a conflicting active decision fails the caller's transaction.
+ * The idempotency key is provider asset, evidence revision, and policy
+ * revision. With skipOnEvaluationConflict, an existing evaluation for that key
+ * leaves history untouched and returns null. A late evaluation is retained in
+ * history but cannot move either current pointer backward.
  */
 export const insertAssetResolutionDecision = ({
   tx,
   decision,
   supersedesDecisionId = null,
-  skipOnActiveConflict = false,
+  skipOnEvaluationConflict = false,
   operation,
 }: {
   readonly tx: SyncEngineDbTransaction
-  readonly decision: AssetResolutionDecisionRecord
+  readonly decision: AssetResolutionPolicyEvaluationRecord
   readonly supersedesDecisionId?: string | null
-  readonly skipOnActiveConflict?: boolean
+  readonly skipOnEvaluationConflict?: boolean
   readonly operation: string
 }): Effect.Effect<{ readonly id: string } | null, SyncEngineStorageError> =>
   Effect.gen(function* () {
@@ -230,13 +229,14 @@ export const insertAssetResolutionDecision = ({
       reason: decision.reason,
       actor: decision.actor,
     })
-    const conflictAwareInsert = skipOnActiveConflict
+    const conflictAwareInsert = skipOnEvaluationConflict
       ? insert.onConflictDoNothing({
           target: [
             schema.assetResolutionDecisions.providerAssetRowId,
             schema.assetResolutionDecisions.evidenceRevision,
+            schema.assetResolutionDecisions.policyRevision,
           ],
-          where: sql`${schema.assetResolutionDecisions.status} = 'active'`,
+          where: sql`${schema.assetResolutionDecisions.humanClaim} is null`,
         })
       : insert
 
@@ -245,7 +245,7 @@ export const insertAssetResolutionDecision = ({
       .pipe(wrapSyncEngineSqlError(operation))
 
     if (inserted === undefined) {
-      if (skipOnActiveConflict) {
+      if (skipOnEvaluationConflict) {
         return null
       }
 
@@ -276,6 +276,42 @@ export const insertAssetResolutionDecision = ({
         )
         .pipe(wrapSyncEngineSqlError(operation))
     }
+
+    const [providerAsset] = yield* tx
+      .select({ evidenceRevision: schema.providerAssets.evidenceRevision })
+      .from(schema.providerAssets)
+      .where(eq(schema.providerAssets.id, decision.providerAssetRowId))
+      .for("update")
+      .limit(1)
+      .pipe(wrapSyncEngineSqlError(operation))
+    if (providerAsset?.evidenceRevision !== decision.evidenceRevision) {
+      return inserted
+    }
+
+    const establishesConclusion = !["pending", "fail_closed"].includes(decision.outcome)
+    yield* tx
+      .insert(schema.assetResolutionCurrentState)
+      .values({
+        providerAssetRowId: decision.providerAssetRowId,
+        currentConclusionId: establishesConclusion ? inserted.id : null,
+        currentPolicyEvaluationId: inserted.id,
+      })
+      .onConflictDoUpdate({
+        target: schema.assetResolutionCurrentState.providerAssetRowId,
+        set: {
+          ...(establishesConclusion
+            ? {
+                currentConclusionId: sql`coalesce(
+                  ${schema.assetResolutionCurrentState.currentConclusionId},
+                  ${inserted.id}::uuid
+                )`,
+              }
+            : {}),
+          currentPolicyEvaluationId: inserted.id,
+          updatedAt: nowDate(),
+        },
+      })
+      .pipe(wrapSyncEngineSqlError(operation))
 
     return inserted
   })

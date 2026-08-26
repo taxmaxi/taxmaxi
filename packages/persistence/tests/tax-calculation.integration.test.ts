@@ -380,6 +380,12 @@ const insertExcludedProviderAssetSourceUseWithRematerialization = () =>
       return yield* Effect.die("Failed to create exclusion replay fixture")
     }
 
+    yield* db.insert(schema.assetResolutionCurrentState).values({
+      providerAssetRowId: providerAsset.id,
+      currentConclusionId: decision.id,
+      currentPolicyEvaluationId: decision.id,
+    })
+
     yield* db.insert(schema.assetDecisionRematerializations).values({
       decisionId: decision.id,
       sourceId,
@@ -559,11 +565,7 @@ describe("TaxCalculationServiceLive", () => {
           .update(schema.assetDecisionRematerializations)
           .set({ status: "operator_attention" })
           .where(eq(schema.assetDecisionRematerializations.decisionId, fixture.decisionId))
-        yield* db
-          .update(schema.assetResolutionDecisions)
-          .set({ status: "superseded" })
-          .where(eq(schema.assetResolutionDecisions.id, fixture.decisionId))
-        const [activeDecision] = yield* db
+        const [replacementConclusion] = yield* db
           .insert(schema.assetResolutionDecisions)
           .values({
             providerAssetRowId: fixture.providerAssetRowId,
@@ -573,6 +575,8 @@ describe("TaxCalculationServiceLive", () => {
             status: "active",
             supersedesDecisionId: fixture.decisionId,
             reason: "not_economic_activity",
+            humanClaim: { _tag: "exclusion", reason: "provider_artifact" },
+            rationale: "The latest human conclusion keeps this observation excluded.",
             actor: userId,
           })
           .returning({ id: schema.assetResolutionDecisions.id })
@@ -585,11 +589,17 @@ describe("TaxCalculationServiceLive", () => {
             status: "completed",
           })
           .returning({ id: schema.processingJobs.id })
-        if (activeDecision === undefined || completedJob === undefined) {
-          return yield* Effect.die("Failed to create active exclusion replay fixture")
+        if (replacementConclusion === undefined || completedJob === undefined) {
+          return yield* Effect.die("Failed to create replacement exclusion replay fixture")
         }
+        yield* db
+          .update(schema.assetResolutionCurrentState)
+          .set({ currentConclusionId: replacementConclusion.id })
+          .where(
+            eq(schema.assetResolutionCurrentState.providerAssetRowId, fixture.providerAssetRowId)
+          )
         yield* db.insert(schema.assetDecisionRematerializations).values({
-          decisionId: activeDecision.id,
+          decisionId: replacementConclusion.id,
           sourceId,
           processingJobId: completedJob.id,
           status: "complete",
@@ -612,14 +622,41 @@ describe("TaxCalculationServiceLive", () => {
             canonicalAssetId: approvedAsset.id,
           })
           .where(eq(schema.providerAssetMappings.providerAssetRowId, fixture.providerAssetRowId))
+        const [approvedConclusion] = yield* db
+          .insert(schema.assetResolutionDecisions)
+          .values({
+            providerAssetRowId: fixture.providerAssetRowId,
+            evidenceRevision: 1,
+            policyRevision: "human:test:approved",
+            outcome: "identity",
+            status: "active",
+            supersedesDecisionId: replacementConclusion.id,
+            assetId: approvedAsset.id,
+            humanClaim: {
+              _tag: "identity",
+              assetId: approvedAsset.id,
+              newAsset: null,
+              representation: null,
+            },
+            rationale: "The replacement conclusion maps the observation to the approved asset.",
+            actor: userId,
+          })
+          .returning({ id: schema.assetResolutionDecisions.id })
+        if (approvedConclusion === undefined) {
+          return yield* Effect.die("Failed to create approved conclusion")
+        }
         yield* db
-          .update(schema.assetResolutionDecisions)
-          .set({ outcome: "identity", assetId: approvedAsset.id })
-          .where(eq(schema.assetResolutionDecisions.id, activeDecision.id))
-        yield* db
-          .update(schema.assetDecisionRematerializations)
-          .set({ status: "pending" })
-          .where(eq(schema.assetDecisionRematerializations.decisionId, activeDecision.id))
+          .update(schema.assetResolutionCurrentState)
+          .set({ currentConclusionId: approvedConclusion.id })
+          .where(
+            eq(schema.assetResolutionCurrentState.providerAssetRowId, fixture.providerAssetRowId)
+          )
+        yield* db.insert(schema.assetDecisionRematerializations).values({
+          decisionId: approvedConclusion.id,
+          sourceId,
+          processingJobId: completedJob.id,
+          status: "pending",
+        })
 
         const approvedReplayError = yield* calculateTax().pipe(Effect.flip)
         expect(approvedReplayError._tag).toBe("TaxCalculationPendingObservationsError")

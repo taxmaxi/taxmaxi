@@ -1061,7 +1061,7 @@ describe("ProviderAssetRepositoryLive", () => {
       expect(state.decisions).toEqual([])
     })
 
-    it("atomically reverses a chainless exclusion after the provider evidence revision advances", async () => {
+    it("rejects a chainless exclusion reversal outside the revision-bound review flow", async () => {
       const providerAssetId = "btc-approval-manual-exclusion-reversal"
       const providerAsset = await seedPendingApprovalAsset("manual-exclusion-reversal")
       await runRepository(
@@ -1177,7 +1177,7 @@ describe("ProviderAssetRepositoryLive", () => {
         })
       )
 
-      const result = await runRepository(
+      const approval = runRepository(
         Effect.flatMap(ProviderAssetRepository, (repository) =>
           repository.approveProviderAssetMappingAndRequestReplay({
             mapping: {
@@ -1192,12 +1192,11 @@ describe("ProviderAssetRepositoryLive", () => {
             },
             expectedObservedRepresentations: [],
             expectedProviderAssetRetrievedAt: revisedProviderAsset.retrievedAt,
-            exclusionReversal: {
-              actor: "human:admin",
-              policyRevision: "manual-approval.1",
-            },
           })
         )
+      )
+      await expect(approval).rejects.toThrow(
+        "providerAssetRepository.approveProviderAssetMappingAndRequestReplay.mappingState"
       )
       const state = await runRepository(
         Effect.gen(function* () {
@@ -1212,28 +1211,12 @@ describe("ProviderAssetRepositoryLive", () => {
         })
       )
 
-      expect(result).toEqual({ mappingChanged: true })
-      expect(Option.getOrNull(state.mapping)).toMatchObject({
-        mappingStatus: "approved",
-        canonicalAssetId: TEST_BTC_ASSET_ID,
-        assetRepresentationId: null,
-      })
-      expect(state.history).toHaveLength(2)
+      expect(Option.getOrNull(state.mapping)).toMatchObject({ mappingStatus: "excluded" })
+      expect(state.history).toHaveLength(1)
       expect(state.history[0]).toMatchObject({
         evidenceRevision: 1,
         outcome: "excluded",
-        status: "superseded",
-      })
-      expect(state.history[1]).toMatchObject({
-        evidenceRevision: 2,
-        policyRevision: "manual-approval.1",
-        outcome: "attach",
-        status: "active",
-        supersedesDecisionId: state.history[0]?.id,
-        assetId: TEST_BTC_ASSET_ID,
-        assetRepresentationId: null,
-        reason: "manual_exclusion_reversal",
-        actor: "human:admin",
+        isCurrentConclusion: true,
       })
       const reversalEvidenceIds = await runPg(
         Effect.gen(function* () {
@@ -1244,7 +1227,7 @@ describe("ProviderAssetRepositoryLive", () => {
             .where(
               eq(
                 schema.assetResolutionDecisionEvidenceLinks.decisionId,
-                state.history[1]?.id ?? "00000000-0000-0000-0000-000000000000"
+                state.history[0]?.id ?? "00000000-0000-0000-0000-000000000000"
               )
             ))
             .map(({ evidenceId }) => evidenceId)
@@ -1375,7 +1358,7 @@ describe("ProviderAssetRepositoryLive", () => {
       expect(state.decisions).toEqual([])
     })
 
-    it("atomically reverses an exclusion after the provider evidence revision advances", async () => {
+    it("rejects an on-chain exclusion reversal outside the revision-bound review flow", async () => {
       const providerAssetId = "btc-approval-manual-exclusion-reversal"
       const providerAsset = await seedPendingApprovalAsset("manual-exclusion-reversal")
       await runRepository(
@@ -1417,7 +1400,7 @@ describe("ProviderAssetRepositoryLive", () => {
         })
       )
 
-      const result = await runRepository(
+      const approval = runRepository(
         Effect.flatMap(ProviderAssetRepository, (repository) =>
           repository.approveProviderAssetMappingAndRequestReplay({
             mapping: {
@@ -1432,12 +1415,11 @@ describe("ProviderAssetRepositoryLive", () => {
             },
             expectedObservedRepresentations: [],
             expectedProviderAssetRetrievedAt: revisedProviderAsset.retrievedAt,
-            exclusionReversal: {
-              actor: "human:admin",
-              policyRevision: "manual-approval.1",
-            },
           })
         )
+      )
+      await expect(approval).rejects.toThrow(
+        "providerAssetRepository.approveProviderAssetMappingAndRequestReplay.mappingState"
       )
       const state = await runRepository(
         Effect.gen(function* () {
@@ -1452,28 +1434,12 @@ describe("ProviderAssetRepositoryLive", () => {
         })
       )
 
-      expect(result).toEqual({ mappingChanged: true })
-      expect(Option.getOrNull(state.mapping)).toMatchObject({
-        mappingStatus: "approved",
-        canonicalAssetId: TEST_BTC_ASSET_ID,
-        assetRepresentationId: TEST_BTC_REPRESENTATION_ID,
-      })
-      expect(state.history).toHaveLength(2)
+      expect(Option.getOrNull(state.mapping)).toMatchObject({ mappingStatus: "excluded" })
+      expect(state.history).toHaveLength(1)
       expect(state.history[0]).toMatchObject({
         evidenceRevision: 1,
         outcome: "excluded",
-        status: "superseded",
-      })
-      expect(state.history[1]).toMatchObject({
-        evidenceRevision: 2,
-        policyRevision: "manual-approval.1",
-        outcome: "attach",
-        status: "active",
-        supersedesDecisionId: state.history[0]?.id,
-        assetId: TEST_BTC_ASSET_ID,
-        assetRepresentationId: TEST_BTC_REPRESENTATION_ID,
-        reason: "manual_exclusion_reversal",
-        actor: "human:admin",
+        isCurrentConclusion: true,
       })
     })
 
@@ -2813,15 +2779,17 @@ describe("ProviderAssetRepositoryLive", () => {
     const makePendingDecision = ({
       providerAssetRowId,
       evidenceRevision = 1,
+      policyRevision = "2026-08-19.attach-only.1",
       reason = "missing_existing_economic_asset",
     }: {
       readonly providerAssetRowId: string
       readonly evidenceRevision?: number
+      readonly policyRevision?: string
       readonly reason?: string
     }) => ({
       providerAssetRowId,
       evidenceRevision,
-      policyRevision: "2026-08-19.attach-only.1",
+      policyRevision,
       outcome: "pending" as const,
       assetId: null,
       assetRepresentationId: null,
@@ -2840,7 +2808,7 @@ describe("ProviderAssetRepositoryLive", () => {
 
       const first = await runRepository(
         Effect.flatMap(ProviderAssetRepository, (repository) =>
-          repository.recordAssetResolutionDecision({
+          repository.recordAssetResolutionPolicyEvaluation({
             decision: makePendingDecision({ providerAssetRowId }),
           })
         )
@@ -2849,7 +2817,7 @@ describe("ProviderAssetRepositoryLive", () => {
 
       const second = await runRepository(
         Effect.flatMap(ProviderAssetRepository, (repository) =>
-          repository.recordAssetResolutionDecision({
+          repository.recordAssetResolutionPolicyEvaluation({
             decision: makePendingDecision({
               providerAssetRowId,
               reason: "non_exact_platform_match",
@@ -2866,17 +2834,178 @@ describe("ProviderAssetRepositoryLive", () => {
       )
       expect(history).toHaveLength(1)
       expect(history[0]).toMatchObject({
-        status: "active",
+        isCurrentPolicyEvaluation: true,
         reason: "missing_existing_economic_asset",
       })
     })
 
-    it("appends a superseding decision and preserves the replaced one", async () => {
+    it("establishes the first settled policy result as the conclusion without replacing one later", async () => {
+      const { providerAssetRowId } = await scheduleResolutionJob("history-first-conclusion")
+
+      await runRepository(
+        Effect.flatMap(ProviderAssetRepository, (repository) =>
+          repository.recordAssetResolutionPolicyEvaluation({
+            decision: makePendingDecision({ providerAssetRowId }),
+          })
+        )
+      )
+      await runPg(
+        Effect.gen(function* () {
+          const db = yield* drizzle
+          yield* db
+            .update(schema.providerAssets)
+            .set({ evidenceRevision: 2 })
+            .where(eq(schema.providerAssets.id, providerAssetRowId))
+        })
+      )
+      await runRepository(
+        Effect.flatMap(ProviderAssetRepository, (repository) =>
+          repository.recordAssetResolutionPolicyEvaluation({
+            decision: {
+              ...makePendingDecision({
+                providerAssetRowId,
+                evidenceRevision: 2,
+                policyRevision: "2026-08-26.attach-only.2",
+              }),
+              outcome: "attach" as const,
+              assetId: TEST_BTC_ASSET_ID,
+            },
+          })
+        )
+      )
+      const [state] = await runPg(
+        Effect.gen(function* () {
+          const db = yield* drizzle
+          return yield* db
+            .select({
+              currentConclusionId: schema.assetResolutionCurrentState.currentConclusionId,
+              currentPolicyEvaluationId:
+                schema.assetResolutionCurrentState.currentPolicyEvaluationId,
+            })
+            .from(schema.assetResolutionCurrentState)
+            .where(eq(schema.assetResolutionCurrentState.providerAssetRowId, providerAssetRowId))
+        })
+      )
+
+      expect(state?.currentConclusionId).not.toBeNull()
+      expect(state?.currentConclusionId).toBe(state?.currentPolicyEvaluationId)
+
+      await runPg(
+        Effect.gen(function* () {
+          const db = yield* drizzle
+          yield* db
+            .update(schema.providerAssets)
+            .set({ evidenceRevision: 3 })
+            .where(eq(schema.providerAssets.id, providerAssetRowId))
+        })
+      )
+      await runRepository(
+        Effect.flatMap(ProviderAssetRepository, (repository) =>
+          repository.recordAssetResolutionPolicyEvaluation({
+            decision: makePendingDecision({
+              providerAssetRowId,
+              evidenceRevision: 3,
+              policyRevision: "2026-08-26.attach-only.3",
+            }),
+          })
+        )
+      )
+      const [advancedState] = await runPg(
+        Effect.gen(function* () {
+          const db = yield* drizzle
+          return yield* db
+            .select({
+              currentConclusionId: schema.assetResolutionCurrentState.currentConclusionId,
+              currentPolicyEvaluationId:
+                schema.assetResolutionCurrentState.currentPolicyEvaluationId,
+            })
+            .from(schema.assetResolutionCurrentState)
+            .where(eq(schema.assetResolutionCurrentState.providerAssetRowId, providerAssetRowId))
+        })
+      )
+
+      expect(advancedState?.currentConclusionId).toBe(state?.currentConclusionId)
+      expect(advancedState?.currentPolicyEvaluationId).not.toBe(state?.currentPolicyEvaluationId)
+    })
+
+    it("keeps a late older evaluation from regressing either current pointer", async () => {
+      const { providerAssetRowId } = await scheduleResolutionJob("history-late-evaluation")
+      await runPg(
+        Effect.gen(function* () {
+          const db = yield* drizzle
+          yield* db
+            .update(schema.providerAssets)
+            .set({ evidenceRevision: 2 })
+            .where(eq(schema.providerAssets.id, providerAssetRowId))
+        })
+      )
+
+      await runRepository(
+        Effect.flatMap(ProviderAssetRepository, (repository) =>
+          repository.recordAssetResolutionPolicyEvaluation({
+            decision: makePendingDecision({
+              providerAssetRowId,
+              evidenceRevision: 2,
+              policyRevision: "2026-08-26.attach-only.2",
+            }),
+          })
+        )
+      )
+      const before = await runPg(
+        Effect.gen(function* () {
+          const db = yield* drizzle
+          const [state] = yield* db
+            .select({
+              currentConclusionId: schema.assetResolutionCurrentState.currentConclusionId,
+              currentPolicyEvaluationId:
+                schema.assetResolutionCurrentState.currentPolicyEvaluationId,
+            })
+            .from(schema.assetResolutionCurrentState)
+            .where(eq(schema.assetResolutionCurrentState.providerAssetRowId, providerAssetRowId))
+          return state
+        })
+      )
+
+      await runRepository(
+        Effect.flatMap(ProviderAssetRepository, (repository) =>
+          repository.recordAssetResolutionPolicyEvaluation({
+            decision: {
+              ...makePendingDecision({
+                providerAssetRowId,
+                evidenceRevision: 1,
+                policyRevision: "2026-08-26.attach-only.1",
+              }),
+              outcome: "attach" as const,
+              assetId: TEST_BTC_ASSET_ID,
+            },
+          })
+        )
+      )
+      const after = await runPg(
+        Effect.gen(function* () {
+          const db = yield* drizzle
+          const [state] = yield* db
+            .select({
+              currentConclusionId: schema.assetResolutionCurrentState.currentConclusionId,
+              currentPolicyEvaluationId:
+                schema.assetResolutionCurrentState.currentPolicyEvaluationId,
+            })
+            .from(schema.assetResolutionCurrentState)
+            .where(eq(schema.assetResolutionCurrentState.providerAssetRowId, providerAssetRowId))
+          return state
+        })
+      )
+
+      expect(after).toEqual(before)
+      expect(after?.currentConclusionId).toBeNull()
+    })
+
+    it("appends a new policy revision without changing the prior evaluation", async () => {
       const { providerAssetRowId } = await scheduleResolutionJob("history-supersede")
 
       await runRepository(
         Effect.flatMap(ProviderAssetRepository, (repository) =>
-          repository.recordAssetResolutionDecision({
+          repository.recordAssetResolutionPolicyEvaluation({
             decision: makePendingDecision({ providerAssetRowId }),
           })
         )
@@ -2884,25 +3013,28 @@ describe("ProviderAssetRepositoryLive", () => {
 
       const original = await runRepository(
         Effect.flatMap(ProviderAssetRepository, (repository) =>
-          repository.findActiveAssetResolutionDecision({ providerAssetRowId, evidenceRevision: 1 })
+          repository.findCurrentAssetResolutionPolicyEvaluation({
+            providerAssetRowId,
+            evidenceRevision: 1,
+          })
         )
       )
       if (Option.isNone(original)) {
-        throw new Error("Expected an active decision to supersede")
+        throw new Error("Expected a current policy evaluation")
       }
 
-      const superseded = await runRepository(
+      const recorded = await runRepository(
         Effect.flatMap(ProviderAssetRepository, (repository) =>
-          repository.appendSupersedingAssetResolutionDecision({
-            supersedesDecisionId: original.value.id,
+          repository.recordAssetResolutionPolicyEvaluation({
             decision: makePendingDecision({
               providerAssetRowId,
+              policyRevision: "2026-08-19.attach-only.2",
               reason: "non_exact_platform_match",
             }),
           })
         )
       )
-      expect(superseded._tag).toBe("superseded")
+      expect(recorded).toEqual({ recorded: true })
 
       const history = await runRepository(
         Effect.flatMap(ProviderAssetRepository, (repository) =>
@@ -2912,68 +3044,28 @@ describe("ProviderAssetRepositoryLive", () => {
       expect(history).toHaveLength(2)
       expect(history[0]).toMatchObject({
         id: original.value.id,
-        status: "superseded",
         reason: "missing_existing_economic_asset",
-        supersedesDecisionId: null,
+        supersedesConclusionId: null,
+        isCurrentPolicyEvaluation: false,
       })
       expect(history[1]).toMatchObject({
-        status: "active",
         reason: "non_exact_platform_match",
-        supersedesDecisionId: original.value.id,
+        supersedesConclusionId: null,
+        isCurrentPolicyEvaluation: true,
       })
 
-      const active = await runRepository(
+      const current = await runRepository(
         Effect.flatMap(ProviderAssetRepository, (repository) =>
-          repository.findActiveAssetResolutionDecision({ providerAssetRowId, evidenceRevision: 1 })
+          repository.findCurrentAssetResolutionPolicyEvaluation({
+            providerAssetRowId,
+            evidenceRevision: 1,
+          })
         )
       )
-      if (Option.isNone(active)) {
-        throw new Error("Expected an active decision after supersession")
+      if (Option.isNone(current)) {
+        throw new Error("Expected the newer policy evaluation")
       }
-      expect(active.value.reason).toBe("non_exact_platform_match")
-    })
-
-    it("rejects superseding a decision that is no longer active", async () => {
-      const { providerAssetRowId } = await scheduleResolutionJob("history-conflict")
-
-      await runRepository(
-        Effect.flatMap(ProviderAssetRepository, (repository) =>
-          repository.recordAssetResolutionDecision({
-            decision: makePendingDecision({ providerAssetRowId }),
-          })
-        )
-      )
-      const original = await runRepository(
-        Effect.flatMap(ProviderAssetRepository, (repository) =>
-          repository.findActiveAssetResolutionDecision({ providerAssetRowId, evidenceRevision: 1 })
-        )
-      )
-      if (Option.isNone(original)) {
-        throw new Error("Expected an active decision")
-      }
-
-      const first = await runRepository(
-        Effect.flatMap(ProviderAssetRepository, (repository) =>
-          repository.appendSupersedingAssetResolutionDecision({
-            supersedesDecisionId: original.value.id,
-            decision: makePendingDecision({
-              providerAssetRowId,
-              reason: "non_exact_platform_match",
-            }),
-          })
-        )
-      )
-      expect(first._tag).toBe("superseded")
-
-      const second = await runRepository(
-        Effect.flatMap(ProviderAssetRepository, (repository) =>
-          repository.appendSupersedingAssetResolutionDecision({
-            supersedesDecisionId: original.value.id,
-            decision: makePendingDecision({ providerAssetRowId }),
-          })
-        )
-      )
-      expect(second).toEqual({ _tag: "conflict" })
+      expect(current.value.reason).toBe("non_exact_platform_match")
     })
 
     it("stores authority-scoped evidence records behind a decision and reads them back", async () => {
@@ -2982,7 +3074,7 @@ describe("ProviderAssetRepositoryLive", () => {
 
       const recorded = await runRepository(
         Effect.flatMap(ProviderAssetRepository, (repository) =>
-          repository.recordAssetResolutionDecision({
+          repository.recordAssetResolutionPolicyEvaluation({
             decision: {
               ...makePendingDecision({ providerAssetRowId }),
               evidence: [
@@ -3013,7 +3105,10 @@ describe("ProviderAssetRepositoryLive", () => {
 
       const decision = await runRepository(
         Effect.flatMap(ProviderAssetRepository, (repository) =>
-          repository.findActiveAssetResolutionDecision({ providerAssetRowId, evidenceRevision: 1 })
+          repository.findCurrentAssetResolutionPolicyEvaluation({
+            providerAssetRowId,
+            evidenceRevision: 1,
+          })
         )
       )
       if (Option.isNone(decision)) {
@@ -3048,7 +3143,7 @@ describe("ProviderAssetRepositoryLive", () => {
 
       await runRepository(
         Effect.flatMap(ProviderAssetRepository, (repository) =>
-          repository.recordAssetResolutionDecision({
+          repository.recordAssetResolutionPolicyEvaluation({
             decision: {
               ...makePendingDecision({ providerAssetRowId }),
               evidence: [
@@ -3069,7 +3164,10 @@ describe("ProviderAssetRepositoryLive", () => {
 
       const decision = await runRepository(
         Effect.flatMap(ProviderAssetRepository, (repository) =>
-          repository.findActiveAssetResolutionDecision({ providerAssetRowId, evidenceRevision: 1 })
+          repository.findCurrentAssetResolutionPolicyEvaluation({
+            providerAssetRowId,
+            evidenceRevision: 1,
+          })
         )
       )
       if (Option.isNone(decision)) {
@@ -3100,7 +3198,7 @@ describe("ProviderAssetRepositoryLive", () => {
 
       await runRepository(
         Effect.flatMap(ProviderAssetRepository, (repository) =>
-          repository.recordAssetResolutionDecision({
+          repository.recordAssetResolutionPolicyEvaluation({
             decision: makePendingDecision({ providerAssetRowId }),
           })
         )

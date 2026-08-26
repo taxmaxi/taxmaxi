@@ -332,7 +332,7 @@ describe("AssetCanonicalizationServiceLive", () => {
     expect(state.jobs).toEqual([{ mode: "replay", sourceId: TEST_SOURCE_ID }])
   })
 
-  it("lets a human approval supersede an excluded mapping", async () => {
+  it("routes excluded mappings through the revision-bound review flow", async () => {
     const providerAssetRowId = await seedObservedPendingProviderAsset({
       providerAssetId: "manual-exclusion-reversal",
     })
@@ -364,7 +364,7 @@ describe("AssetCanonicalizationServiceLive", () => {
     )
     await markProviderAssetExcluded({ providerAssetRowId })
 
-    const result = await runService(
+    const approval = runService(
       Effect.flatMap(AssetCanonicalizationService, (service) =>
         service.approveProviderAssetMapping({
           providerAssetRowId,
@@ -374,6 +374,7 @@ describe("AssetCanonicalizationServiceLive", () => {
         })
       )
     )
+    await expect(approval).rejects.toThrow("Failed to approve provider asset mapping.")
     const history = await context.runPg(
       Effect.gen(function* () {
         const db = yield* drizzle
@@ -390,14 +391,12 @@ describe("AssetCanonicalizationServiceLive", () => {
       })
     )
 
-    expect(result.mapping).toMatchObject({
-      mappingStatus: "approved",
-      canonicalAssetId: TEST_BTC_ASSET_ID,
-      assetRepresentationId: TEST_BTC_REPRESENTATION_ID,
-    })
-    expect(history).toMatchObject([
-      { outcome: "excluded", status: "superseded", supersedesDecisionId: null },
-      { outcome: "attach", status: "active", actor: "human:admin" },
+    expect(history).toEqual([
+      expect.objectContaining({
+        outcome: "excluded",
+        status: "active",
+        supersedesDecisionId: null,
+      }),
     ])
   })
 
@@ -524,13 +523,13 @@ describe("AssetCanonicalizationServiceLive", () => {
     expect(Option.isSome(await Effect.runPromise(Deferred.poll(transactionEntered)))).toBe(true)
   })
 
-  it("lets CoinGecko canonicalization supersede an excluded mapping", async () => {
+  it("routes CoinGecko exclusion reversals through the revision-bound review flow", async () => {
     const providerAssetRowId = await seedObservedPendingProviderAsset({
       providerAssetId: "coingecko-exclusion-reversal",
     })
     await markProviderAssetExcluded({ providerAssetRowId })
 
-    const result = await runService(
+    const canonicalization = runService(
       Effect.flatMap(AssetCanonicalizationService, (service) =>
         service.canonicalizeProviderAssetFromCoinGecko({
           providerAssetRowId,
@@ -538,8 +537,7 @@ describe("AssetCanonicalizationServiceLive", () => {
         })
       )
     )
-
-    expect(result.providerAsset.mapping).toMatchObject({ mappingStatus: "approved" })
+    await expect(canonicalization).rejects.toThrow("Failed to approve provider asset mapping.")
     const history = await context.runPg(
       Effect.gen(function* () {
         const db = yield* drizzle
@@ -554,10 +552,7 @@ describe("AssetCanonicalizationServiceLive", () => {
           .orderBy(schema.assetResolutionDecisions.createdAt)
       })
     )
-    expect(history).toMatchObject([
-      { outcome: "excluded", status: "superseded" },
-      { outcome: "attach", status: "active", actor: "human:admin" },
-    ])
+    expect(history).toEqual([expect.objectContaining({ outcome: "excluded", status: "active" })])
   })
 
   it("does not enter the database transaction when CoinGecko resolution fails", async () => {

@@ -6,6 +6,7 @@ import {
   PasswordHasher,
   type AuthServiceShape,
 } from "@my/core/authentication"
+import { NO_CURRENT_ASSET_CONCLUSION } from "@my/core/assets"
 import {
   SourceSyncRunService,
   SourceSyncService,
@@ -1472,7 +1473,8 @@ describe("AssetsApiLive", () => {
     const payload = {
       claim: { _tag: "exclusion", reason: "provider_artifact" },
       evidenceRevision: 3,
-      activeDecisionRevision: seeded.decisionId,
+      currentConclusionRevision: NO_CURRENT_ASSET_CONCLUSION,
+      currentPolicyEvaluationRevision: seeded.decisionId,
       evidenceSnapshotIds: [seeded.evidenceId],
       rationale: "The immutable provider evidence shows an internal provider artifact.",
     }
@@ -1516,7 +1518,7 @@ describe("AssetsApiLive", () => {
     )
     expect(lookup.body).toMatchObject({
       providerAssetRowId: seeded.rowId,
-      policyOutput: { outcome: "fail_closed", reason: "ownership_conflict" },
+      currentPolicyEvaluation: { outcome: "fail_closed", reason: "ownership_conflict" },
     })
     expect(preview.body).toMatchObject({
       assetOutcome: "none",

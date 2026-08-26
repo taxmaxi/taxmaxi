@@ -20,6 +20,8 @@ export interface AssetExceptionImpact {
   readonly affectedPrincipals: number
   readonly affectedTransactions: number
   readonly affectedSources: number
+  readonly affectedCalculations: number
+  readonly existingGeneratedReportSnapshots: number
   readonly affectedTransactionValueEur: string | null
 }
 
@@ -43,7 +45,8 @@ export interface AssetExceptionListRow extends AssetExceptionRankCursor {
   readonly reason: AssetExceptionReason
   readonly evidenceRevision: number
   readonly policyRevision: string
-  readonly activeDecisionRevision: string
+  readonly currentConclusionRevision: string
+  readonly currentPolicyEvaluationRevision: string
 }
 
 export interface AssetExceptionEvidenceSnapshot {
@@ -59,8 +62,9 @@ export interface AssetExceptionEvidenceSnapshot {
 
 export interface AssetExceptionDecisionHistory {
   readonly id: string
-  readonly status: "active" | "superseded"
-  readonly supersedesDecisionId: string | null
+  readonly supersedesConclusionId: string | null
+  readonly isCurrentConclusion: boolean
+  readonly isCurrentPolicyEvaluation: boolean
   readonly outcome:
     | "attach"
     | "create_standalone"
@@ -99,14 +103,11 @@ export interface AssetExceptionDetail {
   readonly providerType: string | null
   readonly rawProviderPayload: unknown
   readonly evidenceRevision: number
-  readonly policyRevision: string
-  readonly activeDecisionRevision: string
+  readonly currentConclusionRevision: string
+  readonly currentPolicyEvaluationRevision: string
   readonly reviewStatus: "unresolved" | "approved" | "excluded"
-  readonly policyOutput: {
-    readonly outcome: "attach" | "create_standalone" | "excluded" | "pending" | "fail_closed"
-    readonly reason: string | null
-  } | null
-  readonly activeDecision: AssetExceptionDecisionHistory | null
+  readonly currentConclusion: AssetExceptionDecisionHistory | null
+  readonly currentPolicyEvaluation: AssetExceptionDecisionHistory | null
   readonly decisionHistory: ReadonlyArray<AssetExceptionDecisionHistory>
   readonly evidence: ReadonlyArray<AssetExceptionEvidenceSnapshot>
   readonly impact: AssetExceptionImpact
@@ -126,7 +127,8 @@ export interface AssetExceptionDecisionInput {
   readonly providerAssetRowId: string
   readonly claim: AssetExceptionClaim
   readonly evidenceRevision: number
-  readonly activeDecisionRevision: string
+  readonly currentConclusionRevision: string
+  readonly currentPolicyEvaluationRevision: string
   readonly evidenceSnapshotIds: ReadonlyArray<string>
   /** Optional for exclusions whose structured reason already explains the decision. */
   readonly rationale: string | null
@@ -137,18 +139,19 @@ export interface AssetExceptionDecisionPreview {
   readonly decisionAction: "initial" | "supersession" | "reversal"
   readonly resultingAssetId: string | null
   readonly assetOutcome: "none" | "reuse" | "create"
-  readonly representationOutcome: "none" | "reuse" | "create"
-  readonly supersededDecision: AssetExceptionDecisionHistory | null
+  readonly representationOutcome: "none" | "reuse" | "create" | "reassign"
+  readonly supersededConclusion: AssetExceptionDecisionHistory | null
   readonly impact: AssetExceptionImpact
   readonly rematerializationSourceCount: number
   readonly evidenceRevision: number
-  readonly activeDecisionRevision: string
+  readonly currentConclusionRevision: string
+  readonly currentPolicyEvaluationRevision: string
 }
 
 export interface AssetExceptionDecisionConfirmationInput extends AssetExceptionDecisionInput {
   readonly expectedResultingAssetId: string | null
   readonly expectedAssetOutcome: "none" | "reuse" | "create"
-  readonly expectedRepresentationOutcome: "none" | "reuse" | "create"
+  readonly expectedRepresentationOutcome: "none" | "reuse" | "create" | "reassign"
 }
 
 export type AssetExceptionPreviewResult =
@@ -157,7 +160,8 @@ export type AssetExceptionPreviewResult =
   | {
       readonly _tag: "stale_revision"
       readonly evidenceRevision: number
-      readonly activeDecisionRevision: string
+      readonly currentConclusionRevision: string
+      readonly currentPolicyEvaluationRevision: string
     }
   | { readonly _tag: "ambiguous_identity" }
   | { readonly _tag: "invalid_evidence" }
@@ -169,7 +173,8 @@ export type AssetExceptionDecisionResult =
   | {
       readonly _tag: "stale_revision"
       readonly evidenceRevision: number
-      readonly activeDecisionRevision: string
+      readonly currentConclusionRevision: string
+      readonly currentPolicyEvaluationRevision: string
     }
   | { readonly _tag: "ambiguous_identity" }
   | { readonly _tag: "identity_changed" }

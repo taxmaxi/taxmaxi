@@ -30,14 +30,15 @@ const detail = {
   providerType: "spl-token",
   rawProviderPayload: { id: OBSERVED_MINT, symbol: "MLDAO" },
   evidenceRevision: 1,
-  policyRevision: "2026-08-21.jupiter-banned-exclusion.1",
-  activeDecisionRevision: POLICY_DECISION_ID,
+  currentConclusionRevision: "no_current_conclusion",
+  currentPolicyEvaluationRevision: POLICY_DECISION_ID,
   reviewStatus: "unresolved",
-  policyOutput: { outcome: "pending", reason: "display_collision" },
-  activeDecision: {
+  currentConclusion: null,
+  currentPolicyEvaluation: {
     id: POLICY_DECISION_ID,
-    status: "active",
-    supersedesDecisionId: null,
+    supersedesConclusionId: null,
+    isCurrentConclusion: false,
+    isCurrentPolicyEvaluation: true,
     outcome: "pending",
     claim: null,
     rationale: null,
@@ -53,8 +54,9 @@ const detail = {
   decisionHistory: [
     {
       id: POLICY_DECISION_ID,
-      status: "active",
-      supersedesDecisionId: null,
+      supersedesConclusionId: null,
+      isCurrentConclusion: false,
+      isCurrentPolicyEvaluation: true,
       outcome: "pending",
       claim: null,
       rationale: null,
@@ -99,6 +101,8 @@ const detail = {
     affectedPrincipals: 1,
     affectedTransactions: 4,
     affectedSources: 1,
+    affectedCalculations: 0,
+    existingGeneratedReportSnapshots: 0,
     affectedTransactionValueEur: null,
   },
   rematerialization: {
@@ -154,11 +158,12 @@ const makePreview = (input: AssetExceptionDecisionInput): AssetExceptionPreview 
   resultingAssetId: null,
   assetOutcome: input.claim._tag === "identity" ? "create" : "none",
   representationOutcome: input.claim._tag === "identity" ? "create" : "none",
-  supersededDecision: detail.activeDecision,
+  supersededConclusion: detail.currentConclusion,
   impact: detail.impact,
   rematerializationSourceCount: 1,
   evidenceRevision: detail.evidenceRevision,
-  activeDecisionRevision: detail.activeDecisionRevision,
+  currentConclusionRevision: detail.currentConclusionRevision,
+  currentPolicyEvaluationRevision: detail.currentPolicyEvaluationRevision,
 })
 
 const makeActions = (): AssetExceptionActions => ({
@@ -265,7 +270,8 @@ describe("AssetExceptionReview", () => {
       id: OBSERVATION_ID,
       claim: { _tag: "exclusion", reason: "confirmed_spam" },
       evidenceRevision: 1,
-      activeDecisionRevision: POLICY_DECISION_ID,
+      currentConclusionRevision: "no_current_conclusion",
+      currentPolicyEvaluationRevision: POLICY_DECISION_ID,
       evidenceSnapshotIds: [EVIDENCE_ID],
       rationale: null,
       expectedResultingAssetId: null,
@@ -286,7 +292,8 @@ describe("AssetExceptionReview", () => {
           _tag: "AssetStaleRevisionError",
           code: "stale_revision",
           evidenceRevision: 2,
-          activeDecisionRevision: POLICY_DECISION_ID,
+          currentConclusionRevision: "no_current_conclusion",
+          currentPolicyEvaluationRevision: POLICY_DECISION_ID,
         }
       }),
     }
@@ -302,7 +309,7 @@ describe("AssetExceptionReview", () => {
     await waitFor(() =>
       expect(
         screen.getByText(
-          "Evidence or the active decision changed. Detail was refreshed; preview again."
+          "Evidence, the current conclusion, or the policy evaluation changed. Detail was refreshed; preview again."
         )
       ).toBeTruthy()
     )

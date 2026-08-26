@@ -238,7 +238,7 @@ const make = Effect.gen(function* () {
    * outside derived accounting AND make the calculation incomplete: no
    * mapping row yet, or a mapping that is still an open question
    * (pending_review or rejected). A settled observation remains blocking
-   * while its active decision rebuild is incomplete because derived rows may
+   * while its current-conclusion rebuild is incomplete because derived rows may
    * still reflect its previous state. Rebuild status is written by the job
    * lifecycle in SourceSyncJobRepositoryLive when replays finish, so this
    * predicate only trusts the stored status. Shared by the count and the
@@ -260,9 +260,11 @@ const make = Effect.gen(function* () {
             from ${schema.assetDecisionRematerializations} rematerialization
             inner join ${schema.assetResolutionDecisions} decision
               on decision.id = rematerialization.decision_id
+            inner join ${schema.assetResolutionCurrentState} current_state
+              on current_state.provider_asset_row_id = decision.provider_asset_row_id
+             and current_state.current_conclusion_id = decision.id
             where rematerialization.source_id = ${schema.providerAssetSourceUses.sourceId}
               and decision.provider_asset_row_id = ${schema.providerAssetMappings.providerAssetRowId}
-              and decision.status = 'active'
               and rematerialization.status <> 'complete'
           )`
         )

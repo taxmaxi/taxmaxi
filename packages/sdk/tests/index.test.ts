@@ -265,11 +265,14 @@ const assetExceptionListResponseBody = JSON.stringify({
       severity: "critical",
       evidenceRevision: 2,
       policyRevision: "policy.1",
-      activeDecisionRevision: "00000000-0000-4000-8000-000000000021",
+      currentConclusionRevision: "no_current_conclusion",
+      currentPolicyEvaluationRevision: "00000000-0000-4000-8000-000000000021",
       blockedReports: 1,
       affectedPrincipals: 1,
       affectedTransactions: 2,
       affectedSources: 1,
+      affectedCalculations: 0,
+      existingGeneratedReportSnapshots: 0,
       affectedTransactionValueEur: "1250.50",
       oldestAt: "2026-08-21T12:00:00.000Z",
     },
@@ -1211,7 +1214,8 @@ describe("TaxMaxi Promise client", () => {
         ...(code === "stale_revision"
           ? {
               evidenceRevision: 3,
-              activeDecisionRevision: "00000000-0000-4000-8000-000000000704",
+              currentConclusionRevision: "no_current_conclusion",
+              currentPolicyEvaluationRevision: "00000000-0000-4000-8000-000000000704",
             }
           : {}),
       }

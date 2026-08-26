@@ -37,8 +37,6 @@ import { coinGeckoAssetPlatformSnapshot } from "../services/coingecko/CoinGeckoA
 
 const COINGECKO_SOURCE_NOTES = "Approved with CoinGecko asset/platform metadata."
 const MANUAL_SOURCE_NOTES = "Approved by an admin with an existing canonical asset."
-const MANUAL_APPROVAL_ACTOR = "human:admin"
-const MANUAL_APPROVAL_POLICY_REVISION = "manual-approval.1"
 
 const appendSourceNote = ({
   existing,
@@ -808,10 +806,6 @@ const make = Effect.gen(function* () {
                   },
                   expectedObservedRepresentations: observedRepresentations,
                   expectedProviderAssetRetrievedAt: providerAssetReview.providerAsset.retrievedAt,
-                  exclusionReversal: {
-                    actor: MANUAL_APPROVAL_ACTOR,
-                    policyRevision: MANUAL_APPROVAL_POLICY_REVISION,
-                  },
                 })
                 .pipe(
                   Effect.catch(() =>
@@ -1139,10 +1133,6 @@ const make = Effect.gen(function* () {
                   },
                   expectedObservedRepresentations: observedRepresentations,
                   expectedProviderAssetRetrievedAt: providerAssetReview.providerAsset.retrievedAt,
-                  exclusionReversal: {
-                    actor: MANUAL_APPROVAL_ACTOR,
-                    policyRevision: MANUAL_APPROVAL_POLICY_REVISION,
-                  },
                 })
                 .pipe(
                   Effect.catch(() =>

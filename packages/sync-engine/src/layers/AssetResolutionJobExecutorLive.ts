@@ -43,7 +43,7 @@ import {
   AssetResolutionJobRepository,
   ProviderAssetRepository,
   SyncEngineTransaction,
-  type AssetResolutionDecisionRecord,
+  type AssetResolutionPolicyEvaluationRecord,
   type AssetResolutionEvidenceRecord,
   type AssetResolutionJobExecutionResult,
   type AssetResolutionJobExecutorError,
@@ -124,7 +124,7 @@ const decisionToRecord = ({
   readonly evidenceRevision: number
   readonly decision: AssetResolutionDecision
   readonly evidence: ReadonlyArray<AssetResolutionEvidenceRecord>
-}): AssetResolutionDecisionRecord => {
+}): AssetResolutionPolicyEvaluationRecord => {
   switch (decision._tag) {
     case "attach":
       return {
@@ -493,10 +493,10 @@ const make = Effect.gen(function* () {
     record,
   }: {
     readonly jobId: string
-    readonly record: AssetResolutionDecisionRecord
+    readonly record: AssetResolutionPolicyEvaluationRecord
   }): Effect.Effect<void, SyncEngineStorageError> =>
     Effect.gen(function* () {
-      const { recorded } = yield* providerAssetRepository.recordAssetResolutionDecision({
+      const { recorded } = yield* providerAssetRepository.recordAssetResolutionPolicyEvaluation({
         decision: record,
       })
       if (!recorded) {

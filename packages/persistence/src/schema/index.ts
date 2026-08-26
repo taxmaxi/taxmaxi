@@ -3,6 +3,7 @@ import * as assetPrices from "./AssetPricesTable.ts"
 import * as assetDecisionRematerializations from "./AssetDecisionRematerializationsTable.ts"
 import * as assetRepresentations from "./AssetRepresentationsTable.ts"
 import * as assetResolutionDecisionEvidenceLinks from "./AssetResolutionDecisionEvidenceLinksTable.ts"
+import * as assetResolutionCurrentState from "./AssetResolutionCurrentStateTable.ts"
 import * as assetRepresentationOwnershipDecisions from "./AssetRepresentationOwnershipDecisionsTable.ts"
 import * as assetResolutionDecisions from "./AssetResolutionDecisionsTable.ts"
 import * as assetResolutionEvidence from "./AssetResolutionEvidenceTable.ts"
@@ -59,6 +60,7 @@ export const schema = {
   ...assetPrices,
   ...assetRepresentations,
   ...assetRepresentationOwnershipDecisions,
+  ...assetResolutionCurrentState,
   ...assetResolutionDecisions,
   ...assetResolutionDecisionEvidenceLinks,
   ...assetResolutionEvidence,

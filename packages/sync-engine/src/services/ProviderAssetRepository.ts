@@ -102,7 +102,7 @@ export interface AssetResolutionEvidenceEntry extends AssetResolutionEvidenceRec
 }
 
 /** One immutable automatic policy decision to append to resolution audit history. */
-export interface AssetResolutionDecisionRecord {
+export interface AssetResolutionPolicyEvaluationRecord {
   readonly providerAssetRowId: string
   readonly evidenceRevision: number
   readonly policyRevision: string
@@ -120,12 +120,9 @@ export interface AssetResolutionDecisionRecord {
 }
 
 /** Result of appending one decision to resolution audit history. */
-export interface AssetResolutionDecisionRecordResult {
+export interface AssetResolutionPolicyEvaluationRecordResult {
   readonly recorded: boolean
 }
-
-/** Lifecycle status of one recorded resolution decision. */
-export type AssetResolutionDecisionStatus = "active" | "superseded"
 
 /** One recorded resolution decision as read back from audit history. */
 export interface AssetResolutionDecisionHistoryEntry {
@@ -134,25 +131,15 @@ export interface AssetResolutionDecisionHistoryEntry {
   readonly evidenceRevision: number
   readonly policyRevision: string
   readonly outcome: AssetResolutionAuditOutcome
-  readonly status: AssetResolutionDecisionStatus
-  readonly supersedesDecisionId: string | null
+  readonly supersedesConclusionId: string | null
+  readonly isCurrentConclusion: boolean
+  readonly isCurrentPolicyEvaluation: boolean
   readonly assetId: string | null
   readonly assetRepresentationId: string | null
   readonly reason: string | null
   readonly actor: string
   readonly createdAt: Date
 }
-
-/**
- * Result of appending a superseding decision.
- *
- * - superseded: the new decision is active and the replaced one is marked superseded.
- * - conflict: the named decision does not exist or is no longer active, so
- *   nothing changed; the caller must re-read and decide again.
- */
-export type AssetResolutionSupersedeResult =
-  | { readonly _tag: "superseded"; readonly decisionId: string }
-  | { readonly _tag: "conflict" }
 
 /**
  * ProviderAssetMappingState - Provider-asset mapping target and review status.
@@ -235,11 +222,6 @@ export interface ProviderAssetRepositoryShape {
     readonly mapping: ProviderAssetMappingDraft
     readonly expectedObservedRepresentations: ReadonlyArray<ProviderAssetObservedRepresentationRecord>
     readonly expectedProviderAssetRetrievedAt: Date
-    /** Human authority used only when this approval supersedes an exclusion. */
-    readonly exclusionReversal?: {
-      readonly actor: string
-      readonly policyRevision: string
-    }
   }) => Effect.Effect<ProviderAssetApprovalResult, SyncEngineStorageError>
 
   /**
@@ -250,7 +232,7 @@ export interface ProviderAssetRepositoryShape {
    */
   readonly excludeProviderAssetMappingAndRequestReplay: (params: {
     readonly providerAssetRowId: string
-    readonly decision: AssetResolutionDecisionRecord
+    readonly decision: AssetResolutionPolicyEvaluationRecord
     readonly sourceNotes: string | null
     readonly expectedObservedRepresentations: ReadonlyArray<ProviderAssetObservedRepresentationRecord>
     readonly expectedProviderAssetRetrievedAt: Date
@@ -352,39 +334,27 @@ export interface ProviderAssetRepositoryShape {
   }) => Effect.Effect<Option.Option<ResolvedProviderAssetMapping>, SyncEngineStorageError>
 
   /**
-   * Append one automatic policy decision to resolution audit history as
-   * the active decision for its provider asset and evidence revision. When
-   * an active decision already exists for that pair, nothing is written and
-   * the result reports recorded: false, so replaying a resolution job never
-   * rewrites history.
+   * Append one immutable automatic policy evaluation to resolution history.
+   * Provider asset, evidence revision, and policy revision form its
+   * idempotency key, so replaying the same policy job never rewrites history.
+   * Only an evaluation for the observation's current evidence revision can
+   * advance the current policy-evaluation pointer.
    */
-  readonly recordAssetResolutionDecision: (params: {
-    readonly decision: AssetResolutionDecisionRecord
-  }) => Effect.Effect<AssetResolutionDecisionRecordResult, SyncEngineStorageError>
+  readonly recordAssetResolutionPolicyEvaluation: (params: {
+    readonly decision: AssetResolutionPolicyEvaluationRecord
+  }) => Effect.Effect<AssetResolutionPolicyEvaluationRecordResult, SyncEngineStorageError>
 
   /**
-   * Append a superseding decision that replaces the named active decision.
-   * The replaced decision keeps its content and flips to superseded; the new
-   * decision becomes active and records which decision it replaced. Fails
-   * with a conflict result when the named decision is missing or no longer
-   * active, so concurrent supersessions cannot overwrite each other.
+   * Read the current policy evaluation for one provider asset and evidence revision.
    */
-  readonly appendSupersedingAssetResolutionDecision: (params: {
-    readonly supersedesDecisionId: string
-    readonly decision: AssetResolutionDecisionRecord
-  }) => Effect.Effect<AssetResolutionSupersedeResult, SyncEngineStorageError>
-
-  /**
-   * Read the active decision for one provider asset and evidence revision.
-   */
-  readonly findActiveAssetResolutionDecision: (params: {
+  readonly findCurrentAssetResolutionPolicyEvaluation: (params: {
     readonly providerAssetRowId: string
     readonly evidenceRevision: number
   }) => Effect.Effect<Option.Option<AssetResolutionDecisionHistoryEntry>, SyncEngineStorageError>
 
   /**
-   * Read every recorded decision for one provider asset in the order they
-   * were appended, including superseded ones.
+   * Read every immutable conclusion and policy evaluation for one provider
+   * asset in append order, with their current roles marked explicitly.
    */
   readonly listAssetResolutionDecisions: (params: {
     readonly providerAssetRowId: string

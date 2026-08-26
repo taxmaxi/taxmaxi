@@ -173,16 +173,14 @@ const makeProviderLayer = ({
           findProviderAssetReviewById: () => Effect.succeed(Option.none()),
           listProviderAssetReviews: () => Effect.succeed([]),
           findProviderAssetMapping: () => Effect.succeed(Option.none()),
-          appendSupersedingAssetResolutionDecision: () =>
-            Effect.die("appendSupersedingAssetResolutionDecision should not be called"),
-          findActiveAssetResolutionDecision: () =>
-            Effect.die("findActiveAssetResolutionDecision should not be called"),
+          findCurrentAssetResolutionPolicyEvaluation: () =>
+            Effect.die("findCurrentAssetResolutionPolicyEvaluation should not be called"),
           listAssetResolutionDecisions: () =>
             Effect.die("listAssetResolutionDecisions should not be called"),
           listAssetResolutionEvidence: () =>
             Effect.die("listAssetResolutionEvidence should not be called"),
-          recordAssetResolutionDecision: () =>
-            Effect.die("recordAssetResolutionDecision should not be called"),
+          recordAssetResolutionPolicyEvaluation: () =>
+            Effect.die("recordAssetResolutionPolicyEvaluation should not be called"),
         })
       )
     ),
@@ -225,8 +223,8 @@ const makeProviderLayer = ({
             Effect.die("attachRepresentationToExistingAsset should not be called"),
           recordRepresentationOwnershipDecision: () =>
             Effect.die("recordRepresentationOwnershipDecision should not be called"),
-          findActiveRepresentationOwnership: () =>
-            Effect.die("findActiveRepresentationOwnership should not be called"),
+          findCurrentRepresentationOwnership: () =>
+            Effect.die("findCurrentRepresentationOwnership should not be called"),
         })
       )
     ),

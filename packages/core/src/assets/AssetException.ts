@@ -10,8 +10,11 @@ import { AssetDecimals, EconomicAssetType, RepresentationType } from "./AssetRes
 const NonEmptyString = Schema.String.check(Schema.isNonEmpty())
 const NonEmptyTrimmedString = Schema.Trimmed.check(Schema.isNonEmpty())
 
-/** Stable token used when an observation has no active decision. */
-export const NO_ACTIVE_ASSET_DECISION = "no_active_decision" as const
+/** Stable token used when an observation has no current global conclusion. */
+export const NO_CURRENT_ASSET_CONCLUSION = "no_current_conclusion" as const
+
+/** Stable token used when an observation has no current policy evaluation. */
+export const NO_CURRENT_ASSET_POLICY_EVALUATION = "no_current_policy_evaluation" as const
 
 /** Reasons that require a domain conclusion from an administrator. */
 export const AssetExceptionReason = Schema.Literals([

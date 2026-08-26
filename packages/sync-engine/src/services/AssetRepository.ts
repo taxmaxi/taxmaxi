@@ -7,7 +7,7 @@
 import * as Context from "effect/Context"
 import type * as Effect from "effect/Effect"
 import type * as Option from "effect/Option"
-import type { AssetResolutionDecisionRecord } from "./ProviderAssetRepository.ts"
+import type { AssetResolutionPolicyEvaluationRecord } from "./ProviderAssetRepository.ts"
 import { SyncEngineStorageError } from "./SyncEngineStorageError.ts"
 
 /**
@@ -89,8 +89,7 @@ export interface RepresentationOwnershipDecisionEntry {
   readonly id: string
   readonly assetRepresentationId: string
   readonly assetId: string
-  readonly status: "active" | "superseded"
-  readonly supersedesDecisionId: string | null
+  readonly supersedesOwnershipDecisionId: string | null
   readonly policyRevision: string
   readonly reason: string | null
   readonly actor: string
@@ -212,15 +211,14 @@ export interface AssetRepositoryShape {
     readonly blockchainName: string
     readonly asset: EconomicAssetDraft
     readonly representation: AssetRepresentationDraft
-    readonly decision: AssetResolutionDecisionRecord
+    readonly decision: AssetResolutionPolicyEvaluationRecord
   }) => Effect.Effect<EconomicAssetRepresentationRecord, SyncEngineStorageError>
 
   /**
    * Record the audited conclusion that an economic asset owns a network
    * representation, keyed on the representation so any provider can reuse it.
-   * A second record for an already-settled representation with the same owner
-   * reports recorded: false; a record naming a different owner than the
-   * representation's current asset is rejected by the database.
+   * Repeating the same policy result reports recorded: false. Changing the
+   * owner is reserved for the revision-bound human correction transaction.
    */
   readonly recordRepresentationOwnershipDecision: (params: {
     readonly assetRepresentationId: string
@@ -230,9 +228,9 @@ export interface AssetRepositoryShape {
   }) => Effect.Effect<RepresentationOwnershipRecordResult, SyncEngineStorageError>
 
   /**
-   * Read the active ownership decision for one network representation.
+   * Read the latest ownership decision for one network representation.
    */
-  readonly findActiveRepresentationOwnership: (params: {
+  readonly findCurrentRepresentationOwnership: (params: {
     readonly assetRepresentationId: string
   }) => Effect.Effect<Option.Option<RepresentationOwnershipDecisionEntry>, SyncEngineStorageError>
 }

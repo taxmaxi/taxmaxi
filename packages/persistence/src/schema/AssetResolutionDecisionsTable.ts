@@ -39,12 +39,10 @@ export type AssetResolutionDecisionStatus =
  * Append-only automatic policy decision history for one provider
  * observation and evidence revision.
  *
- * Decision content is never edited. A correction appends a new active row
- * that names the row it replaces through supersedes_decision_id, and the
- * replaced row's status flips to superseded. At most one decision is active
- * per (providerAssetRowId, evidenceRevision), enforced by a partial unique
- * index, so replaying a resolution job never rewrites history and concurrent
- * recorders cannot both win.
+ * Decision content is never edited. Automatic policy evaluations are unique
+ * per evidence revision. A human correction appends a conclusion that names
+ * the conclusion it replaces; current conclusion and policy-evaluation roles
+ * are stored separately in asset_resolution_current_state.
  */
 export const assetResolutionDecisions = pgTable(
   "asset_resolution_decisions",
@@ -74,12 +72,16 @@ export const assetResolutionDecisions = pgTable(
     createdAt: timestamp("created_at").notNull().defaultNow(),
   },
   (table) => [
-    uniqueIndex("asset_resolution_decisions_active_observation_revision_unique")
-      .on(table.providerAssetRowId, table.evidenceRevision)
-      .where(sql`${table.status} = 'active'`),
+    uniqueIndex("asset_resolution_decisions_policy_evaluation_unique")
+      .on(table.providerAssetRowId, table.evidenceRevision, table.policyRevision)
+      .where(sql`${table.humanClaim} is null`),
     uniqueIndex("asset_resolution_decisions_supersedes_unique")
       .on(table.supersedesDecisionId)
       .where(sql`${table.supersedesDecisionId} is not null`),
+    uniqueIndex("asset_resolution_decisions_provider_id_unique").on(
+      table.providerAssetRowId,
+      table.id
+    ),
     index("idx_asset_resolution_decisions_asset_id").on(table.assetId),
     foreignKey({
       columns: [table.supersedesDecisionId],
