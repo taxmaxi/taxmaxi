@@ -356,10 +356,11 @@ const buildPrincipalProviderTransfers = ({
   }
 
   switch (transaction.type) {
-    case "send":
-      return buildForDirection("outbound")
     case "receive":
       return buildForDirection("inbound")
+    // Coinbase reports send deposits with a positive amount and send
+    // withdrawals with a negative amount, so the sign decides the direction.
+    case "send":
     case "intx_deposit":
     case "intx_withdrawal":
     case "transfer": {
