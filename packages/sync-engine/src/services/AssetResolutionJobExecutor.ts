@@ -26,10 +26,13 @@ import { SyncEngineStorageError } from "./SyncEngineStorageError.ts"
  *   the decision is recorded as audit history.
  * - evaluated: later evidence for a settled mapping was evaluated without
  *   replacing the current conclusion.
+ * - revision_mismatch: the job belongs to a different resolution policy
+ *   revision; it stays pending for a worker running that revision.
  */
 export type AssetResolutionJobOutcome =
   | "already_claimed"
   | "stale"
+  | "revision_mismatch"
   | "attached"
   | "created"
   | "excluded"

@@ -488,6 +488,7 @@
           "observationId": "observation ID",
           "naturalKey": "natural key",
           "policyRevisionLabel": "policy revision",
+          "policyRevisionMissing": "No current policy evaluation",
           "currentConclusionRevisionLabel": "current conclusion revision",
           "currentPolicyEvaluationRevisionLabel": "current policy-evaluation revision",
           "noEvidence": "No evidence linked",

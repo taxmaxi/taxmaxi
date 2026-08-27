@@ -514,6 +514,9 @@ const make = Effect.gen(function* () {
             // A conclusive evaluation that answers differently than the
             // current conclusion stays discoverable: an excluded observation
             // the policy now wants to attach must not vanish from the queue.
+            // The answer includes the representation: an attach that keeps
+            // the asset but declares different chain facts than the
+            // conclusion's representation blocks sync and needs review too.
             // A human conclusion at the evaluation's evidence revision or
             // later already answered this evidence, so it stays hidden.
             and(
@@ -534,6 +537,32 @@ const make = Effect.gen(function* () {
                     (current_conclusion.outcome = 'excluded')
                       <> (${schema.assetResolutionDecisions.outcome} = 'excluded')
                     or current_conclusion.asset_id is distinct from ${schema.assetResolutionDecisions.assetId}
+                    or (
+                      ${schema.assetResolutionDecisions.blockchain} is not null
+                      and not exists (
+                        select 1
+                        from ${schema.assetRepresentations} conclusion_representation
+                        inner join ${schema.blockchains} conclusion_blockchain
+                          on conclusion_blockchain.id = conclusion_representation.blockchain_id
+                        where conclusion_representation.id = current_conclusion.asset_representation_id
+                          and lower(conclusion_blockchain.name)
+                            = lower(${schema.assetResolutionDecisions.blockchain})
+                          and conclusion_representation.type::text
+                            is not distinct from ${schema.assetResolutionDecisions.representationType}
+                          and (
+                            (
+                              conclusion_representation.contract_address is null
+                              and ${schema.assetResolutionDecisions.contractAddress} is null
+                            )
+                            or lower(trim(conclusion_representation.contract_address))
+                              = lower(trim(${schema.assetResolutionDecisions.contractAddress}))
+                          )
+                          and conclusion_representation.mint_address
+                            is not distinct from ${schema.assetResolutionDecisions.mintAddress}
+                          and conclusion_representation.decimals
+                            is not distinct from ${schema.assetResolutionDecisions.decimals}
+                      )
+                    )
                   )
               )`
             )
@@ -1577,6 +1606,22 @@ const make = Effect.gen(function* () {
       Effect.mapError((cause) => toStorageError("assetExceptionRepository.previewDecision", cause))
     )
 
+  const affectedSourceIdsSubquerySql = (providerAssetRowIds: ReadonlyArray<string>) => sql`(
+    select ${schema.providerAssetSourceUses.sourceId}
+    from ${schema.providerAssetSourceUses}
+    where ${schema.providerAssetSourceUses.providerAssetRowId} in (${sql.join(
+      providerAssetRowIds.map((providerAssetRowId) => sql`${providerAssetRowId}::uuid`),
+      sql`, `
+    )})
+    union
+    select ${schema.providerTransfers.sourceId}
+    from ${schema.providerTransfers}
+    where ${schema.providerTransfers.providerAssetId} in (${sql.join(
+      providerAssetRowIds.map((providerAssetRowId) => sql`${providerAssetRowId}::uuid`),
+      sql`, `
+    )})
+  )`
+
   const scheduleRematerialization = ({
     tx,
     providerAssetRowIds,
@@ -1595,26 +1640,7 @@ const make = Effect.gen(function* () {
           principalId: schema.sources.principalId,
         })
         .from(schema.sources)
-        .where(
-          inArray(
-            schema.sources.id,
-            sql`(
-              select ${schema.providerAssetSourceUses.sourceId}
-              from ${schema.providerAssetSourceUses}
-              where ${schema.providerAssetSourceUses.providerAssetRowId} in (${sql.join(
-                providerAssetRowIds.map((providerAssetRowId) => sql`${providerAssetRowId}::uuid`),
-                sql`, `
-              )})
-              union
-              select ${schema.providerTransfers.sourceId}
-              from ${schema.providerTransfers}
-              where ${schema.providerTransfers.providerAssetId} in (${sql.join(
-                providerAssetRowIds.map((providerAssetRowId) => sql`${providerAssetRowId}::uuid`),
-                sql`, `
-              )})
-            )`
-          )
-        )
+        .where(inArray(schema.sources.id, affectedSourceIdsSubquerySql(providerAssetRowIds)))
         .orderBy(asc(schema.sources.id))
 
       yield* Effect.forEach(sourceRows, ({ sourceId, principalId }) =>
@@ -1768,6 +1794,19 @@ const make = Effect.gen(function* () {
                   representationOutcome: identityResolutionBeforeLocks.representationOutcome,
                 })
               : [initialDetail.providerAssetRowId]
+          // Lock sources before provider assets, matching the automatic
+          // approval path in lockProviderAssetApprovalSnapshotInTransaction.
+          // The replay upsert later takes a key-share lock on its source
+          // through the processing-jobs foreign key; mixed ordering can
+          // deadlock the two flows against each other.
+          yield* tx
+            .select({ id: schema.sources.id })
+            .from(schema.sources)
+            .where(
+              inArray(schema.sources.id, affectedSourceIdsSubquerySql(lockedProviderAssetRowIds))
+            )
+            .orderBy(asc(schema.sources.id))
+            .for("update")
           yield* tx
             .select({ id: schema.providerAssets.id })
             .from(schema.providerAssets)

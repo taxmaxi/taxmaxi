@@ -283,11 +283,27 @@ export function useDecisionDraft({
   readonly detail: AssetExceptionDetail
   readonly onDetailChange: (detail: AssetExceptionDetail) => void
 }) {
-  const policyReason = detail.currentPolicyEvaluation?.reason ?? null
-  const activeAssetId = detail.currentConclusion?.assetId ?? ""
+  const evaluation = detail.currentPolicyEvaluation
+  const policyReason = evaluation?.reason ?? null
+  // A conclusive evaluation is the policy's concrete recommendation: it names
+  // the mode and, for attach, the exact asset. The conclusion it disagrees
+  // with is only a fallback when the policy has no conclusive answer.
+  const recommendedMode: DraftMode | null =
+    evaluation?.outcome === "attach"
+      ? "existing"
+      : evaluation?.outcome === "create_standalone"
+        ? "new"
+        : evaluation?.outcome === "excluded"
+          ? "exclusion"
+          : null
+  const recommendedAssetId = (evaluation?.outcome === "attach" ? evaluation.assetId : null) ?? ""
+  const activeAssetId =
+    recommendedAssetId.length > 0 ? recommendedAssetId : (detail.currentConclusion?.assetId ?? "")
   const observed = observedRepresentation(detail)
   const suggestedMode =
-    suggestedModeForReason(policyReason) ?? (activeAssetId.length > 0 ? "existing" : null)
+    recommendedMode ??
+    suggestedModeForReason(policyReason) ??
+    (activeAssetId.length > 0 ? "existing" : null)
 
   const [mode, setModeState] = useState<DraftMode | null>(suggestedMode)
   const [assetId, setAssetId] = useState(activeAssetId)
@@ -1132,7 +1148,10 @@ export function TechnicalIds({ detail }: { readonly detail: AssetExceptionDetail
           </span>
           <CopyText
             label={m["assetCatalog.exceptions.reviewUi.technical.policyRevisionLabel"]()}
-            value={detail.currentPolicyEvaluation?.policyRevision ?? "—"}
+            value={
+              detail.currentPolicyEvaluation?.policyRevision ??
+              m["assetCatalog.exceptions.reviewUi.technical.policyRevisionMissing"]()
+            }
           />
         </div>
       </div>

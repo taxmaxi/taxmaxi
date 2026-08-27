@@ -19,6 +19,7 @@ import * as Layer from "effect/Layer"
 import * as Option from "effect/Option"
 import {
   ASSET_RESOLUTION_POLICY_ACTOR,
+  ASSET_RESOLUTION_POLICY_REVISION,
   AssetResolutionConflictingEvidence,
   AssetResolutionMalformedPayload,
   canonicalizeAddress,
@@ -841,9 +842,27 @@ const make = Effect.gen(function* () {
       const claim = yield* assetResolutionJobRepository.claimResolutionJob({
         jobId,
         workerId,
+        policyRevision: ASSET_RESOLUTION_POLICY_REVISION,
         startedAt,
         staleBefore,
       })
+
+      if (claim._tag === "revision_mismatch") {
+        yield* Effect.logInfo(
+          {
+            jobId,
+            workerId,
+            jobPolicyRevision: claim.jobPolicyRevision,
+            workerPolicyRevision: ASSET_RESOLUTION_POLICY_REVISION,
+          },
+          "asset-resolution:job-policy-revision-mismatch"
+        )
+        return {
+          outcome: "revision_mismatch",
+          providerAssetRowId: null,
+          evidenceRevision: null,
+        } satisfies AssetResolutionJobExecutionResult
+      }
 
       if (claim._tag !== "claimed") {
         return {

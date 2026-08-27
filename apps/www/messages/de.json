@@ -488,6 +488,7 @@
           "observationId": "Beobachtungs-ID",
           "naturalKey": "natürlicher Schlüssel",
           "policyRevisionLabel": "Richtlinienrevision",
+          "policyRevisionMissing": "Keine aktuelle Richtlinienauswertung",
           "currentConclusionRevisionLabel": "Revision der aktuellen Schlussfolgerung",
           "currentPolicyEvaluationRevisionLabel": "Revision der aktuellen Richtlinienauswertung",
           "noEvidence": "Keine Evidenz verknüpft",

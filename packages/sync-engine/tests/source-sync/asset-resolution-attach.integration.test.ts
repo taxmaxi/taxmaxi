@@ -6,6 +6,7 @@ import * as Layer from "effect/Layer"
 import * as Option from "effect/Option"
 import { beforeEach, describe, expect, it } from "vitest"
 import {
+  ASSET_RESOLUTION_POLICY_REVISION,
   AssetResolutionUpstreamFailure,
   RegistryLookupNotFound,
   type AssetResolutionRegistryEvidence,
@@ -898,7 +899,7 @@ describe("asset resolution attach and rebuild", () => {
             id: laterJobId,
             providerAssetRowId: providerAsset.id,
             evidenceRevision: 2,
-            policyRevision: "test-policy.1",
+            policyRevision: ASSET_RESOLUTION_POLICY_REVISION,
             status: "pending",
           })
           return providerAsset.id
@@ -1474,7 +1475,7 @@ describe("asset resolution attach and rebuild", () => {
               id: staleJobId,
               providerAssetRowId: providerAsset.id,
               evidenceRevision: 2,
-              policyRevision: "test-policy.1",
+              policyRevision: ASSET_RESOLUTION_POLICY_REVISION,
               status: "pending",
             })
           }).pipe(Effect.provide(TestPgClientLive))
@@ -2000,7 +2001,7 @@ describe("asset resolution attach and rebuild", () => {
             id: secondJobId,
             providerAssetRowId: providerAsset.id,
             evidenceRevision: 2,
-            policyRevision: "test-policy.1",
+            policyRevision: ASSET_RESOLUTION_POLICY_REVISION,
             status: "pending",
           })
         }).pipe(Effect.provide(TestPgClientLive))
@@ -2052,7 +2053,7 @@ describe("asset resolution attach and rebuild", () => {
             id: thirdJobId,
             providerAssetRowId: providerAsset.id,
             evidenceRevision: 3,
-            policyRevision: "test-policy.1",
+            policyRevision: ASSET_RESOLUTION_POLICY_REVISION,
             status: "pending",
           })
         }).pipe(Effect.provide(TestPgClientLive))
@@ -2154,7 +2155,7 @@ describe("asset resolution attach and rebuild", () => {
             id: secondJobId,
             providerAssetRowId: providerAsset.id,
             evidenceRevision: 2,
-            policyRevision: "test-policy.1",
+            policyRevision: ASSET_RESOLUTION_POLICY_REVISION,
             status: "pending",
           })
         }).pipe(Effect.provide(TestPgClientLive))

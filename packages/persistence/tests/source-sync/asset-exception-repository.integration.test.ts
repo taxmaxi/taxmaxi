@@ -10,10 +10,13 @@ import { ProviderAssetRepositoryLive } from "../../src/layers/ProviderAssetRepos
 import { drizzle } from "../../src/layers/PgClientLive.ts"
 import { schema } from "../../src/schema/index.ts"
 import {
+  TEST_BTC_ASSET_ID,
+  TEST_BTC_REPRESENTATION_ID,
   TEST_PRINCIPAL_ID,
   TEST_SOURCE_ID,
   TEST_USER_ID,
   makeIntegrationTestDatabaseContext,
+  seedSyncEngineAssets,
   seedSyncEngineRepositoryFixture,
 } from "../support/integration-test-kit.ts"
 
@@ -687,6 +690,116 @@ describe("AssetExceptionRepositoryLive", () => {
       )
     )
     expect(humanSettled).toEqual([])
+  })
+
+  it("keeps a same-asset evaluation with different representation facts discoverable", async () => {
+    const fixture = await seedException("-representation-disagreement")
+
+    // The conclusion attaches the observation to the fixture BTC
+    // representation. A later evaluation recommends the same economic asset
+    // through the same representation facts first, then through different
+    // decimals.
+    await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const blockchainRows = yield* db
+          .select({ id: schema.blockchains.id, name: schema.blockchains.name })
+          .from(schema.blockchains)
+          .where(inArray(schema.blockchains.name, ["base", "bitcoin"]))
+        const baseBlockchainId = blockchainRows.find(({ name }) => name === "base")?.id
+        const bitcoinBlockchainId = blockchainRows.find(({ name }) => name === "bitcoin")?.id
+        if (baseBlockchainId === undefined || bitcoinBlockchainId === undefined) {
+          return yield* Effect.die("Missing fixture blockchains")
+        }
+        yield* seedSyncEngineAssets({ baseBlockchainId, bitcoinBlockchainId })
+        const [conclusion] = yield* db
+          .insert(schema.assetResolutionDecisions)
+          .values({
+            providerAssetRowId: fixture.providerAssetRowId,
+            evidenceRevision: 2,
+            policyRevision: "test-policy.settled.1",
+            outcome: "attach",
+            assetId: TEST_BTC_ASSET_ID,
+            assetRepresentationId: TEST_BTC_REPRESENTATION_ID,
+            actor: "system:asset-resolution-policy",
+          })
+          .returning({ id: schema.assetResolutionDecisions.id })
+        if (conclusion === undefined) {
+          return yield* Effect.die("Failed to seed attach conclusion")
+        }
+        yield* db
+          .update(schema.providerAssets)
+          .set({ evidenceRevision: 3 })
+          .where(eq(schema.providerAssets.id, fixture.providerAssetRowId))
+        yield* db.insert(schema.assetResolutionJobs).values({
+          providerAssetRowId: fixture.providerAssetRowId,
+          evidenceRevision: 3,
+          policyRevision: "test-policy.1",
+          status: "completed",
+        })
+        const [evaluation] = yield* db
+          .insert(schema.assetResolutionDecisions)
+          .values({
+            providerAssetRowId: fixture.providerAssetRowId,
+            evidenceRevision: 3,
+            policyRevision: "test-policy.1",
+            outcome: "attach",
+            assetId: TEST_BTC_ASSET_ID,
+            blockchain: "bitcoin",
+            representationType: "token",
+            contractAddress: "sync-engine-btc-fixture",
+            mintAddress: null,
+            decimals: 8,
+            actor: "system:asset-resolution-policy",
+          })
+          .returning({ id: schema.assetResolutionDecisions.id })
+        if (evaluation === undefined) {
+          return yield* Effect.die("Failed to seed attach evaluation")
+        }
+        yield* db
+          .update(schema.assetResolutionCurrentState)
+          .set({
+            currentConclusionId: conclusion.id,
+            currentPolicyEvaluationId: evaluation.id,
+          })
+          .where(
+            eq(schema.assetResolutionCurrentState.providerAssetRowId, fixture.providerAssetRowId)
+          )
+      })
+    )
+
+    const matchingFacts = await runRepository(
+      Effect.flatMap(AssetExceptionRepository, (repository) =>
+        repository.listExceptions({ cursor: null, limit: 10, query: null })
+      )
+    )
+    expect(matchingFacts).toEqual([])
+
+    await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        yield* db
+          .update(schema.assetResolutionDecisions)
+          .set({ decimals: 9 })
+          .where(
+            and(
+              eq(schema.assetResolutionDecisions.providerAssetRowId, fixture.providerAssetRowId),
+              eq(schema.assetResolutionDecisions.evidenceRevision, 3)
+            )
+          )
+      })
+    )
+    const differentFacts = await runRepository(
+      Effect.flatMap(AssetExceptionRepository, (repository) =>
+        repository.listExceptions({ cursor: null, limit: 10, query: null })
+      )
+    )
+    expect(differentFacts).toEqual([
+      expect.objectContaining({
+        providerAssetRowId: fixture.providerAssetRowId,
+        reason: "conclusion_disagreement",
+      }),
+    ])
   })
 
   it("previews and atomically accepts a typed exclusion without a free-text rationale", async () => {

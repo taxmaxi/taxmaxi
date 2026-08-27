@@ -29,6 +29,16 @@ export type AssetResolutionJobClaim =
     }
   | { readonly _tag: "not_claimable" }
   | { readonly _tag: "stale" }
+  | {
+      /**
+       * The job was scheduled for a different resolution policy revision than
+       * the one the claiming worker runs. The job stays pending for a worker
+       * running that revision, so a rolling deployment cannot burn a
+       * new-revision job identity with an old-revision evaluation.
+       */
+      readonly _tag: "revision_mismatch"
+      readonly jobPolicyRevision: string
+    }
 
 /** Terminal status a resolution job execution attempt can leave the job in. */
 export type AssetResolutionJobFinishStatus = "completed" | "failed"
@@ -37,6 +47,8 @@ export type AssetResolutionJobFinishStatus = "completed" | "failed"
 export interface ClaimAssetResolutionJobParams {
   readonly jobId: string
   readonly workerId: string
+  /** Resolution policy revision compiled into the claiming worker. */
+  readonly policyRevision: string
   readonly startedAt: Date
   /** Heartbeat cutoff a job stuck in processing must be older than to be reclaimed. */
   readonly staleBefore: Date

@@ -100,6 +100,7 @@ const make = Effect.gen(function* () {
   const claimResolutionJob: AssetResolutionJobRepositoryShape["claimResolutionJob"] = ({
     jobId,
     workerId,
+    policyRevision,
     startedAt,
     staleBefore,
   }) =>
@@ -111,6 +112,7 @@ const make = Effect.gen(function* () {
               id: schema.assetResolutionJobs.id,
               providerAssetRowId: schema.assetResolutionJobs.providerAssetRowId,
               evidenceRevision: schema.assetResolutionJobs.evidenceRevision,
+              policyRevision: schema.assetResolutionJobs.policyRevision,
               status: schema.assetResolutionJobs.status,
               attemptCount: schema.assetResolutionJobs.attemptCount,
               nextRetryAt: schema.assetResolutionJobs.nextRetryAt,
@@ -163,6 +165,14 @@ const make = Effect.gen(function* () {
               )
 
             return { _tag: "stale" } as const
+          }
+
+          // The worker evaluates with the policy compiled into its binary. A
+          // job stamped with a different revision stays pending for a worker
+          // running that revision; claiming it here would record the wrong
+          // evaluation and burn the job identity for the intended one.
+          if (job.policyRevision !== policyRevision) {
+            return { _tag: "revision_mismatch", jobPolicyRevision: job.policyRevision } as const
           }
 
           const attemptCount = job.attemptCount + 1

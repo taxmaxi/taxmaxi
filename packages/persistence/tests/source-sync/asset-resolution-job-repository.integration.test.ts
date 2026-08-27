@@ -1,3 +1,4 @@
+import { ASSET_RESOLUTION_POLICY_REVISION } from "@my/core/assets"
 import { eq } from "drizzle-orm"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
@@ -125,17 +126,19 @@ const scheduleResolutionJob = async (suffix: string) => {
 const claimResolutionJobForTest = ({
   jobId,
   workerId,
+  policyRevision = ASSET_RESOLUTION_POLICY_REVISION,
   startedAt = new Date(),
   staleBefore = new Date(Date.now() - 5 * 60 * 1000),
 }: {
   readonly jobId: string
   readonly workerId: string
+  readonly policyRevision?: string
   readonly startedAt?: Date
   readonly staleBefore?: Date
 }) =>
   runJobRepository(
     Effect.flatMap(AssetResolutionJobRepository, (repository) =>
-      repository.claimResolutionJob({ jobId, workerId, startedAt, staleBefore })
+      repository.claimResolutionJob({ jobId, workerId, policyRevision, startedAt, staleBefore })
     )
   )
 
@@ -171,6 +174,26 @@ describe("AssetResolutionJobRepositoryLive", () => {
       expect(job.attemptCount).toBe(1)
       expect(job.startedAt?.toISOString()).toBe(startedAt.toISOString())
       expect(job.heartbeatAt?.toISOString()).toBe(startedAt.toISOString())
+    })
+
+    it("leaves a job for another policy revision pending", async () => {
+      const { jobId } = await scheduleResolutionJob("revision-mismatch")
+
+      const mismatch = await claimResolutionJobForTest({
+        jobId,
+        workerId: "worker-1",
+        policyRevision: "some-other-policy.1",
+      })
+      expect(mismatch).toEqual({
+        _tag: "revision_mismatch",
+        jobPolicyRevision: ASSET_RESOLUTION_POLICY_REVISION,
+      })
+      const job = await selectAssetResolutionJob({ jobId })
+      expect(job.status).toBe("pending")
+      expect(job.attemptCount).toBe(0)
+
+      const matching = await claimResolutionJobForTest({ jobId, workerId: "worker-2" })
+      expect(matching._tag).toBe("claimed")
     })
 
     it("lets exactly one of two concurrently racing claims win", async () => {

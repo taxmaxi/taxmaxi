@@ -15,6 +15,9 @@ export function useAssetCatalogSelection({
   readonly visibleItems: ReadonlyArray<CatalogItem>
 }) {
   const [exactLookupOpen, setExactLookupOpen] = useState(false)
+  // Remount key for the lookup pane: every "open exact lookup" action starts
+  // a fresh lookup, even when the pane already shows a previous result.
+  const [exactLookupKey, setExactLookupKey] = useState(0)
   const [mobileDetailOpen, setMobileDetailOpen] = useState(false)
   const mobileBackButtonRef = useRef<HTMLButtonElement>(null)
   const [selectedKey, setSelectedKey] = useState(() => getCatalogItemKey(visibleItems[0]))
@@ -86,6 +89,7 @@ export function useAssetCatalogSelection({
 
   const openExactLookup = useCallback(() => {
     setExactLookupOpen(true)
+    setExactLookupKey((key) => key + 1)
     setMobileDetailOpen(true)
   }, [])
 
@@ -182,6 +186,7 @@ export function useAssetCatalogSelection({
   }, [mobileDetailOpen, selectItem, selectedItem, selectedItemKey, visibleItems])
 
   return {
+    exactLookupKey,
     exactLookupOpen,
     mobileBackButtonRef,
     mobileDetailOpen,
