@@ -4,7 +4,7 @@
  * @module SourceReplayRepositoryLive
  */
 
-import { and, asc, eq, ne, sql } from "drizzle-orm"
+import { and, asc, eq, inArray, ne, sql } from "drizzle-orm"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import { drizzle } from "./PgClientLive.ts"
@@ -255,6 +255,30 @@ const makeReplayPlanRepository = Effect.gen(function* () {
               jobId,
               reason: "A replay job cannot depend on itself.",
             })
+          }
+
+          if (uniquePrerequisiteJobIds.length > 0) {
+            const prerequisiteJobs = yield* tx
+              .select({ id: schema.processingJobs.id })
+              .from(schema.processingJobs)
+              .where(inArray(schema.processingJobs.id, uniquePrerequisiteJobIds))
+              .orderBy(asc(schema.processingJobs.id))
+              .for("key share")
+              .pipe(
+                wrapSyncEngineSqlError(
+                  "sourceReplayPlanRepository.recordReplayPlan.lockPrerequisites"
+                )
+              )
+            const foundPrerequisiteJobIds = new Set(prerequisiteJobs.map(({ id }) => id))
+            const missingPrerequisiteJobId = uniquePrerequisiteJobIds.find(
+              (prerequisiteJobId) => !foundPrerequisiteJobIds.has(prerequisiteJobId)
+            )
+
+            if (missingPrerequisiteJobId !== undefined) {
+              return yield* new SourceReplayPlanJobNotFoundError({
+                jobId: missingPrerequisiteJobId,
+              })
+            }
           }
 
           const [job] = yield* tx
