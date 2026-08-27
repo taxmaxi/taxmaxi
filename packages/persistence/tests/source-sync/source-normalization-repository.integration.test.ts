@@ -2543,7 +2543,7 @@ describe("SourceNormalizationRepositoryLive", () => {
     )
   })
 
-  it("reruns provider leg classification for an included asset use without a provider transfer", async () => {
+  it("reruns provider leg classification and blocks a later fiat reclassification", async () => {
     const occurredAt = new Date("2025-01-01T11:00:00.000Z")
     const providerAssetRowId = await runPg(
       Effect.gen(function* () {
@@ -2596,78 +2596,81 @@ describe("SourceNormalizationRepositoryLive", () => {
       })
     )
 
-    const result = await runRepository(
-      Effect.flatMap(SourceNormalizationRepository, (repository) =>
-        repository.persistNormalizedArtifacts({
-          transaction: {
-            sourceId: TEST_SOURCE_ID,
-            sourceRawRecordId: TEST_RAW_RECORD_ID,
-            externalId: "tx-principal-included",
-            externalGroupId: "group-principal-included",
-            timestamp: occurredAt,
-            transactionType: "buy_fiat",
-            providerTransactionType: "buy",
-            providerStatus: "completed",
-            providerResourcePath: null,
-            providerDescription: null,
-            providerCreatedAt: occurredAt,
-            providerUpdatedAt: occurredAt,
-            metadata: { provider: "coinbase" },
-            providerFiatAmount: null,
-            providerFiatCurrency: null,
-            principalId: TEST_PRINCIPAL_ID,
-          },
-          venueContext: {
-            venueType: "cex",
-            cexAccountId: fixture.cexAccountId,
-            externalAccountId: "coinbase-account-1",
-            externalOrderId: null,
-            externalFillId: null,
-            side: null,
-            instrument: null,
-            fillPrice: null,
-            commissionAmount: null,
-            commissionCurrency: null,
-            metadata: null,
-          },
-          providerTransfers: [],
-          providerAssetRowIds: [providerAssetRowId],
-          canonicalTransfers: [],
-          deriveLegs: ({ effectiveProviderAssets, transaction }) => {
-            const effectiveAsset = effectiveProviderAssets[0]?.asset
-            return Effect.succeed(
-              effectiveAsset === null || effectiveAsset === undefined
-                ? []
-                : [
-                    {
-                      sourceId: transaction.sourceId,
-                      sourceRawRecordId: transaction.sourceRawRecordId,
-                      externalId: "principal-included-income",
-                      txHash: null,
-                      timestamp: transaction.timestamp,
-                      principalId: transaction.principalId,
-                      addressId: null,
-                      assetId: effectiveAsset.id,
-                      assetRepresentationId: null,
-                      amount: "2.5",
-                      kind: "income" as const,
-                      provenance: "deterministic" as const,
-                      derivationRule: "coinbase_staking_reward_inflow",
-                      metadata: { provider: "coinbase" },
-                      transactionId: transaction.id,
-                      sourceTransferId: null,
-                      fiatAmount: null,
-                      fiatCurrency: null,
-                      feeForTransactionId: null,
-                    },
-                  ]
-            )
-          },
-          transactionReview: null,
-          resolvedTransactionType: APPROVED_MAPPING,
-        })
+    const persistIncludedAsset = (externalId: string) =>
+      runRepository(
+        Effect.flatMap(SourceNormalizationRepository, (repository) =>
+          repository.persistNormalizedArtifacts({
+            transaction: {
+              sourceId: TEST_SOURCE_ID,
+              sourceRawRecordId: TEST_RAW_RECORD_ID,
+              externalId,
+              externalGroupId: externalId,
+              timestamp: occurredAt,
+              transactionType: "buy_fiat",
+              providerTransactionType: "buy",
+              providerStatus: "completed",
+              providerResourcePath: null,
+              providerDescription: null,
+              providerCreatedAt: occurredAt,
+              providerUpdatedAt: occurredAt,
+              metadata: { provider: "coinbase" },
+              providerFiatAmount: null,
+              providerFiatCurrency: null,
+              principalId: TEST_PRINCIPAL_ID,
+            },
+            venueContext: {
+              venueType: "cex",
+              cexAccountId: fixture.cexAccountId,
+              externalAccountId: "coinbase-account-1",
+              externalOrderId: null,
+              externalFillId: null,
+              side: null,
+              instrument: null,
+              fillPrice: null,
+              commissionAmount: null,
+              commissionCurrency: null,
+              metadata: null,
+            },
+            providerTransfers: [],
+            providerAssetRowIds: [providerAssetRowId],
+            canonicalTransfers: [],
+            deriveLegs: ({ effectiveProviderAssets, transaction }) => {
+              const effectiveAsset = effectiveProviderAssets[0]?.asset
+              return Effect.succeed(
+                effectiveAsset === null || effectiveAsset === undefined
+                  ? []
+                  : [
+                      {
+                        sourceId: transaction.sourceId,
+                        sourceRawRecordId: transaction.sourceRawRecordId,
+                        externalId: "principal-included-income",
+                        txHash: null,
+                        timestamp: transaction.timestamp,
+                        principalId: transaction.principalId,
+                        addressId: null,
+                        assetId: effectiveAsset.id,
+                        assetRepresentationId: null,
+                        amount: "2.5",
+                        kind: "income" as const,
+                        provenance: "deterministic" as const,
+                        derivationRule: "coinbase_staking_reward_inflow",
+                        metadata: { provider: "coinbase" },
+                        transactionId: transaction.id,
+                        sourceTransferId: null,
+                        fiatAmount: null,
+                        fiatCurrency: null,
+                        feeForTransactionId: null,
+                      },
+                    ]
+              )
+            },
+            transactionReview: null,
+            resolvedTransactionType: APPROVED_MAPPING,
+          })
+        )
       )
-    )
+
+    const result = await persistIncludedAsset("tx-principal-included")
 
     expect(result.legs).toEqual([
       expect.objectContaining({
@@ -2678,6 +2681,25 @@ describe("SourceNormalizationRepositoryLive", () => {
         fiatAmount: null,
       }),
     ])
+
+    await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        yield* db
+          .update(schema.providerAssetMappings)
+          .set({
+            mappingKind: "fiat",
+            mappingStatus: "approved",
+            canonicalAssetId: null,
+            canonicalFiatCurrency: "EUR",
+          })
+          .where(eq(schema.providerAssetMappings.providerAssetRowId, providerAssetRowId))
+      })
+    )
+
+    const reclassified = await persistIncludedAsset("tx-principal-reclassified-fiat")
+
+    expect(reclassified.legs).toEqual([])
   })
 
   it("does not apply a chainless provider override to a later exact representation", async () => {
@@ -2775,6 +2797,94 @@ describe("SourceNormalizationRepositoryLive", () => {
       })
     )
     expect(movements).toEqual([])
+  })
+
+  it("does not apply a chainless provider override to an accounting-only transfer", async () => {
+    const occurredAt = new Date("2025-01-01T11:06:00.000Z")
+    const providerAssetRowId = await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const [providerAsset] = yield* db
+          .insert(schema.providerAssets)
+          .values({
+            provider: "helius",
+            providerAssetId: "accounting-only-provider-override",
+            currencyCode: "AOP",
+            exponent: 8,
+            providerType: "crypto",
+            retrievedAt: occurredAt,
+          })
+          .returning({ id: schema.providerAssets.id })
+        if (providerAsset === undefined) return yield* Effect.die("Failed to seed provider asset")
+        yield* db.insert(schema.providerAssetMappings).values({
+          providerAssetRowId: providerAsset.id,
+          mappingKind: "asset",
+          mappingStatus: "approved",
+          canonicalAssetId: TEST_BTC_ASSET_ID,
+          assetRepresentationId: null,
+          canonicalFiatCurrency: null,
+        })
+        yield* db.insert(schema.principalAssetOverrides).values({
+          principalId: TEST_PRINCIPAL_ID,
+          kind: "identity",
+          targetKind: "provider_asset",
+          providerAssetRowId: providerAsset.id,
+          action: "set",
+          inspectedSystemRevision: "accounting-only-provider-override-revision",
+          inspectedIdentityState: "resolved",
+          inspectedAssetId: TEST_BTC_ASSET_ID,
+          replacementAssetId: TEST_EUR_ASSET_ID,
+          actorId: TEST_USER_ID,
+          reason: "Use the provider override only for chainless evidence.",
+        })
+        return providerAsset.id
+      })
+    )
+
+    const result = await runRepository(
+      Effect.flatMap(SourceNormalizationRepository, (repository) =>
+        repository.persistNormalizedArtifacts({
+          ...buildBuyArtifacts({
+            externalId: "tx-accounting-only-provider-override",
+            occurredAt,
+            sourceRawRecordId: TEST_RAW_RECORD_ID,
+          }),
+          providerAssetRowIds: [providerAssetRowId],
+          providerTransfers: [
+            {
+              sourceId: TEST_SOURCE_ID,
+              sourceRawRecordId: TEST_RAW_RECORD_ID,
+              externalId: "accounting-only-provider-transfer",
+              externalGroupId: "accounting-only-provider-group",
+              providerAssetId: providerAssetRowId,
+              timestamp: occurredAt,
+              direction: "inbound",
+              processingMode: "accounting_only",
+              fromAccountRef: null,
+              toAccountRef: null,
+              fromAddress: "external-address",
+              toAddress: "owned-address",
+              networkName: "solana",
+              networkHash: "accounting-only-provider-hash",
+              amount: "1",
+              metadata: null,
+            },
+          ],
+        })
+      )
+    )
+
+    const movements = await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        return yield* db
+          .select({ assetId: schema.inventoryMovements.assetId })
+          .from(schema.inventoryMovements)
+          .where(eq(schema.inventoryMovements.transactionId, result.transaction.id))
+      })
+    )
+
+    expect(movements).toEqual([{ assetId: TEST_BTC_ASSET_ID }])
   })
 
   it("applies an exact representation override without a provider asset row", async () => {

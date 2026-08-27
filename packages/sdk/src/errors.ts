@@ -1,5 +1,6 @@
 import {
   AssetOverrideBadRequestError,
+  AssetOverrideConflictError,
   AssetDecisionConflictError,
   AssetDecisionValidationError,
   AssetStaleRevisionError,
@@ -206,6 +207,22 @@ export const getTaxMaxiAssetOverrideValidationErrorCode = (
   return Exit.match(decodeAssetOverrideValidationError(candidate), {
     onFailure: () => null,
     onSuccess: ({ code }) => code,
+  })
+}
+
+export type TaxMaxiAssetOverrideConflict = AssetOverrideConflictError["current"]
+
+const decodeAssetOverrideConflictError = Schema.decodeUnknownExit(AssetOverrideConflictError)
+
+/** Extract the current effective projection from an asset override conflict. */
+export const getTaxMaxiAssetOverrideConflict = (
+  error: unknown
+): TaxMaxiAssetOverrideConflict | null => {
+  const candidate = error instanceof TaxMaxiError ? error.cause : error
+
+  return Exit.match(decodeAssetOverrideConflictError(candidate), {
+    onFailure: () => null,
+    onSuccess: ({ current }) => current,
   })
 }
 

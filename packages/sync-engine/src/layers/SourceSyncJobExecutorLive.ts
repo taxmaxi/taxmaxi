@@ -309,7 +309,9 @@ const make = Effect.gen(function* () {
 
       const transferObservations = decision.providerTransfers.flatMap((providerTransfer) => {
         const providerAssetRowId = providerTransfer.providerAssetId
-        if (providerAssetRowId === null) return []
+        if (providerAssetRowId === null || providerTransfer.processingMode === "accounting_only") {
+          return []
+        }
         return [
           {
             providerAssetRowId,
@@ -322,7 +324,9 @@ const make = Effect.gen(function* () {
         ]
       })
       const providerAssetsWithTransfers = new Set(
-        transferObservations.map(({ providerAssetRowId }) => providerAssetRowId)
+        decision.providerTransfers.flatMap(({ providerAssetId }) =>
+          providerAssetId === null ? [] : [providerAssetId]
+        )
       )
       const transactionOnlyObservations = decision.providerAssetRowIds
         .filter((providerAssetRowId) => !providerAssetsWithTransfers.has(providerAssetRowId))

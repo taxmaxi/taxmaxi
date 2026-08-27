@@ -438,9 +438,13 @@ const make = Effect.gen(function* () {
                   )
             )
       // Exact observations always use their representation key. The provider
-      // asset target is only the fallback while the observation is chainless.
+      // asset target is only the fallback while an evidence-bearing observation
+      // is chainless. Accounting-only rows retain the approved system mapping
+      // without gaining or consuming chainless override authority.
       const providerAssetCondition =
-        representationCondition !== null || providerTransfer.providerAssetId === null
+        representationCondition !== null ||
+        providerTransfer.providerAssetId === null ||
+        providerTransfer.processingMode === "accounting_only"
           ? null
           : and(
               eq(schema.principalAssetOverrides.targetKind, "provider_asset"),
@@ -450,23 +454,28 @@ const make = Effect.gen(function* () {
               )
             )
       const targetCondition = representationCondition ?? providerAssetCondition
-      if (targetCondition === null) return null
+      if (targetCondition === null && providerTransfer.providerAssetId === null) return null
 
-      const overrides = yield* executor
-        .select({
-          id: schema.principalAssetOverrides.id,
-          kind: schema.principalAssetOverrides.kind,
-          targetKind: schema.principalAssetOverrides.targetKind,
-          action: schema.principalAssetOverrides.action,
-          replacementAssetId: schema.principalAssetOverrides.replacementAssetId,
-          replacementInclusionState: schema.principalAssetOverrides.replacementInclusionState,
-        })
-        .from(schema.principalAssetOverrides)
-        .where(and(eq(schema.principalAssetOverrides.principalId, principalId), targetCondition))
-        .orderBy(
-          desc(schema.principalAssetOverrides.createdAt),
-          desc(schema.principalAssetOverrides.id)
-        )
+      const overrides =
+        targetCondition === null
+          ? []
+          : yield* executor
+              .select({
+                id: schema.principalAssetOverrides.id,
+                kind: schema.principalAssetOverrides.kind,
+                targetKind: schema.principalAssetOverrides.targetKind,
+                action: schema.principalAssetOverrides.action,
+                replacementAssetId: schema.principalAssetOverrides.replacementAssetId,
+                replacementInclusionState: schema.principalAssetOverrides.replacementInclusionState,
+              })
+              .from(schema.principalAssetOverrides)
+              .where(
+                and(eq(schema.principalAssetOverrides.principalId, principalId), targetCondition)
+              )
+              .orderBy(
+                desc(schema.principalAssetOverrides.createdAt),
+                desc(schema.principalAssetOverrides.id)
+              )
       const latestForKind = (kind: "identity" | "inclusion") =>
         overrides.find((override) => override.kind === kind)
       const latestIdentity = latestForKind("identity")
@@ -479,6 +488,7 @@ const make = Effect.gen(function* () {
               .select({
                 assetId: schema.providerAssetMappings.canonicalAssetId,
                 assetRepresentationId: schema.providerAssetMappings.assetRepresentationId,
+                mappingKind: schema.providerAssetMappings.mappingKind,
                 status: schema.providerAssetMappings.mappingStatus,
                 exponent: schema.providerAssets.exponent,
                 providerType: schema.providerAssets.providerType,
@@ -488,15 +498,7 @@ const make = Effect.gen(function* () {
                 schema.providerAssetMappings,
                 eq(schema.providerAssetMappings.providerAssetRowId, schema.providerAssets.id)
               )
-              .where(
-                and(
-                  eq(schema.providerAssets.id, providerTransfer.providerAssetId),
-                  or(
-                    eq(schema.providerAssetMappings.mappingKind, "asset"),
-                    isNull(schema.providerAssetMappings.id)
-                  )
-                )
-              )
+              .where(eq(schema.providerAssets.id, providerTransfer.providerAssetId))
               .limit(1)
 
       const representationTarget =
@@ -593,7 +595,10 @@ const make = Effect.gen(function* () {
         exactApprovedAssetIds.length === 1 ? (exactApprovedAssetIds.at(0) ?? null) : null
       const technicallyBlocked =
         representationTarget === null
-          ? mapping?.exponent === null || mapping?.providerType === "unsupported"
+          ? mapping?.exponent === null ||
+            mapping?.providerType === "unsupported" ||
+            mapping?.providerType === "fiat" ||
+            mapping?.mappingKind === "fiat"
           : representation?.decimals === null ||
             (representation === undefined && providerTransfer.observedDecimals === null)
       // Mapping status "excluded" is a final exclusion; "rejected" stays an
@@ -659,6 +664,7 @@ const make = Effect.gen(function* () {
         .select({
           exponent: schema.providerAssets.exponent,
           providerType: schema.providerAssets.providerType,
+          mappingKind: schema.providerAssetMappings.mappingKind,
           mappingStatus: schema.providerAssetMappings.mappingStatus,
           assetId: schema.providerAssetMappings.canonicalAssetId,
         })
@@ -695,7 +701,10 @@ const make = Effect.gen(function* () {
       // Mapping status "excluded" is a final exclusion; "rejected" stays an
       // open question and keeps the observation blocked.
       const systemInclusion =
-        system.exponent === null || system.providerType === "unsupported"
+        system.exponent === null ||
+        system.providerType === "unsupported" ||
+        system.providerType === "fiat" ||
+        system.mappingKind === "fiat"
           ? "blocked"
           : system.mappingStatus === "approved"
             ? "included"
@@ -705,7 +714,11 @@ const make = Effect.gen(function* () {
       const decision = resolveEffectiveAssetOverrideDecision({
         systemAssetId: system.assetId,
         systemInclusionState: systemInclusion,
-        technicalBlocker: system.exponent === null || system.providerType === "unsupported",
+        technicalBlocker:
+          system.exponent === null ||
+          system.providerType === "unsupported" ||
+          system.providerType === "fiat" ||
+          system.mappingKind === "fiat",
         identityOverrideAssetId: identity?.action === "set" ? identity.replacementAssetId : null,
         inclusionOverrideState:
           inclusion?.action === "set" &&

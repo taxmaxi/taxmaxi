@@ -32,7 +32,9 @@ import {
   UnresolvedTransferReconciliationListResponse,
 } from "../src/definitions/AssetsApi.ts"
 import {
+  AssetOverrideConflictError,
   AssetOverrideHistoryResponse,
+  AssetOverrideNotFoundError,
   AssetOverrideProjectionResponse,
   AssetOverrideValidationResponse,
 } from "../src/definitions/AssetOverridesApi.ts"
@@ -242,12 +244,26 @@ await Effect.runPromise(context.recreateTestDatabase())
 describe("AssetsApiLive", () => {
   it("runs the authenticated asset override flow through validation, CAS, history, replacement, and withdrawal", async () => {
     const userId = crypto.randomUUID()
+    const unownedUserId = crypto.randomUUID()
     const principalId = crypto.randomUUID()
     const sourceId = crypto.randomUUID()
     const fixture = await Effect.runPromise(
       Effect.gen(function* () {
-        yield* seedSyncEngineRepositoryFixture({ userId, principalId, sourceId })
+        const syncFixture = yield* seedSyncEngineRepositoryFixture({
+          userId,
+          principalId,
+          sourceId,
+        })
         const db = yield* drizzle
+        yield* db.insert(schema.users).values({
+          id: unownedUserId,
+          email: `asset-override-unowned-${unownedUserId}@taxmaxi.test`,
+          name: "Unowned asset override user",
+        })
+        yield* db.insert(schema.principals).values({
+          kind: "user",
+          userId: unownedUserId,
+        })
         const [firstAsset, secondAsset] = yield* db
           .insert(schema.assets)
           .values([
@@ -269,6 +285,34 @@ describe("AssetsApiLive", () => {
         if (firstAsset === undefined || secondAsset === undefined || providerAsset === undefined) {
           return yield* Effect.die("Failed to seed asset override API fixture")
         }
+        const [resolvedProviderAsset] = yield* db
+          .insert(schema.providerAssets)
+          .values({
+            provider: "coinbase",
+            providerAssetId: `override-api-resolved-${crypto.randomUUID()}`,
+            currencyCode: "OAR",
+            exponent: 8,
+            providerType: "crypto",
+            retrievedAt: new Date("2026-08-26T12:00:00.000Z"),
+          })
+          .returning({ id: schema.providerAssets.id })
+        if (resolvedProviderAsset === undefined) {
+          return yield* Effect.die("Failed to seed resolved asset override API fixture")
+        }
+        const representationContract = "0x0000000000000000000000000000000000000172"
+        yield* db.insert(schema.assetRepresentations).values({
+          assetId: firstAsset.id,
+          blockchainId: syncFixture.baseBlockchainId,
+          type: "token",
+          contractAddress: representationContract,
+          decimals: 8,
+        })
+        yield* db.insert(schema.sourceRepresentationUses).values({
+          sourceId,
+          blockchainId: syncFixture.baseBlockchainId,
+          representationType: "token",
+          contractAddress: representationContract,
+        })
         yield* db.insert(schema.providerAssetMappings).values({
           providerAssetRowId: providerAsset.id,
           mappingKind: "asset",
@@ -279,10 +323,29 @@ describe("AssetsApiLive", () => {
           sourceId,
           hasChainlessObservation: true,
         })
+        yield* db.insert(schema.providerAssetMappings).values({
+          providerAssetRowId: resolvedProviderAsset.id,
+          mappingKind: "asset",
+          mappingStatus: "approved",
+          canonicalAssetId: firstAsset.id,
+        })
+        yield* db.insert(schema.providerAssetSourceUses).values({
+          providerAssetRowId: resolvedProviderAsset.id,
+          sourceId,
+          hasChainlessObservation: true,
+        })
         return {
           firstAssetId: firstAsset.id,
           secondAssetId: secondAsset.id,
           providerAssetRowId: providerAsset.id,
+          resolvedProviderAssetRowId: resolvedProviderAsset.id,
+          representationTarget: {
+            _tag: "representation" as const,
+            blockchainId: syncFixture.baseBlockchainId,
+            representationType: "token" as const,
+            contractAddress: representationContract,
+            mintAddress: null,
+          },
         }
       }).pipe(Effect.provide(TestPgClientLive))
     )
@@ -293,15 +356,17 @@ describe("AssetsApiLive", () => {
     }
     const query = `kind=identity&targetKind=provider_asset&providerAssetRowId=${fixture.providerAssetRowId}`
     const runRequest = <Response, Requirements>({
+      bearerToken = token,
       request,
       responseSchema,
     }: {
+      readonly bearerToken?: string
       readonly request: HttpClientRequest.HttpClientRequest
       readonly responseSchema: Schema.ConstraintDecoder<Response, Requirements>
     }) =>
       Effect.gen(function* () {
         const response = yield* request.pipe(
-          HttpClientRequest.bearerToken(token),
+          HttpClientRequest.bearerToken(bearerToken),
           HttpClient.execute
         )
         const body = yield* response.json
@@ -319,6 +384,87 @@ describe("AssetsApiLive", () => {
     )
     expect(initial.status).toBe(200)
     expect(initial.body.systemConclusion).toMatchObject({ state: "unresolved" })
+
+    const representationQuery = new URLSearchParams({
+      kind: "identity",
+      targetKind: "representation",
+      blockchainId: fixture.representationTarget.blockchainId,
+      representationType: fixture.representationTarget.representationType,
+      contractAddress: fixture.representationTarget.contractAddress,
+    }).toString()
+    const representationCurrent = await Effect.runPromise(
+      runRequest({
+        request: HttpClientRequest.get(`/v1/asset-overrides/current?${representationQuery}`),
+        responseSchema: AssetOverrideProjectionResponse,
+      })
+    )
+    const representationHistory = await Effect.runPromise(
+      runRequest({
+        request: HttpClientRequest.get(`/v1/asset-overrides/history?${representationQuery}`),
+        responseSchema: Schema.Array(AssetOverrideHistoryResponse),
+      })
+    )
+    expect(representationCurrent).toMatchObject({
+      status: 200,
+      body: { target: fixture.representationTarget },
+    })
+    expect(representationHistory).toEqual({ status: 200, body: [] })
+
+    const resolvedTarget = {
+      _tag: "provider_asset" as const,
+      providerAssetRowId: fixture.resolvedProviderAssetRowId,
+    }
+    const identityDifference = await Effect.runPromise(
+      runRequest({
+        request: HttpClientRequest.post("/v1/asset-overrides/validate").pipe(
+          HttpClientRequest.bodyJsonUnsafe({
+            kind: "identity",
+            target: resolvedTarget,
+            replacement: { _tag: "identity", assetId: fixture.secondAssetId },
+          })
+        ),
+        responseSchema: AssetOverrideValidationResponse,
+      })
+    )
+    const inclusionDifference = await Effect.runPromise(
+      runRequest({
+        request: HttpClientRequest.post("/v1/asset-overrides/validate").pipe(
+          HttpClientRequest.bodyJsonUnsafe({
+            kind: "inclusion",
+            target: resolvedTarget,
+            replacement: { _tag: "inclusion", state: "excluded" },
+          })
+        ),
+        responseSchema: AssetOverrideValidationResponse,
+      })
+    )
+    expect(identityDifference.body.warnings).toEqual(["identity_differs_from_system"])
+    expect(inclusionDifference.body.warnings).toEqual(["inclusion_differs_from_system"])
+
+    const absentProviderAssetId = crypto.randomUUID()
+    const absent = await Effect.runPromise(
+      runRequest({
+        request: HttpClientRequest.get(
+          `/v1/asset-overrides/current?kind=identity&targetKind=provider_asset&providerAssetRowId=${absentProviderAssetId}`
+        ),
+        responseSchema: AssetOverrideNotFoundError,
+      })
+    )
+    const unowned = await Effect.runPromise(
+      runRequest({
+        bearerToken: `user_${unownedUserId}_user`,
+        request: HttpClientRequest.get(`/v1/asset-overrides/current?${query}`),
+        responseSchema: AssetOverrideNotFoundError,
+      })
+    )
+    expect(absent).toEqual({
+      status: 404,
+      body: expect.objectContaining({ code: "asset_override_target_not_found" }),
+    })
+    expect(unowned).toEqual({
+      status: 404,
+      body: expect.objectContaining({ code: "asset_override_target_not_found" }),
+    })
 
     const validation = await Effect.runPromise(
       runRequest({
@@ -353,17 +499,17 @@ describe("AssetsApiLive", () => {
     expect(created.body.activeOverride?.actorId).toBe(userId)
     expect(created.body.effectiveConclusion).toMatchObject({ assetId: fixture.firstAssetId })
 
-    const conflictStatus = await Effect.runPromise(
-      HttpClientRequest.post("/v1/asset-overrides").pipe(
-        HttpClientRequest.bodyJsonUnsafe(createPayload),
-        HttpClientRequest.bearerToken(token),
-        HttpClient.execute,
-        Effect.map((response) => response.status),
-        Effect.provide(HttpLive),
-        Effect.scoped
-      )
+    const conflict = await Effect.runPromise(
+      runRequest({
+        request: HttpClientRequest.post("/v1/asset-overrides").pipe(
+          HttpClientRequest.bodyJsonUnsafe(createPayload)
+        ),
+        responseSchema: AssetOverrideConflictError,
+      })
     )
-    expect(conflictStatus).toBe(409)
+    expect(conflict.status).toBe(409)
+    expect(conflict.body.current.activeOverride?.id).toBe(created.body.activeOverride?.id)
+    expect(conflict.body.current.systemRevision).toBe(created.body.systemRevision)
 
     const activeOverrideId = created.body.activeOverride?.id
     if (activeOverrideId === undefined) expect.unreachable("Expected an active override")
@@ -412,7 +558,7 @@ describe("AssetsApiLive", () => {
     )
     expect(withdrawn.body.activeOverride).toBeNull()
     expect(withdrawn.body.history).toHaveLength(3)
-  })
+  }, 10_000)
 
   it("lists canonical assets from the asset table without authentication", async () => {
     const response = await Effect.runPromise(

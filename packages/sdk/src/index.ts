@@ -139,6 +139,7 @@ export {
   TaxMaxiError,
   getTaxMaxiAssetDecisionConflict,
   getTaxMaxiAssetDecisionErrorCode,
+  getTaxMaxiAssetOverrideConflict,
   getTaxMaxiAssetOverrideValidationErrorCode,
   getTaxMaxiCreditRequired,
   isTaxMaxiUnauthorizedError,
@@ -147,6 +148,7 @@ export {
 export type {
   TaxMaxiAssetDecisionConflict,
   TaxMaxiAssetDecisionErrorCode,
+  TaxMaxiAssetOverrideConflict,
   TaxMaxiAssetOverrideValidationErrorCode,
   TaxMaxiCreditRequired,
   TaxMaxiFieldError,

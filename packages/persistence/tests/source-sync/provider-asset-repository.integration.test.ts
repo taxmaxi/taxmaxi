@@ -365,6 +365,278 @@ describe("ProviderAssetRepositoryLive", () => {
       expect(providerAssetRows).toHaveLength(1)
     })
 
+    it("replays active overrides when provider technical facts change", async () => {
+      const providerAssetRowId = await runRepository(
+        Effect.gen(function* () {
+          const repository = yield* ProviderAssetRepository
+          yield* repository.upsertProviderAssets({
+            providerKey: "coinbase",
+            entries: [
+              {
+                providerAssetId: "late-override-facts",
+                naturalKey: null,
+                currencyCode: "LATE",
+                name: "Late Facts Asset",
+                exponent: null,
+                providerType: "crypto",
+                payload: { revision: 1 },
+              },
+            ],
+          })
+          const providerAsset = yield* repository.findProviderAssetByProviderAssetId({
+            providerKey: "coinbase",
+            providerAssetId: "late-override-facts",
+          })
+          if (Option.isNone(providerAsset)) {
+            return yield* Effect.die("Expected late-facts provider asset")
+          }
+          return providerAsset.value.id
+        })
+      )
+
+      const seeded = await runPg(
+        Effect.gen(function* () {
+          const db = yield* drizzle
+          yield* db.insert(schema.providerAssetMappings).values({
+            providerAssetRowId,
+            mappingKind: "asset",
+            mappingStatus: "approved",
+            canonicalAssetId: TEST_BTC_ASSET_ID,
+          })
+          yield* db.insert(schema.providerAssetSourceUses).values({
+            providerAssetRowId,
+            sourceId: TEST_SOURCE_ID,
+            hasChainlessObservation: true,
+          })
+          const [override] = yield* db
+            .insert(schema.principalAssetOverrides)
+            .values({
+              principalId: TEST_PRINCIPAL_ID,
+              kind: "identity",
+              targetKind: "provider_asset",
+              providerAssetRowId,
+              action: "set",
+              inspectedSystemRevision: "missing-decimals-revision",
+              inspectedIdentityState: "resolved",
+              inspectedAssetId: TEST_BTC_ASSET_ID,
+              replacementAssetId: TEST_BTC_ASSET_ID,
+              actorId: "00000000-0000-0000-0000-000000000181",
+              reason: "Use the reviewed identity once decimals are available.",
+            })
+            .returning({ id: schema.principalAssetOverrides.id })
+          const [completedJob] = yield* db
+            .insert(schema.processingJobs)
+            .values({
+              sourceId: TEST_SOURCE_ID,
+              principalId: TEST_PRINCIPAL_ID,
+              mode: "replay",
+              status: "completed",
+              progressDetails: { failedRecords: 0 },
+            })
+            .returning({ id: schema.processingJobs.id })
+          if (override === undefined || completedJob === undefined) {
+            return yield* Effect.die("Failed to seed late-facts override application")
+          }
+          const [application] = yield* db
+            .insert(schema.principalAssetOverrideApplications)
+            .values({
+              overrideId: override.id,
+              sourceId: TEST_SOURCE_ID,
+              replayJobId: completedJob.id,
+              requiresReplay: false,
+            })
+            .returning({ id: schema.principalAssetOverrideApplications.id })
+          if (application === undefined) {
+            return yield* Effect.die("Failed to seed late-facts override application")
+          }
+          return { applicationId: application.id, completedJobId: completedJob.id }
+        })
+      )
+
+      await runRepository(
+        Effect.flatMap(ProviderAssetRepository, (repository) =>
+          repository.upsertProviderAssets({
+            providerKey: "coinbase",
+            entries: [
+              {
+                providerAssetId: "late-override-facts",
+                naturalKey: null,
+                currencyCode: "LATE",
+                name: "Late Facts Asset",
+                exponent: 8,
+                providerType: "crypto",
+                payload: { revision: 2 },
+              },
+            ],
+          })
+        )
+      )
+
+      const replay = await runPg(
+        Effect.gen(function* () {
+          const db = yield* drizzle
+          const [application] = yield* db
+            .select({
+              replayJobId: schema.principalAssetOverrideApplications.replayJobId,
+              requiresReplay: schema.principalAssetOverrideApplications.requiresReplay,
+            })
+            .from(schema.principalAssetOverrideApplications)
+            .where(eq(schema.principalAssetOverrideApplications.id, seeded.applicationId))
+          const jobs = yield* db
+            .select({ id: schema.processingJobs.id, status: schema.processingJobs.status })
+            .from(schema.processingJobs)
+            .orderBy(schema.processingJobs.createdAt)
+          return { application, jobs }
+        })
+      )
+
+      expect(replay.jobs).toHaveLength(2)
+      expect(replay.jobs).toEqual(
+        expect.arrayContaining([
+          { id: seeded.completedJobId, status: "completed" },
+          { id: replay.application?.replayJobId, status: "pending" },
+        ])
+      )
+      expect(replay.application?.replayJobId).not.toBe(seeded.completedJobId)
+      expect(replay.application?.requiresReplay).toBe(true)
+    })
+
+    it("replays an included override when the provider type becomes supported", async () => {
+      const providerAssetRowId = await runRepository(
+        Effect.gen(function* () {
+          const repository = yield* ProviderAssetRepository
+          yield* repository.upsertProviderAssets({
+            providerKey: "coinbase",
+            entries: [
+              {
+                providerAssetId: "late-inclusion-facts",
+                naturalKey: null,
+                currencyCode: "LATEINC",
+                name: "Late Inclusion Facts Asset",
+                exponent: 8,
+                providerType: "unsupported",
+                payload: { revision: 1 },
+              },
+            ],
+          })
+          const providerAsset = yield* repository.findProviderAssetByProviderAssetId({
+            providerKey: "coinbase",
+            providerAssetId: "late-inclusion-facts",
+          })
+          if (Option.isNone(providerAsset)) {
+            return yield* Effect.die("Expected late inclusion provider asset")
+          }
+          return providerAsset.value.id
+        })
+      )
+
+      const seeded = await runPg(
+        Effect.gen(function* () {
+          const db = yield* drizzle
+          yield* db.insert(schema.providerAssetMappings).values({
+            providerAssetRowId,
+            mappingKind: "asset",
+            mappingStatus: "approved",
+            canonicalAssetId: TEST_BTC_ASSET_ID,
+          })
+          yield* db.insert(schema.providerAssetSourceUses).values({
+            providerAssetRowId,
+            sourceId: TEST_SOURCE_ID,
+            hasChainlessObservation: true,
+          })
+          const [override] = yield* db
+            .insert(schema.principalAssetOverrides)
+            .values({
+              principalId: TEST_PRINCIPAL_ID,
+              kind: "inclusion",
+              targetKind: "provider_asset",
+              providerAssetRowId,
+              action: "set",
+              inspectedSystemRevision: "unsupported-provider-type-revision",
+              inspectedInclusionState: "blocked",
+              inspectedInclusionReason: "unsupported_asset_type",
+              replacementInclusionState: "included",
+              actorId: "00000000-0000-0000-0000-000000000181",
+              reason: "Include the reviewed asset once its provider type is supported.",
+            })
+            .returning({ id: schema.principalAssetOverrides.id })
+          const [completedJob] = yield* db
+            .insert(schema.processingJobs)
+            .values({
+              sourceId: TEST_SOURCE_ID,
+              principalId: TEST_PRINCIPAL_ID,
+              mode: "replay",
+              status: "completed",
+              progressDetails: { failedRecords: 0 },
+            })
+            .returning({ id: schema.processingJobs.id })
+          if (override === undefined || completedJob === undefined) {
+            return yield* Effect.die("Failed to seed late inclusion override application")
+          }
+          const [application] = yield* db
+            .insert(schema.principalAssetOverrideApplications)
+            .values({
+              overrideId: override.id,
+              sourceId: TEST_SOURCE_ID,
+              replayJobId: completedJob.id,
+              requiresReplay: false,
+            })
+            .returning({ id: schema.principalAssetOverrideApplications.id })
+          if (application === undefined) {
+            return yield* Effect.die("Failed to seed late inclusion override application")
+          }
+          return { applicationId: application.id, completedJobId: completedJob.id }
+        })
+      )
+
+      await runRepository(
+        Effect.flatMap(ProviderAssetRepository, (repository) =>
+          repository.upsertProviderAssets({
+            providerKey: "coinbase",
+            entries: [
+              {
+                providerAssetId: "late-inclusion-facts",
+                naturalKey: null,
+                currencyCode: "LATEINC",
+                name: "Late Inclusion Facts Asset",
+                exponent: 8,
+                providerType: "crypto",
+                payload: { revision: 2 },
+              },
+            ],
+          })
+        )
+      )
+
+      const replay = await runPg(
+        Effect.gen(function* () {
+          const db = yield* drizzle
+          const [application] = yield* db
+            .select({
+              replayJobId: schema.principalAssetOverrideApplications.replayJobId,
+              requiresReplay: schema.principalAssetOverrideApplications.requiresReplay,
+            })
+            .from(schema.principalAssetOverrideApplications)
+            .where(eq(schema.principalAssetOverrideApplications.id, seeded.applicationId))
+          const jobs = yield* db
+            .select({ id: schema.processingJobs.id, status: schema.processingJobs.status })
+            .from(schema.processingJobs)
+            .orderBy(schema.processingJobs.createdAt)
+          return { application, jobs }
+        })
+      )
+
+      expect(replay.jobs).toHaveLength(2)
+      expect(replay.jobs).toEqual(
+        expect.arrayContaining([
+          { id: seeded.completedJobId, status: "completed" },
+          { id: replay.application?.replayJobId, status: "pending" },
+        ])
+      )
+      expect(replay.application?.replayJobId).not.toBe(seeded.completedJobId)
+      expect(replay.application?.requiresReplay).toBe(true)
+    })
+
     it("bumps evidence revision only when stored observation facts change", async () => {
       const upsertBtc = ({ name, payload }: { readonly name: string; readonly payload: unknown }) =>
         runRepository(

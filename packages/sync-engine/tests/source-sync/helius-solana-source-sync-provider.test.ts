@@ -1178,32 +1178,39 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
           sourceRecord: makeRawRecord({ fullTransaction: payload }),
           lookups,
         })
-        const legs = yield* provider.deriveLegs({
-          transaction: {
-            id: "transaction-mapped-sol",
-            sourceId: prepared.transaction.sourceId,
-            sourceRawRecordId: prepared.transaction.sourceRawRecordId,
-            externalId: prepared.transaction.externalId,
-            timestamp: prepared.transaction.timestamp,
-            providerTransactionType: prepared.transaction.providerTransactionType,
-            metadata: prepared.transaction.metadata,
-            principalId: prepared.transaction.principalId,
+        const legs = yield* provider.derivePreparedLegs({
+          prepared,
+          context: {
+            transaction: {
+              id: "transaction-mapped-sol",
+              sourceId: prepared.transaction.sourceId,
+              sourceRawRecordId: prepared.transaction.sourceRawRecordId,
+              externalId: prepared.transaction.externalId,
+              timestamp: prepared.transaction.timestamp,
+              providerTransactionType: prepared.transaction.providerTransactionType,
+              metadata: prepared.transaction.metadata,
+              principalId: prepared.transaction.principalId,
+            },
+            venueContext: {
+              ...prepared.venueContext,
+              transactionId: "transaction-mapped-sol",
+            },
+            providerTransfers: [],
+            canonicalTransfers: prepared.canonicalTransfers.map((transfer, index) => ({
+              id: `persisted-transfer-${index}`,
+              sourceId: transfer.sourceId,
+              sourceRawRecordId: transfer.sourceRawRecordId,
+              externalId: transfer.externalId,
+              txHash: transfer.txHash,
+              timestamp: transfer.timestamp,
+              addressId: transfer.addressId,
+              assetId: transfer.assetId,
+              assetRepresentationId: transfer.assetRepresentationId ?? null,
+              amount: transfer.amount,
+              type: transfer.type,
+            })),
+            effectiveProviderAssets: [],
           },
-          venueContext: null,
-          canonicalTransfers: prepared.canonicalTransfers.map((transfer, index) => ({
-            id: `persisted-transfer-${index}`,
-            sourceId: transfer.sourceId,
-            sourceRawRecordId: transfer.sourceRawRecordId,
-            externalId: transfer.externalId,
-            txHash: transfer.txHash,
-            timestamp: transfer.timestamp,
-            addressId: transfer.addressId,
-            assetId: transfer.assetId,
-            assetRepresentationId: transfer.assetRepresentationId ?? null,
-            amount: transfer.amount,
-            type: transfer.type,
-          })),
-          legPlans: prepared.legPlans,
         })
         return { prepared, legs }
       }),
@@ -1300,32 +1307,39 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
           sourceRecord: makeRawRecord({ fullTransaction: payload }),
           lookups,
         })
-        const legs = yield* provider.deriveLegs({
-          transaction: {
-            id: "transaction-mapped-spl",
-            sourceId: prepared.transaction.sourceId,
-            sourceRawRecordId: prepared.transaction.sourceRawRecordId,
-            externalId: prepared.transaction.externalId,
-            timestamp: prepared.transaction.timestamp,
-            providerTransactionType: prepared.transaction.providerTransactionType,
-            metadata: prepared.transaction.metadata,
-            principalId: prepared.transaction.principalId,
+        const legs = yield* provider.derivePreparedLegs({
+          prepared,
+          context: {
+            transaction: {
+              id: "transaction-mapped-spl",
+              sourceId: prepared.transaction.sourceId,
+              sourceRawRecordId: prepared.transaction.sourceRawRecordId,
+              externalId: prepared.transaction.externalId,
+              timestamp: prepared.transaction.timestamp,
+              providerTransactionType: prepared.transaction.providerTransactionType,
+              metadata: prepared.transaction.metadata,
+              principalId: prepared.transaction.principalId,
+            },
+            venueContext: {
+              ...prepared.venueContext,
+              transactionId: "transaction-mapped-spl",
+            },
+            providerTransfers: [],
+            canonicalTransfers: prepared.canonicalTransfers.map((transfer, index) => ({
+              id: `persisted-transfer-${index}`,
+              sourceId: transfer.sourceId,
+              sourceRawRecordId: transfer.sourceRawRecordId,
+              externalId: transfer.externalId,
+              txHash: transfer.txHash,
+              timestamp: transfer.timestamp,
+              addressId: transfer.addressId,
+              assetId: transfer.assetId,
+              assetRepresentationId: transfer.assetRepresentationId ?? null,
+              amount: transfer.amount,
+              type: transfer.type,
+            })),
+            effectiveProviderAssets: [],
           },
-          venueContext: null,
-          canonicalTransfers: prepared.canonicalTransfers.map((transfer, index) => ({
-            id: `persisted-transfer-${index}`,
-            sourceId: transfer.sourceId,
-            sourceRawRecordId: transfer.sourceRawRecordId,
-            externalId: transfer.externalId,
-            txHash: transfer.txHash,
-            timestamp: transfer.timestamp,
-            addressId: transfer.addressId,
-            assetId: transfer.assetId,
-            assetRepresentationId: transfer.assetRepresentationId ?? null,
-            amount: transfer.amount,
-            type: transfer.type,
-          })),
-          legPlans: prepared.legPlans,
         })
         return { prepared, legs }
       }),
@@ -4037,20 +4051,53 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
       blockTime: 1_735_689_600,
     }
 
-    const result = await runProvider(
+    const { prepared, legs } = await runProvider(
       Effect.gen(function* () {
         const provider = yield* HeliusSolanaSourceSyncProvider
         const lookups = yield* provider.loadNormalizationLookups()
-        return yield* provider.prepareNormalization({
+        const prepared = yield* provider.prepareNormalization({
           source: makeSource(),
           sourceRecord: makeRawRecord({ fullTransaction: payload }),
           lookups,
         })
+        const transactionId = "transaction-unknown-token-balance"
+        const legs = yield* provider.derivePreparedLegs({
+          prepared,
+          context: {
+            transaction: {
+              id: transactionId,
+              sourceId: prepared.transaction.sourceId,
+              sourceRawRecordId: prepared.transaction.sourceRawRecordId,
+              externalId: prepared.transaction.externalId,
+              timestamp: prepared.transaction.timestamp,
+              providerTransactionType: prepared.transaction.providerTransactionType,
+              metadata: prepared.transaction.metadata,
+              principalId: prepared.transaction.principalId,
+            },
+            venueContext: { ...prepared.venueContext, transactionId },
+            providerTransfers: [],
+            canonicalTransfers: prepared.canonicalTransfers.map((transfer, index) => ({
+              id: `persisted-unknown-transfer-${index}`,
+              sourceId: transfer.sourceId,
+              sourceRawRecordId: transfer.sourceRawRecordId,
+              externalId: transfer.externalId,
+              txHash: transfer.txHash,
+              timestamp: transfer.timestamp,
+              addressId: transfer.addressId,
+              assetId: transfer.assetId,
+              assetRepresentationId: transfer.assetRepresentationId ?? null,
+              amount: transfer.amount,
+              type: transfer.type,
+            })),
+            effectiveProviderAssets: [],
+          },
+        })
+        return { prepared, legs }
       }),
       () => Effect.die("Helius client should not be called during normalization")
     )
 
-    const providerTransfer = result.providerTransfers.find(
+    const providerTransfer = prepared.providerTransfers.find(
       (transfer) => transfer.providerAssetId === `provider-asset-${UNKNOWN_MINT}`
     )
 
@@ -4068,9 +4115,11 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
         },
       }),
     })
-    expect(result.legDerivationStrategy).toBe("skip")
-    expect(result.legPlans).toEqual([])
-    expect(result.transactionReview?.matchedLayer).toBe("solana_asset_mapping")
+    expect(prepared.legDerivationStrategy).toBe("skip")
+    expect(prepared.legPlans).toEqual([])
+    expect(prepared.canonicalTransfers).not.toEqual([])
+    expect(prepared.transactionReview?.matchedLayer).toBe("solana_asset_mapping")
+    expect(legs).toEqual([])
   })
 
   it("keeps excluded SPL movements as evidence without creating accounting or review work", async () => {

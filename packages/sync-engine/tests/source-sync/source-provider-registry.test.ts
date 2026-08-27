@@ -6,6 +6,7 @@ import { CoinbaseSourceSyncProvider } from "../../src/providers/coinbase/service
 import {
   HELIUS_SOLANA_PROVIDER_KEY,
   HeliusSolanaSourceSyncProvider,
+  type HeliusSolanaSourceSyncProviderShape,
 } from "../../src/providers/helius-solana/services/HeliusSolanaSourceSyncProvider.ts"
 import { SourceProviderRegistry } from "../../src/services/SourceProviderRegistry.ts"
 import {
@@ -42,6 +43,10 @@ const sourceRecord: SourceRawRecord = {
   createdAt: new Date("2026-01-01T00:00:00.000Z"),
   updatedAt: new Date("2026-01-01T00:00:00.000Z"),
 }
+
+let capturedHeliusLegDerivation:
+  | Parameters<HeliusSolanaSourceSyncProviderShape["derivePreparedLegs"]>[0]
+  | null = null
 
 const CoinbaseSourceSyncProviderTestLive = Layer.succeed(
   CoinbaseSourceSyncProvider,
@@ -172,7 +177,10 @@ const HeliusSolanaSourceSyncProviderTestLive = Layer.succeed(
         legPlans: [],
       }),
     deriveLegs: () => Effect.die("Helius deriveLegs should not be called"),
-    derivePreparedLegs: () => Effect.succeed([]),
+    derivePreparedLegs: (params) => {
+      capturedHeliusLegDerivation = params
+      return Effect.succeed([])
+    },
   })
 )
 
@@ -207,23 +215,50 @@ describe("SourceProviderRegistryLive", () => {
   })
 
   it("forwards Helius onchain context through prepared normalization", async () => {
+    capturedHeliusLegDerivation = null
     const result = await Effect.runPromise(
       Effect.gen(function* () {
         const registry = yield* SourceProviderRegistry
         const provider = yield* registry.resolveProviderModule({ providerKey: "helius-solana" })
         const normalize = yield* provider.makeRawRecordNormalizer()
-        return yield* normalize({ source, sourceRecord })
+        const normalized = yield* normalize({ source, sourceRecord })
+        if (normalized.kind !== "prepared") return { normalized, legs: null }
+        const legs = yield* normalized.deriveLegs({
+          transaction: {
+            id: "transaction-solana-1",
+            sourceId: normalized.transaction.sourceId,
+            sourceRawRecordId: normalized.transaction.sourceRawRecordId,
+            externalId: normalized.transaction.externalId,
+            timestamp: normalized.transaction.timestamp,
+            providerTransactionType: normalized.transaction.providerTransactionType,
+            metadata: normalized.transaction.metadata,
+            principalId: normalized.transaction.principalId,
+          },
+          venueContext: {
+            ...normalized.venueContext,
+            transactionId: "transaction-solana-1",
+          },
+          providerTransfers: [],
+          canonicalTransfers: [],
+          effectiveProviderAssets: [],
+        })
+        return { normalized, legs }
       }).pipe(Effect.provide(RegistryLive))
     )
 
-    expect(result.kind).toBe("prepared")
-    if (result.kind === "prepared") {
-      expect(result.onchainContext).toMatchObject({
+    expect(result.normalized.kind).toBe("prepared")
+    expect(result.legs).toEqual([])
+    expect(capturedHeliusLegDerivation).toMatchObject({
+      prepared: { transaction: { externalId: "solana-signature-1" } },
+      context: { transaction: { id: "transaction-solana-1" } },
+    })
+    if (result.normalized.kind === "prepared") {
+      expect(result.normalized.onchainContext).toMatchObject({
         chainTxId: "solana-signature-1",
         blockHeight: "123",
         positionInBlock: "4",
       })
-      expect(result.overrideMaterializationAllowed).toBe(true)
+      expect(result.normalized.overrideMaterializationAllowed).toBe(true)
     }
   })
 })

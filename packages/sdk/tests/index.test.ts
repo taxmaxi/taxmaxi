@@ -6,6 +6,7 @@ import {
   TaxMaxiError,
   getTaxMaxiAssetDecisionConflict,
   getTaxMaxiAssetDecisionErrorCode,
+  getTaxMaxiAssetOverrideConflict,
   getTaxMaxiAssetOverrideValidationErrorCode,
   getTaxMaxiCreditRequired,
   isTaxMaxiUnauthorizedError,
@@ -605,6 +606,13 @@ describe("TaxMaxi Promise client", () => {
     }
     const overrideId = "00000000-0000-4000-8000-000000000053"
     const readInput = { kind: "identity" as const, target: assetOverrideTarget }
+    const representationTarget = {
+      _tag: "representation" as const,
+      blockchainId: "00000000-0000-4000-8000-000000000054",
+      representationType: "token" as const,
+      contractAddress: "0x0000000000000000000000000000000000000172",
+      mintAddress: null,
+    }
     const setInput = {
       ...readInput,
       expectedSystemRevision: "system-revision-1",
@@ -614,6 +622,8 @@ describe("TaxMaxi Promise client", () => {
 
     await taxmaxi.assetOverrides.current(readInput)
     await taxmaxi.assetOverrides.history(readInput)
+    await taxmaxi.assetOverrides.current({ kind: "identity", target: representationTarget })
+    await taxmaxi.assetOverrides.history({ kind: "identity", target: representationTarget })
     await taxmaxi.assetOverrides.validate({ ...readInput, replacement })
     await taxmaxi.assetOverrides.create(setInput)
     await taxmaxi.assetOverrides.replace({ ...setInput, overrideId })
@@ -636,6 +646,16 @@ describe("TaxMaxi Promise client", () => {
         body: undefined,
         method: "GET",
         url: `https://sdk.example.test/v1/asset-overrides/history?${query}`,
+      },
+      {
+        body: undefined,
+        method: "GET",
+        url: "https://sdk.example.test/v1/asset-overrides/current?kind=identity&targetKind=representation&blockchainId=00000000-0000-4000-8000-000000000054&representationType=token&contractAddress=0x0000000000000000000000000000000000000172",
+      },
+      {
+        body: undefined,
+        method: "GET",
+        url: "https://sdk.example.test/v1/asset-overrides/history?kind=identity&targetKind=representation&blockchainId=00000000-0000-4000-8000-000000000054&representationType=token&contractAddress=0x0000000000000000000000000000000000000172",
       },
       {
         body: { kind: "identity", target: assetOverrideTarget, replacement },
@@ -1384,6 +1404,41 @@ describe("TaxMaxi Promise client", () => {
       "asset_type_mismatch"
     )
     expect(getTaxMaxiAssetOverrideValidationErrorCode(new Error("boom"))).toBeNull()
+  })
+
+  it("extracts the current projection from an asset override conflict", () => {
+    const current = {
+      kind: "identity" as const,
+      target: {
+        _tag: "provider_asset" as const,
+        providerAssetRowId: "00000000-0000-4000-8000-000000000001",
+      },
+      systemRevision: "current-revision",
+      systemConclusion: {
+        _tag: "identity" as const,
+        state: "unresolved" as const,
+        assetId: null,
+      },
+      activeOverride: null,
+      effectiveConclusion: {
+        _tag: "identity" as const,
+        state: "unresolved" as const,
+        assetId: null,
+      },
+      staleSystemRevision: false,
+      history: [],
+      recomputationState: "complete" as const,
+    }
+    const cause = {
+      _tag: "AssetOverrideConflictError",
+      code: "asset_override_conflict",
+      message: "The TaxMaxi conclusion or active override changed.",
+      current,
+    }
+
+    expect(getTaxMaxiAssetOverrideConflict(cause)).toEqual(current)
+    expect(getTaxMaxiAssetOverrideConflict(toTaxMaxiError(cause))).toEqual(current)
+    expect(getTaxMaxiAssetOverrideConflict(new Error("boom"))).toBeNull()
   })
 
   it("builds explicit first-party request clients with cookie headers", async () => {

@@ -1,4 +1,4 @@
-import { eq, sql } from "drizzle-orm"
+import { and, eq, sql } from "drizzle-orm"
 import * as Effect from "effect/Effect"
 import { beforeEach, describe, expect, it } from "vitest"
 import { drizzle } from "../../src/layers/PgClientLive.ts"
@@ -46,6 +46,8 @@ const successfulCompletedState: SourceSyncExecutionState = {
   ...completedState,
   failedRecords: 0,
 }
+
+const LATE_CONSUMER_OLD_ASSET_ID = "00000000-0000-0000-0000-000000000320"
 
 const createJob = ({
   mode = "sync",
@@ -1379,6 +1381,468 @@ describe("SourceSyncJobRepositoryLive", () => {
       })
     )
     expect(application).toEqual({ replayJobId: job.id, requiresReplay: false })
+  })
+
+  it.each([
+    {
+      name: "queues a late old-asset disposal behind the pending override owner replay",
+      cycle: false,
+      completeInitialReplay: true,
+    },
+    {
+      name: "reuses a pending consumer replay when a future owner arrives",
+      cycle: false,
+      completeInitialReplay: false,
+    },
+    {
+      name: "parks a cyclic late-consumer replay as failed",
+      cycle: true,
+      completeInitialReplay: false,
+    },
+  ])("$name", async ({ cycle, completeInitialReplay }) => {
+    const dependentSourceId = "00000000-0000-0000-0000-000000000319"
+    const otherPrincipalId = "00000000-0000-0000-0000-000000000321"
+    const otherPrincipalSourceId = "00000000-0000-0000-0000-000000000322"
+    await seedSourceFixture({
+      sourceId: otherPrincipalSourceId,
+      principalId: otherPrincipalId,
+    })
+    const seeded = await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        yield* db
+          .insert(schema.assets)
+          .values([
+            {
+              id: LATE_CONSUMER_OLD_ASSET_ID,
+              name: "Late consumer old asset",
+              symbol: "LCOLD",
+              type: "fungible",
+            },
+            {
+              id: TEST_BTC_ASSET_ID,
+              name: "Late consumer replacement asset",
+              symbol: "LCNEW",
+              type: "fungible",
+            },
+          ])
+          .onConflictDoNothing()
+        const [providerAsset] = yield* db
+          .insert(schema.providerAssets)
+          .values({
+            provider: "coinbase",
+            providerAssetId: "late-consumer-override",
+            currencyCode: "LCO",
+            exponent: 8,
+            providerType: "crypto",
+            retrievedAt: new Date("2025-01-01T00:00:00.000Z"),
+          })
+          .returning({ id: schema.providerAssets.id })
+        if (providerAsset === undefined) return yield* Effect.die("Failed to seed provider asset")
+        yield* db.insert(schema.providerAssetMappings).values({
+          providerAssetRowId: providerAsset.id,
+          mappingKind: "asset",
+          mappingStatus: "approved",
+          canonicalAssetId: LATE_CONSUMER_OLD_ASSET_ID,
+        })
+        yield* db.insert(schema.providerAssetSourceUses).values({
+          providerAssetRowId: providerAsset.id,
+          sourceId: TEST_SOURCE_ID,
+          hasChainlessObservation: true,
+        })
+        const [ownerTransaction] = yield* db
+          .insert(schema.transactions)
+          .values({
+            sourceId: TEST_SOURCE_ID,
+            externalId: "late-consumer-owner-transaction",
+            timestamp: new Date("2025-01-01T00:00:00.000Z"),
+            principalId: TEST_PRINCIPAL_ID,
+          })
+          .returning({ id: schema.transactions.id })
+        if (ownerTransaction === undefined)
+          return yield* Effect.die("Failed to seed owner transaction")
+        yield* db.insert(schema.providerTransfers).values({
+          sourceId: TEST_SOURCE_ID,
+          transactionId: ownerTransaction.id,
+          externalId: "late-consumer-owner-transfer",
+          providerAssetId: providerAsset.id,
+          timestamp: new Date("2025-01-01T00:00:00.000Z"),
+          direction: "inbound",
+          processingMode: "accounting_and_evidence",
+          fromAccountRef: "external-account",
+          toAccountRef: "owned-account",
+          amount: "1",
+        })
+        const [address] = yield* db
+          .insert(schema.addresses)
+          .values({
+            address: "0x0000000000000000000000000000000000000319",
+            type: "evm",
+            name: "Late override consumer",
+            principalId: TEST_PRINCIPAL_ID,
+          })
+          .returning({ id: schema.addresses.id })
+        if (address === undefined) return yield* Effect.die("Failed to seed dependent address")
+        yield* db.insert(schema.sources).values({
+          id: dependentSourceId,
+          principalId: TEST_PRINCIPAL_ID,
+          name: "Late override consumer",
+          providerKey: "base-rpc",
+          sourceableType: "onchain",
+          addressId: address.id,
+        })
+        const [consumerTransaction] = yield* db
+          .insert(schema.transactions)
+          .values({
+            sourceId: dependentSourceId,
+            externalId: "late-consumer-transaction",
+            timestamp: new Date("2025-01-02T00:00:00.000Z"),
+            principalId: TEST_PRINCIPAL_ID,
+          })
+          .returning({ id: schema.transactions.id })
+        if (consumerTransaction === undefined) {
+          return yield* Effect.die("Failed to seed consumer transaction")
+        }
+        yield* db.insert(schema.transactionLegs).values({
+          sourceId: dependentSourceId,
+          externalId: "late-consumer-disposal",
+          timestamp: new Date("2025-01-02T00:00:00.000Z"),
+          principalId: TEST_PRINCIPAL_ID,
+          assetId: LATE_CONSUMER_OLD_ASSET_ID,
+          amount: "1",
+          kind: "disposal",
+          provenance: "deterministic",
+          transactionId: consumerTransaction.id,
+        })
+        if (cycle) {
+          yield* db.insert(schema.transactionLegs).values({
+            sourceId: dependentSourceId,
+            externalId: "late-consumer-replacement-disposal",
+            timestamp: new Date("2025-01-02T00:00:00.000Z"),
+            principalId: TEST_PRINCIPAL_ID,
+            assetId: TEST_BTC_ASSET_ID,
+            amount: "1",
+            kind: "disposal",
+            provenance: "deterministic",
+            transactionId: consumerTransaction.id,
+          })
+        }
+        const [otherPrincipalTransaction] = yield* db
+          .insert(schema.transactions)
+          .values({
+            sourceId: otherPrincipalSourceId,
+            externalId: "other-principal-late-consumer-transaction",
+            timestamp: new Date("2025-01-02T00:00:00.000Z"),
+            principalId: otherPrincipalId,
+          })
+          .returning({ id: schema.transactions.id })
+        if (otherPrincipalTransaction === undefined) {
+          return yield* Effect.die("Failed to seed other-principal consumer transaction")
+        }
+        yield* db.insert(schema.transactionLegs).values({
+          sourceId: otherPrincipalSourceId,
+          externalId: "other-principal-late-consumer-disposal",
+          timestamp: new Date("2025-01-02T00:00:00.000Z"),
+          principalId: otherPrincipalId,
+          assetId: LATE_CONSUMER_OLD_ASSET_ID,
+          amount: "1",
+          kind: "disposal",
+          provenance: "deterministic",
+          transactionId: otherPrincipalTransaction.id,
+        })
+        const [override] = yield* db
+          .insert(schema.principalAssetOverrides)
+          .values({
+            principalId: TEST_PRINCIPAL_ID,
+            kind: "identity",
+            targetKind: "provider_asset",
+            providerAssetRowId: providerAsset.id,
+            action: "set",
+            inspectedSystemRevision: "late-consumer-override",
+            inspectedIdentityState: "resolved",
+            inspectedAssetId: LATE_CONSUMER_OLD_ASSET_ID,
+            replacementAssetId: TEST_BTC_ASSET_ID,
+            actorId: TEST_USER_ID,
+            reason: "Rebuild late consumers after the owner.",
+          })
+          .returning({ id: schema.principalAssetOverrides.id })
+        const [ownerJob] = yield* db
+          .insert(schema.processingJobs)
+          .values({
+            sourceId: TEST_SOURCE_ID,
+            principalId: TEST_PRINCIPAL_ID,
+            mode: "replay",
+            status: "pending",
+          })
+          .returning({ id: schema.processingJobs.id })
+        if (override === undefined || ownerJob === undefined) {
+          return yield* Effect.die("Failed to seed pending owner replay")
+        }
+        let noncyclicOverrideId: string | null = null
+        if (cycle) {
+          const [noncyclicOverride] = yield* db
+            .insert(schema.principalAssetOverrides)
+            .values({
+              principalId: TEST_PRINCIPAL_ID,
+              kind: "inclusion",
+              targetKind: "provider_asset",
+              providerAssetRowId: providerAsset.id,
+              action: "set",
+              inspectedSystemRevision: "late-consumer-noncyclic-override",
+              inspectedInclusionState: "excluded",
+              inspectedInclusionReason: "taxmaxi_policy",
+              replacementInclusionState: "included",
+              actorId: TEST_USER_ID,
+              reason: "Keep an independent late-consumer replay runnable.",
+            })
+            .returning({ id: schema.principalAssetOverrides.id })
+          if (noncyclicOverride === undefined) {
+            return yield* Effect.die("Failed to seed noncyclic override")
+          }
+          noncyclicOverrideId = noncyclicOverride.id
+          yield* db.insert(schema.principalAssetOverrideApplications).values({
+            overrideId: noncyclicOverride.id,
+            sourceId: TEST_SOURCE_ID,
+            replayJobId: ownerJob.id,
+            dependsOnSourceIds: [],
+            requiresReplay: true,
+          })
+        }
+        yield* db.insert(schema.principalAssetOverrideApplications).values({
+          overrideId: override.id,
+          sourceId: TEST_SOURCE_ID,
+          replayJobId: ownerJob.id,
+          dependsOnSourceIds: cycle ? [dependentSourceId] : [],
+          requiresReplay: true,
+        })
+        return {
+          overrideId: override.id,
+          noncyclicOverrideId,
+          providerAssetRowId: providerAsset.id,
+        }
+      })
+    )
+
+    const job = await createJob({ sourceId: dependentSourceId })
+    await claimJob({ jobId: job.id })
+    await runRepository(
+      Effect.flatMap(SourceSyncJobRepository, (repository) =>
+        repository.completeJob({ jobId: job.id, state: successfulCompletedState })
+      )
+    )
+
+    const replay = await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const [application] = yield* db
+          .select({
+            replayJobId: schema.principalAssetOverrideApplications.replayJobId,
+            dependsOnSourceIds: schema.principalAssetOverrideApplications.dependsOnSourceIds,
+            requiresReplay: schema.principalAssetOverrideApplications.requiresReplay,
+          })
+          .from(schema.principalAssetOverrideApplications)
+          .where(
+            and(
+              eq(schema.principalAssetOverrideApplications.overrideId, seeded.overrideId),
+              eq(schema.principalAssetOverrideApplications.sourceId, dependentSourceId)
+            )
+          )
+        const followUpJobs = yield* db
+          .select({
+            id: schema.processingJobs.id,
+            mode: schema.processingJobs.mode,
+            status: schema.processingJobs.status,
+            progressDetails: schema.processingJobs.progressDetails,
+          })
+          .from(schema.processingJobs)
+          .where(eq(schema.processingJobs.sourceId, dependentSourceId))
+        const [otherPrincipalApplication] = yield* db
+          .select({ id: schema.principalAssetOverrideApplications.id })
+          .from(schema.principalAssetOverrideApplications)
+          .where(
+            and(
+              eq(schema.principalAssetOverrideApplications.overrideId, seeded.overrideId),
+              eq(schema.principalAssetOverrideApplications.sourceId, otherPrincipalSourceId)
+            )
+          )
+        const noncyclicApplication =
+          seeded.noncyclicOverrideId === null
+            ? undefined
+            : yield* db
+                .select({
+                  replayJobId: schema.principalAssetOverrideApplications.replayJobId,
+                })
+                .from(schema.principalAssetOverrideApplications)
+                .where(
+                  and(
+                    eq(
+                      schema.principalAssetOverrideApplications.overrideId,
+                      seeded.noncyclicOverrideId
+                    ),
+                    eq(schema.principalAssetOverrideApplications.sourceId, dependentSourceId)
+                  )
+                )
+                .limit(1)
+                .pipe(Effect.map((rows) => rows[0]))
+        return { application, followUpJobs, otherPrincipalApplication, noncyclicApplication }
+      })
+    )
+    expect(replay.application).toEqual({
+      replayJobId: replay.application?.replayJobId,
+      dependsOnSourceIds: [TEST_SOURCE_ID],
+      requiresReplay: true,
+    })
+    const failedReplayJob = replay.followUpJobs.find(({ status }) => status === "failed")
+    const pendingReplayJob = replay.followUpJobs.find(({ status }) => status === "pending")
+    if (cycle) {
+      expect(failedReplayJob).toMatchObject({
+        mode: "replay",
+        status: "failed",
+        progressDetails: expect.objectContaining({
+          failureCode: "cyclic_replay_dependency",
+        }),
+      })
+      expect(replay.application?.replayJobId).toBe(failedReplayJob?.id)
+      expect(pendingReplayJob).toMatchObject({ mode: "replay", status: "pending" })
+      expect(replay.noncyclicApplication?.replayJobId).toBe(pendingReplayJob?.id)
+    } else {
+      expect(pendingReplayJob).toMatchObject({ mode: "replay", status: "pending" })
+      expect(replay.application?.replayJobId).toBe(pendingReplayJob?.id)
+    }
+    expect(replay.otherPrincipalApplication).toBeUndefined()
+
+    if (!cycle) {
+      expect(pendingReplayJob).toBeDefined()
+      if (pendingReplayJob === undefined) {
+        return
+      }
+      if (completeInitialReplay) {
+        await claimJob({ jobId: pendingReplayJob.id })
+        await runRepository(
+          Effect.flatMap(SourceSyncJobRepository, (repository) =>
+            repository.completeJob({
+              jobId: pendingReplayJob.id,
+              state: successfulCompletedState,
+            })
+          )
+        )
+      }
+
+      const futureOwnerSourceId = "00000000-0000-0000-0000-000000000323"
+      await runPg(
+        Effect.gen(function* () {
+          const db = yield* drizzle
+          const [address] = yield* db
+            .insert(schema.addresses)
+            .values({
+              address: "0x0000000000000000000000000000000000000323",
+              type: "evm",
+              name: "Future override owner",
+              principalId: TEST_PRINCIPAL_ID,
+            })
+            .returning({ id: schema.addresses.id })
+          if (address === undefined) return yield* Effect.die("Failed to seed future owner address")
+          yield* db.insert(schema.sources).values({
+            id: futureOwnerSourceId,
+            principalId: TEST_PRINCIPAL_ID,
+            name: "Future override owner",
+            providerKey: "base-rpc",
+            sourceableType: "onchain",
+            addressId: address.id,
+          })
+          yield* db.insert(schema.providerAssetSourceUses).values({
+            providerAssetRowId: seeded.providerAssetRowId,
+            sourceId: futureOwnerSourceId,
+            hasChainlessObservation: true,
+          })
+          const [transaction] = yield* db
+            .insert(schema.transactions)
+            .values({
+              sourceId: futureOwnerSourceId,
+              externalId: "future-override-owner-transaction",
+              timestamp: new Date("2025-01-01T12:00:00.000Z"),
+              principalId: TEST_PRINCIPAL_ID,
+            })
+            .returning({ id: schema.transactions.id })
+          if (transaction === undefined) {
+            return yield* Effect.die("Failed to seed future owner transaction")
+          }
+          yield* db.insert(schema.providerTransfers).values({
+            sourceId: futureOwnerSourceId,
+            transactionId: transaction.id,
+            externalId: "future-override-owner-transfer",
+            providerAssetId: seeded.providerAssetRowId,
+            timestamp: new Date("2025-01-01T12:00:00.000Z"),
+            direction: "inbound",
+            processingMode: "accounting_and_evidence",
+            fromAccountRef: "external-account",
+            toAccountRef: "owned-account",
+            amount: "1",
+          })
+        })
+      )
+      const futureOwnerJob = await createJob({ sourceId: futureOwnerSourceId })
+      await claimJob({ jobId: futureOwnerJob.id })
+      await runRepository(
+        Effect.flatMap(SourceSyncJobRepository, (repository) =>
+          repository.completeJob({
+            jobId: futureOwnerJob.id,
+            state: successfulCompletedState,
+          })
+        )
+      )
+      const updatedDependencies = await runPg(
+        Effect.gen(function* () {
+          const db = yield* drizzle
+          const [application] = yield* db
+            .select({
+              dependsOnSourceIds: schema.principalAssetOverrideApplications.dependsOnSourceIds,
+              replayJobId: schema.principalAssetOverrideApplications.replayJobId,
+            })
+            .from(schema.principalAssetOverrideApplications)
+            .where(
+              and(
+                eq(schema.principalAssetOverrideApplications.overrideId, seeded.overrideId),
+                eq(schema.principalAssetOverrideApplications.sourceId, dependentSourceId)
+              )
+            )
+          const [replayJob] = yield* db
+            .select({
+              status: schema.processingJobs.status,
+              followUpMode: schema.processingJobs.followUpMode,
+            })
+            .from(schema.processingJobs)
+            .where(eq(schema.processingJobs.id, application?.replayJobId ?? futureOwnerJob.id))
+          return { application, replayJob }
+        })
+      )
+      expect(updatedDependencies.application?.dependsOnSourceIds).toEqual(
+        [TEST_SOURCE_ID, futureOwnerSourceId].sort()
+      )
+      if (completeInitialReplay) {
+        expect(updatedDependencies.application?.replayJobId).not.toBe(pendingReplayJob.id)
+      } else {
+        expect(updatedDependencies.application?.replayJobId).toBe(pendingReplayJob.id)
+      }
+      expect(updatedDependencies.replayJob).toEqual({
+        status: "pending",
+        followUpMode: null,
+      })
+
+      if (!completeInitialReplay) {
+        await claimJob({ jobId: pendingReplayJob.id })
+        await runRepository(
+          Effect.flatMap(SourceSyncJobRepository, (repository) =>
+            repository.completeJob({
+              jobId: pendingReplayJob.id,
+              state: successfulCompletedState,
+            })
+          )
+        )
+        const completedReplay = await selectProcessingJob({ jobId: pendingReplayJob.id })
+        expect(completedReplay.followUpJobId).toBeNull()
+      }
+    }
   })
 
   it("links a successful replay created exactly at the override timestamp", async () => {

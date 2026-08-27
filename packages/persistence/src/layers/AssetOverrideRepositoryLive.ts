@@ -309,6 +309,7 @@ const make = Effect.gen(function* () {
             exponent: schema.providerAssets.exponent,
             providerType: schema.providerAssets.providerType,
             mappingId: schema.providerAssetMappings.id,
+            mappingKind: schema.providerAssetMappings.mappingKind,
             mappingStatus: schema.providerAssetMappings.mappingStatus,
             assetId: schema.providerAssetMappings.canonicalAssetId,
             representationId: schema.providerAssetMappings.assetRepresentationId,
@@ -349,7 +350,9 @@ const make = Effect.gen(function* () {
         const technicalBlocker =
           row.exponent === null
             ? "missing_decimals"
-            : row.providerType === "unsupported"
+            : row.providerType === "unsupported" ||
+                row.providerType === "fiat" ||
+                row.mappingKind === "fiat"
               ? "unsupported_asset_type"
               : null
         const conclusion: AssetOverrideSystemConclusion =
@@ -532,17 +535,204 @@ const make = Effect.gen(function* () {
       return [...allocationDependencies, ...disposalDependencies]
     })
 
-  const loadReplayPlan = ({
+  const loadPotentialDownstreamDependencies = ({
+    assetIds,
     executor,
-    sourceIds,
+    ownerSourceIds,
+    principalId,
+    target,
   }: {
+    readonly assetIds: ReadonlyArray<string>
     readonly executor: AssetOverrideExecutor
+    readonly ownerSourceIds: ReadonlyArray<string>
+    readonly principalId: string
+    readonly target: AssetOverrideTarget
+  }) =>
+    Effect.gen(function* () {
+      if (assetIds.length === 0) return []
+
+      const transferTargetEvents =
+        target._tag === "representation"
+          ? yield* executor
+              .select({
+                sourceId: schema.providerTransfers.sourceId,
+                timestamp: schema.providerTransfers.timestamp,
+              })
+              .from(schema.providerTransfers)
+              .where(
+                and(
+                  inArray(schema.providerTransfers.sourceId, ownerSourceIds),
+                  eq(schema.providerTransfers.direction, "inbound"),
+                  inArray(schema.providerTransfers.processingMode, [
+                    "accounting_and_evidence",
+                    "accounting_only",
+                  ]),
+                  providerTransferTargetPredicate(target)
+                )
+              )
+          : yield* executor
+              .select({
+                sourceId: schema.providerTransfers.sourceId,
+                timestamp: schema.providerTransfers.timestamp,
+              })
+              .from(schema.providerTransfers)
+              .where(
+                and(
+                  inArray(schema.providerTransfers.sourceId, ownerSourceIds),
+                  eq(schema.providerTransfers.direction, "inbound"),
+                  eq(schema.providerTransfers.providerAssetId, target.providerAssetRowId),
+                  inArray(schema.providerTransfers.processingMode, [
+                    "accounting_and_evidence",
+                    "accounting_only",
+                  ]),
+                  sql`(
+                    ${schema.providerTransfers.observedBlockchainId} is null
+                    or ${schema.providerTransfers.observedRepresentationType} is null
+                  )`
+                )
+              )
+      const transactionOnlyTargetEvents =
+        target._tag === "representation"
+          ? []
+          : yield* executor
+              .select({
+                sourceId: schema.providerAssetTransactionUses.sourceId,
+                timestamp: schema.transactions.timestamp,
+              })
+              .from(schema.providerAssetTransactionUses)
+              .innerJoin(
+                schema.transactions,
+                eq(schema.transactions.id, schema.providerAssetTransactionUses.transactionId)
+              )
+              .where(
+                and(
+                  inArray(schema.providerAssetTransactionUses.sourceId, ownerSourceIds),
+                  eq(
+                    schema.providerAssetTransactionUses.providerAssetRowId,
+                    target.providerAssetRowId
+                  ),
+                  sql`not exists (
+                    select 1
+                    from ${schema.providerTransfers} transaction_provider_transfer
+                    where transaction_provider_transfer.transaction_id = ${schema.providerAssetTransactionUses.transactionId}
+                      and transaction_provider_transfer.provider_asset_id = ${target.providerAssetRowId}
+                  )`,
+                  sql`exists (
+                    select 1
+                    from ${schema.transactionLegs} owner_leg
+                    where owner_leg.transaction_id = ${schema.providerAssetTransactionUses.transactionId}
+                      and owner_leg.asset_id in (${sql.join(
+                        assetIds.map((assetId) => sql`${assetId}::uuid`),
+                        sql`, `
+                      )})
+                      and owner_leg.kind in ('acquisition', 'income')
+                  )`
+                )
+              )
+      const earliestTargetTimestampBySourceId = new Map<string, Date>()
+      for (const event of [...transferTargetEvents, ...transactionOnlyTargetEvents]) {
+        const current = earliestTargetTimestampBySourceId.get(event.sourceId)
+        if (current === undefined || event.timestamp < current) {
+          earliestTargetTimestampBySourceId.set(event.sourceId, event.timestamp)
+        }
+      }
+
+      const legConsumers = yield* executor
+        .select({
+          sourceId: schema.transactionLegs.sourceId,
+          timestamp: schema.transactionLegs.timestamp,
+        })
+        .from(schema.transactionLegs)
+        .where(
+          and(
+            eq(schema.transactionLegs.principalId, principalId),
+            inArray(schema.transactionLegs.assetId, assetIds),
+            inArray(schema.transactionLegs.kind, ["disposal", "fee"])
+          )
+        )
+      const movementConsumers = yield* executor
+        .select({
+          sourceId: schema.inventoryMovements.sourceId,
+          timestamp: schema.inventoryMovements.timestamp,
+        })
+        .from(schema.inventoryMovements)
+        .where(
+          and(
+            eq(schema.inventoryMovements.principalId, principalId),
+            inArray(schema.inventoryMovements.assetId, assetIds),
+            eq(schema.inventoryMovements.direction, "outbound")
+          )
+        )
+      const latestConsumerTimestampBySourceId = new Map<string, Date>()
+      for (const consumer of [...legConsumers, ...movementConsumers]) {
+        const current = latestConsumerTimestampBySourceId.get(consumer.sourceId)
+        if (current === undefined || consumer.timestamp > current) {
+          latestConsumerTimestampBySourceId.set(consumer.sourceId, consumer.timestamp)
+        }
+      }
+
+      return [...earliestTargetTimestampBySourceId].flatMap(
+        ([ownerSourceId, earliestTimestamp]) => {
+          return [...latestConsumerTimestampBySourceId].flatMap(
+            ([dependentSourceId, consumerTimestamp]) =>
+              ownerSourceId !== dependentSourceId && earliestTimestamp <= consumerTimestamp
+                ? [{ ownerSourceId, dependentSourceId }]
+                : []
+          )
+        }
+      )
+    })
+
+  const loadReplayPlan = ({
+    assetIds,
+    executor,
+    principalId,
+    sourceIds,
+    target,
+  }: {
+    readonly assetIds: ReadonlyArray<string>
+    readonly executor: AssetOverrideExecutor
+    readonly principalId: string
     readonly sourceIds: ReadonlyArray<string>
+    readonly target: AssetOverrideTarget
   }) =>
     Effect.gen(function* () {
       const affectedSourceIds = [...new Set(sourceIds)]
       const dependenciesBySourceId = new Map<string, Set<string>>()
       let frontier = [...affectedSourceIds]
+
+      while (frontier.length > 0) {
+        const dependencies = yield* loadCrossSourceDependencies({ executor, sourceIds: frontier })
+        for (const { ownerSourceId, dependentSourceId } of dependencies) {
+          const owners = dependenciesBySourceId.get(dependentSourceId) ?? new Set<string>()
+          owners.add(ownerSourceId)
+          dependenciesBySourceId.set(dependentSourceId, owners)
+        }
+        const dependentSourceIds = dependencies.map(({ dependentSourceId }) => dependentSourceId)
+        const unseen = [...new Set(dependentSourceIds)].filter(
+          (sourceId) => !affectedSourceIds.includes(sourceId)
+        )
+        affectedSourceIds.push(...unseen)
+        frontier = unseen
+      }
+
+      const potentialDependencies = yield* loadPotentialDownstreamDependencies({
+        assetIds,
+        executor,
+        ownerSourceIds: sourceIds,
+        principalId,
+        target,
+      })
+      const potentialDependentSourceIds = [
+        ...new Set(potentialDependencies.map(({ dependentSourceId }) => dependentSourceId)),
+      ].filter((sourceId) => !affectedSourceIds.includes(sourceId))
+      for (const { ownerSourceId, dependentSourceId } of potentialDependencies) {
+        const owners = dependenciesBySourceId.get(dependentSourceId) ?? new Set<string>()
+        owners.add(ownerSourceId)
+        dependenciesBySourceId.set(dependentSourceId, owners)
+      }
+      affectedSourceIds.push(...potentialDependentSourceIds)
+      frontier = potentialDependentSourceIds
 
       while (frontier.length > 0) {
         const dependencies = yield* loadCrossSourceDependencies({ executor, sourceIds: frontier })
@@ -660,6 +850,53 @@ const make = Effect.gen(function* () {
         asc(schema.principalAssetOverrides.id)
       )
       .pipe(Effect.map((rows) => rows.map(rowHistoryEntry)))
+
+  const loadReplayAssetIds = ({
+    action,
+    executor,
+    kind,
+    principalId,
+    replacement,
+    target,
+  }: {
+    readonly action: "set" | "withdraw"
+    readonly executor: AssetOverrideExecutor
+    readonly kind: AssetOverrideKind
+    readonly principalId: string
+    readonly replacement: AssetOverrideReplacement | null
+    readonly target: AssetOverrideTarget
+  }) =>
+    Effect.gen(function* () {
+      const system = yield* loadSystemConclusion({
+        executor,
+        kind: "identity",
+        principalId,
+        target,
+      })
+      const identityHistory = yield* loadHistory({
+        executor,
+        kind: "identity",
+        principalId,
+        target,
+      })
+      const latestIdentity = identityHistory.at(-1) ?? null
+      const currentAssetId =
+        latestIdentity?.action === "set" && latestIdentity.replacement?._tag === "identity"
+          ? latestIdentity.replacement.assetId
+          : system.systemAssetId
+      const nextAssetId =
+        kind !== "identity"
+          ? currentAssetId
+          : action === "set" && replacement?._tag === "identity"
+            ? replacement.assetId
+            : system.systemAssetId
+
+      return [
+        ...new Set(
+          [currentAssetId, nextAssetId].filter((assetId): assetId is string => assetId !== null)
+        ),
+      ]
+    })
 
   const loadRecomputationState = ({
     executor,
@@ -841,6 +1078,26 @@ const make = Effect.gen(function* () {
           message: "Replacement conclusion does not match the override kind.",
         })
       }
+      if (target._tag === "provider_asset") {
+        const [providerAsset] = yield* executor
+          .select({
+            mappingKind: schema.providerAssetMappings.mappingKind,
+            providerType: schema.providerAssets.providerType,
+          })
+          .from(schema.providerAssets)
+          .leftJoin(
+            schema.providerAssetMappings,
+            eq(schema.providerAssetMappings.providerAssetRowId, schema.providerAssets.id)
+          )
+          .where(eq(schema.providerAssets.id, target.providerAssetRowId))
+          .limit(1)
+        if (providerAsset?.providerType === "fiat" || providerAsset?.mappingKind === "fiat") {
+          return yield* new AssetOverrideValidationError({
+            code: "unsupported_asset_type",
+            message: "Fiat mappings are not economic-asset override targets.",
+          })
+        }
+      }
       if (replacement._tag === "identity") {
         const [asset] = yield* executor
           .select({ type: schema.assets.type })
@@ -869,7 +1126,6 @@ const make = Effect.gen(function* () {
                     if (providerType === "nft") return "nft" as const
                     if (
                       providerType === "crypto" ||
-                      providerType === "fiat" ||
                       providerType === "native" ||
                       providerType === "spl-token" ||
                       providerType === "spl-token-2022"
@@ -1000,7 +1256,21 @@ const make = Effect.gen(function* () {
         target: canonicalTarget,
       })
       if (ownedSourceIds.length === 0) return yield* new AssetOverrideTargetNotFoundError()
-      const replayPlan = yield* loadReplayPlan({ executor: db, sourceIds: ownedSourceIds })
+      const replayAssetIds = yield* loadReplayAssetIds({
+        action: "set",
+        executor: db,
+        kind,
+        principalId,
+        replacement,
+        target: canonicalTarget,
+      })
+      const replayPlan = yield* loadReplayPlan({
+        assetIds: replayAssetIds,
+        executor: db,
+        principalId,
+        sourceIds: ownedSourceIds,
+        target: canonicalTarget,
+      })
       yield* validateReplayPlan(replayPlan)
       yield* validateReplacement({
         executor: db,
@@ -1059,7 +1329,21 @@ const make = Effect.gen(function* () {
             target: canonicalTarget,
           })
           if (ownedSourceIds.length === 0) return yield* new AssetOverrideTargetNotFoundError()
-          const replayPlan = yield* loadReplayPlan({ executor: tx, sourceIds: ownedSourceIds })
+          const replayAssetIds = yield* loadReplayAssetIds({
+            action,
+            executor: tx,
+            kind,
+            principalId,
+            replacement,
+            target: canonicalTarget,
+          })
+          const replayPlan = yield* loadReplayPlan({
+            assetIds: replayAssetIds,
+            executor: tx,
+            principalId,
+            sourceIds: ownedSourceIds,
+            target: canonicalTarget,
+          })
           yield* validateReplayPlan(replayPlan)
           const sourceIds = replayPlan.affectedSourceIds
           yield* tx.execute(sourceInventoryLockQuery(sourceIds))
@@ -1070,7 +1354,13 @@ const make = Effect.gen(function* () {
               ${schema.providerTransfers},
               ${schema.providerAssets},
               ${schema.providerAssetMappings},
-              ${schema.assetRepresentations}
+              ${schema.assetRepresentations},
+              ${schema.transactions},
+              ${schema.transactionLegs},
+              ${schema.inventoryMovements},
+              ${schema.inventoryMovementAllocations},
+              ${schema.fifoLots},
+              ${schema.disposalMatches}
             in share mode
           `)
           const before = yield* buildProjection({
@@ -1140,8 +1430,11 @@ const make = Effect.gen(function* () {
             target: canonicalTarget,
           })
           const confirmedReplayPlan = yield* loadReplayPlan({
+            assetIds: replayAssetIds,
             executor: tx,
+            principalId,
             sourceIds: confirmedOwnedSourceIds,
+            target: canonicalTarget,
           })
           yield* validateReplayPlan(confirmedReplayPlan)
           const confirmedSourceIds = confirmedReplayPlan.affectedSourceIds

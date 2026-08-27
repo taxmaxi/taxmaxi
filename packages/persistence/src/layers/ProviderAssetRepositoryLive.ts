@@ -81,6 +81,43 @@ const make = Effect.gen(function* () {
 
   type DbTransactionClient = Parameters<Parameters<typeof db.transaction>[0]>[0]
 
+  const loadExistingProviderAssetTechnicalFacts = ({
+    tx,
+    providerKey,
+    providerAssetId,
+    naturalKey,
+  }: {
+    readonly tx: DbTransactionClient
+    readonly providerKey: string
+    readonly providerAssetId: string | null
+    readonly naturalKey: string | null
+  }) => {
+    const identityCondition =
+      providerAssetId !== null
+        ? and(
+            eq(schema.providerAssets.provider, providerKey),
+            eq(schema.providerAssets.providerAssetId, providerAssetId)
+          )
+        : naturalKey !== null
+          ? and(
+              eq(schema.providerAssets.provider, providerKey),
+              eq(schema.providerAssets.naturalKey, naturalKey)
+            )
+          : null
+
+    return identityCondition === null
+      ? Effect.succeed(null)
+      : tx
+          .select({
+            exponent: schema.providerAssets.exponent,
+            providerType: schema.providerAssets.providerType,
+          })
+          .from(schema.providerAssets)
+          .where(identityCondition)
+          .limit(1)
+          .pipe(Effect.map((rows) => rows[0] ?? null))
+  }
+
   const requestReplayForSource = ({
     tx,
     sourceId,
@@ -97,7 +134,7 @@ const make = Effect.gen(function* () {
     readonly reason: string
     readonly operation: string
     readonly decisionIds: ReadonlyArray<string>
-  }): Effect.Effect<void, SyncEngineStorageError> =>
+  }): Effect.Effect<string, SyncEngineStorageError> =>
     Effect.gen(function* () {
       const requestReplay = (
         attemptsRemaining: number
@@ -176,6 +213,104 @@ const make = Effect.gen(function* () {
               ],
             })
             .pipe(wrapSyncEngineSqlError(`${operation}.trackReplay`)),
+        { discard: true }
+      )
+      return processingJobId
+    })
+
+  const requestReplayForChangedOverrideFacts = ({
+    tx,
+    providerAssetRowId,
+    now,
+  }: {
+    readonly tx: DbTransactionClient
+    readonly providerAssetRowId: string
+    readonly now: Date
+  }) =>
+    Effect.gen(function* () {
+      const applications = yield* tx
+        .select({
+          applicationId: schema.principalAssetOverrideApplications.id,
+          principalId: schema.sources.principalId,
+          sourceId: schema.principalAssetOverrideApplications.sourceId,
+        })
+        .from(schema.principalAssetOverrideApplications)
+        .innerJoin(
+          schema.principalAssetOverrides,
+          eq(
+            schema.principalAssetOverrides.id,
+            schema.principalAssetOverrideApplications.overrideId
+          )
+        )
+        .innerJoin(
+          schema.sources,
+          eq(schema.sources.id, schema.principalAssetOverrideApplications.sourceId)
+        )
+        .where(
+          and(
+            eq(schema.principalAssetOverrides.targetKind, "provider_asset"),
+            eq(schema.principalAssetOverrides.providerAssetRowId, providerAssetRowId),
+            eq(schema.principalAssetOverrides.action, "set"),
+            or(
+              and(
+                eq(schema.principalAssetOverrides.kind, "identity"),
+                sql`${schema.principalAssetOverrides.replacementAssetId} is not null`
+              ),
+              and(
+                eq(schema.principalAssetOverrides.kind, "inclusion"),
+                eq(schema.principalAssetOverrides.replacementInclusionState, "included")
+              )
+            ),
+            sql`${schema.principalAssetOverrideApplications.supersededAt} is null`,
+            sql`not exists (
+              select 1
+              from ${schema.processingJobs} parked_cycle
+              where parked_cycle.id = ${schema.principalAssetOverrideApplications.replayJobId}
+                and parked_cycle.progress_details ->> 'failureCode' = 'cyclic_replay_dependency'
+            )`
+          )
+        )
+        .orderBy(asc(schema.principalAssetOverrideApplications.sourceId))
+        .pipe(
+          wrapSyncEngineSqlError(
+            "providerAssetRepository.upsertProviderAssets.activeOverrideApplications"
+          )
+        )
+
+      yield* Effect.forEach(
+        applications,
+        (application) =>
+          Effect.gen(function* () {
+            const replayJobId = yield* requestReplayForSource({
+              tx,
+              sourceId: application.sourceId,
+              principalId: application.principalId,
+              now,
+              reason: "provider_asset_technical_facts_changed",
+              operation: "providerAssetRepository.upsertProviderAssets",
+              decisionIds: [],
+            })
+            yield* tx
+              .update(schema.principalAssetOverrideApplications)
+              .set({ replayJobId, requiresReplay: true })
+              .where(
+                and(
+                  eq(schema.principalAssetOverrideApplications.id, application.applicationId),
+                  sql`not exists (
+                    select 1
+                    from ${schema.processingJobs} parked_cycle
+                    where parked_cycle.id = ${schema.principalAssetOverrideApplications.replayJobId}
+                      and parked_cycle.progress_details ->> 'failureCode'
+                        = 'cyclic_replay_dependency'
+                  )`
+                )
+              )
+              .pipe(
+                wrapSyncEngineSqlError(
+                  "providerAssetRepository.upsertProviderAssets.updateOverrideApplication"
+                )
+              )
+          }),
         { discard: true }
       )
     })
@@ -273,71 +408,105 @@ const make = Effect.gen(function* () {
 
           const now = nowDate()
 
-          const upserted = yield* Effect.forEach(entries, (entry) => {
-            const values = {
-              provider: providerKey,
+          const upserted = yield* Effect.forEach(entries, (entry) =>
+            loadExistingProviderAssetTechnicalFacts({
+              tx,
+              providerKey,
               providerAssetId: entry.providerAssetId,
               naturalKey: entry.naturalKey,
-              currencyCode: entry.currencyCode.toUpperCase(),
-              name: entry.name,
-              exponent: entry.exponent,
-              providerType: entry.providerType,
-              rawProviderPayload: entry.payload,
-              retrievedAt: now,
-              createdAt: now,
-              updatedAt: now,
-            } as const
+            }).pipe(
+              Effect.flatMap((existing) => {
+                const values = {
+                  provider: providerKey,
+                  providerAssetId: entry.providerAssetId,
+                  naturalKey: entry.naturalKey,
+                  currencyCode: entry.currencyCode.toUpperCase(),
+                  name: entry.name,
+                  exponent: entry.exponent,
+                  providerType: entry.providerType,
+                  rawProviderPayload: entry.payload,
+                  retrievedAt: now,
+                  createdAt: now,
+                  updatedAt: now,
+                } as const
 
-            if (entry.providerAssetId !== null) {
-              return tx
-                .insert(schema.providerAssets)
-                .values(values)
-                .onConflictDoUpdate({
-                  target: [schema.providerAssets.provider, schema.providerAssets.providerAssetId],
-                  targetWhere: sql`${schema.providerAssets.providerAssetId} is not null`,
-                  set: {
-                    naturalKey: sql.raw("excluded.natural_key"),
-                    currencyCode: sql.raw("excluded.currency_code"),
-                    name: sql.raw("excluded.name"),
-                    exponent: sql.raw("excluded.exponent"),
-                    providerType: sql.raw("excluded.provider_type"),
-                    rawProviderPayload: sql.raw("excluded.raw_provider_payload"),
-                    evidenceRevision: nextEvidenceRevisionSql,
-                    retrievedAt: sql.raw("excluded.retrieved_at"),
-                    updatedAt: now,
-                  },
+                if (entry.providerAssetId !== null) {
+                  return tx
+                    .insert(schema.providerAssets)
+                    .values(values)
+                    .onConflictDoUpdate({
+                      target: [
+                        schema.providerAssets.provider,
+                        schema.providerAssets.providerAssetId,
+                      ],
+                      targetWhere: sql`${schema.providerAssets.providerAssetId} is not null`,
+                      set: {
+                        naturalKey: sql.raw("excluded.natural_key"),
+                        currencyCode: sql.raw("excluded.currency_code"),
+                        name: sql.raw("excluded.name"),
+                        exponent: sql.raw("excluded.exponent"),
+                        providerType: sql.raw("excluded.provider_type"),
+                        rawProviderPayload: sql.raw("excluded.raw_provider_payload"),
+                        evidenceRevision: nextEvidenceRevisionSql,
+                        retrievedAt: sql.raw("excluded.retrieved_at"),
+                        updatedAt: now,
+                      },
+                    })
+                    .returning({ id: schema.providerAssets.id })
+                    .pipe(
+                      Effect.map((rows) =>
+                        rows.map((row) => ({
+                          ...row,
+                          technicalFactsChanged:
+                            existing !== null &&
+                            (existing.exponent !== entry.exponent ||
+                              existing.providerType !== entry.providerType),
+                        }))
+                      ),
+                      wrapSyncEngineSqlError("providerAssetRepository.upsertProviderAssets")
+                    )
+                }
+
+                if (entry.naturalKey !== null) {
+                  return tx
+                    .insert(schema.providerAssets)
+                    .values(values)
+                    .onConflictDoUpdate({
+                      target: [schema.providerAssets.provider, schema.providerAssets.naturalKey],
+                      targetWhere: sql`${schema.providerAssets.naturalKey} is not null`,
+                      set: {
+                        currencyCode: sql.raw("excluded.currency_code"),
+                        name: sql.raw("excluded.name"),
+                        exponent: sql.raw("excluded.exponent"),
+                        providerType: sql.raw("excluded.provider_type"),
+                        rawProviderPayload: sql.raw("excluded.raw_provider_payload"),
+                        evidenceRevision: nextEvidenceRevisionSql,
+                        retrievedAt: sql.raw("excluded.retrieved_at"),
+                        updatedAt: now,
+                      },
+                    })
+                    .returning({ id: schema.providerAssets.id })
+                    .pipe(
+                      Effect.map((rows) =>
+                        rows.map((row) => ({
+                          ...row,
+                          technicalFactsChanged:
+                            existing !== null &&
+                            (existing.exponent !== entry.exponent ||
+                              existing.providerType !== entry.providerType),
+                        }))
+                      ),
+                      wrapSyncEngineSqlError("providerAssetRepository.upsertProviderAssets")
+                    )
+                }
+
+                return makeMissingIdentityError({
+                  providerKey,
+                  currencyCode: entry.currencyCode,
                 })
-                .returning({ id: schema.providerAssets.id })
-                .pipe(wrapSyncEngineSqlError("providerAssetRepository.upsertProviderAssets"))
-            }
-
-            if (entry.naturalKey !== null) {
-              return tx
-                .insert(schema.providerAssets)
-                .values(values)
-                .onConflictDoUpdate({
-                  target: [schema.providerAssets.provider, schema.providerAssets.naturalKey],
-                  targetWhere: sql`${schema.providerAssets.naturalKey} is not null`,
-                  set: {
-                    currencyCode: sql.raw("excluded.currency_code"),
-                    name: sql.raw("excluded.name"),
-                    exponent: sql.raw("excluded.exponent"),
-                    providerType: sql.raw("excluded.provider_type"),
-                    rawProviderPayload: sql.raw("excluded.raw_provider_payload"),
-                    evidenceRevision: nextEvidenceRevisionSql,
-                    retrievedAt: sql.raw("excluded.retrieved_at"),
-                    updatedAt: now,
-                  },
-                })
-                .returning({ id: schema.providerAssets.id })
-                .pipe(wrapSyncEngineSqlError("providerAssetRepository.upsertProviderAssets"))
-            }
-
-            return makeMissingIdentityError({
-              providerKey,
-              currencyCode: entry.currencyCode,
-            })
-          })
+              })
+            )
+          )
 
           yield* insertUnresolvedResolutionJobs({
             tx,
@@ -345,6 +514,12 @@ const make = Effect.gen(function* () {
             now,
             unresolvedStatuses: CATALOG_REVIEWABLE_STATUSES,
           })
+
+          yield* Effect.forEach(
+            upserted.flatMap((rows) => rows.filter((row) => row.technicalFactsChanged)),
+            ({ id }) => requestReplayForChangedOverrideFacts({ tx, providerAssetRowId: id, now }),
+            { discard: true }
+          )
 
           return entries.length
         })

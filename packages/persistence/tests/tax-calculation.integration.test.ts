@@ -1,9 +1,11 @@
 import { and, eq, sql } from "drizzle-orm"
+import * as Deferred from "effect/Deferred"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import { beforeEach, describe, expect, it } from "vitest"
 import { TaxCalculationServiceLive } from "../src/layers/TaxCalculationServiceLive.ts"
 import { drizzle } from "../src/layers/PgClientLive.ts"
+import { sourceInventoryLockQuery } from "../src/layers/SourceInventoryLock.ts"
 import { schema } from "../src/schema/index.ts"
 import { TaxCalculationService } from "../src/services/index.ts"
 import { makeIntegrationTestDatabaseContext } from "./support/integration-test-kit.ts"
@@ -1024,12 +1026,80 @@ describe("TaxCalculationServiceLive", () => {
     expect(error._tag).toBe("TaxCalculationPendingObservationsError")
   })
 
+  it("keeps an approved chainless mapping blocked when its exponent is missing", async () => {
+    await context.runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const [asset] = yield* db
+          .select({ id: schema.assets.id })
+          .from(schema.assets)
+          .where(eq(schema.assets.symbol, "BTC"))
+          .limit(1)
+        if (asset === undefined) return yield* Effect.die("Missing Bitcoin fixture")
+        const [providerAsset] = yield* db
+          .insert(schema.providerAssets)
+          .values({
+            provider: "coinbase",
+            naturalKey: "approved-missing-exponent",
+            currencyCode: "AMX",
+            exponent: null,
+            providerType: "crypto",
+            retrievedAt: new Date("2025-01-01T00:00:00.000Z"),
+          })
+          .returning({ id: schema.providerAssets.id })
+        if (providerAsset === undefined) {
+          return yield* Effect.die("Failed to seed approved provider asset")
+        }
+        yield* db.insert(schema.providerAssetMappings).values({
+          providerAssetRowId: providerAsset.id,
+          mappingKind: "asset",
+          canonicalAssetId: asset.id,
+          mappingStatus: "approved",
+        })
+        yield* db.insert(schema.providerAssetSourceUses).values({
+          providerAssetRowId: providerAsset.id,
+          sourceId,
+          hasChainlessObservation: true,
+        })
+      })
+    )
+
+    const error = await Effect.runPromise(calculateTax().pipe(Effect.flip))
+
+    expect(error._tag).toBe("TaxCalculationPendingObservationsError")
+  })
+
   it("keeps a provider identity override blocked for an unsupported asset type", async () => {
     const fixture = await Effect.runPromise(
       insertRejectedOverrideFixture({ providerType: "unsupported" })
     )
     await Effect.runPromise(
       insertIdentityOverride({ providerAssetRowId: fixture.providerAssetRowId })
+    )
+
+    const error = await Effect.runPromise(calculateTax().pipe(Effect.flip))
+
+    expect(error._tag).toBe("TaxCalculationPendingObservationsError")
+  })
+
+  it("keeps an active provider identity override blocked after fiat reclassification", async () => {
+    const fixture = await Effect.runPromise(insertRejectedOverrideFixture())
+    await Effect.runPromise(
+      insertIdentityOverride({ providerAssetRowId: fixture.providerAssetRowId })
+    )
+    await context.runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        yield* db
+          .update(schema.providerAssetMappings)
+          .set({
+            mappingKind: "fiat",
+            mappingStatus: "approved",
+            canonicalAssetId: null,
+            canonicalFiatCurrency: "EUR",
+          })
+          .where(eq(schema.providerAssetMappings.providerAssetRowId, fixture.providerAssetRowId))
+      })
     )
 
     const error = await Effect.runPromise(calculateTax().pipe(Effect.flip))
@@ -1457,6 +1527,230 @@ describe("TaxCalculationServiceLive", () => {
     }
   )
 
+  it("keeps a FIFO owner pending until its transitive dependent override replay completes", async () => {
+    const dependentSourceId = "00000000-0000-0000-0000-000000000299"
+    const transitiveSourceId = "00000000-0000-0000-0000-000000000298"
+    const independentSourceId = "00000000-0000-0000-0000-000000000297"
+    const dependency = await context.runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const [blockchain] = yield* db
+          .select({ id: schema.blockchains.id })
+          .from(schema.blockchains)
+          .where(eq(schema.blockchains.name, "base"))
+          .limit(1)
+        if (blockchain === undefined) return yield* Effect.die("Missing base blockchain")
+
+        const [address] = yield* db
+          .insert(schema.addresses)
+          .values({
+            address: "0x0000000000000000000000000000000000000299",
+            type: "evm",
+            name: "Dependent tax replay source",
+            principalId,
+          })
+          .returning({ id: schema.addresses.id })
+        if (address === undefined) return yield* Effect.die("Failed to create dependent address")
+
+        yield* db.insert(schema.sources).values({
+          id: dependentSourceId,
+          principalId,
+          name: "Dependent tax replay source",
+          providerKey: "base-rpc",
+          sourceableType: "onchain",
+          addressId: address.id,
+        })
+        const [transitiveAddress] = yield* db
+          .insert(schema.addresses)
+          .values({
+            address: "0x0000000000000000000000000000000000000298",
+            type: "evm",
+            name: "Transitive tax replay source",
+            principalId,
+          })
+          .returning({ id: schema.addresses.id })
+        if (transitiveAddress === undefined) {
+          return yield* Effect.die("Failed to create transitive address")
+        }
+        yield* db.insert(schema.sources).values({
+          id: transitiveSourceId,
+          principalId,
+          name: "Transitive tax replay source",
+          providerKey: "base-rpc",
+          sourceableType: "onchain",
+          addressId: transitiveAddress.id,
+        })
+        const [independentAddress] = yield* db
+          .insert(schema.addresses)
+          .values({
+            address: "0x0000000000000000000000000000000000000297",
+            type: "evm",
+            name: "Independent tax replay source",
+            principalId,
+          })
+          .returning({ id: schema.addresses.id })
+        if (independentAddress === undefined) {
+          return yield* Effect.die("Failed to create independent address")
+        }
+        yield* db.insert(schema.sources).values({
+          id: independentSourceId,
+          principalId,
+          name: "Independent tax replay source",
+          providerKey: "base-rpc",
+          sourceableType: "onchain",
+          addressId: independentAddress.id,
+        })
+        const [override] = yield* db
+          .insert(schema.principalAssetOverrides)
+          .values({
+            principalId,
+            kind: "identity",
+            targetKind: "representation",
+            blockchainId: blockchain.id,
+            representationType: "token",
+            contractAddress: btcContractAddress,
+            action: "set",
+            inspectedSystemRevision: "dependent-tax-replay",
+            inspectedIdentityState: "resolved",
+            inspectedAssetId: sql`(
+              select ${schema.assets.id}
+              from ${schema.assets}
+              where ${schema.assets.symbol} = 'BTC'
+              limit 1
+            )`,
+            replacementAssetId: sql`(
+              select ${schema.assets.id}
+              from ${schema.assets}
+              where ${schema.assets.symbol} = 'BTC'
+              limit 1
+            )`,
+            actorId: userId,
+            reason: "Keep owner tax results pending until dependent replay finishes.",
+          })
+          .returning({ id: schema.principalAssetOverrides.id })
+        const jobs = yield* db
+          .insert(schema.processingJobs)
+          .values([
+            {
+              sourceId,
+              principalId,
+              mode: "replay" as const,
+              status: "completed" as const,
+              progressDetails: { failedRecords: 0 },
+            },
+            {
+              sourceId: dependentSourceId,
+              principalId,
+              mode: "replay" as const,
+              status: "completed" as const,
+              progressDetails: { failedRecords: 0 },
+            },
+            {
+              sourceId: transitiveSourceId,
+              principalId,
+              mode: "replay" as const,
+              status: "pending" as const,
+            },
+            {
+              sourceId: independentSourceId,
+              principalId,
+              mode: "replay" as const,
+              status: "pending" as const,
+            },
+          ])
+          .returning({ id: schema.processingJobs.id, sourceId: schema.processingJobs.sourceId })
+        if (override === undefined || jobs.length !== 4) {
+          return yield* Effect.die("Failed to seed dependent replay applications")
+        }
+        const jobBySourceId = new Map(jobs.map((job) => [job.sourceId, job.id]))
+        const ownerJobId = jobBySourceId.get(sourceId)
+        const dependentJobId = jobBySourceId.get(dependentSourceId)
+        const transitiveJobId = jobBySourceId.get(transitiveSourceId)
+        const independentJobId = jobBySourceId.get(independentSourceId)
+        if (
+          ownerJobId === undefined ||
+          dependentJobId === undefined ||
+          transitiveJobId === undefined ||
+          independentJobId === undefined
+        ) {
+          return yield* Effect.die("Failed to identify dependent replay jobs")
+        }
+        yield* db.insert(schema.principalAssetOverrideApplications).values([
+          {
+            overrideId: override.id,
+            sourceId,
+            replayJobId: ownerJobId,
+            dependsOnSourceIds: [],
+          },
+          {
+            overrideId: override.id,
+            sourceId: dependentSourceId,
+            replayJobId: dependentJobId,
+            dependsOnSourceIds: [sourceId],
+          },
+          {
+            overrideId: override.id,
+            sourceId: transitiveSourceId,
+            replayJobId: transitiveJobId,
+            dependsOnSourceIds: [dependentSourceId],
+          },
+          {
+            overrideId: override.id,
+            sourceId: independentSourceId,
+            replayJobId: independentJobId,
+            dependsOnSourceIds: [],
+          },
+        ])
+        return { transitiveJobId }
+      })
+    )
+
+    const pending = await Effect.runPromise(calculateTax().pipe(Effect.flip))
+    expect(pending).toMatchObject({
+      _tag: "TaxCalculationPendingRecomputationError",
+      pendingOverrideReplay: true,
+    })
+
+    await context.runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        yield* db
+          .update(schema.processingJobs)
+          .set({ status: "completed", progressDetails: { failedRecords: 0 } })
+          .where(eq(schema.processingJobs.id, dependency.transitiveJobId))
+      })
+    )
+
+    const tax = await Effect.runPromise(calculateTax())
+    expect(tax.taxableGains).toBe(2000)
+  })
+
+  it("serializes tax input reads with source inventory mutations", async () => {
+    const lockAcquired = await Effect.runPromise(Deferred.make<void>())
+    const releaseLock = await Effect.runPromise(Deferred.make<void>())
+    const heldInventoryLock = context.runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        yield* db.transaction((tx) =>
+          Effect.gen(function* () {
+            yield* tx.execute(sourceInventoryLockQuery([sourceId]))
+            yield* Deferred.succeed(lockAcquired, undefined)
+            yield* Deferred.await(releaseLock)
+          })
+        )
+      })
+    )
+    await Effect.runPromise(Deferred.await(lockAcquired))
+
+    const calculation = Effect.runPromise(calculateTax())
+    await context.waitForQueryBlockedOnLock({ queryIncludes: "source-inventory" })
+    await Effect.runPromise(Deferred.succeed(releaseLock, undefined))
+    const [, tax] = await Promise.all([heldInventoryLock, calculation])
+
+    expect(tax.taxableGains).toBe(2000)
+    expect(tax.incomeTotal).toBe(700)
+  })
+
   it("waits when a completed override replay contains failed records", async () => {
     const fixture = await Effect.runPromise(insertRejectedOverrideFixture())
     await Effect.runPromise(
@@ -1580,7 +1874,7 @@ describe("TaxCalculationServiceLive", () => {
         yield* db.insert(schema.processingJobs).values({
           sourceId,
           principalId,
-          mode: "replay",
+          mode: "sync",
           status: "completed",
           progressDetails: { failedRecords: 0 },
           createdAt: new Date(overrideCreatedAt.getTime() - 1),
@@ -1632,22 +1926,22 @@ describe("TaxCalculationServiceLive", () => {
     expect(tax.taxableGains).toBe(2000)
   })
 
-  it("does not wait for an unrelated active replay", async () => {
+  it("keeps tax pending while a source job can still change its inputs", async () => {
     await Effect.runPromise(
       Effect.gen(function* () {
         const db = yield* drizzle
         yield* db.insert(schema.processingJobs).values({
           sourceId,
           principalId,
-          mode: "replay",
-          status: "pending",
+          mode: "sync",
+          status: "processing",
         })
       }).pipe(Effect.provide(context.TestPgClientLive))
     )
 
-    const tax = await Effect.runPromise(calculateTax())
+    const error = await Effect.runPromise(calculateTax().pipe(Effect.flip))
 
-    expect(tax.taxableGains).toBe(2000)
+    expect(error._tag).toBe("TaxCalculationPendingRecomputationError")
   })
 
   it("keeps a provider observation pending until every exact representation is included", async () => {

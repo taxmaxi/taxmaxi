@@ -4,6 +4,14 @@
  * @module AssetOverrideDecision
  */
 
+/**
+ * Whether an asset may participate in derived accounting.
+ *
+ * `included` has the required identity and technical facts. `excluded` is a
+ * final system or principal choice that intentionally omits the asset.
+ * `blocked` means accounting cannot proceed because a required identity or
+ * technical fact is still missing; it is never treated as a final exclusion.
+ */
 export type AssetInclusionState = "included" | "excluded" | "blocked"
 
 /**

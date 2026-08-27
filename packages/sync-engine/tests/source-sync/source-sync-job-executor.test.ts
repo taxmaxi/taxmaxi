@@ -33,6 +33,8 @@ import {
   type SourceSyncExecutionState,
   type SourceSyncJobMode,
   type SourceRawRecord,
+  type ProviderAssetSourceUseObservation,
+  type SourceProviderTransferDraft,
   type SourceSyncSource,
   type SourceProviderModuleShape,
 } from "../../src/services/index.ts"
@@ -123,6 +125,9 @@ const makeExecutorLayer = ({
   heartbeatIntervalMs = 10_000,
   pageSize = 100,
   prepareReplayTransactions = false,
+  preparedProviderAssetRowIds = [],
+  preparedProviderTransfers = [],
+  recordProviderAssetSourceUses,
   events,
 }: {
   readonly mode: SourceSyncJobMode
@@ -152,6 +157,13 @@ const makeExecutorLayer = ({
   readonly heartbeatIntervalMs?: number
   readonly pageSize?: number
   readonly prepareReplayTransactions?: boolean
+  readonly preparedProviderAssetRowIds?: ReadonlyArray<string>
+  readonly preparedProviderTransfers?: ReadonlyArray<SourceProviderTransferDraft>
+  readonly recordProviderAssetSourceUses?: (params: {
+    readonly sourceId: string
+    readonly providerAssetRowIds: ReadonlyArray<string>
+    readonly observations: ReadonlyArray<ProviderAssetSourceUseObservation>
+  }) => void
   readonly events: Array<string>
 }) => {
   let heartbeatCount = 0
@@ -348,7 +360,7 @@ const makeExecutorLayer = ({
         if (prepareReplayTransactions) {
           return Effect.succeed({
             kind: "prepared",
-            providerAssetRowIds: [],
+            providerAssetRowIds: preparedProviderAssetRowIds,
             transaction: {
               sourceId: source.id,
               sourceRawRecordId: sourceRecord.id,
@@ -380,7 +392,7 @@ const makeExecutorLayer = ({
               commissionCurrency: null,
               metadata: null,
             },
-            providerTransfers: [],
+            providerTransfers: preparedProviderTransfers,
             canonicalTransfers: [],
             transactionReview: null,
             resolvedTransactionType: {
@@ -572,6 +584,9 @@ const makeExecutorLayer = ({
       }),
     persistNormalizedArtifacts: (params) =>
       Effect.gen(function* () {
+        if (params.beforePersist !== undefined) {
+          yield* params.beforePersist
+        }
         const transactionId = `transaction:${params.transaction.sourceRawRecordId ?? "unknown"}`
         const transaction = {
           id: transactionId,
@@ -670,7 +685,11 @@ const makeExecutorLayer = ({
       Effect.die("excludeProviderAssetMappingAndRequestReplay should not be called"),
     lockProviderAssetApprovalSnapshot: () =>
       Effect.die("lockProviderAssetApprovalSnapshot should not be called"),
-    recordProviderAssetSourceUses: () => Effect.succeed(0),
+    recordProviderAssetSourceUses: (params) =>
+      Effect.sync(() => {
+        recordProviderAssetSourceUses?.(params)
+        return params.providerAssetRowIds.length
+      }),
     findProviderAssetByProviderAssetId: () =>
       Effect.die("findProviderAssetByProviderAssetId should not be called"),
     findProviderAssetByNaturalKey: () =>
@@ -981,6 +1000,62 @@ describe("SourceSyncJobExecutor", () => {
     expect(events).toContain("mark-raw-normalized")
     expect(events).toContain("clear-replay-failure-metadata")
     expect(events).toContain("complete:1:1")
+  })
+
+  it("does not record accounting-only transfers as chainless provider-asset evidence", async () => {
+    const events: Array<string> = []
+    const recordedUses: Array<{
+      readonly sourceId: string
+      readonly providerAssetRowIds: ReadonlyArray<string>
+      readonly observations: ReadonlyArray<ProviderAssetSourceUseObservation>
+    }> = []
+
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const executor = yield* SourceSyncJobExecutor
+        return yield* executor.execute({ jobId: "job-1" })
+      }).pipe(
+        Effect.provide(
+          makeExecutorLayer({
+            mode: "replay",
+            replayRawRecords: [replayRawRecord],
+            prepareReplayTransactions: true,
+            preparedProviderAssetRowIds: ["provider-asset-1"],
+            preparedProviderTransfers: [
+              {
+                sourceId: source.id,
+                sourceRawRecordId: replayRawRecord.id,
+                externalId: "accounting-only-1",
+                externalGroupId: null,
+                providerAssetId: "provider-asset-1",
+                timestamp: replayRawRecord.occurredAt,
+                direction: "outbound",
+                processingMode: "accounting_only",
+                fromAccountRef: null,
+                toAccountRef: null,
+                fromAddress: source.walletAddress,
+                toAddress: "recipient-1",
+                networkName: "solana",
+                networkHash: "signature-1",
+                amount: "1",
+                metadata: null,
+              },
+            ],
+            recordProviderAssetSourceUses: (params) => recordedUses.push(params),
+            events,
+          })
+        )
+      )
+    )
+
+    expect(result.status).toBe("completed")
+    expect(recordedUses).toEqual([
+      {
+        sourceId: source.id,
+        providerAssetRowIds: ["provider-asset-1"],
+        observations: [],
+      },
+    ])
   })
 
   it("heartbeats between replay preparation batches and around destructive work", async () => {

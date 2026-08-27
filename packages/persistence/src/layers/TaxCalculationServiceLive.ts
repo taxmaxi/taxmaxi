@@ -29,6 +29,7 @@ import {
   type TaxCalculationServiceShape,
 } from "../services/TaxCalculationService.ts"
 import { drizzle } from "./PgClientLive.ts"
+import { sourceInventoryLockQuery } from "./SourceInventoryLock.ts"
 
 const HOLDING_PERIOD_YEARS = 1
 const SUPPORTED_JURISDICTION = "germany"
@@ -116,9 +117,11 @@ const trackTaxCalculationDuration = ({ jurisdiction }: { readonly jurisdiction: 
 
 const make = Effect.gen(function* () {
   const db = yield* drizzle
+  type TaxCalculationExecutor = Omit<typeof db, "$client">
 
   const selectSourceFields = {
     id: schema.sources.id,
+    principalId: schema.sources.principalId,
   } as const
 
   const selectDisposalMatchFields = {
@@ -215,9 +218,15 @@ const make = Effect.gen(function* () {
    * @param sourceId - Source identifier from the API path
    * @returns The matched source row
    */
-  const loadSource = (sourceId: string) =>
+  const loadSource = ({
+    executor,
+    sourceId,
+  }: {
+    readonly executor: TaxCalculationExecutor
+    readonly sourceId: string
+  }) =>
     Effect.gen(function* () {
-      const [source] = yield* db
+      const [source] = yield* executor
         .select(selectSourceFields)
         .from(schema.sources)
         .where(eq(schema.sources.id, sourceId))
@@ -257,6 +266,56 @@ const make = Effect.gen(function* () {
       or(
         isNull(schema.providerAssetMappings.id),
         notInArray(schema.providerAssetMappings.mappingStatus, ["approved", "excluded"]),
+        sql<boolean>`(
+          ${schema.providerAssetSourceUses.hasChainlessObservation} = true
+          and (
+            ${schema.providerAssetMappings.mappingKind} = 'fiat'
+            or exists (
+              select 1
+              from ${schema.providerAssets} technical_provider_asset
+              where technical_provider_asset.id = ${schema.providerAssetSourceUses.providerAssetRowId}
+                and (
+                  technical_provider_asset.exponent is null
+                  or technical_provider_asset.provider_type in ('unsupported', 'fiat')
+                )
+            )
+          )
+          and (
+            ${schema.providerAssetMappings.mappingStatus} = 'approved'
+            or exists (
+              select 1
+              from ${schema.principalAssetOverrides} technical_override
+              where technical_override.principal_id = (
+                  select source_owner.principal_id
+                  from ${schema.sources} source_owner
+                  where source_owner.id = ${sourceId}
+                )
+                and technical_override.target_kind = 'provider_asset'
+                and technical_override.provider_asset_row_id = ${schema.providerAssetSourceUses.providerAssetRowId}
+                and technical_override.action = 'set'
+                and (
+                  (
+                    technical_override.kind = 'identity'
+                    and technical_override.replacement_asset_id is not null
+                  )
+                  or (
+                    technical_override.kind = 'inclusion'
+                    and technical_override.replacement_inclusion_state = 'included'
+                  )
+                )
+                and technical_override.id = (
+                  select latest_override.id
+                  from ${schema.principalAssetOverrides} latest_override
+                  where latest_override.principal_id = technical_override.principal_id
+                    and latest_override.kind = technical_override.kind
+                    and latest_override.target_kind = technical_override.target_kind
+                    and latest_override.provider_asset_row_id = technical_override.provider_asset_row_id
+                  order by latest_override.created_at desc, latest_override.id desc
+                  limit 1
+                )
+            )
+          )
+        )`,
         and(
           inArray(schema.providerAssetMappings.mappingStatus, ["approved", "excluded"]),
           sql<boolean>`exists (
@@ -698,6 +757,8 @@ const make = Effect.gen(function* () {
                   inclusion_override.replacement_inclusion_state = 'included'
                   and provider_asset.exponent is not null
                   and provider_asset.provider_type is distinct from 'unsupported'
+                  and provider_asset.provider_type is distinct from 'fiat'
+                  and ${schema.providerAssetMappings.mappingKind} is distinct from 'fiat'
                   and (
                     ${schema.providerAssetMappings.canonicalAssetId} is not null
                     or exists (
@@ -751,6 +812,8 @@ const make = Effect.gen(function* () {
               and identity_override.replacement_asset_id is not null
               and provider_asset.exponent is not null
               and provider_asset.provider_type is distinct from 'unsupported'
+              and provider_asset.provider_type is distinct from 'fiat'
+              and ${schema.providerAssetMappings.mappingKind} is distinct from 'fiat'
               and identity_override.id = (
                 select latest_identity.id
                 from principal_asset_overrides latest_identity
@@ -766,8 +829,14 @@ const make = Effect.gen(function* () {
       )`
     )
 
-  const countPendingProviderlessExactObservations = (sourceId: string) =>
-    db
+  const countPendingProviderlessExactObservations = ({
+    executor,
+    sourceId,
+  }: {
+    readonly executor: TaxCalculationExecutor
+    readonly sourceId: string
+  }) =>
+    executor
       .select({
         pendingObservations: sql<number>`count(distinct (
           ${schema.providerTransfers.observedBlockchainId},
@@ -913,10 +982,16 @@ const make = Effect.gen(function* () {
    * @param sourceId - Source identifier
    * @returns Number of observations blocking the calculation
    */
-  const countPendingObservations = (sourceId: string) =>
+  const countPendingObservations = ({
+    executor,
+    sourceId,
+  }: {
+    readonly executor: TaxCalculationExecutor
+    readonly sourceId: string
+  }) =>
     Effect.gen(function* () {
       const [providerAssetCount, providerlessExactCount] = yield* Effect.all([
-        db
+        executor
           .select({ pendingObservations: count() })
           .from(schema.providerAssetSourceUses)
           .leftJoin(
@@ -931,7 +1006,7 @@ const make = Effect.gen(function* () {
             Effect.map((rows) => rows[0]?.pendingObservations ?? 0),
             wrapSqlError("taxCalculationService.countPendingObservations")
           ),
-        countPendingProviderlessExactObservations(sourceId),
+        countPendingProviderlessExactObservations({ executor, sourceId }),
       ])
 
       return providerAssetCount + providerlessExactCount
@@ -944,8 +1019,14 @@ const make = Effect.gen(function* () {
     )
 
   /** Non-asset transaction reviews keep the whole source outside accounting readiness. */
-  const hasPendingTransactionReview = (sourceId: string) =>
-    db
+  const hasPendingTransactionReview = ({
+    executor,
+    sourceId,
+  }: {
+    readonly executor: TaxCalculationExecutor
+    readonly sourceId: string
+  }) =>
+    executor
       .select({ pendingReviews: count() })
       .from(schema.transactionReviews)
       .innerJoin(
@@ -977,22 +1058,47 @@ const make = Effect.gen(function* () {
       )
 
   /** Tax inputs stay stale until a later job has applied every source-affecting override. */
-  const hasPendingOverrideReplay = (sourceId: string) =>
-    db
+  const hasPendingOverrideReplay = ({
+    executor,
+    sourceId,
+  }: {
+    readonly executor: TaxCalculationExecutor
+    readonly sourceId: string
+  }) =>
+    executor
       .select({
         pending: sql<boolean>`(
         exists (
+          with recursive replay_dependency_closure as (
+            select application.id, application.override_id, application.source_id,
+              application.replay_job_id
+            from ${schema.principalAssetOverrideApplications} application
+            where application.source_id = ${sourceId}
+              and application.superseded_at is null
+
+            union
+
+            select dependent_application.id, dependent_application.override_id,
+              dependent_application.source_id, dependent_application.replay_job_id
+            from ${schema.principalAssetOverrideApplications} dependent_application
+            inner join replay_dependency_closure owner_application
+              on owner_application.override_id = dependent_application.override_id
+              and owner_application.source_id = any(dependent_application.depends_on_source_ids)
+            where dependent_application.superseded_at is null
+          )
           select 1
-          from ${schema.principalAssetOverrideApplications} application
+          from replay_dependency_closure application
           left join ${schema.processingJobs} application_job
             on application_job.id = application.replay_job_id
-          where application.source_id = ${sourceId}
-            and application.superseded_at is null
-            and (
-              application.replay_job_id is null
-              or application_job.status <> 'completed'
-              or application_job.progress_details ->> 'failedRecords' is distinct from '0'
-            )
+          where application.replay_job_id is null
+            or application_job.status <> 'completed'
+            or application_job.progress_details ->> 'failedRecords' is distinct from '0'
+        )
+        or exists (
+          select 1
+          from ${schema.processingJobs} active_source_job
+          where active_source_job.principal_id = ${schema.sources.principalId}
+            and active_source_job.status = 'processing'
         )
         or exists (
           select 1
@@ -1069,8 +1175,14 @@ const make = Effect.gen(function* () {
    * @param sourceId - Source identifier
    * @returns Blocking observations, capped at BLOCKING_OBSERVATION_LIST_LIMIT
    */
-  const loadBlockingObservations = (sourceId: string) =>
-    db
+  const loadBlockingObservations = ({
+    executor,
+    sourceId,
+  }: {
+    readonly executor: TaxCalculationExecutor
+    readonly sourceId: string
+  }) =>
+    executor
       .select({
         provider: schema.providerAssets.provider,
         currencyCode: schema.providerAssets.currencyCode,
@@ -1107,15 +1219,17 @@ const make = Effect.gen(function* () {
    * @returns Disposal matches with valuation metadata
    */
   const loadDisposalMatches = ({
+    executor,
     sourceId,
     yearStart,
     yearEnd,
   }: {
+    readonly executor: TaxCalculationExecutor
     readonly sourceId: string
     readonly yearStart: Date
     readonly yearEnd: Date
   }) =>
-    db
+    executor
       .select(selectDisposalMatchFields)
       .from(schema.disposalMatches)
       .innerJoin(
@@ -1152,15 +1266,17 @@ const make = Effect.gen(function* () {
    * @returns Income legs with fiat valuation fields
    */
   const loadIncomeLegs = ({
+    executor,
     sourceId,
     yearStart,
     yearEnd,
   }: {
+    readonly executor: TaxCalculationExecutor
     readonly sourceId: string
     readonly yearStart: Date
     readonly yearEnd: Date
   }) =>
-    db
+    executor
       .select(selectIncomeLegFields)
       .from(schema.transactionLegs)
       .where(
@@ -1282,96 +1398,111 @@ const make = Effect.gen(function* () {
         return yield* new UnsupportedJurisdictionError({ jurisdiction })
       }
 
-      yield* loadSource(sourceId)
-
-      const [pendingObservationCount, pendingOverrideReplay, pendingTransactionReview] =
-        yield* Effect.all([
-          countPendingObservations(sourceId),
-          hasPendingOverrideReplay(sourceId),
-          hasPendingTransactionReview(sourceId),
-        ])
-
-      if (pendingObservationCount > 0) {
-        const blockingObservations = yield* loadBlockingObservations(sourceId)
-
-        return yield* new TaxCalculationPendingObservationsError({
-          sourceId,
-          pendingObservationCount,
-          blockingObservations,
-        })
-      }
-      if (pendingOverrideReplay || pendingTransactionReview) {
-        return yield* new TaxCalculationPendingRecomputationError({
-          sourceId,
-          pendingOverrideReplay,
-          pendingTransactionReview,
-        })
-      }
-
-      const yearStart = startOfYearUtc(year)
-      const yearEnd = endOfYearUtc(year)
-
-      const [disposalRows, incomeRows] = yield* Effect.all([
-        loadDisposalMatches({ sourceId, yearStart, yearEnd }),
-        loadIncomeLegs({ sourceId, yearStart, yearEnd }),
-      ])
-      const unpricedDisposalIds = new Set(
-        disposalRows
-          .filter(
-            (row) => row.disposalCurrency === null || row.costBasisStatus === "pending_review"
+      return yield* db.transaction((tx) =>
+        Effect.gen(function* () {
+          const source = yield* loadSource({ executor: tx, sourceId })
+          const principalSources = yield* tx
+            .select({ sourceId: schema.sources.id })
+            .from(schema.sources)
+            .where(eq(schema.sources.principalId, source.principalId))
+            .pipe(wrapSqlError("taxCalculationService.calculateTax.loadPrincipalSources"))
+          yield* tx.execute(
+            sourceInventoryLockQuery(principalSources.map(({ sourceId }) => sourceId))
           )
-          .map((row) => row.disposalLegId)
+
+          const [pendingObservationCount, pendingOverrideReplay, pendingTransactionReview] =
+            yield* Effect.all([
+              countPendingObservations({ executor: tx, sourceId }),
+              hasPendingOverrideReplay({ executor: tx, sourceId }),
+              hasPendingTransactionReview({ executor: tx, sourceId }),
+            ])
+
+          if (pendingObservationCount > 0) {
+            const blockingObservations = yield* loadBlockingObservations({
+              executor: tx,
+              sourceId,
+            })
+
+            return yield* new TaxCalculationPendingObservationsError({
+              sourceId,
+              pendingObservationCount,
+              blockingObservations,
+            })
+          }
+          if (pendingOverrideReplay || pendingTransactionReview) {
+            return yield* new TaxCalculationPendingRecomputationError({
+              sourceId,
+              pendingOverrideReplay,
+              pendingTransactionReview,
+            })
+          }
+
+          const yearStart = startOfYearUtc(year)
+          const yearEnd = endOfYearUtc(year)
+
+          const [disposalRows, incomeRows] = yield* Effect.all([
+            loadDisposalMatches({ executor: tx, sourceId, yearStart, yearEnd }),
+            loadIncomeLegs({ executor: tx, sourceId, yearStart, yearEnd }),
+          ])
+          const unpricedDisposalIds = new Set(
+            disposalRows
+              .filter(
+                (row) => row.disposalCurrency === null || row.costBasisStatus === "pending_review"
+              )
+              .map((row) => row.disposalLegId)
+          )
+          const unpricedIncomeCount = incomeRows.filter(
+            (row) => row.fiatAmount === null || row.fiatCurrency === null
+          ).length
+          const unpricedEventCount = unpricedDisposalIds.size + unpricedIncomeCount
+
+          yield* Effect.annotateCurrentSpan({
+            sourceId,
+            jurisdiction,
+            year,
+            disposalRowCount: disposalRows.length,
+            incomeRowCount: incomeRows.length,
+          })
+
+          const disposalTotals = yield* summarizeDisposals({
+            sourceId,
+            rows: disposalRows,
+          })
+          const incomeTotal = yield* summarizeIncome({
+            sourceId,
+            rows: incomeRows,
+          })
+
+          const summary = {
+            year,
+            currency: REPORTING_CURRENCY,
+            calculationState: unpricedEventCount === 0 ? "complete" : "partial",
+            unpricedEventCount,
+            taxableGains: toResponseNumber(disposalTotals.taxableGains),
+            taxableLosses: toResponseNumber(disposalTotals.taxableLosses),
+            taxFreeGains: toResponseNumber(disposalTotals.taxFreeGains),
+            incomeTotal: toResponseNumber(incomeTotal),
+          } as const
+
+          yield* recordTaxCalculationOutcome({
+            jurisdiction,
+            outcome: "completed",
+          })
+
+          yield* Effect.logInfo(
+            {
+              sourceId,
+              jurisdiction,
+              year,
+              disposalRowCount: disposalRows.length,
+              incomeRowCount: incomeRows.length,
+            },
+            "tax-calculation:completed"
+          )
+
+          return summary
+        })
       )
-      const unpricedIncomeCount = incomeRows.filter(
-        (row) => row.fiatAmount === null || row.fiatCurrency === null
-      ).length
-      const unpricedEventCount = unpricedDisposalIds.size + unpricedIncomeCount
-
-      yield* Effect.annotateCurrentSpan({
-        sourceId,
-        jurisdiction,
-        year,
-        disposalRowCount: disposalRows.length,
-        incomeRowCount: incomeRows.length,
-      })
-
-      const disposalTotals = yield* summarizeDisposals({
-        sourceId,
-        rows: disposalRows,
-      })
-      const incomeTotal = yield* summarizeIncome({
-        sourceId,
-        rows: incomeRows,
-      })
-
-      const summary = {
-        year,
-        currency: REPORTING_CURRENCY,
-        calculationState: unpricedEventCount === 0 ? "complete" : "partial",
-        unpricedEventCount,
-        taxableGains: toResponseNumber(disposalTotals.taxableGains),
-        taxableLosses: toResponseNumber(disposalTotals.taxableLosses),
-        taxFreeGains: toResponseNumber(disposalTotals.taxFreeGains),
-        incomeTotal: toResponseNumber(incomeTotal),
-      } as const
-
-      yield* recordTaxCalculationOutcome({
-        jurisdiction,
-        outcome: "completed",
-      })
-
-      yield* Effect.logInfo(
-        {
-          sourceId,
-          jurisdiction,
-          year,
-          disposalRowCount: disposalRows.length,
-          incomeRowCount: incomeRows.length,
-        },
-        "tax-calculation:completed"
-      )
-
-      return summary
     }).pipe(
       withObservedOperation({
         name: "persistence.tax-calculation.calculate-tax",

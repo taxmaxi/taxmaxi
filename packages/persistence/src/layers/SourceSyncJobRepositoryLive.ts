@@ -13,6 +13,7 @@ import { isActiveProcessingJobConflict } from "../errors/ProcessingJobConflict.t
 import { PersistenceError, wrapSqlError } from "../errors/RepositoryError.ts"
 import { drizzle } from "./PgClientLive.ts"
 import { schema } from "../schema/index.ts"
+import { sourceInventoryLockQuery } from "./SourceInventoryLock.ts"
 import {
   type CreateOrReuseSourceSyncJobResult,
   type ActiveSourceSyncJobStatus,
@@ -103,7 +104,7 @@ const toExecutionJob = ({
 
 const make = Effect.gen(function* () {
   const db = yield* drizzle
-  type SourceSyncJobExecutor = Pick<typeof db, "insert" | "update">
+  type SourceSyncJobExecutor = Pick<typeof db, "insert" | "select" | "update">
 
   const preserveExpectedExecutionError = (operation: string) =>
     Effect.mapError((error: unknown) =>
@@ -179,6 +180,8 @@ const make = Effect.gen(function* () {
                   where previous_replay.id = ${schema.principalAssetOverrideApplications.replayJobId}
                     and (
                       previous_replay.status in ('failed', 'credit_required')
+                      and previous_replay.progress_details ->> 'failureCode'
+                        is distinct from 'cyclic_replay_dependency'
                       or (
                         previous_replay.status = 'completed'
                         and previous_replay.progress_details ->> 'failedRecords' <> '0'
@@ -230,8 +233,9 @@ const make = Effect.gen(function* () {
     readonly sourceId: string
     readonly completedAt: Date
   }) =>
-    executor
-      .execute(sql`
+    Effect.gen(function* () {
+      yield* executor
+        .execute(sql`
         insert into principal_asset_override_applications (
           override_id,
           source_id,
@@ -310,11 +314,530 @@ const make = Effect.gen(function* () {
                 )
             )
           )
-      `)
-      .pipe(
-        Effect.asVoid,
-        wrapSyncEngineSqlError("sourceSyncJobRepository.recordNewlyObservedOverrideApplications")
-      )
+        `)
+        .pipe(
+          Effect.asVoid,
+          wrapSyncEngineSqlError("sourceSyncJobRepository.recordNewlyObservedOverrideApplications")
+        )
+
+      yield* executor
+        .execute(sql`
+          with active_override as (
+            select asset_override.*
+            from ${schema.principalAssetOverrides} asset_override
+            where asset_override.principal_id = (
+                select ${schema.sources.principalId}
+                from ${schema.sources}
+                where ${schema.sources.id} = ${sourceId}::uuid
+              )
+              and not exists (
+                select 1
+                from ${schema.principalAssetOverrides} superseding_override
+                where superseding_override.supersedes_override_id = asset_override.id
+              )
+          ),
+          affected_asset as (
+            select identity_override.id as override_id, identity_asset.asset_id
+            from active_override identity_override
+            left join ${schema.principalAssetOverrides} previous_override
+              on previous_override.id = identity_override.supersedes_override_id
+            cross join lateral unnest(array[
+              identity_override.inspected_asset_id,
+              identity_override.replacement_asset_id,
+              previous_override.replacement_asset_id
+            ]::uuid[]) identity_asset(asset_id)
+            where identity_override.kind = 'identity'
+              and identity_asset.asset_id is not null
+            union
+            select inclusion_override.id,
+                   coalesce(identity_override.replacement_asset_id, provider_mapping.canonical_asset_id)
+            from active_override inclusion_override
+            left join ${schema.principalAssetOverrides} identity_override
+              on identity_override.principal_id = inclusion_override.principal_id
+             and identity_override.kind = 'identity'
+             and identity_override.target_kind = inclusion_override.target_kind
+             and identity_override.provider_asset_row_id is not distinct from inclusion_override.provider_asset_row_id
+             and identity_override.blockchain_id is not distinct from inclusion_override.blockchain_id
+             and identity_override.representation_type is not distinct from inclusion_override.representation_type
+             and lower(identity_override.contract_address) is not distinct from lower(inclusion_override.contract_address)
+             and identity_override.mint_address is not distinct from inclusion_override.mint_address
+             and identity_override.action = 'set'
+             and not exists (
+               select 1
+               from ${schema.principalAssetOverrides} later_identity
+               where later_identity.supersedes_override_id = identity_override.id
+             )
+            left join ${schema.providerAssetMappings} provider_mapping
+              on inclusion_override.target_kind = 'provider_asset'
+             and provider_mapping.provider_asset_row_id = inclusion_override.provider_asset_row_id
+            where inclusion_override.kind = 'inclusion'
+              and coalesce(identity_override.replacement_asset_id, provider_mapping.canonical_asset_id) is not null
+            union
+            select inclusion_override.id,
+                   coalesce(identity_override.replacement_asset_id, representation.asset_id)
+            from active_override inclusion_override
+            left join ${schema.principalAssetOverrides} identity_override
+              on identity_override.principal_id = inclusion_override.principal_id
+             and identity_override.kind = 'identity'
+             and identity_override.target_kind = inclusion_override.target_kind
+             and identity_override.provider_asset_row_id is not distinct from inclusion_override.provider_asset_row_id
+             and identity_override.blockchain_id is not distinct from inclusion_override.blockchain_id
+             and identity_override.representation_type is not distinct from inclusion_override.representation_type
+             and lower(identity_override.contract_address) is not distinct from lower(inclusion_override.contract_address)
+             and identity_override.mint_address is not distinct from inclusion_override.mint_address
+             and identity_override.action = 'set'
+             and not exists (
+               select 1
+               from ${schema.principalAssetOverrides} later_identity
+               where later_identity.supersedes_override_id = identity_override.id
+             )
+            left join ${schema.assetRepresentations} representation
+              on inclusion_override.target_kind = 'representation'
+             and representation.blockchain_id = inclusion_override.blockchain_id
+             and representation.type = inclusion_override.representation_type
+             and lower(representation.contract_address) is not distinct from lower(inclusion_override.contract_address)
+             and representation.mint_address is not distinct from inclusion_override.mint_address
+            where inclusion_override.kind = 'inclusion'
+              and coalesce(identity_override.replacement_asset_id, representation.asset_id) is not null
+            union
+            select distinct inclusion_override.id,
+                   retained_mapping.canonical_asset_id
+            from active_override inclusion_override
+            inner join ${schema.providerTransfers} observed_transfer
+              on inclusion_override.target_kind = 'representation'
+             and observed_transfer.observed_blockchain_id = inclusion_override.blockchain_id
+             and observed_transfer.observed_representation_type = inclusion_override.representation_type
+             and lower(observed_transfer.observed_contract_address) is not distinct from lower(inclusion_override.contract_address)
+             and observed_transfer.observed_mint_address is not distinct from inclusion_override.mint_address
+            inner join ${schema.providerAssetMappings} retained_mapping
+              on retained_mapping.provider_asset_row_id = observed_transfer.provider_asset_id
+             and retained_mapping.canonical_asset_id is not null
+            where inclusion_override.kind = 'inclusion'
+          ),
+          target_application as (
+            select application.override_id,
+                   application.source_id as owner_source_id
+            from ${schema.principalAssetOverrideApplications} application
+            inner join active_override on active_override.id = application.override_id
+            where application.superseded_at is null
+              and (
+                (
+                  active_override.target_kind = 'provider_asset'
+                  and exists (
+                    select 1
+                    from ${schema.providerAssetSourceUses} source_use
+                    where source_use.source_id = application.source_id
+                      and source_use.provider_asset_row_id = active_override.provider_asset_row_id
+                      and source_use.has_chainless_observation = true
+                  )
+                )
+                or (
+                  active_override.target_kind = 'representation'
+                  and exists (
+                    select 1
+                    from ${schema.sourceRepresentationUses} representation_use
+                    where representation_use.source_id = application.source_id
+                      and representation_use.blockchain_id = active_override.blockchain_id
+                      and representation_use.representation_type = active_override.representation_type
+                      and lower(representation_use.contract_address) is not distinct from lower(active_override.contract_address)
+                      and representation_use.mint_address is not distinct from active_override.mint_address
+                  )
+                )
+              )
+          ),
+          owner_event as (
+            select target_application.override_id,
+                   target_application.owner_source_id,
+                   min(target_event.timestamp) as earliest_timestamp
+            from target_application
+            inner join active_override on active_override.id = target_application.override_id
+            inner join lateral (
+              select provider_transfer.timestamp
+              from ${schema.providerTransfers} provider_transfer
+              where provider_transfer.source_id = target_application.owner_source_id
+                and provider_transfer.direction = 'inbound'
+                and provider_transfer.processing_mode in (
+                  'accounting_and_evidence',
+                  'accounting_only'
+                )
+                and (
+                  (
+                    active_override.target_kind = 'provider_asset'
+                    and provider_transfer.provider_asset_id = active_override.provider_asset_row_id
+                    and (
+                      provider_transfer.observed_blockchain_id is null
+                      or provider_transfer.observed_representation_type is null
+                    )
+                  )
+                  or (
+                    active_override.target_kind = 'representation'
+                    and provider_transfer.observed_blockchain_id = active_override.blockchain_id
+                    and provider_transfer.observed_representation_type = active_override.representation_type
+                    and lower(provider_transfer.observed_contract_address) is not distinct from lower(active_override.contract_address)
+                    and provider_transfer.observed_mint_address is not distinct from active_override.mint_address
+                  )
+                )
+              union all
+              select target_transaction.timestamp
+              from ${schema.providerAssetTransactionUses} transaction_use
+              inner join ${schema.transactions} target_transaction
+                on target_transaction.id = transaction_use.transaction_id
+              where active_override.target_kind = 'provider_asset'
+                and transaction_use.source_id = target_application.owner_source_id
+                and transaction_use.provider_asset_row_id = active_override.provider_asset_row_id
+                and not exists (
+                  select 1
+                  from ${schema.providerTransfers} transaction_provider_transfer
+                  where transaction_provider_transfer.transaction_id = transaction_use.transaction_id
+                    and transaction_provider_transfer.provider_asset_id = active_override.provider_asset_row_id
+                )
+                and exists (
+                  select 1
+                  from ${schema.transactionLegs} owner_leg
+                  inner join affected_asset
+                    on affected_asset.override_id = active_override.id
+                   and affected_asset.asset_id = owner_leg.asset_id
+                  where owner_leg.transaction_id = transaction_use.transaction_id
+                    and owner_leg.kind in ('acquisition', 'income')
+                )
+            ) target_event on true
+            group by target_application.override_id, target_application.owner_source_id
+          ),
+          consumer_event as (
+            select affected_asset.override_id,
+                   consumer.source_id,
+                   max(consumer.timestamp) as latest_timestamp
+            from affected_asset
+            inner join active_override
+              on active_override.id = affected_asset.override_id
+            inner join lateral (
+              select leg.source_id, leg.timestamp
+              from ${schema.transactionLegs} leg
+              where leg.asset_id = affected_asset.asset_id
+                and leg.principal_id = active_override.principal_id
+                and leg.kind in ('disposal', 'fee')
+              union all
+              select movement.source_id, movement.timestamp
+              from ${schema.inventoryMovements} movement
+              where movement.asset_id = affected_asset.asset_id
+                and movement.principal_id = active_override.principal_id
+                and movement.direction = 'outbound'
+            ) consumer on true
+            group by affected_asset.override_id, consumer.source_id
+          ),
+          candidate as (
+            select consumer_event.override_id,
+                   consumer_event.source_id,
+                   array_agg(distinct owner_event.owner_source_id order by owner_event.owner_source_id) as owner_source_ids
+            from consumer_event
+            inner join owner_event
+              on owner_event.override_id = consumer_event.override_id
+             and owner_event.earliest_timestamp <= consumer_event.latest_timestamp
+             and owner_event.owner_source_id <> consumer_event.source_id
+            group by consumer_event.override_id, consumer_event.source_id
+          ),
+          replay_application as (
+            insert into ${schema.principalAssetOverrideApplications} (
+              override_id,
+              source_id,
+              replay_job_id,
+              depends_on_source_ids,
+              requires_replay,
+              created_at
+            )
+            select candidate.override_id,
+                   candidate.source_id,
+                   null,
+                   candidate.owner_source_ids,
+                   true,
+                   ${completedAt}
+            from candidate
+            on conflict (override_id, source_id) do update
+              set replay_job_id = excluded.replay_job_id,
+                  depends_on_source_ids = (
+                    select array_agg(distinct dependency_source_id order by dependency_source_id)
+                    from unnest(
+                      ${schema.principalAssetOverrideApplications.dependsOnSourceIds}
+                      || excluded.depends_on_source_ids
+                    ) dependency_source_id
+                  ),
+                  requires_replay = true,
+                  created_at = excluded.created_at
+            where ${schema.principalAssetOverrideApplications.requiresReplay} = false
+               or not (
+                 excluded.depends_on_source_ids
+                 <@ ${schema.principalAssetOverrideApplications.dependsOnSourceIds}
+               )
+            returning override_id, source_id
+          )
+          select count(*) from replay_application
+        `)
+        .pipe(
+          Effect.asVoid,
+          wrapSyncEngineSqlError(
+            "sourceSyncJobRepository.recordPotentialOverrideConsumerApplications"
+          )
+        )
+
+      yield* executor
+        .execute(sql`
+          with recursive dependency_path(root_override_id, root_source_id, source_id) as (
+            select application.override_id,
+                   application.source_id,
+                   dependency_source_id
+            from ${schema.principalAssetOverrideApplications} application
+            inner join ${schema.principalAssetOverrides} asset_override
+              on asset_override.id = application.override_id
+            cross join lateral unnest(application.depends_on_source_ids) dependency_source_id
+            where asset_override.principal_id = (
+                select ${schema.sources.principalId}
+                from ${schema.sources}
+                where ${schema.sources.id} = ${sourceId}::uuid
+              )
+              and application.requires_replay = true
+              and application.superseded_at is null
+
+            union
+
+            select dependency_path.root_override_id,
+                   dependency_path.root_source_id,
+                   dependency_source_id
+            from dependency_path
+            inner join ${schema.principalAssetOverrideApplications} dependency_application
+              on dependency_application.override_id = dependency_path.root_override_id
+             and dependency_application.source_id = dependency_path.source_id
+             and dependency_application.superseded_at is null
+            cross join lateral unnest(
+              dependency_application.depends_on_source_ids
+            ) dependency_source_id
+          ),
+          cyclic_override as (
+            select distinct dependency_path.root_override_id as override_id,
+                            dependency_path.root_source_id as source_id
+            from dependency_path
+            where dependency_path.source_id = dependency_path.root_source_id
+          ),
+          failed_job as (
+            insert into ${schema.processingJobs} (
+              source_id,
+              principal_id,
+              mode,
+              status,
+              attempt_count,
+              max_attempts,
+              completed_at,
+              error_message,
+              progress_details,
+              created_at,
+              updated_at
+            )
+            select cyclic_override.source_id,
+                   ${schema.sources.principalId},
+                   'replay',
+                   'failed',
+                   0,
+                   3,
+                   ${completedAt},
+                   'Cyclic principal asset override replay dependency.',
+                   jsonb_build_object(
+                     'mode', 'replay',
+                     'failedRecords', 1,
+                     'failureCode', 'cyclic_replay_dependency'
+                   ),
+                   ${completedAt},
+                   ${completedAt}
+            from cyclic_override
+            inner join ${schema.sources}
+              on ${schema.sources.id} = cyclic_override.source_id
+            inner join ${schema.principalAssetOverrideApplications} cyclic_application
+              on cyclic_application.override_id = cyclic_override.override_id
+             and cyclic_application.source_id = cyclic_override.source_id
+            where not exists (
+                select 1
+                from ${schema.processingJobs} parked_cycle
+                where parked_cycle.id = cyclic_application.replay_job_id
+                  and parked_cycle.progress_details ->> 'failureCode'
+                    = 'cyclic_replay_dependency'
+              )
+            group by cyclic_override.source_id, ${schema.sources.principalId}
+            returning id, source_id
+          ),
+          linked_cycle as (
+            update ${schema.principalAssetOverrideApplications} application
+            set replay_job_id = failed_job.id
+            from failed_job
+            where application.source_id = failed_job.source_id
+              and exists (
+                select 1
+                from cyclic_override
+                where cyclic_override.override_id = application.override_id
+                  and cyclic_override.source_id = application.source_id
+              )
+              and not exists (
+                select 1
+                from ${schema.processingJobs} parked_cycle
+                where parked_cycle.id = application.replay_job_id
+                  and parked_cycle.progress_details ->> 'failureCode'
+                    = 'cyclic_replay_dependency'
+              )
+            returning application.id, application.source_id
+          ),
+          pending_application as (
+            select application.override_id, application.source_id
+            from ${schema.principalAssetOverrideApplications} application
+            inner join ${schema.principalAssetOverrides} asset_override
+              on asset_override.id = application.override_id
+            where asset_override.principal_id = (
+                select ${schema.sources.principalId}
+                from ${schema.sources}
+                where ${schema.sources.id} = ${sourceId}::uuid
+              )
+              and application.requires_replay = true
+              and application.superseded_at is null
+              and application.replay_job_id is null
+              and not exists (
+                select 1
+                from cyclic_override
+                where cyclic_override.override_id = application.override_id
+                  and cyclic_override.source_id = application.source_id
+              )
+          ),
+          active_job as (
+            update ${schema.processingJobs} active_job
+            set follow_up_mode = case
+                  when active_job.status = 'processing' or active_job.mode = 'sync'
+                    then 'replay'::job_mode
+                  else active_job.follow_up_mode
+                end,
+                updated_at = ${completedAt}
+            from pending_application
+            where active_job.source_id = pending_application.source_id
+              and active_job.status in ('pending', 'processing')
+            returning active_job.id, active_job.source_id, active_job.mode
+          ),
+          new_job as (
+            insert into ${schema.processingJobs} (
+              source_id,
+              principal_id,
+              mode,
+              status,
+              attempt_count,
+              max_attempts,
+              progress_details,
+              created_at,
+              updated_at
+            )
+            select pending_application.source_id,
+                   ${schema.sources.principalId},
+                   'replay',
+                   'pending',
+                   0,
+                   3,
+                   jsonb_build_object(
+                     'mode', 'replay',
+                     'reason', 'principal_asset_override_dependency'
+                   ),
+                   ${completedAt},
+                   ${completedAt}
+            from pending_application
+            inner join ${schema.sources}
+              on ${schema.sources.id} = pending_application.source_id
+            where pending_application.source_id <> ${sourceId}::uuid
+              and not exists (
+                select 1
+                from active_job
+                where active_job.source_id = pending_application.source_id
+              )
+            group by pending_application.source_id, ${schema.sources.principalId}
+            on conflict do nothing
+            returning id, source_id
+          ),
+          linked_pending as (
+            update ${schema.principalAssetOverrideApplications} application
+            set replay_job_id = coalesce(
+                  (
+                    select new_job.id
+                    from new_job
+                    where new_job.source_id = application.source_id
+                    limit 1
+                  ),
+                  (
+                    select active_job.id
+                    from active_job
+                    where active_job.source_id = application.source_id
+                      and active_job.mode = 'replay'
+                    limit 1
+                  )
+                )
+            where exists (
+              select 1
+              from pending_application
+              where pending_application.override_id = application.override_id
+                and pending_application.source_id = application.source_id
+            )
+            returning application.id
+          )
+          update ${schema.processingJobs} completed_job
+          set follow_up_mode = case
+                when exists (
+                  select 1
+                  from pending_application
+                  where pending_application.source_id = ${sourceId}::uuid
+                ) then 'replay'::job_mode
+                else completed_job.follow_up_mode
+              end,
+              updated_at = ${completedAt}
+          where completed_job.id = ${jobId}::uuid
+        `)
+        .pipe(
+          Effect.asVoid,
+          wrapSyncEngineSqlError(
+            "sourceSyncJobRepository.recordPotentialOverrideConsumerApplications.deferReplay"
+          )
+        )
+
+      const [job] = yield* executor
+        .select({ followUpMode: schema.processingJobs.followUpMode })
+        .from(schema.processingJobs)
+        .where(eq(schema.processingJobs.id, jobId))
+        .limit(1)
+        .pipe(
+          wrapSyncEngineSqlError(
+            "sourceSyncJobRepository.recordNewlyObservedOverrideApplications.followUpMode"
+          )
+        )
+      return job?.followUpMode ?? null
+    })
+
+  const lockJobSourceInventory = ({
+    executor,
+    jobId,
+  }: {
+    readonly executor: SourceSyncJobExecutor & Pick<typeof db, "execute">
+    readonly jobId: string
+  }) =>
+    Effect.gen(function* () {
+      const [job] = yield* executor
+        .select({ principalId: schema.processingJobs.principalId })
+        .from(schema.processingJobs)
+        .where(eq(schema.processingJobs.id, jobId))
+        .limit(1)
+        .pipe(wrapSyncEngineSqlError("sourceSyncJobRepository.lockJobSourceInventory.select"))
+      if (job === undefined) return
+
+      const sourceRows = yield* executor
+        .select({ sourceId: schema.sources.id })
+        .from(schema.sources)
+        .where(eq(schema.sources.principalId, job.principalId))
+        .pipe(wrapSyncEngineSqlError("sourceSyncJobRepository.lockJobSourceInventory.sources"))
+
+      yield* executor
+        .execute(sourceInventoryLockQuery(sourceRows.map(({ sourceId }) => sourceId)))
+        .pipe(
+          Effect.asVoid,
+          wrapSyncEngineSqlError("sourceSyncJobRepository.lockJobSourceInventory.lock")
+        )
+    })
 
   /**
    * Record the outcome of a finished replay on every unfinished decision
@@ -713,6 +1236,8 @@ const make = Effect.gen(function* () {
     db
       .transaction((tx) =>
         Effect.gen(function* () {
+          yield* lockJobSourceInventory({ executor: tx, jobId })
+
           const [job] = yield* tx
             .update(schema.processingJobs)
             .set({
@@ -762,7 +1287,7 @@ const make = Effect.gen(function* () {
               )
             )
 
-          yield* recordNewlyObservedOverrideApplications({
+          const followUpMode = yield* recordNewlyObservedOverrideApplications({
             executor: tx,
             jobId: job.id,
             sourceId: job.sourceId,
@@ -774,11 +1299,11 @@ const make = Effect.gen(function* () {
             jobId: job.id,
             sourceId: job.sourceId,
             principalId: job.principalId,
-            followUpMode: job.followUpMode,
+            followUpMode,
             createdAt: completedAt,
           })
 
-          if (job.mode === "replay" && job.followUpMode !== "replay") {
+          if (job.mode === "replay" && followUpMode !== "replay") {
             yield* settleSourceRebuilds({
               executor: tx,
               sourceId: job.sourceId,
@@ -799,6 +1324,8 @@ const make = Effect.gen(function* () {
     db
       .transaction((tx) =>
         Effect.gen(function* () {
+          yield* lockJobSourceInventory({ executor: tx, jobId })
+
           const [job] = yield* tx
             .update(schema.processingJobs)
             .set({
@@ -830,7 +1357,7 @@ const make = Effect.gen(function* () {
             })
           }
 
-          yield* recordNewlyObservedOverrideApplications({
+          const followUpMode = yield* recordNewlyObservedOverrideApplications({
             executor: tx,
             jobId: job.id,
             sourceId: job.sourceId,
@@ -842,11 +1369,11 @@ const make = Effect.gen(function* () {
             jobId: job.id,
             sourceId: job.sourceId,
             principalId: job.principalId,
-            followUpMode: job.followUpMode,
+            followUpMode,
             createdAt: completedAt,
           })
 
-          if (job.mode === "replay" && job.followUpMode !== "replay") {
+          if (job.mode === "replay" && followUpMode !== "replay") {
             yield* settleSourceRebuilds({
               executor: tx,
               sourceId: job.sourceId,
@@ -869,6 +1396,8 @@ const make = Effect.gen(function* () {
     db
       .transaction((tx) =>
         Effect.gen(function* () {
+          yield* lockJobSourceInventory({ executor: tx, jobId })
+
           const [job] = yield* tx
             .update(schema.processingJobs)
             .set({
@@ -906,7 +1435,7 @@ const make = Effect.gen(function* () {
             })
           }
 
-          yield* recordNewlyObservedOverrideApplications({
+          const followUpMode = yield* recordNewlyObservedOverrideApplications({
             executor: tx,
             jobId: job.id,
             sourceId: job.sourceId,
@@ -918,11 +1447,11 @@ const make = Effect.gen(function* () {
             jobId: job.id,
             sourceId: job.sourceId,
             principalId: job.principalId,
-            followUpMode: job.followUpMode,
+            followUpMode,
             createdAt: completedAt,
           })
 
-          if (job.mode === "replay" && job.followUpMode !== "replay") {
+          if (job.mode === "replay" && followUpMode !== "replay") {
             yield* settleSourceRebuilds({
               executor: tx,
               sourceId: job.sourceId,
@@ -939,6 +1468,8 @@ const make = Effect.gen(function* () {
     return db
       .transaction((tx) =>
         Effect.gen(function* () {
+          yield* lockJobSourceInventory({ executor: tx, jobId })
+
           const [job] = yield* tx
             .update(schema.processingJobs)
             .set({
@@ -982,7 +1513,7 @@ const make = Effect.gen(function* () {
             })
           }
 
-          yield* recordNewlyObservedOverrideApplications({
+          const followUpMode = yield* recordNewlyObservedOverrideApplications({
             executor: tx,
             jobId: job.id,
             sourceId: job.sourceId,
@@ -994,14 +1525,14 @@ const make = Effect.gen(function* () {
             jobId: job.id,
             sourceId: job.sourceId,
             principalId: job.principalId,
-            followUpMode: job.followUpMode,
+            followUpMode,
             createdAt: completedAt,
           })
 
           // A replay that skipped rows left derived accounting incomplete
           // even though the job itself completed, so it must not count as a
           // finished rebuild.
-          if (job.mode === "replay" && job.followUpMode !== "replay") {
+          if (job.mode === "replay" && followUpMode !== "replay") {
             yield* settleSourceRebuilds({
               executor: tx,
               sourceId: job.sourceId,
