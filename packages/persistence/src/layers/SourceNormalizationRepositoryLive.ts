@@ -13,6 +13,7 @@ import { and, asc, eq, gt, inArray, isNotNull, isNull, lte, notInArray, or, sql 
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import * as Schema from "effect/Schema"
+import { canonicalizeAddress } from "@my/core/assets"
 import {
   divideToScale,
   formatScaled,
@@ -1420,6 +1421,71 @@ const make = Effect.gen(function* () {
       )
     })
 
+  const recordSourceRepresentationUses = ({
+    executor,
+    providerTransfers,
+    sourceId,
+  }: {
+    readonly executor: SourceNormalizationExecutor
+    readonly providerTransfers: ReadonlyArray<SourceProviderTransferDraft>
+    readonly sourceId: string
+  }) => {
+    const observedRepresentations = new Map<
+      string,
+      {
+        readonly sourceId: string
+        readonly blockchainId: string
+        readonly representationType: "native" | "token" | "nft"
+        readonly contractAddress: string | null
+        readonly mintAddress: string | null
+      }
+    >()
+
+    for (const transfer of providerTransfers) {
+      if (
+        transfer.observedBlockchainId === null ||
+        transfer.observedBlockchainId === undefined ||
+        transfer.observedRepresentationType === null ||
+        transfer.observedRepresentationType === undefined
+      ) {
+        continue
+      }
+
+      const representation = {
+        sourceId,
+        blockchainId: transfer.observedBlockchainId,
+        representationType: transfer.observedRepresentationType,
+        contractAddress: canonicalizeAddress(transfer.observedContractAddress ?? null),
+        mintAddress: canonicalizeAddress(transfer.observedMintAddress ?? null),
+      } as const
+      const key = JSON.stringify([
+        representation.sourceId,
+        representation.blockchainId,
+        representation.representationType,
+        representation.contractAddress,
+        representation.mintAddress,
+      ])
+      observedRepresentations.set(key, representation)
+    }
+
+    if (observedRepresentations.size === 0) {
+      return Effect.void
+    }
+
+    const now = nowDate()
+    return executor
+      .insert(schema.sourceRepresentationUses)
+      .values(
+        Array.from(observedRepresentations.values(), (representation) => ({
+          ...representation,
+          createdAt: now,
+          updatedAt: now,
+        }))
+      )
+      .onConflictDoNothing()
+      .pipe(wrapSyncEngineSqlError("sourceNormalizationRepository.recordSourceRepresentationUses"))
+  }
+
   const buildFifoLotAllocations = ({
     lots,
     disposalAmount,
@@ -2605,6 +2671,11 @@ const make = Effect.gen(function* () {
             executor: tx,
             transactionId: persistedTransaction.id,
             onchainContext: params.onchainContext,
+          })
+          yield* recordSourceRepresentationUses({
+            executor: tx,
+            providerTransfers: params.providerTransfers,
+            sourceId: persistedTransaction.sourceId,
           })
           yield* syncProviderAssetTransactionUses({
             executor: tx,

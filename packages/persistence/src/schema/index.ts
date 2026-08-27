@@ -36,6 +36,7 @@ import * as providerTransactionTypeCatalog from "./ProviderTransactionTypeCatalo
 import * as providerTransactionTypeMappings from "./ProviderTransactionTypeMappingsTable.ts"
 import * as sessions from "./SessionsTable.ts"
 import * as sourceRecordsRaw from "./SourceRecordsRawTable.ts"
+import * as sourceRepresentationUses from "./SourceRepresentationUsesTable.ts"
 import * as sourceSyncState from "./SourceSyncStateTable.ts"
 import * as sources from "./SourcesTable.ts"
 import * as syncRunItems from "./SyncRunItemsTable.ts"
@@ -92,6 +93,7 @@ export const schema = {
   ...providerTransactionTypeMappings,
   ...sessions,
   ...sourceRecordsRaw,
+  ...sourceRepresentationUses,
   ...sourceSyncState,
   ...sources,
   ...syncRunItems,
@@ -222,6 +224,10 @@ export type {
 } from "./ProviderTransactionTypeMappingsTable.ts"
 export type { SessionRow } from "./SessionsTable.ts"
 export type { SourceRecordRaw, SourceRecordRawInsert } from "./SourceRecordsRawTable.ts"
+export type {
+  SourceRepresentationUse,
+  SourceRepresentationUseInsert,
+} from "./SourceRepresentationUsesTable.ts"
 export type { SourceSyncState, SourceSyncStateInsert } from "./SourceSyncStateTable.ts"
 export type { SourceInsert, SourceRow } from "./SourcesTable.ts"
 export type { SyncRunItem, SyncRunItemInsert } from "./SyncRunItemsTable.ts"
