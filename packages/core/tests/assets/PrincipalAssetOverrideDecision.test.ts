@@ -7,6 +7,7 @@ import {
 } from "../../src/assets/PrincipalAssetOverrideDecision.ts"
 
 const BTC_ASSET_ID = "11111111-1111-4111-8111-111111111111"
+const ETH_ASSET_ID = "33333333-3333-4333-8333-333333333333"
 
 describe("decidePrincipalAssetOverride", () => {
   it("accepts exact representation and provider-asset fallback targets", () => {
@@ -153,6 +154,18 @@ describe("decidePrincipalAssetOverride", () => {
     })
 
     expect(decision).toEqual({ _tag: "included", assetId: BTC_ASSET_ID })
+  })
+
+  it("uses an identity replacement for an already-resolved included asset", () => {
+    const decision = decidePrincipalAssetOverride({
+      systemIdentity: { _tag: "resolved", assetId: BTC_ASSET_ID },
+      systemInclusion: "included",
+      identityReplacement: { _tag: "resolved", assetId: ETH_ASSET_ID },
+      inclusionReplacement: null,
+      technicalBlockers: [],
+    })
+
+    expect(decision).toEqual({ _tag: "included", assetId: ETH_ASSET_ID })
   })
 
   it("uses an inclusion replacement to include a policy-excluded asset", () => {

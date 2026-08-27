@@ -5,7 +5,7 @@
  */
 
 import * as Schema from "effect/Schema"
-import { RepresentationType } from "./AssetResolutionPolicy.ts"
+import { representationIdentityMatchesType, RepresentationType } from "./AssetResolutionPolicy.ts"
 
 const NonEmptyString = Schema.String.check(Schema.isNonEmpty())
 const Uuid = Schema.String.check(Schema.isUUID())
@@ -20,16 +20,9 @@ export const PrincipalAssetRepresentationTarget = Schema.TaggedStruct("represent
   .pipe(
     Schema.check(
       Schema.makeFilter((target) => {
-        const addressCount =
-          Number(target.contractAddress !== null) + Number(target.mintAddress !== null)
-
-        return target.type === "native"
-          ? addressCount === 0
-            ? undefined
-            : "Native representation targets cannot declare an address."
-          : addressCount === 1
-            ? undefined
-            : "Token and NFT representation targets require exactly one address."
+        return representationIdentityMatchesType(target)
+          ? undefined
+          : "Representation target identity does not match its type."
       })
     )
   )
