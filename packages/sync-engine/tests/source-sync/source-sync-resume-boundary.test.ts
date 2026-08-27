@@ -80,6 +80,7 @@ const runWithProvider = <A, E>(
         Layer.provide(
           Layer.succeed(CoinbaseReferenceDataService, {
             refreshReferenceData: () => Effect.die("refreshReferenceData should not be called"),
+            refreshDefaultMappings: () => Effect.die("refreshDefaultMappings should not be called"),
           })
         ),
         Layer.provide(

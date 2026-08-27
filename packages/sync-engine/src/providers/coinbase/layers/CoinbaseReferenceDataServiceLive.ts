@@ -191,29 +191,39 @@ const make = Effect.gen(function* () {
         )
     })
 
+  const refreshDefaultMappings: CoinbaseReferenceDataServiceShape["refreshDefaultMappings"] = () =>
+    coinbaseReferenceMappingService.ensureDefaultMappings().pipe(
+      Effect.map(
+        (mappings) =>
+          ({
+            defaultTransactionMappingCount: mappings.transactionTypeMappingCount,
+            defaultProviderAssetMappingCount: mappings.providerAssetMappingCount,
+          }) as const
+      ),
+      Effect.mapError(
+        (cause) =>
+          new CoinbaseReferenceDataError({
+            message: "Failed to ensure Coinbase default mappings",
+            cause,
+          })
+      )
+    )
+
   const refreshReferenceData: CoinbaseReferenceDataServiceShape["refreshReferenceData"] = () =>
     Effect.gen(function* () {
       const transactionTypeCatalogCount = yield* syncTransactionTypeCatalog()
       const providerAssetCatalogCount = yield* syncProviderAssetCatalog()
-      const ensuredMappings = yield* coinbaseReferenceMappingService.ensureDefaultMappings().pipe(
-        Effect.mapError(
-          (cause) =>
-            new CoinbaseReferenceDataError({
-              message: "Failed to ensure Coinbase default mappings",
-              cause,
-            })
-        )
-      )
+      const defaultMappings = yield* refreshDefaultMappings()
 
       return {
         transactionTypeCatalogCount,
         providerAssetCatalogCount,
-        defaultTransactionMappingCount: ensuredMappings.transactionTypeMappingCount,
-        defaultProviderAssetMappingCount: ensuredMappings.providerAssetMappingCount,
+        ...defaultMappings,
       } as const
     })
 
   return CoinbaseReferenceDataService.of({
+    refreshDefaultMappings,
     refreshReferenceData,
   } satisfies CoinbaseReferenceDataServiceShape)
 })

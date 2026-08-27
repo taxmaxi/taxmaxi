@@ -344,6 +344,11 @@ const principalTransferDirection = (
   }
 }
 
+const networkFeeDirection = (transaction: CoinbaseTransaction): "inbound" | "outbound" | null =>
+  transaction.type === "tx"
+    ? movementDirectionFromSignedAmount(transaction.amount.amount)
+    : principalTransferDirection(transaction)
+
 const buildPrincipalProviderTransfers = ({
   normalizeParams,
   transaction,
@@ -495,7 +500,7 @@ const normalizeCoinbaseRecord = (params: NormalizeCoinbaseRecordParams) =>
         // A network fee on an inbound row was paid by the sender, so it must
         // not become a fee transfer that consumes the recipient's inventory.
         Option.fromNullishOr(transactionPayload.network?.transaction_fee).pipe(
-          Option.filter(() => principalTransferDirection(transactionPayload) !== "inbound"),
+          Option.filter(() => networkFeeDirection(transactionPayload) !== "inbound"),
           Option.map((money) =>
             buildFeeTransfer({
               normalizeParams: params,
