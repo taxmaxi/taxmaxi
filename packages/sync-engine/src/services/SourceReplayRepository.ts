@@ -10,6 +10,58 @@ import * as Schema from "effect/Schema"
 import { SyncEngineStorageError } from "./SyncEngineStorageError.ts"
 
 /**
+ * SourceReplayPlanJobNotFoundError - The replay plan refers to a missing processing job.
+ */
+export class SourceReplayPlanJobNotFoundError extends Schema.TaggedError<SourceReplayPlanJobNotFoundError>()(
+  "SourceReplayPlanJobNotFoundError",
+  {
+    jobId: Schema.String,
+  }
+) {}
+
+/**
+ * SourceReplayPlanConflictError - The processing job cannot accept the requested replay plan.
+ */
+export class SourceReplayPlanConflictError extends Schema.TaggedError<SourceReplayPlanConflictError>()(
+  "SourceReplayPlanConflictError",
+  {
+    jobId: Schema.String,
+    reason: Schema.String,
+  }
+) {}
+
+/** Durable prerequisites and accounting boundary for one replay job. */
+export interface RecordSourceReplayPlanParams {
+  readonly jobId: string
+  readonly prerequisiteJobIds: ReadonlyArray<string>
+  readonly rebuildFrom: Date
+}
+
+/** Stored replay prerequisites and earliest affected event. */
+export interface SourceReplayPlan {
+  readonly jobId: string
+  readonly prerequisiteJobIds: ReadonlyArray<string>
+  readonly rebuildFrom: Date
+}
+
+/** Persistence operations for a replay job's durable execution plan. */
+export interface SourceReplayPlanRepositoryShape {
+  /** Add prerequisite jobs and keep the earliest rebuild boundary for a pending replay. */
+  readonly recordReplayPlan: (
+    params: RecordSourceReplayPlanParams
+  ) => Effect.Effect<
+    SourceReplayPlan,
+    SourceReplayPlanJobNotFoundError | SourceReplayPlanConflictError | SyncEngineStorageError
+  >
+}
+
+/** Context tag for durable replay-plan persistence. */
+export class SourceReplayPlanRepository extends Context.Service<
+  SourceReplayPlanRepository,
+  SourceReplayPlanRepositoryShape
+>()("SourceReplayPlanRepository") {}
+
+/**
  * SourceReplayDependencyError - A replay would invalidate inventory consumed by another source.
  */
 export class SourceReplayDependencyError extends Schema.TaggedError<SourceReplayDependencyError>()(

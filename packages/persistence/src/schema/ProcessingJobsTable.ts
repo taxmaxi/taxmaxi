@@ -64,6 +64,7 @@ export const processingJobs = pgTable(
     workerId: text("worker_id"),
     checkpointExternalId: text("checkpoint_external_id"), // Lightweight provider-facing resume anchor.
     checkpointPayload: jsonb("checkpoint_payload"), // Opaque provider-specific checkpoint/cursor blob.
+    rebuildFrom: timestamp("rebuild_from", { withTimezone: true, mode: "date" }), // Earliest event affected by this replay plan.
     createdAt: timestamp("created_at").notNull().defaultNow(),
     updatedAt: timestamp("updated_at").notNull().defaultNow(),
   },

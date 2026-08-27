@@ -51,6 +51,26 @@ const TEST_SOL_ASSET_ID = "00000000-0000-0000-0000-000000000483"
 
 await Effect.runPromise(context.recreateTestDatabase())
 
+const loadSourceRepresentationUses = (sourceId: string) =>
+  runPg(
+    Effect.gen(function* () {
+      const db = yield* drizzle
+      return yield* db
+        .select({
+          representationType: schema.sourceRepresentationUses.representationType,
+          contractAddress: schema.sourceRepresentationUses.contractAddress,
+          mintAddress: schema.sourceRepresentationUses.mintAddress,
+        })
+        .from(schema.sourceRepresentationUses)
+        .where(eq(schema.sourceRepresentationUses.sourceId, sourceId))
+        .orderBy(
+          asc(schema.sourceRepresentationUses.representationType),
+          asc(schema.sourceRepresentationUses.contractAddress),
+          asc(schema.sourceRepresentationUses.mintAddress)
+        )
+    })
+  )
+
 const runRepository = <A, E>(effect: Effect.Effect<A, E, SourceNormalizationRepository>) =>
   Effect.runPromise(context.runWithLayer({ effect, layer: SourceNormalizationRepositoryLive }))
 
@@ -1943,6 +1963,15 @@ describe("SourceNormalizationRepositoryLive", () => {
   it("persists exact observed provider transfer representations", async () => {
     const occurredAt = new Date("2025-01-01T10:00:00.000Z")
     const smallestU8DecimalAmount = `0.${"0".repeat(254)}1`
+    const globalRepresentationCountBefore = await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const [row] = yield* db
+          .select({ count: sql<number>`count(*)` })
+          .from(schema.assetRepresentations)
+        return Number(row?.count ?? 0)
+      })
+    )
     const sharedTransfer = {
       sourceId: TEST_SOURCE_ID,
       sourceRawRecordId: TEST_RAW_RECORD_ID,
@@ -1974,7 +2003,14 @@ describe("SourceNormalizationRepositoryLive", () => {
         ...sharedTransfer,
         externalId: "observed-token",
         observedRepresentationType: "token" as const,
-        observedContractAddress: "0x0000000000000000000000000000000000000096",
+        observedContractAddress: "0xAbCd000000000000000000000000000000000096",
+        observedDecimals: 6,
+      },
+      {
+        ...sharedTransfer,
+        externalId: "observed-case-sensitive-contract",
+        observedRepresentationType: "token" as const,
+        observedContractAddress: "CaseSensitiveContractAddress",
         observedDecimals: 6,
       },
       {
@@ -2061,7 +2097,15 @@ describe("SourceNormalizationRepositoryLive", () => {
           externalId: "observed-token",
           observedBlockchainId: fixture.baseBlockchainId,
           observedRepresentationType: "token",
-          observedContractAddress: "0x0000000000000000000000000000000000000096",
+          observedContractAddress: "0xAbCd000000000000000000000000000000000096",
+          observedMintAddress: null,
+          observedDecimals: 6,
+        }),
+        expect.objectContaining({
+          externalId: "observed-case-sensitive-contract",
+          observedBlockchainId: fixture.baseBlockchainId,
+          observedRepresentationType: "token",
+          observedContractAddress: "CaseSensitiveContractAddress",
           observedMintAddress: null,
           observedDecimals: 6,
         }),
@@ -2090,6 +2134,48 @@ describe("SourceNormalizationRepositoryLive", () => {
         }),
       ])
     )
+
+    const sourceUses = await loadSourceRepresentationUses(TEST_SOURCE_ID)
+    const globalRepresentationCount = await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const [globalCount] = yield* db
+          .select({ count: sql<number>`count(*)` })
+          .from(schema.assetRepresentations)
+        return Number(globalCount?.count ?? 0)
+      })
+    )
+
+    expect({ sourceUses, globalRepresentationCount }).toEqual({
+      sourceUses: [
+        {
+          representationType: "native",
+          contractAddress: null,
+          mintAddress: null,
+        },
+        {
+          representationType: "token",
+          contractAddress: "0xabcd000000000000000000000000000000000096",
+          mintAddress: null,
+        },
+        {
+          representationType: "token",
+          contractAddress: "CaseSensitiveContractAddress",
+          mintAddress: null,
+        },
+        {
+          representationType: "token",
+          contractAddress: null,
+          mintAddress: "MaxDecimalsMint111111111111111111111111111111",
+        },
+        {
+          representationType: "nft",
+          contractAddress: null,
+          mintAddress: "NftMint111111111111111111111111111111111111",
+        },
+      ],
+      globalRepresentationCount: globalRepresentationCountBefore,
+    })
 
     const observedNativeTransfer = result.providerTransfers.find(
       (transfer) => transfer.externalId === "observed-native"
@@ -2299,7 +2385,7 @@ describe("SourceNormalizationRepositoryLive", () => {
               ? {
                   ...transfer,
                   observedContractAddress: null,
-                  observedMintAddress: "CorrectedMint1111111111111111111111111111111",
+                  observedMintAddress: "0xAbCd000000000000000000000000000000000097",
                   observedDecimals: 9,
                   amount: "3",
                   metadata: { provider: "corrected-mint-observation", rawUnits: "3000000000" },
@@ -2317,7 +2403,7 @@ describe("SourceNormalizationRepositoryLive", () => {
       observedBlockchainId: fixture.baseBlockchainId,
       observedRepresentationType: "token",
       observedContractAddress: null,
-      observedMintAddress: "CorrectedMint1111111111111111111111111111111",
+      observedMintAddress: "0xAbCd000000000000000000000000000000000097",
       observedDecimals: 9,
       amount: expect.stringMatching(/^3(?:\.0+)?$/),
       metadata: { provider: "corrected-mint-observation", rawUnits: "3000000000" },
@@ -2434,7 +2520,7 @@ describe("SourceNormalizationRepositoryLive", () => {
         status: "auto_applied",
       }),
     ])
-    expect(stateAfterRejectedRemoval.preservedTransfers).toHaveLength(5)
+    expect(stateAfterRejectedRemoval.preservedTransfers).toHaveLength(6)
     expect(stateAfterRejectedRemoval.preservedTransfers).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
@@ -2485,7 +2571,7 @@ describe("SourceNormalizationRepositoryLive", () => {
       })
     )
 
-    expect(staleProviderTransfers).toHaveLength(5)
+    expect(staleProviderTransfers).toHaveLength(6)
     expect(staleProviderTransfers).toEqual(
       expect.arrayContaining(
         providerTransfers.map((transfer) =>
@@ -2501,6 +2587,37 @@ describe("SourceNormalizationRepositoryLive", () => {
         )
       )
     )
+
+    const historicalAndFutureUses = await loadSourceRepresentationUses(TEST_SOURCE_ID)
+
+    expect(historicalAndFutureUses).toEqual([
+      { representationType: "native", contractAddress: null, mintAddress: null },
+      {
+        representationType: "token",
+        contractAddress: "0xabcd000000000000000000000000000000000096",
+        mintAddress: null,
+      },
+      {
+        representationType: "token",
+        contractAddress: "CaseSensitiveContractAddress",
+        mintAddress: null,
+      },
+      {
+        representationType: "token",
+        contractAddress: null,
+        mintAddress: "0xabcd000000000000000000000000000000000097",
+      },
+      {
+        representationType: "token",
+        contractAddress: null,
+        mintAddress: "MaxDecimalsMint111111111111111111111111111111",
+      },
+      {
+        representationType: "nft",
+        contractAddress: null,
+        mintAddress: "NftMint111111111111111111111111111111111111",
+      },
+    ])
   })
 
   it("persists normalized artifacts idempotently and feeds FIFO side effects", async () => {

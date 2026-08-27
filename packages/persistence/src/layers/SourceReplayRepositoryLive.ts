@@ -4,13 +4,17 @@
  * @module SourceReplayRepositoryLive
  */
 
-import { and, eq, ne, sql } from "drizzle-orm"
+import { and, asc, eq, inArray, ne, sql } from "drizzle-orm"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import { drizzle } from "./PgClientLive.ts"
 import { schema } from "../schema/index.ts"
 import {
   SourceReplayDependencyError,
+  SourceReplayPlanConflictError,
+  SourceReplayPlanJobNotFoundError,
+  SourceReplayPlanRepository,
+  type SourceReplayPlanRepositoryShape,
   SourceReplayRepository,
   type SourceReplayRepositoryShape,
 } from "@my/sync-engine/services"
@@ -232,4 +236,154 @@ const make = Effect.gen(function* () {
   } satisfies SourceReplayRepositoryShape)
 })
 
-export const SourceReplayRepositoryLive = Layer.effect(SourceReplayRepository, make)
+const SourceReplayResetRepositoryLive = Layer.effect(SourceReplayRepository, make)
+
+const makeReplayPlanRepository = Effect.gen(function* () {
+  const db = yield* drizzle
+
+  const recordReplayPlan: SourceReplayPlanRepositoryShape["recordReplayPlan"] = ({
+    jobId,
+    prerequisiteJobIds,
+    rebuildFrom,
+  }) =>
+    db
+      .transaction((tx) =>
+        Effect.gen(function* () {
+          const uniquePrerequisiteJobIds = [...new Set(prerequisiteJobIds)].sort()
+          if (uniquePrerequisiteJobIds.includes(jobId)) {
+            return yield* new SourceReplayPlanConflictError({
+              jobId,
+              reason: "A replay job cannot depend on itself.",
+            })
+          }
+
+          if (uniquePrerequisiteJobIds.length > 0) {
+            const prerequisiteJobs = yield* tx
+              .select({ id: schema.processingJobs.id })
+              .from(schema.processingJobs)
+              .where(inArray(schema.processingJobs.id, uniquePrerequisiteJobIds))
+              .orderBy(asc(schema.processingJobs.id))
+              .for("key share")
+              .pipe(
+                wrapSyncEngineSqlError(
+                  "sourceReplayPlanRepository.recordReplayPlan.lockPrerequisites"
+                )
+              )
+            const foundPrerequisiteJobIds = new Set(prerequisiteJobs.map(({ id }) => id))
+            const missingPrerequisiteJobId = uniquePrerequisiteJobIds.find(
+              (prerequisiteJobId) => !foundPrerequisiteJobIds.has(prerequisiteJobId)
+            )
+
+            if (missingPrerequisiteJobId !== undefined) {
+              return yield* new SourceReplayPlanJobNotFoundError({
+                jobId: missingPrerequisiteJobId,
+              })
+            }
+          }
+
+          const [job] = yield* tx
+            .update(schema.processingJobs)
+            .set({
+              rebuildFrom: sql<Date>`least(
+                coalesce(${schema.processingJobs.rebuildFrom}, ${rebuildFrom}),
+                ${rebuildFrom}
+              )`,
+              updatedAt: nowDate(),
+            })
+            .where(
+              and(
+                eq(schema.processingJobs.id, jobId),
+                eq(schema.processingJobs.mode, "replay"),
+                eq(schema.processingJobs.status, "pending")
+              )
+            )
+            .returning({
+              id: schema.processingJobs.id,
+              rebuildFrom: schema.processingJobs.rebuildFrom,
+            })
+            .pipe(wrapSyncEngineSqlError("sourceReplayPlanRepository.recordReplayPlan.update"))
+
+          if (job === undefined) {
+            const [existingJob] = yield* tx
+              .select({
+                mode: schema.processingJobs.mode,
+                status: schema.processingJobs.status,
+              })
+              .from(schema.processingJobs)
+              .where(eq(schema.processingJobs.id, jobId))
+              .limit(1)
+              .pipe(wrapSyncEngineSqlError("sourceReplayPlanRepository.recordReplayPlan.select"))
+
+            if (existingJob === undefined) {
+              return yield* new SourceReplayPlanJobNotFoundError({ jobId })
+            }
+
+            return yield* new SourceReplayPlanConflictError({
+              jobId,
+              reason: `Only pending replay jobs accept a replay plan; found ${existingJob.mode} job with ${existingJob.status} status.`,
+            })
+          }
+
+          if (job.rebuildFrom === null) {
+            return yield* toSyncEngineStorageError({
+              error: { jobId, reason: "Replay rebuild boundary was not stored." },
+              operation: "sourceReplayPlanRepository.recordReplayPlan.update",
+            })
+          }
+
+          if (uniquePrerequisiteJobIds.length > 0) {
+            yield* tx
+              .insert(schema.processingJobDependencies)
+              .values(
+                uniquePrerequisiteJobIds.map((prerequisiteJobId) => ({
+                  jobId,
+                  prerequisiteJobId,
+                }))
+              )
+              .onConflictDoNothing()
+              .pipe(
+                wrapSyncEngineSqlError("sourceReplayPlanRepository.recordReplayPlan.dependencies")
+              )
+          }
+
+          const dependencies = yield* tx
+            .select({ prerequisiteJobId: schema.processingJobDependencies.prerequisiteJobId })
+            .from(schema.processingJobDependencies)
+            .where(eq(schema.processingJobDependencies.jobId, jobId))
+            .orderBy(asc(schema.processingJobDependencies.prerequisiteJobId))
+            .pipe(wrapSyncEngineSqlError("sourceReplayPlanRepository.recordReplayPlan.load"))
+
+          return {
+            jobId: job.id,
+            prerequisiteJobIds: dependencies.map(({ prerequisiteJobId }) => prerequisiteJobId),
+            rebuildFrom: job.rebuildFrom,
+          }
+        })
+      )
+      .pipe(
+        Effect.mapError((error) =>
+          error instanceof SourceReplayPlanJobNotFoundError ||
+          error instanceof SourceReplayPlanConflictError
+            ? error
+            : toSyncEngineStorageError({
+                error,
+                operation: "sourceReplayPlanRepository.recordReplayPlan.transaction",
+              })
+        )
+      )
+
+  return SourceReplayPlanRepository.of({
+    recordReplayPlan,
+  } satisfies SourceReplayPlanRepositoryShape)
+})
+
+const SourceReplayPlanPersistenceLive = Layer.effect(
+  SourceReplayPlanRepository,
+  makeReplayPlanRepository
+)
+
+/** Live persistence for replay resets, prerequisites, and rebuild boundaries. */
+export const SourceReplayRepositoryLive = Layer.merge(
+  SourceReplayResetRepositoryLive,
+  SourceReplayPlanPersistenceLive
+)
