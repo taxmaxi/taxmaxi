@@ -194,6 +194,17 @@ function CandidatePicker({ draft }: { readonly draft: DecisionDraft }) {
       .then((result) => {
         if (latestSearchId.current === searchId) {
           setCandidates(result.assets)
+          // A recommended asset prefilled into the draft can be missing from
+          // the search results, because the search runs on the observation's
+          // display text. Keeping the hidden ID would enable preview with no
+          // visible selection, so drop it when no candidate row can show it.
+          if (
+            !clearSelection &&
+            draft.assetId.length > 0 &&
+            !result.assets.some((asset) => asset.id === draft.assetId)
+          ) {
+            draft.setAssetId("")
+          }
         }
       })
       .catch(() => {

@@ -90,7 +90,12 @@ export function useAssetCatalogSelection({
   const openExactLookup = useCallback(() => {
     setExactLookupOpen(true)
     setExactLookupKey((key) => key + 1)
-    setMobileDetailOpen(true)
+
+    // Only mobile needs the detail pane state; on desktop it would trigger
+    // the media-query effect, which pulls focus back into the catalog list.
+    if (!window.matchMedia(ASSET_CATALOG_DESKTOP_MEDIA_QUERY).matches) {
+      setMobileDetailOpen(true)
+    }
   }, [])
 
   // A scope change leaves the lookup context behind; keeping the pane open
