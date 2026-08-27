@@ -4904,6 +4904,13 @@ describe("SourceNormalizationRepositoryLive", () => {
         amount: expect.stringContaining("0.00005000"),
       }),
     ])
+    expect(result.canonicalTransfers).toHaveLength(0)
+    expect(result.legs).toEqual([
+      expect.objectContaining({
+        kind: "acquisition",
+        amount: expect.stringContaining("0.00005000"),
+      }),
+    ])
   })
 
   it("carves a same-currency network fee out of an internal-transfer disposal leg", async () => {

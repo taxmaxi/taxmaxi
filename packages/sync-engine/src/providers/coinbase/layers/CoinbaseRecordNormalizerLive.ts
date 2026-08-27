@@ -323,6 +323,27 @@ const buildPrincipalProviderTransfer = ({
   }
 }
 
+/**
+ * Direction of the row's principal movement, or null for types that move no
+ * principal. Coinbase reports send deposits with a positive amount and send
+ * withdrawals with a negative amount, so the sign decides the direction.
+ */
+const principalTransferDirection = (
+  transaction: CoinbaseTransaction
+): "inbound" | "outbound" | null => {
+  switch (transaction.type) {
+    case "receive":
+      return "inbound"
+    case "send":
+    case "intx_deposit":
+    case "intx_withdrawal":
+    case "transfer":
+      return movementDirectionFromSignedAmount(transaction.amount.amount)
+    default:
+      return null
+  }
+}
+
 const buildPrincipalProviderTransfers = ({
   normalizeParams,
   transaction,
@@ -334,47 +355,34 @@ const buildPrincipalProviderTransfers = ({
 }): Effect.Effect<
   ReadonlyArray<CoinbaseRecordNormalizationResult["providerTransfers"][number]>,
   CoinbaseRecordNormalizationError
-> => {
-  // Only an outbound row carries the fee inside its debit; an inbound row's
-  // fee was paid by the sender, so the credited amount stays untouched. A
-  // debit fully covered by its network fee leaves no principal to move, so
-  // the fee transfer alone accounts for the row.
-  const buildForDirection = (direction: "inbound" | "outbound") =>
-    Effect.gen(function* () {
-      const amount =
-        direction === "outbound"
-          ? yield* deriveOutboundPrincipalAmount(transaction)
-          : normalizeUnsignedAmount(transaction.amount.amount)
-
-      return isZeroAmount(amount)
-        ? []
-        : [
-            buildPrincipalProviderTransfer({
-              normalizeParams,
-              transaction,
-              timestamp,
-              direction,
-              amount,
-            }),
-          ]
-    })
-
-  switch (transaction.type) {
-    case "receive":
-      return buildForDirection("inbound")
-    // Coinbase reports send deposits with a positive amount and send
-    // withdrawals with a negative amount, so the sign decides the direction.
-    case "send":
-    case "intx_deposit":
-    case "intx_withdrawal":
-    case "transfer": {
-      const direction = movementDirectionFromSignedAmount(transaction.amount.amount)
-      return direction === null ? Effect.succeed([]) : buildForDirection(direction)
+> =>
+  Effect.gen(function* () {
+    const direction = principalTransferDirection(transaction)
+    if (direction === null) {
+      return []
     }
-    default:
-      return Effect.succeed([])
-  }
-}
+
+    // Only an outbound row carries the fee inside its debit; an inbound row's
+    // fee was paid by the sender, so the credited amount stays untouched. A
+    // debit fully covered by its network fee leaves no principal to move, so
+    // the fee transfer alone accounts for the row.
+    const amount =
+      direction === "outbound"
+        ? yield* deriveOutboundPrincipalAmount(transaction)
+        : normalizeUnsignedAmount(transaction.amount.amount)
+
+    return isZeroAmount(amount)
+      ? []
+      : [
+          buildPrincipalProviderTransfer({
+            normalizeParams,
+            transaction,
+            timestamp,
+            direction,
+            amount,
+          }),
+        ]
+  })
 
 /**
  * Build a canonical fee transfer row from Coinbase fee payloads.
@@ -484,7 +492,10 @@ const normalizeCoinbaseRecord = (params: NormalizeCoinbaseRecordParams) =>
 
     const feeTransferResults = yield* Effect.all(
       [
+        // A network fee on an inbound row was paid by the sender, so it must
+        // not become a fee transfer that consumes the recipient's inventory.
         Option.fromNullishOr(transactionPayload.network?.transaction_fee).pipe(
+          Option.filter(() => principalTransferDirection(transactionPayload) !== "inbound"),
           Option.map((money) =>
             buildFeeTransfer({
               normalizeParams: params,
