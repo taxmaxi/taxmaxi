@@ -27,7 +27,10 @@ import { ProviderReferenceRepositoryLive } from "../../../persistence/src/layers
 import { RepositoriesLive } from "../../../persistence/src/layers/RepositoriesLive.ts"
 import { drizzle } from "../../../persistence/src/layers/PgClientLive.ts"
 import { schema } from "../../../persistence/src/schema/index.ts"
-import { TaxCalculationService } from "../../../persistence/src/services/index.ts"
+import {
+  PortfolioRepository,
+  TaxCalculationService,
+} from "../../../persistence/src/services/index.ts"
 import {
   makeIntegrationTestDatabaseContext,
   seedSyncEngineRepositoryFixture,
@@ -325,6 +328,7 @@ const makeHypeWithBtcFeeSyncRecords = () =>
 let activeSyncRecords: ReadonlyArray<ProviderRawRecord> = defaultSyncRecords
 let activeFiatCurrencies: ReadonlyArray<CoinbaseFiatCurrencyRecord> = defaultFiatCurrencies
 let activeCryptoCurrencies: ReadonlyArray<CoinbaseCryptoCurrencyRecord> = defaultCryptoCurrencies
+let remoteReferenceCatalogAvailable = true
 
 const CoinbaseSyncClientTestLive = Layer.succeed(CoinbaseSyncClient, {
   fetchAccountsPage: () =>
@@ -351,8 +355,14 @@ const CoinbaseSyncClientTestLive = Layer.succeed(CoinbaseSyncClient, {
         })),
       nextCursor: null,
     }),
-  fetchFiatCurrencies: () => Effect.succeed(activeFiatCurrencies),
-  fetchCryptoCurrencies: () => Effect.succeed(activeCryptoCurrencies),
+  fetchFiatCurrencies: () =>
+    remoteReferenceCatalogAvailable
+      ? Effect.succeed(activeFiatCurrencies)
+      : Effect.die("Remote fiat reference catalog should not be called during replay"),
+  fetchCryptoCurrencies: () =>
+    remoteReferenceCatalogAvailable
+      ? Effect.succeed(activeCryptoCurrencies)
+      : Effect.die("Remote crypto reference catalog should not be called during replay"),
 })
 
 const CoinbaseReferenceMappingWithDepsLive = CoinbaseReferenceMappingServiceLive.pipe(
@@ -490,6 +500,15 @@ const calculateTax = () =>
       sourceId,
       jurisdiction: "germany",
       year: 2025,
+    })
+  }).pipe(Effect.provide(TestLayer))
+
+const fetchPortfolioPositions = () =>
+  Effect.gen(function* () {
+    const portfolio = yield* PortfolioRepository
+    return yield* portfolio.listAssetPositions({
+      principalId,
+      sourceId,
     })
   }).pipe(Effect.provide(TestLayer))
 
@@ -862,6 +881,7 @@ const fetchCounts = () =>
         id: schema.transactions.id,
         externalId: schema.transactions.externalId,
         transactionType: schema.transactions.transactionType,
+        providerStatus: schema.transactions.providerStatus,
       })
       .from(schema.transactions)
       .where(eq(schema.transactions.sourceId, sourceId))
@@ -1136,6 +1156,7 @@ describe("coinbase normalization persistence", () => {
       activeSyncRecords = defaultSyncRecords
       activeFiatCurrencies = defaultFiatCurrencies
       activeCryptoCurrencies = defaultCryptoCurrencies
+      remoteReferenceCatalogAvailable = true
       yield* recreateTestDatabase()
       yield* seedCoinbaseSource()
     }).pipe(Effect.runPromise)
@@ -1964,8 +1985,8 @@ describe("coinbase normalization persistence", () => {
           id: "tx-uncategorized-inflow-1",
           type: "tx",
           status: "completed",
-          amount: { amount: "0.41000000", currency: "BTC" },
-          native_amount: { amount: "4100.00", currency: "EUR" },
+          amount: { amount: "0.49360000", currency: "BTC" },
+          native_amount: { amount: "4936.00", currency: "EUR" },
           created_at: "2025-01-05T10:00:00.000Z",
           resource_path: "/v2/accounts/coinbase-account-1/transactions/tx-uncategorized-inflow-1",
           description: "Uncategorized credit",
@@ -1999,10 +2020,14 @@ describe("coinbase normalization persistence", () => {
           "disposal:coinbase_sell",
         ])
 
-        const remainingAmounts = firstRun.fifoLots.map((row) => String(row.remainingAmount))
+        const remainingAmounts = firstRun.fifoLots
+          .map((row) => String(row.remainingAmount))
+          .sort((left, right) => left.localeCompare(right))
         expect(remainingAmounts).toHaveLength(2)
-        for (const remainingAmount of remainingAmounts) {
-          expectDecimalAmount(remainingAmount, "0")
+        const [emptyLot, remainingLot] = remainingAmounts
+        if (emptyLot !== undefined && remainingLot !== undefined) {
+          expectDecimalAmount(emptyLot, "0")
+          expectDecimalAmount(remainingLot, "0.0836")
         }
 
         const matchedAmounts = firstRun.disposalMatches
@@ -2032,6 +2057,7 @@ describe("coinbase normalization persistence", () => {
         // Simulate a source last synced while tx still mapped to no_leg: the
         // replay must refresh the stored mapping before re-deriving legs.
         yield* revertTxMappingToNoLeg()
+        remoteReferenceCatalogAvailable = false
         const replay = yield* replaySource()
         expect(replay.status).toBe("completed")
 
@@ -2042,11 +2068,16 @@ describe("coinbase normalization persistence", () => {
 
         const taxAfterReplay = yield* calculateTax()
         expect(taxAfterReplay.taxableGains).toBe(7050)
+
+        const portfolioPositions = yield* fetchPortfolioPositions()
+        const btcPosition = portfolioPositions.find((position) => position.assetId === BTC_ASSET_ID)
+        expect(btcPosition).toBeDefined()
+        expectDecimalAmount(String(btcPosition?.amount), "0.0836")
       })
     )
   })
 
-  it("deducts inventory from a negative Coinbase tx record as a reviewable disposal", async () => {
+  it("deducts inventory from a succeeded negative Coinbase tx as a reviewable disposal", async () => {
     activeSyncRecords = [
       makeCoinbaseRecord({
         recordType: "coinbase_account",
@@ -2078,7 +2109,7 @@ describe("coinbase normalization persistence", () => {
         payload: {
           id: "tx-uncategorized-outflow-1",
           type: "tx",
-          status: "completed",
+          status: "succeeded",
           amount: { amount: "-0.40000000", currency: "BTC" },
           native_amount: { amount: "-4000.00", currency: "EUR" },
           created_at: "2025-02-01T10:00:00.000Z",
@@ -2094,6 +2125,12 @@ describe("coinbase normalization persistence", () => {
         const state = yield* fetchCounts()
 
         expect(state.rawRows.every((row) => row.normalizationError === null)).toBe(true)
+        expect(
+          state.transactions.some(
+            (row) =>
+              row.externalId === "tx-uncategorized-outflow-1" && row.providerStatus === "succeeded"
+          )
+        ).toBe(true)
         expect(state.legs.map((row) => `${row.kind}:${row.derivationRule}`).sort()).toEqual([
           "acquisition:coinbase_buy",
           "disposal:coinbase_tx_outflow",
@@ -2116,6 +2153,142 @@ describe("coinbase normalization persistence", () => {
             matchedLayer: "coinbase_reference_mapping",
           }),
         ])
+      })
+    )
+  })
+
+  it("persists zero, pending, and failed Coinbase tx rows for review without inventory legs", async () => {
+    activeSyncRecords = [
+      makeCoinbaseRecord({
+        recordType: "coinbase_account",
+        externalRecordId: "coinbase-account-1",
+        occurredAt: new Date("2025-01-01T00:00:00.000Z"),
+        payload: {
+          id: "coinbase-account-1",
+          created_at: "2025-01-01T00:00:00.000Z",
+          updated_at: "2025-01-01T00:00:00.000Z",
+        },
+      }),
+      ...(["completed", "pending", "failed"] as const).map((status, index) =>
+        makeCoinbaseRecord({
+          externalRecordId: `tx-${status}-without-inventory`,
+          occurredAt: new Date(`2025-01-0${index + 2}T10:00:00.000Z`),
+          payload: {
+            id: `tx-${status}-without-inventory`,
+            type: "tx",
+            status,
+            amount: {
+              amount: status === "completed" ? "0.00000000" : "0.40000000",
+              currency: "BTC",
+            },
+            native_amount: {
+              amount: status === "completed" ? "0.00" : "4000.00",
+              currency: "EUR",
+            },
+            created_at: `2025-01-0${index + 2}T10:00:00.000Z`,
+            resource_path: `/v2/accounts/coinbase-account-1/transactions/tx-${status}-without-inventory`,
+            description: `Uncategorized ${status} row`,
+          },
+        })
+      ),
+    ]
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        yield* runSync()
+        const state = yield* fetchCounts()
+
+        expect(state.rawRows.every((row) => row.normalizedAt !== null)).toBe(true)
+        expect(state.rawRows.every((row) => row.normalizationError === null)).toBe(true)
+        expect(
+          state.transactions
+            .map((row) => row.providerStatus)
+            .sort((left, right) => (left ?? "").localeCompare(right ?? ""))
+        ).toEqual(["completed", "failed", "pending"])
+        expect(state.transactionReviews).toHaveLength(3)
+        expect(state.transactionReviews.every((row) => row.needsReview)).toBe(true)
+        expect(state.legs).toHaveLength(0)
+        expect(state.fifoLots).toHaveLength(0)
+        expect(state.disposalMatches).toHaveLength(0)
+      })
+    )
+  })
+
+  it("reprocesses a Coinbase tx when its status changes from pending to completed", async () => {
+    const makeStatusRecord = (status: "pending" | "completed") =>
+      makeCoinbaseRecord({
+        externalRecordId: "tx-status-transition-1",
+        occurredAt: new Date("2025-01-02T10:00:00.000Z"),
+        payload: {
+          id: "tx-status-transition-1",
+          type: "tx",
+          status,
+          amount: { amount: "0.40000000", currency: "BTC" },
+          native_amount: { amount: "4000.00", currency: "EUR" },
+          created_at: "2025-01-02T10:00:00.000Z",
+          resource_path: "/v2/accounts/coinbase-account-1/transactions/tx-status-transition-1",
+          description: `Uncategorized ${status} credit`,
+        },
+      })
+    const accountRecord = makeCoinbaseRecord({
+      recordType: "coinbase_account",
+      externalRecordId: "coinbase-account-1",
+      occurredAt: new Date("2025-01-01T00:00:00.000Z"),
+      payload: {
+        id: "coinbase-account-1",
+        created_at: "2025-01-01T00:00:00.000Z",
+        updated_at: "2025-01-01T00:00:00.000Z",
+      },
+    })
+    const newerCheckpointRecord = makeCoinbaseRecord({
+      externalRecordId: "tx-newer-checkpoint-1",
+      occurredAt: new Date("2025-01-03T10:00:00.000Z"),
+      payload: {
+        id: "tx-newer-checkpoint-1",
+        type: "tx",
+        status: "completed",
+        amount: { amount: "0.00000000", currency: "BTC" },
+        native_amount: { amount: "0.00", currency: "EUR" },
+        created_at: "2025-01-03T10:00:00.000Z",
+        resource_path: "/v2/accounts/coinbase-account-1/transactions/tx-newer-checkpoint-1",
+        description: "Newer checkpoint row",
+      },
+    })
+    activeSyncRecords = [accountRecord, makeStatusRecord("pending"), newerCheckpointRecord]
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        yield* runSync()
+        const pendingState = yield* fetchCounts()
+        expect(
+          pendingState.transactions.find((row) => row.externalId === "tx-status-transition-1")
+        ).toEqual(expect.objectContaining({ providerStatus: "pending" }))
+        expect(pendingState.legs).toHaveLength(0)
+
+        activeSyncRecords = [accountRecord, makeStatusRecord("completed"), newerCheckpointRecord]
+        yield* runSync()
+        yield* runSync()
+
+        const completedState = yield* fetchCounts()
+        expect(
+          completedState.transactions.find((row) => row.externalId === "tx-status-transition-1")
+        ).toEqual(expect.objectContaining({ providerStatus: "completed" }))
+        expect(completedState.legs).toEqual([
+          expect.objectContaining({
+            kind: "acquisition",
+            derivationRule: "coinbase_tx_inflow",
+          }),
+        ])
+        expect(completedState.fifoLots).toHaveLength(1)
+        const completedTx = completedState.transactions.find(
+          (row) => row.externalId === "tx-status-transition-1"
+        )
+        expect(completedTx).toBeDefined()
+        expect(
+          completedState.transactionReviews.some(
+            (review) => review.transactionId === completedTx?.id
+          )
+        ).toBe(true)
       })
     )
   })

@@ -219,4 +219,117 @@ describe("SourceRawRecordRepositoryLive", () => {
     })
     expect(rows[0]?.occurredAt.toISOString()).toBe("2025-01-01T00:01:00.000Z")
   })
+
+  it("reopens flagged changed payloads while preserving unchanged failures", async () => {
+    const [record] = firstBatch.slice(1)
+    if (record === undefined) {
+      return
+    }
+    const makeRecord = ({
+      amount,
+      externalRecordId = record.externalRecordId,
+      status,
+      reopenNormalizationOnChange,
+    }: {
+      readonly amount: string
+      readonly externalRecordId?: string
+      readonly status: string
+      readonly reopenNormalizationOnChange: boolean
+    }) =>
+      ProviderRawRecord.make({
+        providerKey: record.providerKey,
+        recordType: record.recordType,
+        externalRecordId,
+        externalAccountId: record.externalAccountId,
+        externalParentId: record.externalParentId,
+        occurredAt: record.occurredAt,
+        payload: { id: externalRecordId, amount, status },
+        reopenNormalizationOnChange,
+      })
+    const pendingRecord = makeRecord({
+      amount: "1.0",
+      status: "pending",
+      reopenNormalizationOnChange: true,
+    })
+    const stableRecord = makeRecord({
+      amount: "1.0",
+      externalRecordId: "tx-stable",
+      status: "completed",
+      reopenNormalizationOnChange: false,
+    })
+
+    const firstWrite = await runRepository(
+      Effect.flatMap(SourceRawRecordRepository, (repository) =>
+        repository.upsertRawBatch({
+          sourceId: TEST_SOURCE_ID,
+          records: [pendingRecord, stableRecord],
+        })
+      )
+    )
+    const rawRecord = firstWrite.rawRecords.find((row) => row.externalRecordId === "tx-1")
+    const stableRawRecord = firstWrite.rawRecords.find(
+      (row) => row.externalRecordId === "tx-stable"
+    )
+    if (rawRecord === undefined || stableRawRecord === undefined) {
+      return
+    }
+
+    await runRepository(
+      Effect.flatMap(SourceRawRecordRepository, (repository) =>
+        repository.markRawRecordFailed({
+          rawRecordId: rawRecord.id,
+          message: "Coinbase transaction is still pending",
+        })
+      )
+    )
+    await runRepository(
+      Effect.flatMap(SourceRawRecordRepository, (repository) =>
+        repository.markRawRecordNormalized({ rawRecordId: stableRawRecord.id })
+      )
+    )
+
+    const unchangedWrite = await runRepository(
+      Effect.flatMap(SourceRawRecordRepository, (repository) =>
+        repository.upsertRawBatch({ sourceId: TEST_SOURCE_ID, records: [pendingRecord] })
+      )
+    )
+    expect(unchangedWrite.rawRecords[0]?.normalizedAt).toBeNull()
+    expect(unchangedWrite.rawRecords[0]?.normalizationError).toBe(
+      "Coinbase transaction is still pending"
+    )
+
+    const replayCandidates = await runRepository(
+      Effect.flatMap(SourceRawRecordRepository, (repository) =>
+        repository.listReplayCandidates({ sourceId: TEST_SOURCE_ID })
+      )
+    )
+    expect(replayCandidates.map((row) => row.externalRecordId)).toEqual(["tx-1"])
+
+    const changedWrite = await runRepository(
+      Effect.flatMap(SourceRawRecordRepository, (repository) =>
+        repository.upsertRawBatch({
+          sourceId: TEST_SOURCE_ID,
+          records: [
+            makeRecord({
+              amount: "1.0",
+              status: "completed",
+              reopenNormalizationOnChange: true,
+            }),
+            makeRecord({
+              amount: "2.0",
+              externalRecordId: "tx-stable",
+              status: "completed",
+              reopenNormalizationOnChange: false,
+            }),
+          ],
+        })
+      )
+    )
+
+    const reopenedRow = changedWrite.rawRecords.find((row) => row.externalRecordId === "tx-1")
+    const preservedRow = changedWrite.rawRecords.find((row) => row.externalRecordId === "tx-stable")
+    expect(reopenedRow?.normalizedAt).toBeNull()
+    expect(reopenedRow?.normalizationError).toBeNull()
+    expect(preservedRow?.normalizedAt).not.toBeNull()
+  })
 })

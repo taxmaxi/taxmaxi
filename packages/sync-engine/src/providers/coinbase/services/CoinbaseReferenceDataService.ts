@@ -31,6 +31,14 @@ export interface RefreshCoinbaseReferenceDataResult {
 }
 
 /**
+ * RefreshCoinbaseDefaultMappingsResult - Counts returned after applying checked-in mappings.
+ */
+export interface RefreshCoinbaseDefaultMappingsResult {
+  readonly defaultTransactionMappingCount: number
+  readonly defaultProviderAssetMappingCount: number
+}
+
+/**
  * CoinbaseReferenceDataServiceError - Union of Coinbase reference refresh failures.
  */
 export type CoinbaseReferenceDataServiceError = CoinbaseReferenceDataError | SyncEngineStorageError
@@ -39,6 +47,12 @@ export type CoinbaseReferenceDataServiceError = CoinbaseReferenceDataError | Syn
  * CoinbaseReferenceDataServiceShape - Refresh Coinbase transaction and currency references.
  */
 export interface CoinbaseReferenceDataServiceShape {
+  /** Apply checked-in defaults without calling Coinbase. */
+  readonly refreshDefaultMappings: () => Effect.Effect<
+    RefreshCoinbaseDefaultMappingsResult,
+    CoinbaseReferenceDataServiceError
+  >
+
   readonly refreshReferenceData: () => Effect.Effect<
     RefreshCoinbaseReferenceDataResult,
     CoinbaseReferenceDataServiceError

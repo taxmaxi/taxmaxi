@@ -28,6 +28,7 @@ import { SyncEngineStorageError } from "../../../services/SyncEngineStorageError
 import type { CoinbaseLegDerivationError } from "./CoinbaseLegDerivationService.ts"
 import type { CoinbaseRecordNormalizationError } from "./CoinbaseRecordNormalizer.ts"
 import type {
+  RefreshCoinbaseDefaultMappingsResult,
   RefreshCoinbaseReferenceDataResult,
   CoinbaseReferenceDataServiceError,
 } from "./CoinbaseReferenceDataService.ts"
@@ -100,6 +101,11 @@ export interface CoinbaseSourceSyncProviderShape {
 
   readonly refreshReferenceData: () => Effect.Effect<
     RefreshCoinbaseReferenceDataResult,
+    CoinbaseReferenceDataServiceError
+  >
+
+  readonly refreshDefaultMappings: () => Effect.Effect<
+    RefreshCoinbaseDefaultMappingsResult,
     CoinbaseReferenceDataServiceError
   >
 

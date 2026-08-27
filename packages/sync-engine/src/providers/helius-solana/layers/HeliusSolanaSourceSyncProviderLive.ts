@@ -52,6 +52,7 @@ import {
   type HeliusSolanaNormalizationLookups,
   type HeliusSolanaReferenceDataRefreshResult,
   type HeliusSolanaSourceSyncProviderShape,
+  type HeliusSolanaDefaultMappingsRefreshResult,
 } from "../services/HeliusSolanaSourceSyncProvider.ts"
 import {
   HeliusSolanaAuthError,
@@ -77,6 +78,11 @@ const emptyReferenceDataRefresh = {
   defaultTransactionMappingCount: 0,
   defaultProviderAssetMappingCount: 0,
 } satisfies HeliusSolanaReferenceDataRefreshResult
+
+const emptyDefaultMappingsRefresh = {
+  defaultTransactionMappingCount: 0,
+  defaultProviderAssetMappingCount: 0,
+} satisfies HeliusSolanaDefaultMappingsRefreshResult
 
 const SOLANA_EXPLORER_SIGNATURE_URL = "https://explorer.solana.com/tx/"
 const SOLANA_TOKEN_PROGRAM_IDS = new Set([
@@ -1254,8 +1260,10 @@ const mapAssetsByMint = (
   )
 
 const make = ({
+  refreshDefaultMappings,
   refreshReferenceData,
 }: {
+  readonly refreshDefaultMappings: HeliusSolanaSourceSyncProviderShape["refreshDefaultMappings"]
   readonly refreshReferenceData: HeliusSolanaSourceSyncProviderShape["refreshReferenceData"]
 }) =>
   Effect.gen(function* () {
@@ -2670,6 +2678,7 @@ const make = ({
 
     return HeliusSolanaSourceSyncProvider.of({
       fetchRawBatch,
+      refreshDefaultMappings,
       refreshReferenceData,
       loadNormalizationLookups,
       prepareNormalization: ({ source, sourceRecord, lookups }) =>
@@ -3084,13 +3093,23 @@ const make = ({
   })
 
 const makeWithEmptyReferenceData = make({
+  refreshDefaultMappings: () => Effect.succeed(emptyDefaultMappingsRefresh),
   refreshReferenceData: () => Effect.succeed(emptyReferenceDataRefresh),
 })
 
 const makeWithAssetResolutionReferenceData = Effect.gen(function* () {
   const assetResolutionService = yield* HeliusSolanaAssetResolutionService
+  const refreshDefaultMappings = () =>
+    assetResolutionService.ensureDefaultMappings().pipe(
+      Effect.map((result) => ({
+        defaultTransactionMappingCount: 0,
+        defaultProviderAssetMappingCount: result.defaultProviderAssetMappingCount,
+      })),
+      Effect.mapError(toReferenceRefreshStorageError)
+    )
 
   return yield* make({
+    refreshDefaultMappings,
     refreshReferenceData: () =>
       assetResolutionService
         .ensureDefaultMappings()

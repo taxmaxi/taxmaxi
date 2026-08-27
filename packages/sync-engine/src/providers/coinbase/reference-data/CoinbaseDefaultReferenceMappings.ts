@@ -280,7 +280,7 @@ export const coinbaseDefaultTransactionTypeMappings: ReadonlyArray<CoinbaseDefau
       pairedRecordRequired: false,
       mappingStatus: "approved",
       sourceNotes:
-        "Coinbase catch-all rows move real funds: positive amounts add inventory as acquisitions, negative amounts deduct it as disposals. Each row is flagged for user review because the provider gives no category.",
+        "Settled Coinbase catch-all rows move real funds: positive amounts add inventory as acquisitions, negative amounts deduct it as disposals, and zero amounts create no leg. Pending or failed rows do not affect inventory. Each row is flagged for user review because the provider gives no category.",
     },
     {
       providerTransactionType: "unstaking_transfer",

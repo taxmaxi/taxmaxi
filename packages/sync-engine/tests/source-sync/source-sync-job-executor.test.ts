@@ -14,6 +14,7 @@ import {
   ProviderAssetRepository,
   SourceNormalizationRepository,
   SourceProviderRecoverableNormalizationError,
+  SourceProviderReferenceDataError,
   SourceProviderRegistry,
   SourceRawRecordRepository,
   SourceReplayRepository,
@@ -96,6 +97,8 @@ const unusedJobLifecycleMethods = {
 const makeExecutorLayer = ({
   mode,
   failFetch = false,
+  failRemoteReferenceRefresh = false,
+  failDefaultMappingsRefresh = false,
   executionJobFailure,
   sourceProviderKey = "coinbase",
   fetchedProviderRecords = [],
@@ -123,6 +126,8 @@ const makeExecutorLayer = ({
 }: {
   readonly mode: SourceSyncJobMode
   readonly failFetch?: boolean
+  readonly failRemoteReferenceRefresh?: boolean
+  readonly failDefaultMappingsRefresh?: boolean
   readonly executionJobFailure?: "not-found" | "conflict" | "payload"
   readonly sourceProviderKey?: string
   readonly fetchedProviderRecords?: ReadonlyArray<ProviderRawRecord>
@@ -330,12 +335,34 @@ const makeExecutorLayer = ({
             })
           }),
     refreshReferenceData: () =>
-      Effect.succeed({
-        transactionTypeCatalogCount: 0,
-        providerAssetCatalogCount: 0,
-        defaultTransactionMappingCount: 0,
-        defaultProviderAssetMappingCount: 0,
-      }),
+      Effect.sync(() => events.push("coinbase:refresh-reference-data")).pipe(
+        Effect.andThen(
+          failRemoteReferenceRefresh
+            ? Effect.die("Coinbase network reference refresh should not run during replay")
+            : Effect.succeed({
+                transactionTypeCatalogCount: 0,
+                providerAssetCatalogCount: 0,
+                defaultTransactionMappingCount: 0,
+                defaultProviderAssetMappingCount: 0,
+              })
+        )
+      ),
+    refreshDefaultMappings: () =>
+      Effect.sync(() => events.push("coinbase:refresh-default-mappings")).pipe(
+        Effect.andThen(
+          failDefaultMappingsRefresh
+            ? Effect.fail(
+                new SourceProviderReferenceDataError({
+                  providerKey: "coinbase",
+                  message: "Local default mapping refresh failed",
+                })
+              )
+            : Effect.succeed({
+                defaultTransactionMappingCount: 0,
+                defaultProviderAssetMappingCount: 0,
+              })
+        )
+      ),
     makeRawRecordNormalizer: () =>
       Effect.succeed(({ source, sourceRecord }) => {
         events.push(`normalize:${sourceRecord.id}`)
@@ -422,6 +449,14 @@ const makeExecutorLayer = ({
           defaultProviderAssetMappingCount: 0,
         }
       }),
+    refreshDefaultMappings: () =>
+      Effect.sync(() => {
+        events.push("stub:refresh-default-mappings")
+        return {
+          defaultTransactionMappingCount: 0,
+          defaultProviderAssetMappingCount: 0,
+        }
+      }),
     makeRawRecordNormalizer: () =>
       Effect.sync(() => {
         events.push("stub:make-normalizer")
@@ -462,6 +497,14 @@ const makeExecutorLayer = ({
           providerAssetCatalogCount: 0,
           defaultTransactionMappingCount: 0,
           defaultProviderAssetMappingCount: 0,
+        }
+      }),
+    refreshDefaultMappings: () =>
+      Effect.sync(() => {
+        events.push("helius:refresh-default-mappings")
+        return {
+          defaultTransactionMappingCount: 0,
+          defaultProviderAssetMappingCount: 1,
         }
       }),
     makeRawRecordNormalizer: () =>
@@ -961,6 +1004,84 @@ describe("SourceSyncJobExecutor", () => {
     expect(events).toContain("mark-raw-normalized")
     expect(events).toContain("clear-replay-failure-metadata")
     expect(events).toContain("complete:1:1")
+  })
+
+  it("replays cached rows without refreshing remote provider reference data", async () => {
+    const events: Array<string> = []
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const executor = yield* SourceSyncJobExecutor
+        return yield* executor.execute({ jobId: "job-1" })
+      }).pipe(
+        Effect.provide(
+          makeExecutorLayer({
+            mode: "replay",
+            replayRawRecords: [replayRawRecord],
+            failRemoteReferenceRefresh: true,
+            events,
+          })
+        )
+      )
+    )
+
+    expect(result.status).toBe("completed")
+    expect(events).not.toContain("coinbase:refresh-reference-data")
+    expect(events).toContain("coinbase:refresh-default-mappings")
+    expect(events).toContain("mark-raw-normalized")
+  })
+
+  it("applies local Helius asset mappings during replay without a remote refresh", async () => {
+    const events: Array<string> = []
+    const heliusRawRecord = {
+      ...replayRawRecord,
+      provider: "helius-solana",
+      recordType: "solana_transaction_full",
+    }
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const executor = yield* SourceSyncJobExecutor
+        return yield* executor.execute({ jobId: "job-1" })
+      }).pipe(
+        Effect.provide(
+          makeExecutorLayer({
+            mode: "replay",
+            sourceProviderKey: "helius-solana",
+            replayRawRecords: [heliusRawRecord],
+            events,
+          })
+        )
+      )
+    )
+
+    expect(result.status).toBe("completed")
+    expect(events).toContain("helius:refresh-default-mappings")
+    expect(events).not.toContain("helius:refresh-reference-data")
+  })
+
+  it("fails replay before normalization when local default mappings cannot refresh", async () => {
+    const events: Array<string> = []
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const executor = yield* SourceSyncJobExecutor
+        return yield* executor.execute({ jobId: "job-1" })
+      }).pipe(
+        Effect.provide(
+          makeExecutorLayer({
+            mode: "replay",
+            replayRawRecords: [replayRawRecord],
+            failDefaultMappingsRefresh: true,
+            events,
+          })
+        )
+      )
+    )
+
+    expect(result.status).toBe("failed")
+    expect(events).toContain("coinbase:refresh-default-mappings")
+    expect(events).not.toContain("coinbase:refresh-reference-data")
+    expect(events.some((event) => event.startsWith("normalize:"))).toBe(false)
+    expect(events).not.toContain("reserve-replay-credits")
+    expect(events).not.toContain("reset-derived-state")
   })
 
   it("heartbeats between replay preparation batches and around destructive work", async () => {

@@ -86,6 +86,11 @@ const CoinbasePairedSpreadPayloadSchema = Schema.Struct({
   }),
 })
 
+const CoinbasePendingTransactionPayloadSchema = Schema.Struct({
+  type: Schema.String,
+  status: Schema.String,
+})
+
 type CoinbasePairedSpreadPayload = Schema.Schema.Type<typeof CoinbasePairedSpreadPayloadSchema>
 
 /**
@@ -105,6 +110,7 @@ interface CoinbasePairedSpreadRecord {
 }
 
 const SUCCESSFUL_PROVIDER_STATUSES = new Set(["completed", "succeeded"])
+const MUTABLE_PROVIDER_STATUSES = new Set(["pending"])
 
 const hasSuccessfulProviderStatus = (status: string | null): boolean =>
   status !== null && SUCCESSFUL_PROVIDER_STATUSES.has(status.toLowerCase())
@@ -153,12 +159,14 @@ const makeTransactionRecord = ({
   parentId,
   occurredAt,
   payload,
+  reopenNormalizationOnChange,
 }: {
   readonly id: string
   readonly accountId: string
   readonly parentId: string | null
   readonly occurredAt: Date
   readonly payload: unknown
+  readonly reopenNormalizationOnChange: boolean
 }): ProviderRawRecord =>
   ProviderRawRecord.make({
     providerKey: COINBASE_PROVIDER_KEY,
@@ -168,6 +176,7 @@ const makeTransactionRecord = ({
     externalParentId: parentId,
     occurredAt,
     payload,
+    reopenNormalizationOnChange,
   })
 
 const makeAccountRecord = ({
@@ -202,6 +211,7 @@ const CoinbaseCursorPayloadSchema = Schema.Struct({
   transactionCursor: Schema.optional(Schema.NullOr(Schema.String)),
   resumeBoundaryActive: Schema.optional(Schema.Boolean),
   resumeCheckpointExternalId: Schema.optional(Schema.NullOr(Schema.String)),
+  pendingTransactionIds: Schema.optional(Schema.NullOr(Schema.Array(Schema.String))),
 })
 
 interface PendingAccount {
@@ -217,6 +227,7 @@ interface CoinbaseCursorPayload {
   readonly transactionCursor: CoinbaseSyncCursor
   readonly resumeBoundaryActive: boolean
   readonly resumeCheckpointExternalId: string | null
+  readonly pendingTransactionIds: ReadonlyArray<string> | null
 }
 
 const defaultCoinbaseCursorPayload: CoinbaseCursorPayload = {
@@ -226,6 +237,7 @@ const defaultCoinbaseCursorPayload: CoinbaseCursorPayload = {
   transactionCursor: null,
   resumeBoundaryActive: false,
   resumeCheckpointExternalId: null,
+  pendingTransactionIds: null,
 }
 
 const toCursorDecodeError = (message: string) =>
@@ -291,6 +303,7 @@ const decodeCoinbaseCursorPayload = (
       transactionCursor: decoded.transactionCursor ?? null,
       resumeBoundaryActive: decoded.resumeBoundaryActive ?? false,
       resumeCheckpointExternalId: decoded.resumeCheckpointExternalId ?? null,
+      pendingTransactionIds: decoded.pendingTransactionIds ?? null,
     }
   })
 
@@ -305,6 +318,7 @@ const encodeCoinbaseCursorPayload = (payload: CoinbaseCursorPayload): unknown =>
   transactionCursor: payload.transactionCursor,
   resumeBoundaryActive: payload.resumeBoundaryActive,
   resumeCheckpointExternalId: payload.resumeCheckpointExternalId,
+  pendingTransactionIds: payload.pendingTransactionIds,
 })
 
 interface IncrementalBoundaryScanResult {
@@ -316,10 +330,12 @@ const scanIncrementalBoundary = ({
   records,
   resumeHighWatermark,
   resumeCheckpointExternalId,
+  pendingTransactionIds,
 }: {
   readonly records: ReadonlyArray<CoinbaseTransactionPageRecord>
   readonly resumeHighWatermark: Date
   readonly resumeCheckpointExternalId: string | null
+  readonly pendingTransactionIds: ReadonlySet<string>
 }): IncrementalBoundaryScanResult => {
   const watermark = Timestamp.fromDate(resumeHighWatermark)
   const boundaryIndex = records.findIndex((record) => {
@@ -333,9 +349,38 @@ const scanIncrementalBoundary = ({
         record.id === resumeCheckpointExternalId)
     )
   })
+  const boundaryRecord = boundaryIndex === -1 ? undefined : records[boundaryIndex]
+  const isCheckpointBoundary =
+    boundaryRecord !== undefined &&
+    resumeCheckpointExternalId !== null &&
+    boundaryRecord.id === resumeCheckpointExternalId &&
+    Timestamp.equals(Timestamp.fromDate(boundaryRecord.occurredAt), watermark)
+  const lastPendingIndex = records.reduce(
+    (lastIndex, record, index) => (pendingTransactionIds.has(record.id) ? index : lastIndex),
+    -1
+  )
+  const pendingIdsFound = new Set(
+    records.flatMap((record) => (pendingTransactionIds.has(record.id) ? [record.id] : []))
+  )
+  const hasPendingIdsBelowThisPage = pendingIdsFound.size < pendingTransactionIds.size
+
+  if (hasPendingIdsBelowThisPage) {
+    return {
+      records,
+      reachedBoundary: false,
+    }
+  }
+
+  const boundaryEndIndex = boundaryIndex + (isCheckpointBoundary ? 1 : 0)
+  const pendingEndIndex = lastPendingIndex + 1
 
   return {
-    records: boundaryIndex === -1 ? records : records.slice(0, boundaryIndex),
+    // Include the boundary record so a provider payload update for the same id
+    // can reopen normalization. Unchanged rows remain normalized on upsert.
+    records:
+      boundaryIndex === -1
+        ? records
+        : records.slice(0, Math.max(boundaryEndIndex, pendingEndIndex)),
     reachedBoundary: boundaryIndex !== -1,
   }
 }
@@ -349,6 +394,39 @@ const make = Effect.gen(function* () {
   const assetRepository = yield* AssetRepository
   const providerAssetRepository = yield* ProviderAssetRepository
   const sourceRawRecordRepository = yield* SourceRawRecordRepository
+
+  const loadPendingTransactionIds = ({
+    sourceId,
+    accountId,
+  }: {
+    readonly sourceId: string
+    readonly accountId: string
+  }) =>
+    sourceRawRecordRepository.listAllRawRowsForReplay({ sourceId }).pipe(
+      Effect.map((rawRecords) =>
+        rawRecords.flatMap((rawRecord) => {
+          if (
+            rawRecord.recordType !== COINBASE_RECORD_TYPE_TRANSACTION ||
+            rawRecord.externalAccountId !== accountId
+          ) {
+            return []
+          }
+
+          const payload = Schema.decodeUnknownOption(CoinbasePendingTransactionPayloadSchema)(
+            rawRecord.payload
+          )
+          if (
+            Option.isNone(payload) ||
+            payload.value.type !== "tx" ||
+            !MUTABLE_PROVIDER_STATUSES.has(payload.value.status.toLowerCase())
+          ) {
+            return []
+          }
+
+          return [rawRecord.externalRecordId]
+        })
+      )
+    )
 
   /**
    * Find the positive principal sibling row of a negative paired-spread row.
@@ -622,6 +700,12 @@ const make = Effect.gen(function* () {
     readonly pageSize: number
   }) =>
     Effect.gen(function* () {
+      const pendingTransactionIds =
+        state.pendingTransactionIds ??
+        (yield* loadPendingTransactionIds({
+          sourceId,
+          accountId: state.transactionAccountId,
+        }))
       const transactionsPage = yield* coinbaseSyncClient
         .fetchTransactionsPage({
           sourceId,
@@ -632,12 +716,17 @@ const make = Effect.gen(function* () {
         .pipe(Effect.mapError(mapCoinbaseClientError))
 
       const isIncrementalBoundaryScan = state.resumeBoundaryActive && resumeHighWatermark !== null
+      const foundTransactionIds = new Set(transactionsPage.records.map((record) => record.id))
+      const remainingPendingTransactionIds = pendingTransactionIds.filter(
+        (transactionId) => !foundTransactionIds.has(transactionId)
+      )
       const boundaryScan = isIncrementalBoundaryScan
         ? scanIncrementalBoundary({
             records: transactionsPage.records,
             resumeHighWatermark,
             resumeCheckpointExternalId:
               state.resumeCheckpointExternalId ?? resumeCheckpointExternalId,
+            pendingTransactionIds: new Set(pendingTransactionIds),
           })
         : {
             records: transactionsPage.records,
@@ -653,6 +742,7 @@ const make = Effect.gen(function* () {
               transactionCursor: null,
               resumeBoundaryActive: false,
               resumeCheckpointExternalId: null,
+              pendingTransactionIds: null,
             }
           : {
               ...state,
@@ -660,6 +750,7 @@ const make = Effect.gen(function* () {
               resumeBoundaryActive: isIncrementalBoundaryScan,
               resumeCheckpointExternalId:
                 state.resumeCheckpointExternalId ?? resumeCheckpointExternalId,
+              pendingTransactionIds: remainingPendingTransactionIds,
             }
 
       const nextHighWatermark = filteredTransactions.reduce<Date | null>(
@@ -680,6 +771,7 @@ const make = Effect.gen(function* () {
             parentId: record.parentId,
             occurredAt: record.occurredAt,
             payload: record.payload,
+            reopenNormalizationOnChange: pendingTransactionIds.includes(record.id),
           })
         ),
         cursorPayload: encodeCoinbaseCursorPayload(nextState),
@@ -717,6 +809,7 @@ const make = Effect.gen(function* () {
       transactionCursor: null,
       resumeBoundaryActive: resumeHighWatermark !== null,
       resumeCheckpointExternalId,
+      pendingTransactionIds: null,
     }
 
     return Effect.succeed(
@@ -778,6 +871,7 @@ const make = Effect.gen(function* () {
             transactionCursor: null,
             resumeBoundaryActive: false,
             resumeCheckpointExternalId: null,
+            pendingTransactionIds: null,
           }),
           highWatermark: resumeHighWatermark,
           done: accountsPage.nextCursor === null,
@@ -803,6 +897,7 @@ const make = Effect.gen(function* () {
           transactionCursor: null,
           resumeBoundaryActive: resumeHighWatermark !== null,
           resumeCheckpointExternalId,
+          pendingTransactionIds: null,
         }),
         highWatermark: resumeHighWatermark,
         done: false,
@@ -1157,6 +1252,9 @@ const make = Effect.gen(function* () {
       const providerAssetRowIds = Array.from(providerAssetIdsByCurrency.values()).filter(
         (providerAssetRowId): providerAssetRowId is string => providerAssetRowId !== null
       )
+      const shouldDeriveLegs =
+        normalized.transaction.providerTransactionType !== "tx" ||
+        hasSuccessfulProviderStatus(normalized.transaction.providerStatus)
 
       return {
         providerAssetRowIds,
@@ -1178,7 +1276,8 @@ const make = Effect.gen(function* () {
         transactionReview,
         resolvedTransactionType,
         primaryAsset: Option.getOrNull(maybePrimaryAsset),
-        legDerivationStrategy: unresolvedAssetCurrencies.length > 0 ? "skip" : "derive",
+        legDerivationStrategy:
+          unresolvedAssetCurrencies.length > 0 || !shouldDeriveLegs ? "skip" : "derive",
         deriveMainLeg: !primaryAssetResolution.excluded,
       }
     })
@@ -1233,6 +1332,7 @@ const make = Effect.gen(function* () {
   return CoinbaseSourceSyncProvider.of({
     fetchRawBatch,
     refreshReferenceData: coinbaseReferenceDataService.refreshReferenceData,
+    refreshDefaultMappings: coinbaseReferenceDataService.refreshDefaultMappings,
     loadNormalizationLookups,
     prepareNormalization,
     deriveLegs,

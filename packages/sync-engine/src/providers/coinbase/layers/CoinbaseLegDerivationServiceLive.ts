@@ -210,6 +210,9 @@ const deriveMainLegClassification = ({
         })
       )
     case "amount_sign":
+      if (isZeroAmount(amount)) {
+        return Effect.succeed(Option.none())
+      }
       return Effect.succeed(
         Option.some(
           isNegativeAmount(amount)

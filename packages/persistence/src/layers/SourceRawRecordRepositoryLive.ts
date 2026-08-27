@@ -4,7 +4,7 @@
  * @module SourceRawRecordRepositoryLive
  */
 
-import { and, asc, eq, gte, inArray, isNull, lte, sql } from "drizzle-orm"
+import { and, asc, eq, gte, inArray, isNull, lte, or, sql } from "drizzle-orm"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import { drizzle } from "./PgClientLive.ts"
@@ -49,6 +49,20 @@ const make = Effect.gen(function* () {
       }
 
       const now = nowDate()
+      const reopenRecordConditions = records.flatMap((record) =>
+        record.reopenNormalizationOnChange === true
+          ? [
+              and(
+                eq(sql.raw("excluded.record_type"), record.recordType),
+                eq(sql.raw("excluded.external_record_id"), record.externalRecordId)
+              ),
+            ]
+          : []
+      )
+      const shouldReopenNormalization =
+        reopenRecordConditions.length === 0
+          ? sql`false`
+          : (or(...reopenRecordConditions) ?? sql`false`)
       const rawRecords = yield* db
         .insert(schema.sourceRecordsRaw)
         .values(
@@ -76,6 +90,16 @@ const make = Effect.gen(function* () {
             externalParentId: sql.raw("excluded.external_parent_id"),
             occurredAt: sql.raw("excluded.occurred_at"),
             payload: sql.raw("excluded.payload"),
+            normalizedAt: sql`case
+              when ${shouldReopenNormalization}
+                and ${schema.sourceRecordsRaw.payload} is distinct from excluded.payload then null
+              else ${schema.sourceRecordsRaw.normalizedAt}
+            end`,
+            normalizationError: sql`case
+              when ${shouldReopenNormalization}
+                and ${schema.sourceRecordsRaw.payload} is distinct from excluded.payload then null
+              else ${schema.sourceRecordsRaw.normalizationError}
+            end`,
             importedAt: now,
             updatedAt: now,
           },

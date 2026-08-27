@@ -50,6 +50,14 @@ export interface HeliusSolanaReferenceDataRefreshResult {
 }
 
 /**
+ * HeliusSolanaDefaultMappingsRefreshResult - Counts from applying checked-in defaults.
+ */
+export interface HeliusSolanaDefaultMappingsRefreshResult {
+  readonly defaultTransactionMappingCount: number
+  readonly defaultProviderAssetMappingCount: number
+}
+
+/**
  * HeliusSolanaNormalizationLookups - Provider-side lookup data reused across normalization.
  */
 export interface HeliusSolanaNormalizationLookups {
@@ -169,6 +177,11 @@ export interface HeliusSolanaSourceSyncProviderShape {
 
   readonly refreshReferenceData: () => Effect.Effect<
     HeliusSolanaReferenceDataRefreshResult,
+    SyncEngineStorageError
+  >
+
+  readonly refreshDefaultMappings: () => Effect.Effect<
+    HeliusSolanaDefaultMappingsRefreshResult,
     SyncEngineStorageError
   >
 

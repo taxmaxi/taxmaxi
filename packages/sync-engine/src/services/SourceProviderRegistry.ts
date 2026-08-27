@@ -38,6 +38,14 @@ export interface SourceProviderReferenceDataRefreshResult {
 }
 
 /**
+ * SourceProviderDefaultMappingsRefreshResult - Checked-in mapping refresh summary.
+ */
+export interface SourceProviderDefaultMappingsRefreshResult {
+  readonly defaultTransactionMappingCount: number
+  readonly defaultProviderAssetMappingCount: number
+}
+
+/**
  * SourceProviderRecoverableNormalizationError - Provider row-level error that fails one raw row.
  */
 export class SourceProviderRecoverableNormalizationError extends Schema.TaggedError<SourceProviderRecoverableNormalizationError>()(
@@ -129,6 +137,12 @@ export interface SourceProviderModuleShape {
 
   readonly refreshReferenceData: () => Effect.Effect<
     SourceProviderReferenceDataRefreshResult,
+    SourceProviderModuleError
+  >
+
+  /** Apply checked-in mappings without contacting the remote provider. */
+  readonly refreshDefaultMappings: () => Effect.Effect<
+    SourceProviderDefaultMappingsRefreshResult,
     SourceProviderModuleError
   >
 

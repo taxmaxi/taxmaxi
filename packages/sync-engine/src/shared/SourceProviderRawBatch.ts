@@ -18,6 +18,8 @@ export class ProviderRawRecord extends Schema.Class<ProviderRawRecord>("Provider
   externalParentId: Schema.NullOr(Schema.String),
   occurredAt: Schema.Date,
   payload: Schema.Unknown,
+  /** Reopen a previously normalized row when this fetched payload changed. */
+  reopenNormalizationOnChange: Schema.optional(Schema.Boolean),
 }) {}
 
 /**

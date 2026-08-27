@@ -80,6 +80,7 @@ const runWithProvider = <A, E>(
         Layer.provide(
           Layer.succeed(CoinbaseReferenceDataService, {
             refreshReferenceData: () => Effect.die("refreshReferenceData should not be called"),
+            refreshDefaultMappings: () => Effect.die("refreshDefaultMappings should not be called"),
           })
         ),
         Layer.provide(
@@ -214,6 +215,7 @@ describe("source sync resume boundary", () => {
             transactionCursor: null,
             resumeBoundaryActive: true,
             resumeCheckpointExternalId: "checkpoint-1",
+            pendingTransactionIds: ["older-record"],
           },
           resumeHighWatermark: watermark,
           resumeCheckpointExternalId: "checkpoint-1",
@@ -246,7 +248,10 @@ describe("source sync resume boundary", () => {
       )
     )
 
-    expect(secondBatch.records).toHaveLength(0)
+    expect(secondBatch.records.map((record) => record.externalRecordId)).toEqual([
+      "checkpoint-1",
+      "older-record",
+    ])
     expect(secondBatch.done).toBe(true)
     expect(secondBatch.cursorPayload).toMatchObject({
       transactionAccountId: null,
@@ -254,5 +259,48 @@ describe("source sync resume boundary", () => {
       resumeBoundaryActive: false,
       resumeCheckpointExternalId: null,
     })
+  })
+
+  it("stops at the Coinbase checkpoint when there are no older pending transactions", async () => {
+    const firstBatch = await Effect.runPromise(
+      runWithProvider((provider) =>
+        provider.fetchRawBatch({
+          providerKey: "coinbase",
+          sourceId: "source-1",
+          walletAddress: null,
+          cursorPayload: {
+            accountCursor: null,
+            pendingAccounts: [],
+            transactionAccountId: "account-1",
+            transactionCursor: null,
+            resumeBoundaryActive: true,
+            resumeCheckpointExternalId: "checkpoint-1",
+            pendingTransactionIds: [],
+          },
+          resumeHighWatermark: watermark,
+          resumeCheckpointExternalId: "checkpoint-1",
+          pageSize: 100,
+        })
+      )
+    )
+    const secondBatch = await Effect.runPromise(
+      runWithProvider((provider) =>
+        provider.fetchRawBatch({
+          providerKey: "coinbase",
+          sourceId: "source-1",
+          walletAddress: null,
+          cursorPayload: firstBatch.cursorPayload,
+          resumeHighWatermark: watermark,
+          resumeCheckpointExternalId: "checkpoint-1",
+          pageSize: 100,
+        })
+      )
+    )
+
+    expect(firstBatch.records.map((record) => record.externalRecordId)).toEqual([
+      "late-at-watermark",
+    ])
+    expect(secondBatch.records.map((record) => record.externalRecordId)).toEqual(["checkpoint-1"])
+    expect(secondBatch.done).toBe(true)
   })
 })

@@ -72,6 +72,8 @@ const makeCoinbaseProviderModule = (
   fetchRawBatch: coinbaseSourceSyncProvider.fetchRawBatch,
   refreshReferenceData: () =>
     coinbaseSourceSyncProvider.refreshReferenceData().pipe(Effect.mapError(toReferenceDataError)),
+  refreshDefaultMappings: () =>
+    coinbaseSourceSyncProvider.refreshDefaultMappings().pipe(Effect.mapError(toReferenceDataError)),
   makeRawRecordNormalizer: () =>
     coinbaseSourceSyncProvider.loadNormalizationLookups().pipe(
       Effect.map(
@@ -124,6 +126,7 @@ const makeHeliusSolanaProviderModule = (
 ): SourceProviderModuleShape => ({
   fetchRawBatch: heliusSolanaSourceSyncProvider.fetchRawBatch,
   refreshReferenceData: heliusSolanaSourceSyncProvider.refreshReferenceData,
+  refreshDefaultMappings: heliusSolanaSourceSyncProvider.refreshDefaultMappings,
   makeRawRecordNormalizer: () =>
     heliusSolanaSourceSyncProvider.loadNormalizationLookups().pipe(
       Effect.map(
