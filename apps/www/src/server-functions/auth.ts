@@ -10,10 +10,19 @@ const getRestServerUrl = (): string => {
   return value === undefined || value.length === 0 ? DEFAULT_REST_SERVER_URL : value
 }
 
+const getCookieDomain = (): string | undefined => {
+  // Empty means "no cookie domain" (local dev, see .dev.vars). The delete must
+  // match the Domain attribute the API used when setting the cookie.
+  const value = process.env.COOKIE_DOMAIN?.trim()
+  return value === undefined || value.length === 0 ? undefined : value
+}
+
 const deleteAuthSessionCookie = (): void => {
+  const domain = getCookieDomain()
+
   deleteCookie(REST_SESSION_COOKIE_NAME, {
     path: "/",
-    ...(process.env.COOKIE_DOMAIN === undefined ? {} : { domain: process.env.COOKIE_DOMAIN }),
+    ...(domain === undefined ? {} : { domain }),
   })
 }
 
