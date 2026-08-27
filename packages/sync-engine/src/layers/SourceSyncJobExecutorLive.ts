@@ -1017,6 +1017,25 @@ const make = Effect.gen(function* () {
     Effect.gen(function* () {
       const provider = source.providerKey ?? "unknown"
       const providerModule = yield* resolveProviderModule({ providerKey: provider })
+      const mappingRefresh = yield* providerModule.refreshDefaultMappings().pipe(
+        sourceSyncSpan({
+          name: "source-replay.refresh-default-mappings",
+          attributes: { sourceId: source.id, jobId, provider },
+          kind: "client",
+        })
+      )
+
+      yield* Effect.logInfo(
+        {
+          sourceId: source.id,
+          jobId,
+          provider,
+          defaultTransactionMappingCount: mappingRefresh.defaultTransactionMappingCount,
+          defaultProviderAssetMappingCount: mappingRefresh.defaultProviderAssetMappingCount,
+        },
+        "source-replay:default-mappings-refreshed"
+      )
+
       const initialExecution = yield* sourceSyncStateRepository
         .getExecutionState({ sourceId: source.id })
         .pipe(

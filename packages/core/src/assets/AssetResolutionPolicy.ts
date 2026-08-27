@@ -73,7 +73,8 @@ export type EconomicAssetType = typeof EconomicAssetType.Type
  */
 export const STANDALONE_CREATION_SUPPORTED_TYPES: ReadonlyArray<RepresentationType> = ["token"]
 
-const chainFactIdentityMatchesType = ({
+/** Check that native, contract, and mint identity fields match the representation type. */
+export const representationIdentityMatchesType = ({
   type,
   contractAddress,
   mintAddress,
@@ -100,7 +101,7 @@ export const ChainFactPayload = Schema.Struct({
   .pipe(
     Schema.check(
       Schema.makeFilter((fact) =>
-        chainFactIdentityMatchesType(fact)
+        representationIdentityMatchesType(fact)
           ? undefined
           : "Chain fact identity does not match representation type."
       )
