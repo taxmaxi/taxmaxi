@@ -453,6 +453,7 @@
           "namedRepresentation": "{network} representation",
           "createRepresentation": "Its {representation} will be added to the catalog.",
           "reuseRepresentation": "The existing exact {representation} will be reused.",
+          "reassignRepresentation": "The existing {representation} will move to this asset, together with every mapping and accounting row that depends on it.",
           "reason": "Reason",
           "supersession": "This replaces the current conclusion.",
           "reversal": "This reverses the current conclusion.",

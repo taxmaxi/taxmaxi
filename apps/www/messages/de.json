@@ -453,6 +453,7 @@
           "namedRepresentation": "{network}-Repräsentation",
           "createRepresentation": "Die {representation} wird zum Katalog hinzugefügt.",
           "reuseRepresentation": "Die bestehende exakte {representation} wird wiederverwendet.",
+          "reassignRepresentation": "Die bestehende {representation} wechselt zu diesem Asset, zusammen mit allen Mappings und Buchungszeilen, die davon abhängen.",
           "reason": "Grund",
           "supersession": "Dies ersetzt die aktuelle Schlussfolgerung.",
           "reversal": "Dies kehrt die aktuelle Schlussfolgerung um.",

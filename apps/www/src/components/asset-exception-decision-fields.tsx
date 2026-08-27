@@ -599,6 +599,11 @@ function representationDescription({
       representation: label,
     })
   }
+  if (outcome === "reassign") {
+    return m["assetCatalog.exceptions.reviewUi.preview.reassignRepresentation"]({
+      representation: label,
+    })
+  }
   return null
 }
 
