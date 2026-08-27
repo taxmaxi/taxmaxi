@@ -122,6 +122,7 @@ const makeExecutorLayer = ({
   heartbeatIntervalMs = 10_000,
   pageSize = 100,
   prepareReplayTransactions = false,
+  requiresSettlementRebuild = false,
   events,
 }: {
   readonly mode: SourceSyncJobMode
@@ -151,6 +152,7 @@ const makeExecutorLayer = ({
   readonly heartbeatIntervalMs?: number
   readonly pageSize?: number
   readonly prepareReplayTransactions?: boolean
+  readonly requiresSettlementRebuild?: boolean
   readonly events: Array<string>
 }) => {
   let heartbeatCount = 0
@@ -302,6 +304,7 @@ const makeExecutorLayer = ({
         )
       ),
     listRawRecordsByOccurredAt: () => Effect.succeed([]),
+    listExternalRecordIdsByProviderStatus: () => Effect.succeed([]),
     markRawRecordNormalized: ({ rawRecordId }) =>
       Effect.sync(() => {
         normalizedRawRecordIds.add(rawRecordId)
@@ -558,6 +561,11 @@ const makeExecutorLayer = ({
   })
 
   const SourceNormalizationRepositoryTestLive = Layer.succeed(SourceNormalizationRepository, {
+    requiresProviderSettlementRebuild: () =>
+      Effect.sync(() => {
+        events.push("check-provider-settlement")
+        return requiresSettlementRebuild
+      }),
     reserveReplayTransactionCredits: ({ transactions }) =>
       Effect.gen(function* () {
         events.push("reserve-replay-credits")
@@ -613,6 +621,12 @@ const makeExecutorLayer = ({
           side: params.venueContext.side,
           instrument: params.venueContext.instrument,
           fillPrice: params.venueContext.fillPrice,
+        }
+        if (params.beforeSourceLock !== undefined) {
+          yield* params.beforeSourceLock
+        }
+        if (params.beforePersist !== undefined) {
+          yield* params.beforePersist
         }
         events.push(`persist-normalized:${params.transaction.sourceRawRecordId ?? "unknown"}`)
         if (params.transaction.sourceRawRecordId === failReplayPersistenceStorageRawRecordId) {
@@ -788,6 +802,44 @@ describe("SourceSyncJobExecutor", () => {
     expect(events).toContain("heartbeat:source-sync-inline-executor")
     expect(events).toContain("progress:0:done")
     expect(events).toContain("complete:0:0")
+  })
+
+  it("rolls back reconciled transfers before persisting a provider settlement", async () => {
+    const events: Array<string> = []
+    const fetchedProviderRecord = ProviderRawRecord.make({
+      providerKey: "coinbase",
+      recordType: "coinbase_account",
+      externalRecordId: "account-1",
+      externalAccountId: "account-1",
+      externalParentId: null,
+      occurredAt: replayRawRecord.occurredAt,
+      payload: replayRawRecord.payload,
+    })
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const executor = yield* SourceSyncJobExecutor
+        yield* executor.execute({ jobId: "job-1" })
+      }).pipe(
+        Effect.provide(
+          makeExecutorLayer({
+            mode: "sync",
+            fetchedProviderRecords: [fetchedProviderRecord],
+            checkpointRawRecords: [replayRawRecord],
+            prepareReplayTransactions: true,
+            requiresSettlementRebuild: true,
+            events,
+          })
+        )
+      )
+    )
+
+    expect(events.indexOf("check-provider-settlement")).toBeLessThan(
+      events.indexOf("rollback-reconciliations")
+    )
+    expect(events.indexOf("rollback-reconciliations")).toBeLessThan(
+      events.indexOf("persist-normalized:raw-1")
+    )
   })
 
   it("runs a non-Coinbase provider module through fetch and normalization hooks", async () => {

@@ -302,6 +302,17 @@ const make = Effect.gen(function* () {
       yield* syncEngineTransaction.run(
         sourceNormalizationRepository.persistNormalizedArtifacts({
           ...(replayReservationId === null ? {} : { replayReservationId }),
+          beforeSourceLock: sourceNormalizationRepository
+            .requiresProviderSettlementRebuild({ transaction: decision.transaction })
+            .pipe(
+              Effect.flatMap((requiresSettlementRebuild) =>
+                requiresSettlementRebuild
+                  ? transferReconciliationService.rollbackReconciliationsForSourceReplay({
+                      sourceId: decision.transaction.sourceId,
+                    })
+                  : Effect.void
+              )
+            ),
           beforePersist: providerAssetRepository
             .recordProviderAssetSourceUses({
               sourceId: decision.transaction.sourceId,

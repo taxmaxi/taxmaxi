@@ -86,11 +86,6 @@ const CoinbasePairedSpreadPayloadSchema = Schema.Struct({
   }),
 })
 
-const CoinbasePendingTransactionPayloadSchema = Schema.Struct({
-  type: Schema.String,
-  status: Schema.String,
-})
-
 type CoinbasePairedSpreadPayload = Schema.Schema.Type<typeof CoinbasePairedSpreadPayloadSchema>
 
 /**
@@ -110,7 +105,14 @@ interface CoinbasePairedSpreadRecord {
 }
 
 const SUCCESSFUL_PROVIDER_STATUSES = new Set(["completed", "succeeded"])
-const MUTABLE_PROVIDER_STATUSES = new Set(["pending"])
+const MUTABLE_PROVIDER_STATUSES = ["pending", "failed"] as const
+const MUTABLE_PROVIDER_TRANSACTION_TYPES = [
+  "tx",
+  "send",
+  "intx_deposit",
+  "intx_withdrawal",
+  "transfer",
+] as const
 
 const hasSuccessfulProviderStatus = (status: string | null): boolean =>
   status !== null && SUCCESSFUL_PROVIDER_STATUSES.has(status.toLowerCase())
@@ -402,31 +404,18 @@ const make = Effect.gen(function* () {
     readonly sourceId: string
     readonly accountId: string
   }) =>
-    sourceRawRecordRepository.listAllRawRowsForReplay({ sourceId }).pipe(
-      Effect.map((rawRecords) =>
-        rawRecords.flatMap((rawRecord) => {
-          if (
-            rawRecord.recordType !== COINBASE_RECORD_TYPE_TRANSACTION ||
-            rawRecord.externalAccountId !== accountId
-          ) {
-            return []
-          }
-
-          const payload = Schema.decodeUnknownOption(CoinbasePendingTransactionPayloadSchema)(
-            rawRecord.payload
-          )
-          if (
-            Option.isNone(payload) ||
-            payload.value.type !== "tx" ||
-            !MUTABLE_PROVIDER_STATUSES.has(payload.value.status.toLowerCase())
-          ) {
-            return []
-          }
-
-          return [rawRecord.externalRecordId]
-        })
-      )
-    )
+    Effect.forEach(
+      MUTABLE_PROVIDER_TRANSACTION_TYPES,
+      (providerTransactionType) =>
+        sourceRawRecordRepository.listExternalRecordIdsByProviderStatus({
+          sourceId,
+          externalAccountId: accountId,
+          recordType: COINBASE_RECORD_TYPE_TRANSACTION,
+          providerTransactionType,
+          providerStatuses: MUTABLE_PROVIDER_STATUSES,
+        }),
+      { concurrency: 1 }
+    ).pipe(Effect.map((idsByType) => [...new Set(idsByType.flat())].sort()))
 
   /**
    * Find the positive principal sibling row of a negative paired-spread row.

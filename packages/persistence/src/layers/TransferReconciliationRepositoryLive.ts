@@ -222,6 +222,8 @@ const make = Effect.gen(function* () {
     readonly amount: unknown
     readonly fiatAmount: unknown
     readonly timestamp: Date
+    readonly sourceOrder: Date
+    readonly sourceOrderId: string
     readonly createdAt: Date
   }
 
@@ -376,6 +378,32 @@ const make = Effect.gen(function* () {
     const inventoryKeyForEffect = (effect: RebuildableFifoEffect) =>
       `${effect.sourceId}:${effect.principalId}:${effect.assetId}`
 
+    const isLotAvailableForEffect = ({
+      lot,
+      effect,
+    }: {
+      readonly lot: {
+        readonly acquiredAt: Date
+        readonly availableAt: Date
+        readonly sourceOrder: Date
+        readonly sourceOrderId: string
+      }
+      readonly effect: RebuildableFifoEffect
+    }) => {
+      if (lot.acquiredAt > effect.timestamp || lot.availableAt > effect.timestamp) {
+        return false
+      }
+      if (lot.availableAt < effect.timestamp) {
+        return true
+      }
+
+      const sourceOrderDifference = lot.sourceOrder.getTime() - effect.sourceOrder.getTime()
+      return (
+        sourceOrderDifference < 0 ||
+        (sourceOrderDifference === 0 && lot.sourceOrderId.localeCompare(effect.sourceOrderId) <= 0)
+      )
+    }
+
     const rebuildFifoEffects = ({
       effects: unsortedEffects,
       shortageMode,
@@ -387,7 +415,8 @@ const make = Effect.gen(function* () {
         const effects = [...unsortedEffects].sort(
           (left, right) =>
             left.timestamp.getTime() - right.timestamp.getTime() ||
-            left.createdAt.getTime() - right.createdAt.getTime() ||
+            left.sourceOrder.getTime() - right.sourceOrder.getTime() ||
+            left.sourceOrderId.localeCompare(right.sourceOrderId) ||
             left.kind.localeCompare(right.kind) ||
             left.id.localeCompare(right.id)
         )
@@ -478,12 +507,24 @@ const make = Effect.gen(function* () {
                   availableAt: schema.transactionLegs.timestamp,
                   remainingAmount: schema.fifoLots.remainingAmount,
                   costBasisPerToken: schema.fifoLots.costBasisPerToken,
+                  sourceOrder: sql<Date>`coalesce(
+                    ${schema.sourceRecordsRaw.createdAt},
+                    ${schema.fifoLots.createdAt}
+                  )`.mapWith(schema.sourceRecordsRaw.createdAt),
+                  sourceOrderId: sql<string>`coalesce(
+                    ${schema.sourceRecordsRaw.id}::text,
+                    ${schema.fifoLots.id}::text
+                  )`,
                   createdAt: schema.fifoLots.createdAt,
                 })
                 .from(schema.fifoLots)
                 .innerJoin(
                   schema.transactionLegs,
                   eq(schema.transactionLegs.id, schema.fifoLots.sourceLegId)
+                )
+                .leftJoin(
+                  schema.sourceRecordsRaw,
+                  eq(schema.sourceRecordsRaw.id, schema.transactionLegs.sourceRawRecordId)
                 )
                 .where(
                   or(
@@ -496,7 +537,16 @@ const make = Effect.gen(function* () {
                     )
                   )
                 )
-                .orderBy(asc(schema.fifoLots.acquiredAt), asc(schema.fifoLots.createdAt))
+                .orderBy(
+                  asc(schema.fifoLots.acquiredAt),
+                  asc(
+                    sql`coalesce(${schema.sourceRecordsRaw.createdAt}, ${schema.fifoLots.createdAt})`
+                  ),
+                  asc(
+                    sql`coalesce(${schema.sourceRecordsRaw.id}::text, ${schema.fifoLots.id}::text)`
+                  ),
+                  asc(schema.fifoLots.id)
+                )
                 .pipe(
                   wrapSyncEngineSqlError(
                     "transferReconciliationRepository.reconciliationEffectMutations.rebuildFifoEffects.loadCandidateLots"
@@ -544,8 +594,7 @@ const make = Effect.gen(function* () {
               lot.sourceId !== effect.sourceId ||
               lot.principalId !== effect.principalId ||
               lot.assetId !== effect.assetId ||
-              lot.acquiredAt > effect.timestamp ||
-              lot.availableAt > effect.timestamp
+              !isLotAvailableForEffect({ lot, effect })
             ) {
               continue
             }
@@ -650,13 +699,27 @@ const make = Effect.gen(function* () {
           const availableLots = yield* tx
             .select({
               id: schema.fifoLots.id,
+              acquiredAt: schema.fifoLots.acquiredAt,
+              availableAt: schema.transactionLegs.timestamp,
               remainingAmount: schema.fifoLots.remainingAmount,
               costBasisPerToken: schema.fifoLots.costBasisPerToken,
+              sourceOrder: sql<Date>`coalesce(
+                ${schema.sourceRecordsRaw.createdAt},
+                ${schema.fifoLots.createdAt}
+              )`.mapWith(schema.sourceRecordsRaw.createdAt),
+              sourceOrderId: sql<string>`coalesce(
+                ${schema.sourceRecordsRaw.id}::text,
+                ${schema.fifoLots.id}::text
+              )`,
             })
             .from(schema.fifoLots)
             .innerJoin(
               schema.transactionLegs,
               eq(schema.transactionLegs.id, schema.fifoLots.sourceLegId)
+            )
+            .leftJoin(
+              schema.sourceRecordsRaw,
+              eq(schema.sourceRecordsRaw.id, schema.transactionLegs.sourceRawRecordId)
             )
             .where(
               and(
@@ -668,7 +731,14 @@ const make = Effect.gen(function* () {
                 gt(schema.fifoLots.remainingAmount, "0")
               )
             )
-            .orderBy(asc(schema.fifoLots.acquiredAt), asc(schema.fifoLots.createdAt))
+            .orderBy(
+              asc(schema.fifoLots.acquiredAt),
+              asc(
+                sql`coalesce(${schema.sourceRecordsRaw.createdAt}, ${schema.fifoLots.createdAt})`
+              ),
+              asc(sql`coalesce(${schema.sourceRecordsRaw.id}::text, ${schema.fifoLots.id}::text)`),
+              asc(schema.fifoLots.id)
+            )
             .pipe(
               wrapSyncEngineSqlError(
                 "transferReconciliationRepository.reconciliationEffectMutations.rebuildFifoEffects.loadOpenLots"
@@ -679,6 +749,9 @@ const make = Effect.gen(function* () {
           for (const lot of availableLots) {
             if (!BigDecimal.isGreaterThan(remainingAmount, BigDecimal.fromBigInt(0n))) {
               break
+            }
+            if (!isLotAvailableForEffect({ lot, effect })) {
+              continue
             }
             const lotRemaining = yield* decodeBigDecimal({
               value: yield* formatDecimal({
@@ -1758,9 +1831,21 @@ const make = Effect.gen(function* () {
                         amount: schema.transactionLegs.amount,
                         fiatAmount: schema.transactionLegs.fiatAmount,
                         timestamp: schema.transactionLegs.timestamp,
+                        sourceOrder: sql<Date>`coalesce(
+                          ${schema.sourceRecordsRaw.createdAt},
+                          ${schema.transactionLegs.createdAt}
+                        )`.mapWith(schema.sourceRecordsRaw.createdAt),
+                        sourceOrderId: sql<string>`coalesce(
+                          ${schema.sourceRecordsRaw.id}::text,
+                          ${schema.transactionLegs.id}::text
+                        )`,
                         createdAt: schema.transactionLegs.createdAt,
                       })
                       .from(schema.transactionLegs)
+                      .leftJoin(
+                        schema.sourceRecordsRaw,
+                        eq(schema.sourceRecordsRaw.id, schema.transactionLegs.sourceRawRecordId)
+                      )
                       .where(
                         and(
                           or(...disposalRollbackWindows),
@@ -1785,9 +1870,21 @@ const make = Effect.gen(function* () {
                         providerTransferId: schema.inventoryMovements.providerTransferId,
                         purpose: schema.inventoryMovements.purpose,
                         timestamp: schema.inventoryMovements.timestamp,
+                        sourceOrder: sql<Date>`coalesce(
+                          ${schema.sourceRecordsRaw.createdAt},
+                          ${schema.inventoryMovements.createdAt}
+                        )`.mapWith(schema.sourceRecordsRaw.createdAt),
+                        sourceOrderId: sql<string>`coalesce(
+                          ${schema.sourceRecordsRaw.id}::text,
+                          ${schema.inventoryMovements.id}::text
+                        )`,
                         createdAt: schema.inventoryMovements.createdAt,
                       })
                       .from(schema.inventoryMovements)
+                      .leftJoin(
+                        schema.sourceRecordsRaw,
+                        eq(schema.sourceRecordsRaw.id, schema.inventoryMovements.sourceRawRecordId)
+                      )
                       .where(
                         and(
                           or(...movementRollbackWindows),
@@ -1995,6 +2092,8 @@ const make = Effect.gen(function* () {
                   amount: disposal.amount,
                   fiatAmount: disposal.fiatAmount,
                   timestamp: disposal.timestamp,
+                  sourceOrder: disposal.sourceOrder,
+                  sourceOrderId: disposal.sourceOrderId,
                   createdAt: disposal.createdAt,
                 })),
                 ...dependentMovementsToRebuild.map((movement) => ({
@@ -2007,6 +2106,8 @@ const make = Effect.gen(function* () {
                   amount: movement.amount,
                   fiatAmount: null,
                   timestamp: movement.timestamp,
+                  sourceOrder: movement.sourceOrder,
+                  sourceOrderId: movement.sourceOrderId,
                   createdAt: movement.createdAt,
                 })),
               ]
@@ -2735,8 +2836,25 @@ const make = Effect.gen(function* () {
                   schema.fifoLots,
                   eq(schema.fifoLots.id, schema.disposalMatches.fifoLotId)
                 )
+                .leftJoin(
+                  schema.transactionLegs,
+                  eq(schema.transactionLegs.id, schema.fifoLots.sourceLegId)
+                )
+                .leftJoin(
+                  schema.sourceRecordsRaw,
+                  eq(schema.sourceRecordsRaw.id, schema.transactionLegs.sourceRawRecordId)
+                )
                 .where(eq(schema.disposalMatches.disposalLegId, disposalLegId))
-                .orderBy(asc(schema.fifoLots.acquiredAt), asc(schema.fifoLots.createdAt))
+                .orderBy(
+                  asc(schema.fifoLots.acquiredAt),
+                  asc(
+                    sql`coalesce(${schema.sourceRecordsRaw.createdAt}, ${schema.fifoLots.createdAt})`
+                  ),
+                  asc(
+                    sql`coalesce(${schema.sourceRecordsRaw.id}::text, ${schema.fifoLots.id}::text)`
+                  ),
+                  asc(schema.fifoLots.id)
+                )
                 .pipe(
                   wrapSyncEngineSqlError(
                     "transferReconciliationRepository.applyDeterministicInternalTransferCanonicalization.loadInternalTransferDisposalMatches"
@@ -2851,6 +2969,10 @@ const make = Effect.gen(function* () {
                   schema.transactionLegs,
                   eq(schema.transactionLegs.id, schema.fifoLots.sourceLegId)
                 )
+                .leftJoin(
+                  schema.sourceRecordsRaw,
+                  eq(schema.sourceRecordsRaw.id, schema.transactionLegs.sourceRawRecordId)
+                )
                 .where(
                   and(
                     eq(schema.fifoLots.principalId, lotPrincipalId),
@@ -2862,7 +2984,16 @@ const make = Effect.gen(function* () {
                     lte(schema.transactionLegs.timestamp, maxAcquiredAt)
                   )
                 )
-                .orderBy(asc(schema.fifoLots.acquiredAt), asc(schema.fifoLots.createdAt))
+                .orderBy(
+                  asc(schema.fifoLots.acquiredAt),
+                  asc(
+                    sql`coalesce(${schema.sourceRecordsRaw.createdAt}, ${schema.fifoLots.createdAt})`
+                  ),
+                  asc(
+                    sql`coalesce(${schema.sourceRecordsRaw.id}::text, ${schema.fifoLots.id}::text)`
+                  ),
+                  asc(schema.fifoLots.id)
+                )
                 .pipe(
                   wrapSyncEngineSqlError(
                     "transferReconciliationRepository.applyDeterministicInternalTransferCanonicalization.loadOpenLots"
@@ -4021,9 +4152,21 @@ const make = Effect.gen(function* () {
                     amount: schema.transactionLegs.amount,
                     fiatAmount: schema.transactionLegs.fiatAmount,
                     timestamp: schema.transactionLegs.timestamp,
+                    sourceOrder: sql<Date>`coalesce(
+                      ${schema.sourceRecordsRaw.createdAt},
+                      ${schema.transactionLegs.createdAt}
+                    )`.mapWith(schema.sourceRecordsRaw.createdAt),
+                    sourceOrderId: sql<string>`coalesce(
+                      ${schema.sourceRecordsRaw.id}::text,
+                      ${schema.transactionLegs.id}::text
+                    )`,
                     createdAt: schema.transactionLegs.createdAt,
                   })
                   .from(schema.transactionLegs)
+                  .leftJoin(
+                    schema.sourceRecordsRaw,
+                    eq(schema.sourceRecordsRaw.id, schema.transactionLegs.sourceRawRecordId)
+                  )
                   .where(
                     and(
                       eq(schema.transactionLegs.sourceId, destinationSourceId),
@@ -4045,12 +4188,24 @@ const make = Effect.gen(function* () {
                     assetId: schema.inventoryMovements.assetId,
                     amount: schema.inventoryMovements.amount,
                     timestamp: schema.inventoryMovements.timestamp,
+                    sourceOrder: sql<Date>`coalesce(
+                      ${schema.sourceRecordsRaw.createdAt},
+                      ${schema.inventoryMovements.createdAt}
+                    )`.mapWith(schema.sourceRecordsRaw.createdAt),
+                    sourceOrderId: sql<string>`coalesce(
+                      ${schema.sourceRecordsRaw.id}::text,
+                      ${schema.inventoryMovements.id}::text
+                    )`,
                     createdAt: schema.inventoryMovements.createdAt,
                     transactionLegId: schema.inventoryMovements.transactionLegId,
                     providerTransferId: schema.inventoryMovements.providerTransferId,
                     purpose: schema.inventoryMovements.purpose,
                   })
                   .from(schema.inventoryMovements)
+                  .leftJoin(
+                    schema.sourceRecordsRaw,
+                    eq(schema.sourceRecordsRaw.id, schema.inventoryMovements.sourceRawRecordId)
+                  )
                   .where(
                     and(
                       eq(schema.inventoryMovements.sourceId, destinationSourceId),

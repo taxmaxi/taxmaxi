@@ -137,7 +137,11 @@ const make = Effect.gen(function* () {
           sql`${schema.sourceRecordsRaw.normalizationError} is not null`
         )
       )
-      .orderBy(asc(schema.sourceRecordsRaw.occurredAt), asc(schema.sourceRecordsRaw.createdAt))
+      .orderBy(
+        asc(schema.sourceRecordsRaw.occurredAt),
+        asc(schema.sourceRecordsRaw.createdAt),
+        asc(schema.sourceRecordsRaw.id)
+      )
       .pipe(wrapSyncEngineSqlError("sourceRawRecordRepository.listReplayCandidates"))
 
   const listAllRawRowsForReplay: SourceRawRecordRepositoryShape["listAllRawRowsForReplay"] = ({
@@ -147,7 +151,11 @@ const make = Effect.gen(function* () {
       .select(selectRawRecordFields)
       .from(schema.sourceRecordsRaw)
       .where(eq(schema.sourceRecordsRaw.sourceId, sourceId))
-      .orderBy(asc(schema.sourceRecordsRaw.occurredAt), asc(schema.sourceRecordsRaw.createdAt))
+      .orderBy(
+        asc(schema.sourceRecordsRaw.occurredAt),
+        asc(schema.sourceRecordsRaw.createdAt),
+        asc(schema.sourceRecordsRaw.id)
+      )
       .pipe(wrapSyncEngineSqlError("sourceRawRecordRepository.listAllRawRowsForReplay"))
 
   const listPendingNormalizationRecordIds: SourceRawRecordRepositoryShape["listPendingNormalizationRecordIds"] =
@@ -161,7 +169,11 @@ const make = Effect.gen(function* () {
             isNull(schema.sourceRecordsRaw.normalizedAt)
           )
         )
-        .orderBy(asc(schema.sourceRecordsRaw.occurredAt), asc(schema.sourceRecordsRaw.createdAt))
+        .orderBy(
+          asc(schema.sourceRecordsRaw.occurredAt),
+          asc(schema.sourceRecordsRaw.createdAt),
+          asc(schema.sourceRecordsRaw.id)
+        )
         .pipe(
           wrapSyncEngineSqlError("sourceRawRecordRepository.listPendingNormalizationRecordIds"),
           Effect.map((rows) => rows.map((row) => row.id))
@@ -182,7 +194,11 @@ const make = Effect.gen(function* () {
               inArray(schema.sourceRecordsRaw.id, rawRecordIds)
             )
           )
-          .orderBy(asc(schema.sourceRecordsRaw.occurredAt), asc(schema.sourceRecordsRaw.createdAt))
+          .orderBy(
+            asc(schema.sourceRecordsRaw.occurredAt),
+            asc(schema.sourceRecordsRaw.createdAt),
+            asc(schema.sourceRecordsRaw.id)
+          )
           .pipe(wrapSyncEngineSqlError("sourceRawRecordRepository.listRawRecordsByIds"))
 
   const listRawRecordsByOccurredAt: SourceRawRecordRepositoryShape["listRawRecordsByOccurredAt"] =
@@ -206,9 +222,39 @@ const make = Effect.gen(function* () {
             )
           )
         )
-        .orderBy(asc(schema.sourceRecordsRaw.createdAt))
+        .orderBy(asc(schema.sourceRecordsRaw.createdAt), asc(schema.sourceRecordsRaw.id))
         .pipe(wrapSyncEngineSqlError("sourceRawRecordRepository.listRawRecordsByOccurredAt"))
     }
+
+  const listExternalRecordIdsByProviderStatus: SourceRawRecordRepositoryShape["listExternalRecordIdsByProviderStatus"] =
+    ({ sourceId, externalAccountId, recordType, providerTransactionType, providerStatuses }) =>
+      providerStatuses.length === 0
+        ? Effect.succeed([])
+        : db
+            .select({ externalRecordId: schema.sourceRecordsRaw.externalRecordId })
+            .from(schema.sourceRecordsRaw)
+            .where(
+              and(
+                eq(schema.sourceRecordsRaw.sourceId, sourceId),
+                eq(schema.sourceRecordsRaw.externalAccountId, externalAccountId),
+                eq(schema.sourceRecordsRaw.recordType, recordType),
+                eq(
+                  sql<string>`lower(${schema.sourceRecordsRaw.payload}->>'type')`,
+                  providerTransactionType.toLowerCase()
+                ),
+                inArray(
+                  sql<string>`lower(${schema.sourceRecordsRaw.payload}->>'status')`,
+                  providerStatuses.map((status) => status.toLowerCase())
+                )
+              )
+            )
+            .orderBy(asc(schema.sourceRecordsRaw.externalRecordId))
+            .pipe(
+              wrapSyncEngineSqlError(
+                "sourceRawRecordRepository.listExternalRecordIdsByProviderStatus"
+              ),
+              Effect.map((rows) => rows.map((row) => row.externalRecordId))
+            )
 
   const markRawRecordNormalized: SourceRawRecordRepositoryShape["markRawRecordNormalized"] = ({
     rawRecordId,
@@ -255,6 +301,7 @@ const make = Effect.gen(function* () {
     listPendingNormalizationRecordIds,
     listRawRecordsByIds,
     listRawRecordsByOccurredAt,
+    listExternalRecordIdsByProviderStatus,
     markRawRecordNormalized,
     markRawRecordFailed,
     resetNormalizationStateForSource,

@@ -41,6 +41,11 @@ export const sourceRecordsRaw = pgTable(
     ),
     index("idx_source_records_raw_source_occurred").on(table.sourceId, table.occurredAt),
     index("idx_source_records_raw_source_normalized").on(table.sourceId, table.normalizedAt),
+    index("idx_source_records_raw_source_account_type").on(
+      table.sourceId,
+      table.externalAccountId,
+      table.recordType
+    ),
   ]
 )
 

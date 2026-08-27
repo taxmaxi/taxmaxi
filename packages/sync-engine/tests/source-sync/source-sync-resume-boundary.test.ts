@@ -22,7 +22,14 @@ const watermark = new Date("2026-01-01T00:00:00.000Z")
 const olderThanWatermark = new Date("2025-12-31T23:59:59.000Z")
 
 const runWithProvider = <A, E>(
-  f: (provider: typeof CoinbaseSourceSyncProvider.Service) => Effect.Effect<A, E>
+  f: (provider: typeof CoinbaseSourceSyncProvider.Service) => Effect.Effect<A, E>,
+  mutableStatusFixture?: {
+    readonly externalRecordIds: ReadonlyArray<string>
+    readonly onQuery: (params: {
+      readonly providerTransactionType: string
+      readonly providerStatuses: ReadonlyArray<string>
+    }) => void
+  }
 ) =>
   Effect.gen(function* () {
     const provider = yield* CoinbaseSourceSyncProvider
@@ -189,6 +196,16 @@ const runWithProvider = <A, E>(
             listRawRecordsByIds: () => Effect.die("listRawRecordsByIds should not be called"),
             listRawRecordsByOccurredAt: () =>
               Effect.die("listRawRecordsByOccurredAt should not be called"),
+            listExternalRecordIdsByProviderStatus: ({
+              providerTransactionType,
+              providerStatuses,
+            }) =>
+              mutableStatusFixture === undefined
+                ? Effect.die("listExternalRecordIdsByProviderStatus should not be called")
+                : Effect.sync(() => {
+                    mutableStatusFixture.onQuery({ providerTransactionType, providerStatuses })
+                    return mutableStatusFixture.externalRecordIds
+                  }),
             markRawRecordNormalized: () =>
               Effect.die("markRawRecordNormalized should not be called"),
             markRawRecordFailed: () => Effect.die("markRawRecordFailed should not be called"),
@@ -201,6 +218,80 @@ const runWithProvider = <A, E>(
   )
 
 describe("source sync resume boundary", () => {
+  it("discovers a failed transaction below the Coinbase checkpoint", async () => {
+    const queries: Array<{
+      readonly providerTransactionType: string
+      readonly providerStatuses: ReadonlyArray<string>
+    }> = []
+    const mutableStatusFixture = {
+      externalRecordIds: ["older-record"],
+      onQuery: (query: {
+        readonly providerTransactionType: string
+        readonly providerStatuses: ReadonlyArray<string>
+      }) => {
+        queries.push(query)
+      },
+    }
+    const firstBatch = await Effect.runPromise(
+      runWithProvider(
+        (provider) =>
+          provider.fetchRawBatch({
+            providerKey: "coinbase",
+            sourceId: "source-1",
+            walletAddress: null,
+            cursorPayload: {
+              accountCursor: null,
+              pendingAccounts: [],
+              transactionAccountId: "account-1",
+              transactionCursor: null,
+              resumeBoundaryActive: true,
+              resumeCheckpointExternalId: "checkpoint-1",
+            },
+            resumeHighWatermark: watermark,
+            resumeCheckpointExternalId: "checkpoint-1",
+            pageSize: 100,
+          }),
+        mutableStatusFixture
+      )
+    )
+    const secondBatch = await Effect.runPromise(
+      runWithProvider(
+        (provider) =>
+          provider.fetchRawBatch({
+            providerKey: "coinbase",
+            sourceId: "source-1",
+            walletAddress: null,
+            cursorPayload: firstBatch.cursorPayload,
+            resumeHighWatermark: watermark,
+            resumeCheckpointExternalId: "checkpoint-1",
+            pageSize: 100,
+          }),
+        mutableStatusFixture
+      )
+    )
+
+    expect(queries).toEqual(
+      ["tx", "send", "intx_deposit", "intx_withdrawal", "transfer"].map(
+        (providerTransactionType) => ({
+          providerTransactionType,
+          providerStatuses: ["pending", "failed"],
+        })
+      )
+    )
+    expect(firstBatch.records.map((record) => record.externalRecordId)).toEqual([
+      "late-at-watermark",
+    ])
+    expect(secondBatch.records.map((record) => record.externalRecordId)).toEqual([
+      "checkpoint-1",
+      "older-record",
+    ])
+    expect(
+      secondBatch.records.find((record) => record.externalRecordId === "older-record")
+        ?.reopenNormalizationOnChange
+    ).toBe(true)
+    expect(secondBatch.done).toBe(true)
+  })
+
   it("keeps scanning equal-watermark Coinbase pages until the checkpoint boundary", async () => {
     const firstBatch = await Effect.runPromise(
       runWithProvider((provider) =>

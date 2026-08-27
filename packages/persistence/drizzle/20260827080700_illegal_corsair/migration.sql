@@ -1,0 +1,1 @@
+CREATE INDEX "idx_source_records_raw_source_account_type" ON "source_records_raw" ("source_id","external_account_id","record_type");

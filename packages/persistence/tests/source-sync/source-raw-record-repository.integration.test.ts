@@ -155,6 +155,181 @@ describe("SourceRawRecordRepositoryLive", () => {
     expect(rows.every((row) => row.normalizationError === null)).toBe(true)
   })
 
+  it("uses raw row ids to break equal-time replay ties", async () => {
+    const occurredAt = new Date("2025-01-01T12:00:00.000Z")
+    const records = ["tx-tie-c", "tx-tie-a", "tx-tie-b"].map((externalRecordId) =>
+      ProviderRawRecord.make({
+        providerKey: "coinbase",
+        recordType: "coinbase_transaction",
+        externalRecordId,
+        externalAccountId: "coinbase-account-1",
+        externalParentId: null,
+        occurredAt,
+        payload: { id: externalRecordId },
+      })
+    )
+    const write = await runRepository(
+      Effect.flatMap(SourceRawRecordRepository, (repository) =>
+        repository.upsertRawBatch({ sourceId: TEST_SOURCE_ID, records })
+      )
+    )
+    const expectedIds = write.rawRecords
+      .map((record) => record.id)
+      .sort((left, right) => left.localeCompare(right))
+
+    const [allRows, pendingIds, selectedRows, pairingRows] = await Promise.all([
+      runRepository(
+        Effect.flatMap(SourceRawRecordRepository, (repository) =>
+          repository.listAllRawRowsForReplay({ sourceId: TEST_SOURCE_ID })
+        )
+      ),
+      runRepository(
+        Effect.flatMap(SourceRawRecordRepository, (repository) =>
+          repository.listPendingNormalizationRecordIds({ sourceId: TEST_SOURCE_ID })
+        )
+      ),
+      runRepository(
+        Effect.flatMap(SourceRawRecordRepository, (repository) =>
+          repository.listRawRecordsByIds({
+            sourceId: TEST_SOURCE_ID,
+            rawRecordIds: [...expectedIds].reverse(),
+          })
+        )
+      ),
+      runRepository(
+        Effect.flatMap(SourceRawRecordRepository, (repository) =>
+          repository.listRawRecordsByOccurredAt({
+            sourceId: TEST_SOURCE_ID,
+            recordType: "coinbase_transaction",
+            occurredAt,
+          })
+        )
+      ),
+    ])
+
+    expect(allRows.map((row) => row.id)).toEqual(expectedIds)
+    expect(pendingIds).toEqual(expectedIds)
+    expect(selectedRows.map((row) => row.id)).toEqual(expectedIds)
+    expect(pairingRows.map((row) => row.id)).toEqual(expectedIds)
+
+    await runRepository(
+      Effect.gen(function* () {
+        const repository = yield* SourceRawRecordRepository
+        yield* Effect.forEach(
+          expectedIds,
+          (rawRecordId) =>
+            repository.markRawRecordFailed({ rawRecordId, message: "Equal-time replay fixture" }),
+          { concurrency: 1, discard: true }
+        )
+      })
+    )
+    const replayCandidates = await runRepository(
+      Effect.flatMap(SourceRawRecordRepository, (repository) =>
+        repository.listReplayCandidates({ sourceId: TEST_SOURCE_ID })
+      )
+    )
+    expect(replayCandidates.map((row) => row.id)).toEqual(expectedIds)
+  })
+
+  it("lists only matching mutable provider rows for one indexed source account", async () => {
+    const otherSourceId = "00000000-0000-0000-0000-000000000282"
+    await runPg(
+      seedSyncEngineRepositoryFixture({
+        userId: "00000000-0000-0000-0000-000000000182",
+        principalId: "00000000-0000-0000-0000-000000000182",
+        sourceId: otherSourceId,
+      })
+    )
+
+    const makeRecord = ({
+      externalRecordId,
+      externalAccountId = "coinbase-account-1",
+      recordType = "coinbase_transaction",
+      payload,
+    }: {
+      readonly externalRecordId: string
+      readonly externalAccountId?: string
+      readonly recordType?: string
+      readonly payload: unknown
+    }) =>
+      ProviderRawRecord.make({
+        providerKey: "coinbase",
+        recordType,
+        externalRecordId,
+        externalAccountId,
+        externalParentId: null,
+        occurredAt: new Date("2025-01-01T12:00:00.000Z"),
+        payload,
+      })
+
+    await runRepository(
+      Effect.flatMap(SourceRawRecordRepository, (repository) =>
+        repository.upsertRawBatch({
+          sourceId: TEST_SOURCE_ID,
+          records: [
+            makeRecord({
+              externalRecordId: "pending-tx-match",
+              payload: { type: "TX", status: "Pending" },
+            }),
+            makeRecord({
+              externalRecordId: "failed-tx-match",
+              payload: { type: "tx", status: "FAILED" },
+            }),
+            makeRecord({
+              externalRecordId: "completed-tx",
+              payload: { type: "tx", status: "completed" },
+            }),
+            makeRecord({
+              externalRecordId: "pending-buy",
+              payload: { type: "buy", status: "pending" },
+            }),
+            makeRecord({
+              externalRecordId: "pending-other-account",
+              externalAccountId: "coinbase-account-2",
+              payload: { type: "tx", status: "pending" },
+            }),
+            makeRecord({
+              externalRecordId: "pending-other-record-type",
+              recordType: "coinbase_account",
+              payload: { type: "tx", status: "pending" },
+            }),
+            makeRecord({
+              externalRecordId: "malformed-payload",
+              payload: { status: 42 },
+            }),
+          ],
+        })
+      )
+    )
+    await runRepository(
+      Effect.flatMap(SourceRawRecordRepository, (repository) =>
+        repository.upsertRawBatch({
+          sourceId: otherSourceId,
+          records: [
+            makeRecord({
+              externalRecordId: "pending-other-source",
+              payload: { type: "tx", status: "pending" },
+            }),
+          ],
+        })
+      )
+    )
+
+    const externalRecordIds = await runRepository(
+      Effect.flatMap(SourceRawRecordRepository, (repository) =>
+        repository.listExternalRecordIdsByProviderStatus({
+          sourceId: TEST_SOURCE_ID,
+          externalAccountId: "coinbase-account-1",
+          recordType: "coinbase_transaction",
+          providerTransactionType: "tx",
+          providerStatuses: ["pending", "failed"],
+        })
+      )
+    )
+
+    expect(externalRecordIds).toEqual(["failed-tx-match", "pending-tx-match"])
+  })
+
   it("updates duplicate Solana signatures instead of inserting another raw row", async () => {
     const signature = "solana-signature-1"
     const firstWrite = await runRepository(
@@ -223,7 +398,7 @@ describe("SourceRawRecordRepositoryLive", () => {
   it("reopens flagged changed payloads while preserving unchanged failures", async () => {
     const [record] = firstBatch.slice(1)
     if (record === undefined) {
-      return
+      throw new Error("Expected a transaction fixture in firstBatch")
     }
     const makeRecord = ({
       amount,
@@ -271,7 +446,7 @@ describe("SourceRawRecordRepositoryLive", () => {
       (row) => row.externalRecordId === "tx-stable"
     )
     if (rawRecord === undefined || stableRawRecord === undefined) {
-      return
+      throw new Error("Expected pending and stable raw records to be returned from upsertRawBatch")
     }
 
     await runRepository(

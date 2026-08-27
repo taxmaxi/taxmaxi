@@ -354,6 +354,11 @@ export interface PersistNormalizedSourceArtifactsParamsBase {
   /** Replay reservation that this persistence call is allowed to finalize. */
   readonly replayReservationId?: string
   /**
+   * Reserve cross-source state after network advisory locks are held but before
+   * this write locks its source. The reservation shares the persistence transaction.
+   */
+  readonly beforeSourceLock?: Effect.Effect<void, SyncEngineStorageError>
+  /**
    * Reserve related rows after persistence locks are held but before canonical artifacts are
    * written. The reservation shares this repository transaction and is rolled back on failure.
    */
@@ -417,6 +422,10 @@ export interface ReservedReplayTransactionCredit {
  * SourceNormalizationRepositoryShape - Atomic canonical write surface for normalized source artifacts.
  */
 export interface SourceNormalizationRepositoryShape {
+  /** Check whether this write settles an existing provider transaction with deferred FIFO effects. */
+  readonly requiresProviderSettlementRebuild: (params: {
+    readonly transaction: SourceTransactionDraft
+  }) => Effect.Effect<boolean, SyncEngineStorageError>
   /** Reserve every missing transaction credit atomically before a source replay resets state. */
   readonly reserveReplayTransactionCredits: (params: {
     readonly reservationId: string

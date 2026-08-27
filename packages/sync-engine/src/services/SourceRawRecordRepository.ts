@@ -72,6 +72,18 @@ export interface SourceRawRecordRepositoryShape {
   }) => Effect.Effect<ReadonlyArray<SourceRawRecord>, SyncEngineStorageError>
 
   /**
+   * List provider record ids in one source account whose payload type and
+   * status match the requested mutable provider state.
+   */
+  readonly listExternalRecordIdsByProviderStatus: (params: {
+    readonly sourceId: string
+    readonly externalAccountId: string
+    readonly recordType: string
+    readonly providerTransactionType: string
+    readonly providerStatuses: ReadonlyArray<string>
+  }) => Effect.Effect<ReadonlyArray<string>, SyncEngineStorageError>
+
+  /**
    * Mark one raw row normalized once canonical writes succeed.
    */
   readonly markRawRecordNormalized: (params: {

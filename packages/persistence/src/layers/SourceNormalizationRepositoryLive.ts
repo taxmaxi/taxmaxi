@@ -9,7 +9,21 @@
  */
 
 import { createHash } from "node:crypto"
-import { and, asc, eq, gt, inArray, isNotNull, isNull, lte, notInArray, or, sql } from "drizzle-orm"
+import {
+  and,
+  asc,
+  eq,
+  gt,
+  gte,
+  inArray,
+  isNotNull,
+  isNull,
+  lte,
+  ne,
+  notInArray,
+  or,
+  sql,
+} from "drizzle-orm"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import * as Schema from "effect/Schema"
@@ -20,6 +34,7 @@ import {
   parseDecimal,
   powerOfTen,
 } from "./SourceNormalizationFixedPoint.ts"
+import { rebuildFifoEffects, type RebuildableFifoEffect } from "./FifoEffectRebuild.ts"
 import { drizzle } from "./PgClientLive.ts"
 import { schema } from "../schema/index.ts"
 import {
@@ -105,6 +120,16 @@ const hasCompletedProviderStatus = (providerStatus: string | null): boolean =>
 
 const hasFailedProviderStatus = (providerStatus: string | null): boolean =>
   providerStatus?.toLowerCase() === "failed"
+
+const startsProviderFifoEffects = ({
+  previousStatus,
+  nextStatus,
+}: {
+  readonly previousStatus: string | null
+  readonly nextStatus: string | null
+}): boolean =>
+  (!hasCompletedProviderStatus(previousStatus) && hasCompletedProviderStatus(nextStatus)) ||
+  (!hasFailedProviderStatus(previousStatus) && hasFailedProviderStatus(nextStatus))
 
 const stableTransactionId = ({
   externalId,
@@ -1336,16 +1361,56 @@ const make = Effect.gen(function* () {
             .onConflictDoUpdate({
               target: schema.transactionReviews.transactionId,
               set: {
-                reviewStatus: sql.raw("excluded.review_status"),
-                originalTypeKey: sql.raw("excluded.original_type_key"),
-                originalConfidence: sql.raw("excluded.original_confidence"),
-                currentTypeKey: sql.raw("excluded.current_type_key"),
-                legalRuleSetVersion: sql.raw("excluded.legal_rule_set_version"),
-                categorizationReason: sql.raw("excluded.categorization_reason"),
-                matchedLayer: sql.raw("excluded.matched_layer"),
-                needsReview: sql.raw("excluded.needs_review"),
-                userNotes: sql.raw("excluded.user_notes"),
-                reviewedAt: sql.raw("excluded.reviewed_at"),
+                reviewStatus: sql`case
+                  when ${schema.transactionReviews.reviewStatus} in ('approved', 'changed')
+                    then ${schema.transactionReviews.reviewStatus}
+                  else excluded.review_status
+                end`,
+                originalTypeKey: sql`case
+                  when ${schema.transactionReviews.reviewStatus} in ('approved', 'changed')
+                    then ${schema.transactionReviews.originalTypeKey}
+                  else excluded.original_type_key
+                end`,
+                originalConfidence: sql`case
+                  when ${schema.transactionReviews.reviewStatus} in ('approved', 'changed')
+                    then ${schema.transactionReviews.originalConfidence}
+                  else excluded.original_confidence
+                end`,
+                currentTypeKey: sql`case
+                  when ${schema.transactionReviews.reviewStatus} in ('approved', 'changed')
+                    then ${schema.transactionReviews.currentTypeKey}
+                  else excluded.current_type_key
+                end`,
+                legalRuleSetVersion: sql`case
+                  when ${schema.transactionReviews.reviewStatus} in ('approved', 'changed')
+                    then ${schema.transactionReviews.legalRuleSetVersion}
+                  else excluded.legal_rule_set_version
+                end`,
+                categorizationReason: sql`case
+                  when ${schema.transactionReviews.reviewStatus} in ('approved', 'changed')
+                    then ${schema.transactionReviews.categorizationReason}
+                  else excluded.categorization_reason
+                end`,
+                matchedLayer: sql`case
+                  when ${schema.transactionReviews.reviewStatus} in ('approved', 'changed')
+                    then ${schema.transactionReviews.matchedLayer}
+                  else excluded.matched_layer
+                end`,
+                needsReview: sql`case
+                  when ${schema.transactionReviews.reviewStatus} in ('approved', 'changed')
+                    then ${schema.transactionReviews.needsReview}
+                  else excluded.needs_review
+                end`,
+                userNotes: sql`case
+                  when ${schema.transactionReviews.reviewStatus} in ('approved', 'changed')
+                    then ${schema.transactionReviews.userNotes}
+                  else excluded.user_notes
+                end`,
+                reviewedAt: sql`case
+                  when ${schema.transactionReviews.reviewStatus} in ('approved', 'changed')
+                    then ${schema.transactionReviews.reviewedAt}
+                  else excluded.reviewed_at
+                end`,
                 updatedAt: now,
               },
             })
@@ -1375,11 +1440,23 @@ const make = Effect.gen(function* () {
           originalAmount: schema.fifoLots.originalAmount,
           remainingAmount: schema.fifoLots.remainingAmount,
           costBasisPerToken: schema.fifoLots.costBasisPerToken,
+          sourceOrder: sql<Date>`coalesce(
+            ${schema.sourceRecordsRaw.createdAt},
+            ${schema.fifoLots.createdAt}
+          )`.mapWith(schema.sourceRecordsRaw.createdAt),
+          sourceOrderId: sql<string>`coalesce(
+            ${schema.sourceRecordsRaw.id}::text,
+            ${schema.fifoLots.id}::text
+          )`,
         })
         .from(schema.fifoLots)
         .innerJoin(
           schema.transactionLegs,
           eq(schema.transactionLegs.id, schema.fifoLots.sourceLegId)
+        )
+        .leftJoin(
+          schema.sourceRecordsRaw,
+          eq(schema.sourceRecordsRaw.id, schema.transactionLegs.sourceRawRecordId)
         )
         .where(
           and(
@@ -1392,7 +1469,12 @@ const make = Effect.gen(function* () {
             lte(schema.transactionLegs.timestamp, maxAcquiredAt)
           )
         )
-        .orderBy(asc(schema.fifoLots.acquiredAt), asc(schema.fifoLots.createdAt))
+        .orderBy(
+          asc(schema.fifoLots.acquiredAt),
+          asc(sql`coalesce(${schema.sourceRecordsRaw.createdAt}, ${schema.fifoLots.createdAt})`),
+          asc(sql`coalesce(${schema.sourceRecordsRaw.id}::text, ${schema.fifoLots.id}::text)`),
+          asc(schema.fifoLots.id)
+        )
         .pipe(wrapSyncEngineSqlError("sourceNormalizationRepository.loadOpenFifoLots"))
 
       return yield* Effect.forEach(rows, (row) =>
@@ -1651,6 +1733,551 @@ const make = Effect.gen(function* () {
         yield* matchDisposalLeg({ executor, leg })
       })
     )
+
+  interface FifoRebuildWindow {
+    readonly sourceId: string
+    readonly principalId: string
+    readonly assetId: string
+    readonly fromTimestamp: Date
+  }
+
+  const fifoRebuildWindowsForLegs = (
+    legs: ReadonlyArray<PersistedSourceLegRecord>
+  ): ReadonlyArray<FifoRebuildWindow> => [
+    ...new Map(
+      legs
+        .filter(
+          (leg) =>
+            leg.kind === "acquisition" ||
+            leg.kind === "income" ||
+            leg.kind === "disposal" ||
+            leg.kind === "fee"
+        )
+        .map((leg) => {
+          const inventoryKey = `${leg.sourceId}:${leg.principalId}:${leg.assetId}`
+          return [
+            inventoryKey,
+            {
+              sourceId: leg.sourceId,
+              principalId: leg.principalId,
+              assetId: leg.assetId,
+              fromTimestamp: leg.timestamp,
+            },
+          ] as const
+        })
+    ).values(),
+  ]
+
+  const loadDownstreamFifoEffects = ({
+    executor,
+    windows,
+  }: {
+    readonly executor: SourceNormalizationExecutor
+    readonly windows: ReadonlyArray<FifoRebuildWindow>
+  }) =>
+    Effect.gen(function* () {
+      if (windows.length === 0) {
+        return [] as ReadonlyArray<RebuildableFifoEffect>
+      }
+
+      const disposals = yield* executor
+        .select({
+          id: schema.transactionLegs.id,
+          transactionId: schema.transactionLegs.transactionId,
+          sourceId: schema.transactionLegs.sourceId,
+          principalId: schema.transactionLegs.principalId,
+          assetId: schema.transactionLegs.assetId,
+          amount: schema.transactionLegs.amount,
+          fiatAmount: schema.transactionLegs.fiatAmount,
+          timestamp: schema.transactionLegs.timestamp,
+          sourceOrder: sql<Date>`coalesce(
+            ${schema.sourceRecordsRaw.createdAt},
+            ${schema.transactionLegs.createdAt}
+          )`.mapWith(schema.sourceRecordsRaw.createdAt),
+          sourceOrderId: sql<string>`coalesce(
+            ${schema.sourceRecordsRaw.id}::text,
+            ${schema.transactionLegs.id}::text
+          )`,
+          createdAt: schema.transactionLegs.createdAt,
+        })
+        .from(schema.transactionLegs)
+        .leftJoin(
+          schema.sourceRecordsRaw,
+          eq(schema.sourceRecordsRaw.id, schema.transactionLegs.sourceRawRecordId)
+        )
+        .where(
+          and(
+            eq(schema.transactionLegs.kind, "disposal"),
+            sql`${schema.transactionLegs.derivationRule} is distinct from 'internal_transfer_out'`,
+            sql`${schema.transactionLegs.transactionId} is not null`,
+            or(
+              ...windows.map((window) =>
+                and(
+                  eq(schema.transactionLegs.sourceId, window.sourceId),
+                  eq(schema.transactionLegs.principalId, window.principalId),
+                  eq(schema.transactionLegs.assetId, window.assetId),
+                  gte(schema.transactionLegs.timestamp, window.fromTimestamp)
+                )
+              )
+            )
+          )
+        )
+        .pipe(
+          wrapSyncEngineSqlError(
+            "sourceNormalizationRepository.rebuildDownstreamFifoEffects.loadDisposals"
+          )
+        )
+
+      const downstreamFeeLegs = yield* executor
+        .select({
+          id: schema.transactionLegs.id,
+          transactionId: schema.transactionLegs.transactionId,
+          sourceId: schema.transactionLegs.sourceId,
+          sourceRawRecordId: schema.transactionLegs.sourceRawRecordId,
+          principalId: schema.transactionLegs.principalId,
+          assetId: schema.transactionLegs.assetId,
+          assetRepresentationId: schema.transactionLegs.assetRepresentationId,
+          amount: schema.transactionLegs.amount,
+          timestamp: schema.transactionLegs.timestamp,
+        })
+        .from(schema.transactionLegs)
+        .innerJoin(
+          schema.transactions,
+          eq(schema.transactions.id, schema.transactionLegs.transactionId)
+        )
+        .where(
+          and(
+            eq(schema.transactionLegs.kind, "fee"),
+            gt(schema.transactionLegs.amount, "0"),
+            inArray(sql<string>`lower(${schema.transactions.providerStatus})`, [
+              "completed",
+              "succeeded",
+              "failed",
+            ]),
+            or(
+              ...windows.map((window) =>
+                and(
+                  eq(schema.transactionLegs.sourceId, window.sourceId),
+                  eq(schema.transactionLegs.principalId, window.principalId),
+                  eq(schema.transactionLegs.assetId, window.assetId),
+                  gte(schema.transactionLegs.timestamp, window.fromTimestamp)
+                )
+              )
+            )
+          )
+        )
+        .pipe(
+          wrapSyncEngineSqlError(
+            "sourceNormalizationRepository.rebuildDownstreamFifoEffects.loadFeeLegs"
+          )
+        )
+
+      const now = nowDate()
+      yield* Effect.forEach(
+        downstreamFeeLegs,
+        (leg) => {
+          if (leg.transactionId === null) {
+            return Effect.void
+          }
+
+          return executor
+            .insert(schema.inventoryMovements)
+            .values({
+              principalId: leg.principalId,
+              sourceId: leg.sourceId,
+              sourceRawRecordId: leg.sourceRawRecordId,
+              transactionId: leg.transactionId,
+              providerTransferId: null,
+              transactionLegId: leg.id,
+              assetId: leg.assetId,
+              assetRepresentationId: leg.assetRepresentationId,
+              timestamp: leg.timestamp,
+              direction: "outbound",
+              purpose: "fee",
+              taxTreatment: "pending_review",
+              reconciliationStatus: "unmatched",
+              amount: leg.amount,
+              createdAt: now,
+              updatedAt: now,
+            })
+            .onConflictDoNothing({
+              target: schema.inventoryMovements.transactionLegId,
+              where: sql`${schema.inventoryMovements.transactionLegId} is not null`,
+            })
+            .pipe(
+              wrapSyncEngineSqlError(
+                "sourceNormalizationRepository.rebuildDownstreamFifoEffects.ensureFeeMovement"
+              ),
+              Effect.asVoid
+            )
+        },
+        { concurrency: 1, discard: true }
+      )
+
+      const movements = yield* executor
+        .select({
+          id: schema.inventoryMovements.id,
+          transactionId: schema.inventoryMovements.transactionId,
+          sourceId: schema.inventoryMovements.sourceId,
+          principalId: schema.inventoryMovements.principalId,
+          assetId: schema.inventoryMovements.assetId,
+          amount: schema.inventoryMovements.amount,
+          timestamp: schema.inventoryMovements.timestamp,
+          sourceOrder: sql<Date>`coalesce(
+            ${schema.sourceRecordsRaw.createdAt},
+            ${schema.inventoryMovements.createdAt}
+          )`.mapWith(schema.sourceRecordsRaw.createdAt),
+          sourceOrderId: sql<string>`coalesce(
+            ${schema.sourceRecordsRaw.id}::text,
+            ${schema.inventoryMovements.id}::text
+          )`,
+          createdAt: schema.inventoryMovements.createdAt,
+          transactionLegId: schema.inventoryMovements.transactionLegId,
+          providerTransferId: schema.inventoryMovements.providerTransferId,
+          purpose: schema.inventoryMovements.purpose,
+        })
+        .from(schema.inventoryMovements)
+        .leftJoin(
+          schema.sourceRecordsRaw,
+          eq(schema.sourceRecordsRaw.id, schema.inventoryMovements.sourceRawRecordId)
+        )
+        .where(
+          and(
+            eq(schema.inventoryMovements.direction, "outbound"),
+            ne(schema.inventoryMovements.reconciliationStatus, "matched"),
+            or(
+              ...windows.map((window) =>
+                and(
+                  eq(schema.inventoryMovements.sourceId, window.sourceId),
+                  eq(schema.inventoryMovements.principalId, window.principalId),
+                  eq(schema.inventoryMovements.assetId, window.assetId),
+                  gte(schema.inventoryMovements.timestamp, window.fromTimestamp)
+                )
+              )
+            )
+          )
+        )
+        .pipe(
+          wrapSyncEngineSqlError(
+            "sourceNormalizationRepository.rebuildDownstreamFifoEffects.loadMovements"
+          )
+        )
+
+      const movementsToRebuild = []
+      for (const movement of movements) {
+        if (
+          movement.transactionLegId === null &&
+          movement.providerTransferId !== null &&
+          movement.purpose === "principal"
+        ) {
+          const matchingDisposals = disposals.filter(
+            (disposal) =>
+              disposal.transactionId === movement.transactionId &&
+              disposal.assetId === movement.assetId
+          )
+          const matchingDisposalResults = yield* Effect.forEach(matchingDisposals, (disposal) =>
+            compareDecimalQuantities({
+              left: String(disposal.amount),
+              right: String(movement.amount),
+            })
+          )
+          if (matchingDisposalResults.some((comparison) => comparison === 0)) {
+            continue
+          }
+        }
+
+        movementsToRebuild.push(movement)
+      }
+
+      return [
+        ...disposals.map(
+          (disposal): RebuildableFifoEffect => ({
+            ...disposal,
+            kind: "disposal",
+          })
+        ),
+        ...movementsToRebuild.map(
+          (movement): RebuildableFifoEffect => ({
+            id: movement.id,
+            kind: "movement",
+            transactionId: movement.transactionId,
+            sourceId: movement.sourceId,
+            principalId: movement.principalId,
+            assetId: movement.assetId,
+            amount: movement.amount,
+            fiatAmount: null,
+            timestamp: movement.timestamp,
+            sourceOrder: movement.sourceOrder,
+            sourceOrderId: movement.sourceOrderId,
+            createdAt: movement.createdAt,
+          })
+        ),
+      ]
+    })
+
+  const markBlockedFifoReview = ({
+    executor,
+    effect,
+  }: {
+    readonly executor: SourceNormalizationExecutor
+    readonly effect: RebuildableFifoEffect
+  }) => {
+    if (effect.transactionId === null) {
+      return Effect.void
+    }
+
+    const inventoryReason = `${FIFO_INVENTORY_REVIEW_REASON_PREFIX} Rebuilding FIFO after a backdated provider settlement still found insufficient inventory.`
+    const now = nowDate()
+
+    return executor
+      .insert(schema.transactionReviews)
+      .values({
+        transactionId: effect.transactionId,
+        principalId: effect.principalId,
+        reviewStatus: "needs_review",
+        categorizationReason: inventoryReason,
+        matchedLayer: FIFO_INVENTORY_REVIEW_LAYER,
+        needsReview: true,
+        createdAt: now,
+        updatedAt: now,
+      })
+      .onConflictDoUpdate({
+        target: schema.transactionReviews.transactionId,
+        set: {
+          reviewStatus: sql`case
+            when ${schema.transactionReviews.reviewStatus} in ('approved', 'changed')
+              then ${schema.transactionReviews.reviewStatus}
+            else 'needs_review'
+          end`,
+          categorizationReason: sql`case
+            when strpos(
+              coalesce(${schema.transactionReviews.categorizationReason}, ''),
+              cast(${FIFO_INVENTORY_REVIEW_REASON_PREFIX} as text)
+            ) > 0 then ${schema.transactionReviews.categorizationReason}
+            when coalesce(${schema.transactionReviews.categorizationReason}, '') = ''
+              then cast(${inventoryReason} as text)
+            else ${schema.transactionReviews.categorizationReason}
+              || E'\n'
+              || cast(${inventoryReason} as text)
+          end`,
+          matchedLayer: sql`case
+            when cast(${FIFO_INVENTORY_REVIEW_LAYER} as text) = any(
+              string_to_array(coalesce(${schema.transactionReviews.matchedLayer}, ''), ',')
+            ) then ${schema.transactionReviews.matchedLayer}
+            when coalesce(${schema.transactionReviews.matchedLayer}, '') = ''
+              then cast(${FIFO_INVENTORY_REVIEW_LAYER} as text)
+            else ${schema.transactionReviews.matchedLayer}
+              || ','
+              || cast(${FIFO_INVENTORY_REVIEW_LAYER} as text)
+          end`,
+          needsReview: true,
+          userNotes: schema.transactionReviews.userNotes,
+          reviewedAt: schema.transactionReviews.reviewedAt,
+          updatedAt: now,
+        },
+      })
+      .pipe(
+        wrapSyncEngineSqlError(
+          "sourceNormalizationRepository.rebuildDownstreamFifoEffects.markBlockedReview"
+        ),
+        Effect.asVoid
+      )
+  }
+
+  const clearResolvedFifoReview = ({
+    executor,
+    transactionId,
+  }: {
+    readonly executor: SourceNormalizationExecutor
+    readonly transactionId: string
+  }) =>
+    Effect.gen(function* () {
+      const [fifoState] = yield* executor
+        .select({
+          hasUnresolvedEffects: sql<boolean>`
+            exists (
+              select 1
+              from ${schema.transactionLegs} disposal
+              where disposal.transaction_id = ${transactionId}
+                and disposal.kind = 'disposal'
+                and disposal.derivation_rule is distinct from 'internal_transfer_out'
+                and coalesce(
+                  (
+                    select sum(match.matched_amount)
+                    from ${schema.disposalMatches} match
+                    where match.disposal_leg_id = disposal.id
+                  ),
+                  0
+                ) < disposal.amount
+            )
+            or exists (
+              select 1
+              from ${schema.inventoryMovements} movement
+              where movement.transaction_id = ${transactionId}
+                and movement.direction = 'outbound'
+                and movement.reconciliation_status <> 'matched'
+                and not (
+                  movement.transaction_leg_id is null
+                  and movement.provider_transfer_id is not null
+                  and movement.purpose = 'principal'
+                  and exists (
+                    select 1
+                    from ${schema.transactionLegs} equivalent_disposal
+                    where equivalent_disposal.transaction_id = movement.transaction_id
+                      and equivalent_disposal.asset_id = movement.asset_id
+                      and equivalent_disposal.kind = 'disposal'
+                      and equivalent_disposal.derivation_rule is distinct from 'internal_transfer_out'
+                      and equivalent_disposal.amount = movement.amount
+                  )
+                )
+                and coalesce(
+                  (
+                    select sum(allocation.matched_amount)
+                    from ${schema.inventoryMovementAllocations} allocation
+                    where allocation.inventory_movement_id = movement.id
+                  ),
+                  0
+                ) < movement.amount
+            )
+            or exists (
+              select 1
+              from ${schema.transactionLegs} fee
+              where fee.transaction_id = ${transactionId}
+                and fee.kind = 'fee'
+                and fee.amount > 0
+                and not exists (
+                  select 1
+                  from ${schema.inventoryMovements} fee_movement
+                  where fee_movement.transaction_leg_id = fee.id
+                )
+            )
+          `,
+        })
+        .from(schema.transactions)
+        .where(eq(schema.transactions.id, transactionId))
+        .limit(1)
+        .pipe(
+          wrapSyncEngineSqlError(
+            "sourceNormalizationRepository.rebuildDownstreamFifoEffects.loadTransactionFifoState"
+          )
+        )
+
+      if (fifoState?.hasUnresolvedEffects === true) {
+        return
+      }
+
+      const [review] = yield* executor
+        .select({
+          reviewStatus: schema.transactionReviews.reviewStatus,
+          categorizationReason: schema.transactionReviews.categorizationReason,
+          matchedLayer: schema.transactionReviews.matchedLayer,
+          userNotes: schema.transactionReviews.userNotes,
+        })
+        .from(schema.transactionReviews)
+        .where(eq(schema.transactionReviews.transactionId, transactionId))
+        .limit(1)
+        .pipe(
+          wrapSyncEngineSqlError(
+            "sourceNormalizationRepository.rebuildDownstreamFifoEffects.loadReview"
+          )
+        )
+
+      if (review === undefined) {
+        return
+      }
+
+      const remainingLayers = (review.matchedLayer ?? "")
+        .split(",")
+        .map((layer) => layer.trim())
+        .filter((layer) => layer !== "" && layer !== FIFO_INVENTORY_REVIEW_LAYER)
+      const remainingReasons = (review.categorizationReason ?? "")
+        .split("\n")
+        .filter(
+          (reason) =>
+            reason.trim() !== "" &&
+            !reason.trimStart().startsWith(FIFO_INVENTORY_REVIEW_REASON_PREFIX)
+        )
+      const preservesUserReview =
+        review.reviewStatus === "approved" || review.reviewStatus === "changed"
+      const shouldKeepReview =
+        remainingLayers.length > 0 ||
+        remainingReasons.length > 0 ||
+        review.userNotes !== null ||
+        preservesUserReview
+
+      if (!shouldKeepReview) {
+        yield* executor
+          .delete(schema.transactionReviews)
+          .where(eq(schema.transactionReviews.transactionId, transactionId))
+          .pipe(
+            wrapSyncEngineSqlError(
+              "sourceNormalizationRepository.rebuildDownstreamFifoEffects.deleteResolvedReview"
+            )
+          )
+        return
+      }
+
+      yield* executor
+        .update(schema.transactionReviews)
+        .set({
+          categorizationReason: remainingReasons.length === 0 ? null : remainingReasons.join("\n"),
+          matchedLayer: remainingLayers.length === 0 ? null : remainingLayers.join(","),
+          needsReview: review.reviewStatus === "needs_review",
+          updatedAt: nowDate(),
+        })
+        .where(eq(schema.transactionReviews.transactionId, transactionId))
+        .pipe(
+          wrapSyncEngineSqlError(
+            "sourceNormalizationRepository.rebuildDownstreamFifoEffects.clearResolvedReview"
+          )
+        )
+    })
+
+  const rebuildDownstreamFifoEffects = ({
+    executor,
+    legs,
+  }: {
+    readonly executor: SourceNormalizationExecutor
+    readonly legs: ReadonlyArray<PersistedSourceLegRecord>
+  }) =>
+    Effect.gen(function* () {
+      const windows = fifoRebuildWindowsForLegs(legs)
+      const effects = yield* loadDownstreamFifoEffects({ executor, windows })
+      const { blockedEffectIds } = yield* rebuildFifoEffects({
+        executor,
+        effects,
+        shortageMode: "clear",
+        operationPrefix: "sourceNormalizationRepository.rebuildDownstreamFifoEffects",
+      })
+      const blockedTransactionIds = new Set(
+        effects.flatMap((effect) =>
+          blockedEffectIds.has(effect.id) && effect.transactionId !== null
+            ? [effect.transactionId]
+            : []
+        )
+      )
+
+      for (const effect of effects) {
+        if (blockedEffectIds.has(effect.id)) {
+          yield* markBlockedFifoReview({ executor, effect })
+        }
+      }
+
+      const resolvedTransactionIds = [
+        ...new Set(
+          effects.flatMap((effect) =>
+            effect.transactionId === null || blockedTransactionIds.has(effect.transactionId)
+              ? []
+              : [effect.transactionId]
+          )
+        ),
+      ]
+      yield* Effect.forEach(
+        resolvedTransactionIds,
+        (transactionId) => clearResolvedFifoReview({ executor, transactionId }),
+        { concurrency: 1, discard: true }
+      )
+    })
 
   const resetInventoryMovementAllocations = ({
     executor,
@@ -2477,43 +3104,47 @@ const make = Effect.gen(function* () {
             disposalFiatAmount: null,
           })
 
-          yield* Effect.forEach(allocations, (allocation) =>
-            Effect.gen(function* () {
-              yield* executor
-                .insert(schema.inventoryMovementAllocations)
-                .values({
-                  inventoryMovementId: movement.id,
-                  fifoLotId: allocation.fifoLotId,
-                  matchedAmount: allocation.matchedAmount,
-                  createdAt: now,
-                })
-                .onConflictDoNothing({
-                  target: [
-                    schema.inventoryMovementAllocations.inventoryMovementId,
-                    schema.inventoryMovementAllocations.fifoLotId,
-                  ],
-                })
-                .pipe(
-                  wrapSyncEngineSqlError(
-                    "sourceNormalizationRepository.allocateFeeInventoryMovements.insertAllocation"
+          yield* Effect.forEach(
+            allocations,
+            (allocation) =>
+              Effect.gen(function* () {
+                yield* executor
+                  .insert(schema.inventoryMovementAllocations)
+                  .values({
+                    inventoryMovementId: movement.id,
+                    fifoLotId: allocation.fifoLotId,
+                    matchedAmount: allocation.matchedAmount,
+                    createdAt: now,
+                  })
+                  .onConflictDoNothing({
+                    target: [
+                      schema.inventoryMovementAllocations.inventoryMovementId,
+                      schema.inventoryMovementAllocations.fifoLotId,
+                    ],
+                  })
+                  .pipe(
+                    wrapSyncEngineSqlError(
+                      "sourceNormalizationRepository.allocateFeeInventoryMovements.insertAllocation"
+                    )
                   )
-                )
 
-              yield* executor
-                .update(schema.fifoLots)
-                .set({
-                  remainingAmount: allocation.remainingAmount,
-                  updatedAt: now,
-                })
-                .where(eq(schema.fifoLots.id, allocation.fifoLotId))
-                .pipe(
-                  wrapSyncEngineSqlError(
-                    "sourceNormalizationRepository.allocateFeeInventoryMovements.updateLot"
+                yield* executor
+                  .update(schema.fifoLots)
+                  .set({
+                    remainingAmount: allocation.remainingAmount,
+                    updatedAt: now,
+                  })
+                  .where(eq(schema.fifoLots.id, allocation.fifoLotId))
+                  .pipe(
+                    wrapSyncEngineSqlError(
+                      "sourceNormalizationRepository.allocateFeeInventoryMovements.updateLot"
+                    )
                   )
-                )
-            })
+              }),
+            { discard: true }
           )
-        })
+        }),
+      { discard: true }
     )
 
   const persistNormalizedArtifacts = <E>(
@@ -2552,6 +3183,10 @@ const make = Effect.gen(function* () {
             { concurrency: 1, discard: true }
           )
 
+          if (params.beforeSourceLock !== undefined) {
+            yield* params.beforeSourceLock
+          }
+
           const [ownedSource] = yield* tx
             .select({ id: schema.sources.id })
             .from(schema.sources)
@@ -2576,6 +3211,27 @@ const make = Effect.gen(function* () {
               error: `Source ${params.transaction.sourceId} is no longer owned by principal ${params.transaction.principalId}`,
             })
           }
+
+          const canonicalTransactionId = stableTransactionId(params.transaction)
+          const [existingTransaction] =
+            canonicalTransactionId === null
+              ? []
+              : yield* tx
+                  .select({ providerStatus: schema.transactions.providerStatus })
+                  .from(schema.transactions)
+                  .where(eq(schema.transactions.id, canonicalTransactionId))
+                  .limit(1)
+                  .pipe(
+                    wrapSyncEngineSqlError(
+                      "sourceNormalizationRepository.persistNormalizedArtifacts.loadExistingStatus"
+                    )
+                  )
+          const rebuildAfterSettlement =
+            existingTransaction !== undefined &&
+            startsProviderFifoEffects({
+              previousStatus: existingTransaction.providerStatus,
+              nextStatus: params.transaction.providerStatus,
+            })
 
           if (params.beforePersist !== undefined) {
             yield* params.beforePersist
@@ -2713,6 +3369,12 @@ const make = Effect.gen(function* () {
             transactionId: persistedTransaction.id,
             transactionReview,
           })
+          if (rebuildAfterSettlement) {
+            yield* rebuildDownstreamFifoEffects({
+              executor: tx,
+              legs: persistedLegs,
+            })
+          }
           if (persistedTransaction.sourceRawRecordId !== null) {
             yield* tx
               .update(schema.sourceRecordsRaw)
@@ -2741,6 +3403,35 @@ const make = Effect.gen(function* () {
       .pipe(
         wrapPreservingCreditExhausted("sourceNormalizationRepository.persistNormalizedArtifacts")
       )
+
+  const requiresProviderSettlementRebuild: SourceNormalizationRepositoryShape["requiresProviderSettlementRebuild"] =
+    ({ transaction }) => {
+      const transactionId = stableTransactionId(transaction)
+      if (
+        transactionId === null ||
+        (!hasCompletedProviderStatus(transaction.providerStatus) &&
+          !hasFailedProviderStatus(transaction.providerStatus))
+      ) {
+        return Effect.succeed(false)
+      }
+
+      return db
+        .select({ providerStatus: schema.transactions.providerStatus })
+        .from(schema.transactions)
+        .where(eq(schema.transactions.id, transactionId))
+        .limit(1)
+        .pipe(
+          wrapSyncEngineSqlError("sourceNormalizationRepository.requiresProviderSettlementRebuild"),
+          Effect.map(
+            ([existing]) =>
+              existing !== undefined &&
+              startsProviderFifoEffects({
+                previousStatus: existing.providerStatus,
+                nextStatus: transaction.providerStatus,
+              })
+          )
+        )
+    }
 
   const reserveReplayTransactionCredits: SourceNormalizationRepositoryShape["reserveReplayTransactionCredits"] =
     ({ reservationId, transactions }) =>
@@ -2800,6 +3491,7 @@ const make = Effect.gen(function* () {
             )
 
   return SourceNormalizationRepository.of({
+    requiresProviderSettlementRebuild,
     reserveReplayTransactionCredits,
     releaseReplayTransactionCredits,
     persistNormalizedArtifacts,
