@@ -11,6 +11,7 @@ import {
   TEST_BTC_ASSET_ID,
   TEST_BTC_REPRESENTATION_ID,
   TEST_EUR_ASSET_ID,
+  TEST_EUR_REPRESENTATION_ID,
   makeIntegrationTestDatabaseContext,
   seedSyncEngineAssets,
   seedSyncEngineRepositoryFixture,
@@ -959,6 +960,38 @@ describe("AssetRepositoryLive", () => {
       )
 
       await expect(deleteRepresentation).rejects.toThrow()
+    })
+
+    it("rejects supersession links that cross representation histories", async () => {
+      const crossRepresentation = await runPg(
+        Effect.gen(function* () {
+          const db = yield* drizzle
+          const [eurOwnership] = yield* db
+            .insert(schema.assetRepresentationOwnershipDecisions)
+            .values({
+              assetRepresentationId: TEST_EUR_REPRESENTATION_ID,
+              assetId: TEST_EUR_ASSET_ID,
+              policyRevision: "2026-08-19.attach-only.1",
+              actor: "test:direct-insert",
+            })
+            .returning({ id: schema.assetRepresentationOwnershipDecisions.id })
+          if (eurOwnership === undefined) {
+            return yield* Effect.die("Expected EUR ownership decision")
+          }
+          return yield* db
+            .insert(schema.assetRepresentationOwnershipDecisions)
+            .values({
+              assetRepresentationId: TEST_BTC_REPRESENTATION_ID,
+              assetId: TEST_BTC_ASSET_ID,
+              supersedesDecisionId: eurOwnership.id,
+              policyRevision: "2026-08-26.human-supersession.1",
+              actor: "human:admin",
+            })
+            .pipe(Effect.result)
+        })
+      )
+
+      expect(crossRepresentation._tag).toBe("Failure")
     })
   })
 

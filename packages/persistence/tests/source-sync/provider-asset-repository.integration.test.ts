@@ -3656,6 +3656,45 @@ describe("ProviderAssetRepositoryLive", () => {
       expect(history).toHaveLength(2)
     })
 
+    it("rejects supersession links that cross observation histories", async () => {
+      const { providerAssetRowId: firstObservationId } =
+        await scheduleResolutionJob("history-cross-first")
+      const { providerAssetRowId: secondObservationId } =
+        await scheduleResolutionJob("history-cross-second")
+
+      const crossObservation = await runPg(
+        Effect.gen(function* () {
+          const db = yield* drizzle
+          const [secondDecision] = yield* db
+            .insert(schema.assetResolutionDecisions)
+            .values({
+              providerAssetRowId: secondObservationId,
+              evidenceRevision: 1,
+              policyRevision: "2026-08-19.attach-only.1",
+              outcome: "excluded",
+              actor: "system:attach-only-policy",
+            })
+            .returning({ id: schema.assetResolutionDecisions.id })
+          if (secondDecision === undefined) {
+            return yield* Effect.die("Expected second observation decision")
+          }
+          return yield* db
+            .insert(schema.assetResolutionDecisions)
+            .values({
+              providerAssetRowId: firstObservationId,
+              evidenceRevision: 1,
+              policyRevision: "2026-08-26.human-supersession.1",
+              outcome: "excluded",
+              supersedesDecisionId: secondDecision.id,
+              actor: "human:admin",
+            })
+            .pipe(Effect.result)
+        })
+      )
+
+      expect(crossObservation._tag).toBe("Failure")
+    })
+
     it("establishes the first settled policy result as the conclusion without replacing one later", async () => {
       const { providerAssetRowId } = await scheduleResolutionJob("history-first-conclusion")
 
