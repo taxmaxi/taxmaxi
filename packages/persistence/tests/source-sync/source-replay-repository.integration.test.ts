@@ -20,6 +20,7 @@ import {
 import {
   SourceNormalizationRepository,
   SourceRawRecordRepository,
+  SourceReplayPlanRepository,
   SourceReplayRepository,
 } from "@my/sync-engine/services"
 
@@ -38,6 +39,9 @@ const runRawRepository = <A, E>(effect: Effect.Effect<A, E, SourceRawRecordRepos
   Effect.runPromise(context.runWithLayer({ effect, layer: SourceRawRecordRepositoryLive }))
 
 const runReplayRepository = <A, E>(effect: Effect.Effect<A, E, SourceReplayRepository>) =>
+  Effect.runPromise(context.runWithLayer({ effect, layer: SourceReplayRepositoryLive }))
+
+const runReplayPlanRepository = <A, E>(effect: Effect.Effect<A, E, SourceReplayPlanRepository>) =>
   Effect.runPromise(context.runWithLayer({ effect, layer: SourceReplayRepositoryLive }))
 
 const seedReplayRawRecord = () =>
@@ -72,6 +76,136 @@ describe("SourceReplayRepositoryLive", () => {
       })
     )
     await runPg(seedReplayRawRecord())
+  })
+
+  it("persists replay prerequisites and keeps the earliest rebuild boundary", async () => {
+    const [firstPrerequisiteJob, secondPrerequisiteJob, replayJob] = await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        return yield* db
+          .insert(schema.processingJobs)
+          .values([
+            {
+              sourceId: TEST_SOURCE_ID,
+              principalId: TEST_PRINCIPAL_ID,
+              mode: "replay",
+              status: "completed",
+            },
+            {
+              sourceId: TEST_SOURCE_ID,
+              principalId: TEST_PRINCIPAL_ID,
+              mode: "replay",
+              status: "completed",
+            },
+            {
+              sourceId: TEST_SOURCE_ID,
+              principalId: TEST_PRINCIPAL_ID,
+              mode: "replay",
+              status: "pending",
+            },
+          ])
+          .returning({ id: schema.processingJobs.id })
+      })
+    )
+
+    if (
+      firstPrerequisiteJob === undefined ||
+      secondPrerequisiteJob === undefined ||
+      replayJob === undefined
+    ) {
+      throw new Error("Failed to create replay plan jobs")
+    }
+
+    const earliestBoundary = new Date("2025-01-01T00:00:00.000Z")
+    await runReplayPlanRepository(
+      Effect.flatMap(SourceReplayPlanRepository, (repository) =>
+        repository.recordReplayPlan({
+          jobId: replayJob.id,
+          prerequisiteJobIds: [firstPrerequisiteJob.id],
+          rebuildFrom: earliestBoundary,
+        })
+      )
+    )
+
+    const plan = await runReplayPlanRepository(
+      Effect.flatMap(SourceReplayPlanRepository, (repository) =>
+        repository.recordReplayPlan({
+          jobId: replayJob.id,
+          prerequisiteJobIds: [secondPrerequisiteJob.id],
+          rebuildFrom: new Date("2025-01-03T00:00:00.000Z"),
+        })
+      )
+    )
+
+    expect(plan).toEqual({
+      jobId: replayJob.id,
+      prerequisiteJobIds: [firstPrerequisiteJob.id, secondPrerequisiteJob.id].sort(),
+      rebuildFrom: earliestBoundary,
+    })
+  })
+
+  it("returns a typed error for a missing prerequisite without changing the replay plan", async () => {
+    const existingPrerequisiteJobId = "00000000-0000-0000-0000-000000000403"
+    const missingPrerequisiteJobId = "00000000-0000-0000-0000-000000000404"
+    const replayJobId = "00000000-0000-0000-0000-000000000405"
+    await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        yield* db.insert(schema.processingJobs).values([
+          {
+            id: existingPrerequisiteJobId,
+            sourceId: TEST_SOURCE_ID,
+            principalId: TEST_PRINCIPAL_ID,
+            mode: "replay",
+            status: "completed",
+          },
+          {
+            id: replayJobId,
+            sourceId: TEST_SOURCE_ID,
+            principalId: TEST_PRINCIPAL_ID,
+            mode: "replay",
+            status: "pending",
+          },
+        ])
+      })
+    )
+
+    const failedPlan = await runReplayPlanRepository(
+      Effect.flatMap(SourceReplayPlanRepository, (repository) =>
+        repository
+          .recordReplayPlan({
+            jobId: replayJobId,
+            prerequisiteJobIds: [missingPrerequisiteJobId],
+            rebuildFrom: new Date("2025-01-01T00:00:00.000Z"),
+          })
+          .pipe(Effect.result)
+      )
+    )
+
+    expect(failedPlan).toMatchObject({
+      _tag: "Failure",
+      failure: {
+        _tag: "SourceReplayPlanJobNotFoundError",
+        jobId: missingPrerequisiteJobId,
+      },
+    })
+
+    const acceptedBoundary = new Date("2025-01-03T00:00:00.000Z")
+    const acceptedPlan = await runReplayPlanRepository(
+      Effect.flatMap(SourceReplayPlanRepository, (repository) =>
+        repository.recordReplayPlan({
+          jobId: replayJobId,
+          prerequisiteJobIds: [existingPrerequisiteJobId],
+          rebuildFrom: acceptedBoundary,
+        })
+      )
+    )
+
+    expect(acceptedPlan).toEqual({
+      jobId: replayJobId,
+      prerequisiteJobIds: [existingPrerequisiteJobId],
+      rebuildFrom: acceptedBoundary,
+    })
   })
 
   it("waits for the source inventory lock before resetting replay state", async () => {
