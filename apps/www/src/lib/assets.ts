@@ -67,6 +67,44 @@ export function formatAssetRepresentationType(type: AssetRepresentation["type"])
   }
 }
 
+// Characters that render as a blank on screen: control and format characters,
+// spaces, Hangul fillers, the halfwidth filler, and the blank Braille pattern.
+// Spam tokens use these as their symbol so the label looks empty.
+const BLANK_LABEL_CHARACTERS = /[\p{C}\p{Z}\u{115F}\u{1160}\u{3164}\u{FFA0}\u{2800}]/gu
+
+/** Trimmed label, or null when every character in it renders as a blank. */
+export function readableAssetLabel(label: string | null | undefined): string | null {
+  if (label === null || label === undefined) {
+    return null
+  }
+
+  const trimmed = label.trim()
+  return trimmed.replaceAll(BLANK_LABEL_CHARACTERS, "").length === 0 ? null : trimmed
+}
+
+/** Fields an asset exception offers for picking a readable symbol. */
+export type AssetExceptionLabelSource = {
+  readonly currencyCode: string
+  readonly name: string | null
+  readonly providerAssetId: string | null
+  readonly naturalKey: string | null
+  readonly providerAssetRowId: string
+}
+
+/**
+ * Symbol shown for an asset exception: the first readable value among the
+ * provider symbol, the provider name, and the provider identifiers.
+ */
+export function getAssetExceptionDisplaySymbol(exception: AssetExceptionLabelSource): string {
+  return (
+    readableAssetLabel(exception.currencyCode) ??
+    readableAssetLabel(exception.name) ??
+    exception.providerAssetId ??
+    exception.naturalKey ??
+    exception.providerAssetRowId
+  )
+}
+
 export function formatBlockchainName(name: string): string {
   return name
     .split(/[\s_-]+/)

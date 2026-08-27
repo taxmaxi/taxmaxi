@@ -1,6 +1,8 @@
 import {
   formatBlockchainName,
+  getAssetExceptionDisplaySymbol,
   matchesAssetCatalogQuery,
+  readableAssetLabel,
   type TaxMaxiAsset,
   type TaxMaxiPendingAsset,
 } from "#/lib/assets"
@@ -58,12 +60,16 @@ export function getCatalogItemName(item: CatalogItem): string {
     case "pending":
       return getPendingAssetName(item.asset)
     case "exception":
-      return item.exception.name ?? item.exception.currencyCode
+      return (
+        readableAssetLabel(item.exception.name) ?? getAssetExceptionDisplaySymbol(item.exception)
+      )
   }
 }
 
 export function getCatalogItemSymbol(item: CatalogItem): string {
-  return item.kind === "exception" ? item.exception.currencyCode : item.asset.symbol
+  return item.kind === "exception"
+    ? getAssetExceptionDisplaySymbol(item.exception)
+    : item.asset.symbol
 }
 
 export function compareCatalogItems(left: CatalogItem, right: CatalogItem): number {

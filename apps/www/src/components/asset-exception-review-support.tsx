@@ -10,6 +10,7 @@ import {
 import { z } from "zod"
 
 import type { AssetExceptionActions } from "#/components/asset-catalog-context"
+import { getAssetExceptionDisplaySymbol, readableAssetLabel } from "#/lib/assets"
 import { cn } from "#/lib/utils"
 import { m } from "#/paraglide/messages"
 
@@ -289,8 +290,10 @@ export function useDecisionDraft({
 
   const [mode, setModeState] = useState<DraftMode | null>(suggestedMode)
   const [assetId, setAssetId] = useState(activeAssetId)
-  const [name, setName] = useState(detail.name ?? "")
-  const [symbol, setSymbol] = useState(detail.currencyCode)
+  const [name, setName] = useState(readableAssetLabel(detail.name) ?? "")
+  // Seed only a readable symbol; an invisible spam symbol must not slip into
+  // the catalog through the prefilled create form.
+  const [symbol, setSymbol] = useState(readableAssetLabel(detail.currencyCode) ?? "")
   const [assetType, setAssetType] = useState<"fungible" | "nft">("fungible")
   const [blockchain, setBlockchain] = useState(observed?.blockchain ?? "")
   const [representationType, setRepresentationType] = useState<"native" | "token" | "nft">(
@@ -803,7 +806,7 @@ export function MessageLine({ message }: { readonly message: DraftMessage | null
 
 /** Plain-English answer to "why is this here and what should I do about it". */
 export function caseExplainer(detail: AssetExceptionDetail): string {
-  const symbol = detail.currencyCode
+  const symbol = getAssetExceptionDisplaySymbol(detail)
   switch (detail.policyOutput?.reason) {
     case "display_collision":
       return m["assetCatalog.exceptions.reviewUi.case.displayCollision"]({ symbol })

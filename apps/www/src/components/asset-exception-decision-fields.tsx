@@ -6,6 +6,7 @@ import type { AssetCatalogAsset } from "taxmaxi"
 import { Button } from "#/components/ui/button"
 import { Input } from "#/components/ui/input"
 import { Textarea } from "#/components/ui/textarea"
+import { readableAssetLabel } from "#/lib/assets"
 import { cn } from "#/lib/utils"
 import { m } from "#/paraglide/messages"
 
@@ -168,7 +169,11 @@ function isSameAddress(candidate: string | null, observed: string): boolean {
  */
 function CandidatePicker({ draft }: { readonly draft: DecisionDraft }) {
   const claimError = draft.fieldErrors.claim
-  const [query, setQuery] = useState(draft.detail.currencyCode)
+  // Search by symbol or name only when they are readable; an invisible spam
+  // symbol would search the catalog for an empty-looking string.
+  const initialQuery =
+    readableAssetLabel(draft.detail.currencyCode) ?? readableAssetLabel(draft.detail.name) ?? ""
+  const [query, setQuery] = useState(initialQuery)
   const [candidates, setCandidates] = useState<ReadonlyArray<AssetCatalogAsset> | null>(null)
   const [busy, setBusy] = useState(false)
   const search = draft.searchAssets
@@ -202,7 +207,7 @@ function CandidatePicker({ draft }: { readonly draft: DecisionDraft }) {
   }
 
   useEffect(() => {
-    runSearch(draft.detail.currencyCode)
+    runSearch(initialQuery)
     // Initial search only — later searches are user-driven.
   }, [])
 

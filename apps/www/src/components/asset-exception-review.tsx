@@ -14,6 +14,7 @@ import type { ReactNode } from "react"
 import type { AssetExceptionActions } from "#/components/asset-catalog-context"
 import type { TaxMaxiAssetException } from "#/components/asset-catalog-model"
 import { Button } from "#/components/ui/button"
+import { getAssetExceptionDisplaySymbol, readableAssetLabel } from "#/lib/assets"
 import { cn } from "#/lib/utils"
 import { m } from "#/paraglide/messages"
 import type { AssetExceptionDetail } from "taxmaxi"
@@ -58,6 +59,8 @@ export function AssetExceptionReview({
   readonly stale: boolean
 }) {
   const draft = useDecisionDraft({ actions, detail, onDetailChange })
+  const displaySymbol = getAssetExceptionDisplaySymbol(detail)
+  const displayName = readableAssetLabel(detail.name)
   const age = exception === undefined ? null : formatAgo(exception.oldestAt)
   const hasHumanDecision = detail.decisionHistory.some((decision) => decision.claim !== null)
   const showDataUpdate = hasHumanDecision && detail.rematerialization.affectedSourceCount > 0
@@ -71,7 +74,7 @@ export function AssetExceptionReview({
     >
       <header>
         <div className="flex flex-wrap items-center gap-2">
-          <h2 className="text-3xl font-semibold tracking-tight">{detail.currencyCode}</h2>
+          <h2 className="text-3xl font-semibold tracking-tight">{displaySymbol}</h2>
           <TintBadge className={statusClasses(detail.reviewStatus)}>
             {detail.reviewStatus === "unresolved"
               ? m["assetCatalog.exceptions.reviewUi.needsDecision"]()
@@ -84,7 +87,7 @@ export function AssetExceptionReview({
           )}
         </div>
         <p className="mt-1 text-sm text-muted-foreground">
-          {detail.name ?? m["assetCatalog.exceptions.reviewUi.noName"]()} · {detail.provider}
+          {displayName ?? m["assetCatalog.exceptions.reviewUi.noName"]()} · {detail.provider}
           {age === null ? null : <> · {m["assetCatalog.exceptions.reviewUi.caseOpen"]({ age })}</>}
         </p>
         <p className="mt-3 max-w-2xl text-sm leading-6">
@@ -110,8 +113,8 @@ export function AssetExceptionReview({
           <p className="text-sm text-muted-foreground">
             {m["assetCatalog.exceptions.reviewUi.observationDescription"]({
               provider: detail.provider,
-              symbol: detail.currencyCode,
-              name: detail.name ?? m["assetCatalog.exceptions.reviewUi.unnamedAsset"](),
+              symbol: displaySymbol,
+              name: displayName ?? m["assetCatalog.exceptions.reviewUi.unnamedAsset"](),
             })}
           </p>
           <div className="mt-2 max-w-md">
