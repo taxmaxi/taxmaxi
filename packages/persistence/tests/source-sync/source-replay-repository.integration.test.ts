@@ -583,6 +583,51 @@ describe("SourceReplayRepositoryLive", () => {
     })
   })
 
+  it("rejects replay plans that attach an unsuccessful terminal prerequisite", async () => {
+    const failedPrerequisiteJobId = "00000000-0000-0000-0000-000000000406"
+    const replayJobId = "00000000-0000-0000-0000-000000000407"
+    await runPg(
+      Effect.flatMap(drizzle, (db) =>
+        db.insert(schema.processingJobs).values([
+          {
+            id: failedPrerequisiteJobId,
+            sourceId: TEST_SOURCE_ID,
+            principalId: TEST_PRINCIPAL_ID,
+            mode: "replay",
+            status: "failed",
+          },
+          {
+            id: replayJobId,
+            sourceId: TEST_SOURCE_ID,
+            principalId: TEST_PRINCIPAL_ID,
+            mode: "replay",
+            status: "pending",
+          },
+        ])
+      )
+    )
+
+    const result = await runReplayPlanRepository(
+      Effect.flatMap(SourceReplayPlanRepository, (repository) =>
+        repository
+          .recordReplayPlan({
+            jobId: replayJobId,
+            prerequisiteJobIds: [failedPrerequisiteJobId],
+            rebuildFrom: new Date("2025-01-01T00:00:00.000Z"),
+          })
+          .pipe(Effect.result)
+      )
+    )
+
+    expect(result).toMatchObject({
+      _tag: "Failure",
+      failure: {
+        _tag: "SourceReplayPlanConflictError",
+        jobId: replayJobId,
+      },
+    })
+  })
+
   it("waits for FIFO owner inventory locks before resetting replay state", async () => {
     const { ownerSourceId, replayJobId } = await seedFifoOwnerLockScenario()
 
@@ -827,7 +872,7 @@ describe("SourceReplayRepositoryLive", () => {
       )
       expect(blockedDispatch).toMatchObject({
         _tag: "Failure",
-        failure: { _tag: "SourceSyncJobExecutionRecordConflictError" },
+        failure: { _tag: "SourceSyncJobPrerequisitesPendingError" },
       })
 
       await runPg(

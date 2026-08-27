@@ -739,11 +739,18 @@ const makeReplayPlanRepository = Effect.gen(function* () {
 
           if (uniquePrerequisiteJobIds.length > 0) {
             const prerequisiteJobs = yield* tx
-              .select({ id: schema.processingJobs.id })
+              .select({
+                id: schema.processingJobs.id,
+                status: schema.processingJobs.status,
+                failedRecords: sql<number>`coalesce(
+                  (${schema.processingJobs.progressDetails} ->> 'failedRecords')::integer,
+                  0
+                )`,
+              })
               .from(schema.processingJobs)
               .where(inArray(schema.processingJobs.id, uniquePrerequisiteJobIds))
               .orderBy(asc(schema.processingJobs.id))
-              .for("key share")
+              .for("update")
               .pipe(
                 wrapSyncEngineSqlError(
                   "sourceReplayPlanRepository.recordReplayPlan.lockPrerequisites"
@@ -757,6 +764,19 @@ const makeReplayPlanRepository = Effect.gen(function* () {
             if (missingPrerequisiteJobId !== undefined) {
               return yield* new SourceReplayPlanJobNotFoundError({
                 jobId: missingPrerequisiteJobId,
+              })
+            }
+
+            const unsuccessfulPrerequisite = prerequisiteJobs.find(
+              ({ status, failedRecords }) =>
+                status === "failed" ||
+                status === "credit_required" ||
+                (status === "completed" && failedRecords > 0)
+            )
+            if (unsuccessfulPrerequisite !== undefined) {
+              return yield* new SourceReplayPlanConflictError({
+                jobId,
+                reason: `Prerequisite job ${unsuccessfulPrerequisite.id} did not complete successfully.`,
               })
             }
           }

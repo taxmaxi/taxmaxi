@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest"
 import { SourceSyncServiceLive } from "../../src/layers/SourceSyncServiceLive.ts"
 import {
   SourceRepository,
-  SourceSyncJobExecutionRecordConflictError,
+  SourceSyncJobPrerequisitesPendingError,
   SourceSyncJobRepository,
   SourceSyncQueue,
   SourceSyncQueueError,
@@ -112,9 +112,9 @@ const makeServiceLayer = ({
     getExecutionJob: ({ jobId }) =>
       dispatchBlocked
         ? Effect.fail(
-            new SourceSyncJobExecutionRecordConflictError({
+            new SourceSyncJobPrerequisitesPendingError({
               jobId,
-              reason: "Prerequisite replay has not completed.",
+              sourceId: source.id,
             })
           )
         : Effect.succeed({

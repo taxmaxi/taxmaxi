@@ -22,6 +22,7 @@ import {
   getSourceSyncProgressPercent,
   SourceSyncJobExecutionRecordConflictError,
   SourceSyncJobExecutionRecordNotFoundError,
+  SourceSyncJobPrerequisitesPendingError,
   SourceSyncJobRecordNotVisibleError,
   SourceSyncJobRepository,
   SyncEngineStorageError,
@@ -44,6 +45,7 @@ const ACTIVE_JOB_STATUSES = [
   "processing",
 ] as const satisfies ReadonlyArray<ActiveSourceSyncJobStatus>
 const MAX_CREATE_OR_REUSE_RACE_ATTEMPTS = 3
+const PREREQUISITE_FAILURE_MESSAGE = "Prerequisite processing job did not complete successfully."
 const processingJobPrerequisitesSucceeded = sql<boolean>`not exists (
   select 1
   from processing_job_dependencies dependency
@@ -114,12 +116,21 @@ const toExecutionJob = ({
 
 const make = Effect.gen(function* () {
   const db = yield* drizzle
-  type SourceSyncJobExecutor = Pick<typeof db, "insert" | "update">
+  type SourceSyncJobExecutor = Pick<typeof db, "insert" | "select" | "update">
 
   const preserveExpectedExecutionError = (operation: string) =>
     Effect.mapError((error: unknown) =>
       error instanceof SourceSyncJobExecutionRecordNotFoundError ||
       error instanceof SourceSyncJobExecutionRecordConflictError
+        ? error
+        : toSyncEngineStorageError({ error, operation })
+    )
+
+  const preserveClaimExecutionError = (operation: string) =>
+    Effect.mapError((error: unknown) =>
+      error instanceof SourceSyncJobExecutionRecordNotFoundError ||
+      error instanceof SourceSyncJobExecutionRecordConflictError ||
+      error instanceof SourceSyncJobPrerequisitesPendingError
         ? error
         : toSyncEngineStorageError({ error, operation })
     )
@@ -246,6 +257,92 @@ const make = Effect.gen(function* () {
       )
       .pipe(Effect.asVoid, wrapSyncEngineSqlError("sourceSyncJobRepository.settleSourceRebuilds"))
 
+  const failPendingDependentJobs = ({
+    executor,
+    prerequisiteJobId,
+    failureCode,
+    completedAt,
+  }: {
+    readonly executor: SourceSyncJobExecutor
+    readonly prerequisiteJobId: string
+    readonly failureCode: string
+    readonly completedAt: Date
+  }) =>
+    Effect.gen(function* () {
+      let frontierJobIds: ReadonlyArray<string> = [prerequisiteJobId]
+      const replaySourceIds = new Set<string>()
+
+      while (frontierJobIds.length > 0) {
+        const dependentJobs = yield* executor
+          .select({
+            id: schema.processingJobs.id,
+            sourceId: schema.processingJobs.sourceId,
+            mode: schema.processingJobs.mode,
+          })
+          .from(schema.processingJobDependencies)
+          .innerJoin(
+            schema.processingJobs,
+            eq(schema.processingJobs.id, schema.processingJobDependencies.jobId)
+          )
+          .where(
+            and(
+              inArray(schema.processingJobDependencies.prerequisiteJobId, frontierJobIds),
+              eq(schema.processingJobs.status, "pending")
+            )
+          )
+          .orderBy(asc(schema.processingJobs.id))
+          .for("update")
+          .pipe(
+            wrapSyncEngineSqlError(
+              "sourceSyncJobRepository.failPendingDependentJobs.lockDependents"
+            )
+          )
+
+        const dependentJobIds = dependentJobs.map(({ id }) => id)
+        if (dependentJobIds.length === 0) break
+
+        const failedJobs = yield* executor
+          .update(schema.processingJobs)
+          .set({
+            status: "failed",
+            completedAt,
+            errorMessage: PREREQUISITE_FAILURE_MESSAGE,
+            progressDetails: { failureCode, prerequisiteJobId },
+            workerId: null,
+            updatedAt: completedAt,
+          })
+          .where(
+            and(
+              inArray(schema.processingJobs.id, dependentJobIds),
+              eq(schema.processingJobs.status, "pending")
+            )
+          )
+          .returning({
+            id: schema.processingJobs.id,
+            sourceId: schema.processingJobs.sourceId,
+            mode: schema.processingJobs.mode,
+          })
+          .pipe(wrapSyncEngineSqlError("sourceSyncJobRepository.failPendingDependentJobs.update"))
+
+        for (const failedJob of failedJobs) {
+          if (failedJob.mode === "replay") replaySourceIds.add(failedJob.sourceId)
+        }
+        frontierJobIds = failedJobs.map(({ id }) => id)
+      }
+
+      yield* Effect.forEach(
+        [...replaySourceIds].sort(),
+        (sourceId) =>
+          settleSourceRebuilds({
+            executor,
+            sourceId,
+            outcome: { _tag: "failed", failureCode },
+            at: completedAt,
+          }),
+        { concurrency: 1, discard: true }
+      )
+    })
+
   const selectActiveJobFields = {
     id: schema.processingJobs.id,
     sourceId: schema.processingJobs.sourceId,
@@ -301,6 +398,38 @@ const make = Effect.gen(function* () {
         Effect.fail(new SourceSyncJobExecutionRecordConflictError({ jobId, reason }))
       )
     )
+
+  const jobPrerequisitesSucceeded = ({
+    executor,
+    jobId,
+  }: {
+    readonly executor: SourceSyncJobExecutor
+    readonly jobId: string
+  }) =>
+    executor
+      .select({ prerequisiteJobId: schema.processingJobDependencies.prerequisiteJobId })
+      .from(schema.processingJobDependencies)
+      .innerJoin(
+        schema.processingJobs,
+        eq(schema.processingJobs.id, schema.processingJobDependencies.prerequisiteJobId)
+      )
+      .where(
+        and(
+          eq(schema.processingJobDependencies.jobId, jobId),
+          or(
+            ne(schema.processingJobs.status, "completed"),
+            sql`coalesce(
+              (${schema.processingJobs.progressDetails} ->> 'failedRecords')::integer,
+              0
+            ) <> 0`
+          )
+        )
+      )
+      .limit(1)
+      .pipe(
+        wrapSyncEngineSqlError("sourceSyncJobRepository.jobPrerequisitesSucceeded"),
+        Effect.map((blockedPrerequisites) => blockedPrerequisites.length === 0)
+      )
 
   const findActiveJob: SourceSyncJobRepositoryShape["findActiveJob"] = ({
     sourceId,
@@ -489,40 +618,68 @@ const make = Effect.gen(function* () {
     })
 
   const claimJob: SourceSyncJobRepositoryShape["claimJob"] = ({ jobId, workerId, startedAt }) =>
-    Effect.gen(function* () {
-      const [job] = yield* db
-        .update(schema.processingJobs)
-        .set({
-          status: "processing",
-          workerId,
-          startedAt,
-          heartbeatAt: startedAt,
-          completedAt: null,
-          nextRetryAt: null,
-          errorMessage: null,
-          updatedAt: startedAt,
-        })
-        .where(
-          and(
-            eq(schema.processingJobs.id, jobId),
-            eq(schema.processingJobs.status, "pending"),
-            isNotNull(schema.processingJobs.principalId),
-            processingJobPrerequisitesSucceeded
-          )
-        )
-        .returning(selectExecutionJobFields)
-        .pipe(wrapSyncEngineSqlError("sourceSyncJobRepository.claimJob.update"))
+    db
+      .transaction((tx) =>
+        Effect.gen(function* () {
+          const [job] = yield* tx
+            .select(selectExecutionJobFields)
+            .from(schema.processingJobs)
+            .where(eq(schema.processingJobs.id, jobId))
+            .limit(1)
+            .for("update")
+            .pipe(wrapSyncEngineSqlError("sourceSyncJobRepository.claimJob.lock"))
 
-      if (job === undefined) {
-        return yield* failExpectedState({
-          jobId,
-          operation: "sourceSyncJobRepository.claimJob.select",
-          reason: "Only pending jobs with successful prerequisites can be claimed.",
-        })
-      }
+          if (job === undefined) {
+            return yield* new SourceSyncJobExecutionRecordNotFoundError({ jobId })
+          }
+          if (job.status !== "pending") {
+            return yield* new SourceSyncJobExecutionRecordConflictError({
+              jobId,
+              reason: `Job status ${job.status} is not claimable.`,
+            })
+          }
+          const prerequisitesSucceeded = yield* jobPrerequisitesSucceeded({ executor: tx, jobId })
+          if (!prerequisitesSucceeded) {
+            return yield* new SourceSyncJobPrerequisitesPendingError({
+              jobId,
+              sourceId: job.sourceId,
+            })
+          }
 
-      return yield* toExecutionJob({ job, jobId })
-    })
+          const [claimedJob] = yield* tx
+            .update(schema.processingJobs)
+            .set({
+              status: "processing",
+              workerId,
+              startedAt,
+              heartbeatAt: startedAt,
+              completedAt: null,
+              nextRetryAt: null,
+              errorMessage: null,
+              updatedAt: startedAt,
+            })
+            .where(
+              and(
+                eq(schema.processingJobs.id, jobId),
+                eq(schema.processingJobs.status, "pending"),
+                isNotNull(schema.processingJobs.principalId),
+                processingJobPrerequisitesSucceeded
+              )
+            )
+            .returning(selectExecutionJobFields)
+            .pipe(wrapSyncEngineSqlError("sourceSyncJobRepository.claimJob.update"))
+
+          if (claimedJob === undefined) {
+            return yield* new SourceSyncJobExecutionRecordConflictError({
+              jobId,
+              reason: "The pending job changed while it was being claimed.",
+            })
+          }
+
+          return yield* toExecutionJob({ job: claimedJob, jobId })
+        })
+      )
+      .pipe(preserveClaimExecutionError("sourceSyncJobRepository.claimJob"))
 
   const heartbeatJob: SourceSyncJobRepositoryShape["heartbeatJob"] = ({
     jobId,
@@ -665,6 +822,13 @@ const make = Effect.gen(function* () {
             })
           }
 
+          yield* failPendingDependentJobs({
+            executor: tx,
+            prerequisiteJobId: job.id,
+            failureCode: "replay_prerequisite_interrupted",
+            completedAt,
+          })
+
           yield* Effect.logWarning(
             { sourceId, jobId, completedAt: completedAt.toISOString() },
             "source-sync:stale-active-job-recovered"
@@ -725,6 +889,13 @@ const make = Effect.gen(function* () {
               at: completedAt,
             })
           }
+
+          yield* failPendingDependentJobs({
+            executor: tx,
+            prerequisiteJobId: job.id,
+            failureCode: "replay_prerequisite_failed",
+            completedAt,
+          })
         })
       )
       .pipe(preserveExpectedExecutionError("sourceSyncJobRepository.failJob"))
@@ -794,6 +965,13 @@ const make = Effect.gen(function* () {
               at: completedAt,
             })
           }
+
+          yield* failPendingDependentJobs({
+            executor: tx,
+            prerequisiteJobId: job.id,
+            failureCode: "replay_prerequisite_credit_required",
+            completedAt,
+          })
         })
       )
       .pipe(preserveExpectedExecutionError("sourceSyncJobRepository.failCreditRequiredJob"))
@@ -869,6 +1047,15 @@ const make = Effect.gen(function* () {
               at: completedAt,
             })
           }
+
+          if (state.failedRecords > 0) {
+            yield* failPendingDependentJobs({
+              executor: tx,
+              prerequisiteJobId: job.id,
+              failureCode: "replay_prerequisite_failed_records",
+              completedAt,
+            })
+          }
         })
       )
       .pipe(preserveExpectedExecutionError("sourceSyncJobRepository.completeJob"))
@@ -942,19 +1129,24 @@ const make = Effect.gen(function* () {
       const [job] = yield* db
         .select(selectExecutionJobFields)
         .from(schema.processingJobs)
-        .where(and(eq(schema.processingJobs.id, jobId), processingJobPrerequisitesSucceeded))
+        .where(eq(schema.processingJobs.id, jobId))
         .limit(1)
         .pipe(wrapSyncEngineSqlError("sourceSyncJobRepository.getExecutionJob.select"))
 
       if (job === undefined) {
-        return yield* failExpectedState({
+        return yield* new SourceSyncJobExecutionRecordNotFoundError({ jobId })
+      }
+
+      const executionJob = yield* toExecutionJob({ job, jobId })
+      const prerequisitesSucceeded = yield* jobPrerequisitesSucceeded({ executor: db, jobId })
+      if (!prerequisitesSucceeded) {
+        return yield* new SourceSyncJobPrerequisitesPendingError({
           jobId,
-          operation: "sourceSyncJobRepository.getExecutionJob.loadBlockedJob",
-          reason: "Only jobs with successful prerequisites can be dispatched.",
+          sourceId: job.sourceId,
         })
       }
 
-      return yield* toExecutionJob({ job, jobId })
+      return executionJob
     })
 
   const listStaleActiveJobs: SourceSyncJobRepositoryShape["listStaleActiveJobs"] = ({

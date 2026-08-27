@@ -138,6 +138,7 @@ const make = Effect.gen(function* () {
     Effect.gen(function* () {
       const readyForDispatch = yield* sourceSyncJobRepository.getExecutionJob({ jobId }).pipe(
         Effect.as(true),
+        Effect.catchTag("SourceSyncJobPrerequisitesPendingError", () => Effect.succeed(false)),
         Effect.catchTag("SourceSyncJobExecutionRecordConflictError", () => Effect.succeed(false)),
         Effect.mapError((cause) =>
           cause instanceof SyncEngineStorageError

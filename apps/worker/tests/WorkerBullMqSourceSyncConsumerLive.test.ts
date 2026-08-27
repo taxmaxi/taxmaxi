@@ -1,5 +1,5 @@
 import { ConfigProvider, Effect, Layer, Result, Schema } from "effect"
-import { UnrecoverableError } from "bullmq"
+import { DelayedError, UnrecoverableError } from "bullmq"
 import { describe, expect, it } from "vitest"
 import {
   makeWorkerBullMqSourceSyncConsumerLive,
@@ -53,7 +53,7 @@ const summary = ({
   status,
 }: {
   readonly jobId: string
-  readonly status: "completed" | "credit_required"
+  readonly status: "completed" | "credit_required" | "queued"
 }) =>
   ({
     sourceId: "source-1",
@@ -383,6 +383,47 @@ describe("WorkerBullMqSourceSyncConsumerLive", () => {
         }
       }),
     })
+  })
+
+  it("moves a waiting database job to BullMQ delayed state without consuming it", async () => {
+    let processor: WorkerBullMqSourceSyncProcessor | null = null
+    const delayedCalls: Array<{ timestamp: number; token?: string }> = []
+
+    await runWithConsumer({
+      executor: {
+        execute: ({ jobId }) => Effect.succeed(summary({ jobId, status: "queued" })),
+      },
+      acquireWorker: (_config, acquiredProcessor) =>
+        Effect.sync(() => {
+          processor = acquiredProcessor
+          return { close: Effect.void }
+        }),
+      effect: Effect.gen(function* () {
+        if (processor === null) return yield* Effect.die(new Error("Processor was not acquired"))
+        const acquiredProcessor = processor
+        const job = {
+          ...makeJob({ data: replayPayload }),
+          moveToDelayed: (timestamp: number, token?: string) => {
+            delayedCalls.push({ timestamp, ...(token === undefined ? {} : { token }) })
+            return Promise.resolve()
+          },
+        }
+        const result = yield* Effect.tryPromise({
+          try: () => acquiredProcessor(job, "lock-token"),
+          catch: toPromiseRejectionError,
+        }).pipe(Effect.result)
+
+        expect(Result.isFailure(result)).toBe(true)
+        if (Result.isFailure(result)) {
+          expect(result.failure.cause).toBeInstanceOf(DelayedError)
+          expect(result.failure.cause).not.toBeInstanceOf(UnrecoverableError)
+        }
+      }),
+    })
+
+    expect(delayedCalls).toHaveLength(1)
+    expect(delayedCalls[0]).toMatchObject({ token: "lock-token" })
+    expect(delayedCalls[0]?.timestamp).toBeGreaterThan(Date.now())
   })
 
   it("marks unrecoverable executor state errors terminal for BullMQ", async () => {

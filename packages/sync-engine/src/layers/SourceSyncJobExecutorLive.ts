@@ -1499,7 +1499,11 @@ const make = Effect.gen(function* () {
     retryPolicy,
   }) =>
     Effect.gen(function* () {
-      yield* sourceSyncJobRepository.getExecutionJob({ jobId }).pipe(
+      const executionReadiness = yield* sourceSyncJobRepository.getExecutionJob({ jobId }).pipe(
+        Effect.as({ _tag: "Ready" as const }),
+        Effect.catchTag("SourceSyncJobPrerequisitesPendingError", ({ sourceId }) =>
+          Effect.succeed({ _tag: "Waiting" as const, sourceId })
+        ),
         Effect.catchTag("SourceSyncJobExecutionRecordNotFoundError", () =>
           Effect.fail(new SourceSyncJobExecutionNotFoundError({ jobId }))
         ),
@@ -1510,9 +1514,22 @@ const make = Effect.gen(function* () {
           Effect.fail(new SourceSyncJobExecutionPayloadError({ jobId, reason: error.reason }))
         )
       )
-      const executionJob = yield* sourceSyncJobRepository
+
+      if (executionReadiness._tag === "Waiting") {
+        return makePlainSourceSyncJobSummary({
+          sourceId: executionReadiness.sourceId,
+          jobId,
+          status: "queued",
+        })
+      }
+
+      const claimResult = yield* sourceSyncJobRepository
         .claimJob({ jobId, workerId, startedAt: nowDate() })
         .pipe(
+          Effect.map((job) => ({ _tag: "Claimed" as const, job })),
+          Effect.catchTag("SourceSyncJobPrerequisitesPendingError", ({ sourceId }) =>
+            Effect.succeed({ _tag: "Waiting" as const, sourceId })
+          ),
           Effect.catchTag("SourceSyncJobExecutionRecordNotFoundError", () =>
             Effect.fail(new SourceSyncJobExecutionNotFoundError({ jobId }))
           ),
@@ -1520,6 +1537,16 @@ const make = Effect.gen(function* () {
             Effect.fail(new SourceSyncJobExecutionConflictError({ jobId, reason: error.reason }))
           )
         )
+
+      if (claimResult._tag === "Waiting") {
+        return makePlainSourceSyncJobSummary({
+          sourceId: claimResult.sourceId,
+          jobId,
+          status: "queued",
+        })
+      }
+
+      const executionJob = claimResult.job
       const source = yield* loadSource({
         principalId: executionJob.principalId,
         sourceId: executionJob.sourceId,
