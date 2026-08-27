@@ -357,10 +357,16 @@ export interface ProviderAssetRepositoryShape {
    * idempotency key, so replaying the same policy job never rewrites history.
    * Only an evaluation for the observation's current evidence revision can
    * advance the current policy-evaluation pointer.
+   *
+   * With policyEvaluationOnly, the write never fills the conclusion pointer,
+   * even when it is empty. Use it when re-evaluating a settled mapping so a
+   * conclusive evaluation stays a visible disagreement for human review
+   * instead of becoming the conclusion of a mapping that never had one.
    */
   readonly recordAssetResolutionPolicyEvaluation: (params: {
     readonly decision: AssetResolutionPolicyEvaluationRecord
     readonly requireCurrentEvidenceRevision?: true
+    readonly policyEvaluationOnly?: true
   }) => Effect.Effect<AssetResolutionPolicyEvaluationRecordResult, SyncEngineStorageError>
 
   /**

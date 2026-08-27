@@ -493,15 +493,18 @@ const make = Effect.gen(function* () {
   const recordDecision = ({
     jobId,
     record,
+    policyEvaluationOnly,
   }: {
     readonly jobId: string
     readonly record: AssetResolutionPolicyEvaluationRecord
+    readonly policyEvaluationOnly?: true
   }): Effect.Effect<"recorded" | "replayed" | "stale", SyncEngineStorageError> =>
     Effect.gen(function* () {
       const { recorded, stale } =
         yield* providerAssetRepository.recordAssetResolutionPolicyEvaluation({
           decision: record,
           requireCurrentEvidenceRevision: true,
+          ...(policyEvaluationOnly === true ? { policyEvaluationOnly: true as const } : {}),
         })
       if (stale === true) {
         return "stale"
@@ -621,7 +624,14 @@ const make = Effect.gen(function* () {
         // New evidence can reopen review, but automatic policy work must not
         // replace a settled global conclusion. Record the policy evaluation
         // and leave the mapping projection untouched for human supersession.
-        const recordOutcome = yield* recordDecision({ jobId, record: decisionRecord })
+        // policyEvaluationOnly keeps a conclusive evaluation from filling an
+        // empty conclusion pointer (a trusted fiat mapping has none), which
+        // would read as agreement and hide the case from exception review.
+        const recordOutcome = yield* recordDecision({
+          jobId,
+          record: decisionRecord,
+          policyEvaluationOnly: true,
+        })
         yield* assetResolutionJobRepository.finishResolutionJob({ jobId, status: "completed" })
         if (recordOutcome === "stale") {
           return {

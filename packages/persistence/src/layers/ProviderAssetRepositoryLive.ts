@@ -1498,7 +1498,7 @@ const make = Effect.gen(function* () {
   }
 
   const recordAssetResolutionPolicyEvaluation: ProviderAssetRepositoryShape["recordAssetResolutionPolicyEvaluation"] =
-    ({ decision, requireCurrentEvidenceRevision }) =>
+    ({ decision, requireCurrentEvidenceRevision, policyEvaluationOnly }) =>
       db
         .transaction((tx) =>
           Effect.gen(function* () {
@@ -1506,6 +1506,7 @@ const make = Effect.gen(function* () {
               const result = yield* insertCurrentAssetResolutionDecision({
                 tx,
                 decision,
+                policyEvaluationOnly: policyEvaluationOnly === true,
                 operation: "providerAssetRepository.recordAssetResolutionPolicyEvaluation",
               })
 
@@ -1518,6 +1519,7 @@ const make = Effect.gen(function* () {
               tx,
               decision,
               skipOnEvaluationConflict: true,
+              policyEvaluationOnly: policyEvaluationOnly === true,
               operation: "providerAssetRepository.recordAssetResolutionPolicyEvaluation",
             })
 

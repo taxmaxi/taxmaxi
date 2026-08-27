@@ -2079,6 +2079,81 @@ describe("asset resolution attach and rebuild", () => {
     )
   })
 
+  it("keeps a conclusive reevaluation of a trusted fiat mapping out of the conclusion pointer", async () => {
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        coinGeckoMode = "not_found"
+        jupiterMode = "banned"
+
+        yield* runSync()
+        yield* recordOrbSolanaObservation()
+        const jobId = yield* fetchPendingResolutionJobId()
+
+        // Trusted reference mappings are seeded as approved without any
+        // decision history, so they have no conclusion. Approve the mapping
+        // as fiat directly to reproduce that state before the job runs.
+        const providerAssetRowId = yield* Effect.gen(function* () {
+          const db = yield* drizzle
+          const [providerAsset] = yield* db
+            .select({ id: schema.providerAssets.id })
+            .from(schema.providerAssets)
+            .where(
+              and(
+                eq(schema.providerAssets.provider, "coinbase"),
+                eq(schema.providerAssets.currencyCode, "ORB")
+              )
+            )
+            .limit(1)
+          if (providerAsset === undefined) {
+            return yield* Effect.die("Missing ORB provider asset fixture")
+          }
+
+          const [mapping] = yield* db
+            .update(schema.providerAssetMappings)
+            .set({
+              mappingKind: "fiat",
+              canonicalAssetId: null,
+              canonicalFiatCurrency: "EUR",
+              mappingStatus: "approved",
+            })
+            .where(eq(schema.providerAssetMappings.providerAssetRowId, providerAsset.id))
+            .returning({ id: schema.providerAssetMappings.id })
+          if (mapping === undefined) {
+            return yield* Effect.die("Missing ORB provider asset mapping fixture")
+          }
+          return providerAsset.id
+        }).pipe(Effect.provide(TestPgClientLive))
+
+        const result = yield* runResolutionJob({ jobId })
+        expect(result.outcome).toBe("evaluated")
+
+        // The conclusive evaluation must stay a policy evaluation: filling
+        // the empty conclusion pointer would read as agreement and hide the
+        // reclassified mapping from exception review.
+        const state = yield* fetchAttachState()
+        expect(state.mapping).toMatchObject({ mappingStatus: "approved" })
+        expect(state.decisions).toEqual([
+          expect.objectContaining({
+            outcome: "excluded",
+            currentConclusionId: null,
+          }),
+        ])
+        const evaluation = state.decisions[0]
+        expect(evaluation?.id).toBe(evaluation?.currentPolicyEvaluationId)
+
+        const repository = yield* AssetExceptionRepository
+        const detail = yield* repository.findDetail({
+          _tag: "row_id",
+          providerAssetRowId,
+        })
+        expect(Option.getOrNull(detail)).toMatchObject({
+          currentConclusion: null,
+          currentPolicyEvaluation: { id: evaluation?.id, outcome: "excluded" },
+        })
+      }).pipe(Effect.provide(TestLayer))
+    )
+  })
+
   it("fails closed when Jupiter bans a mint that exact registry evidence would attach", async () => {
     await Effect.runPromise(
       Effect.gen(function* () {

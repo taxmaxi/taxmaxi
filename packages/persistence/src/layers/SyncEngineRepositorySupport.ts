@@ -251,18 +251,26 @@ export const insertResolutionJobsForMappings = ({
  * revision. With skipOnEvaluationConflict, an existing evaluation for that key
  * leaves history untouched and returns null. A late evaluation is retained in
  * history but cannot move either current pointer backward.
+ *
+ * With policyEvaluationOnly, the write may advance the current
+ * policy-evaluation pointer but never fills the conclusion pointer, even when
+ * it is empty. Writers re-evaluating a settled mapping use this so a policy
+ * disagreement stays visible for human review instead of becoming the
+ * conclusion of a mapping that never had one.
  */
 export const insertAssetResolutionDecision = ({
   tx,
   decision,
   supersedesDecisionId = null,
   skipOnEvaluationConflict = false,
+  policyEvaluationOnly = false,
   operation,
 }: {
   readonly tx: SyncEngineDbTransaction
   readonly decision: AssetResolutionPolicyEvaluationRecord
   readonly supersedesDecisionId?: string | null
   readonly skipOnEvaluationConflict?: boolean
+  readonly policyEvaluationOnly?: boolean
   readonly operation: string
 }): Effect.Effect<{ readonly id: string } | null, SyncEngineStorageError> =>
   Effect.gen(function* () {
@@ -346,10 +354,11 @@ export const insertAssetResolutionDecision = ({
     }
 
     const establishesConclusion =
-      decision.outcome === "excluded" ||
-      (!["pending", "fail_closed"].includes(decision.outcome) &&
-        decision.assetId !== null &&
-        (decision.blockchain === null || decision.assetRepresentationId !== null))
+      !policyEvaluationOnly &&
+      (decision.outcome === "excluded" ||
+        (!["pending", "fail_closed"].includes(decision.outcome) &&
+          decision.assetId !== null &&
+          (decision.blockchain === null || decision.assetRepresentationId !== null)))
     yield* tx
       .insert(schema.assetResolutionCurrentState)
       .values({
@@ -385,10 +394,12 @@ export const insertAssetResolutionDecision = ({
 export const insertCurrentAssetResolutionDecision = ({
   tx,
   decision,
+  policyEvaluationOnly = false,
   operation,
 }: {
   readonly tx: SyncEngineDbTransaction
   readonly decision: AssetResolutionPolicyEvaluationRecord
+  readonly policyEvaluationOnly?: boolean
   readonly operation: string
 }): Effect.Effect<
   | { readonly _tag: "inserted"; readonly id: string }
@@ -413,6 +424,7 @@ export const insertCurrentAssetResolutionDecision = ({
       tx,
       decision,
       skipOnEvaluationConflict: true,
+      policyEvaluationOnly,
       operation,
     })
 
