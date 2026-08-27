@@ -37,6 +37,7 @@ export const AssetOverrideConclusionSchema = Schema.Union([
   Schema.TaggedStruct("identity", {
     state: Schema.Literals(["resolved", "unresolved", "excluded"]),
     assetId: Schema.NullOr(Schema.String.check(Schema.isUUID())),
+    reason: Schema.optional(Schema.NullOr(Schema.String)),
   }),
   Schema.TaggedStruct("inclusion", {
     state: Schema.Literals(["included", "excluded", "blocked"]),

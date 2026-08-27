@@ -32,14 +32,17 @@ export type AssetOverrideTarget =
 /**
  * The system's current answer for one override kind before a principal choice.
  *
- * Identity conclusions carry a canonical asset only when resolved. Inclusion
- * conclusions use `blocked` when accounting cannot safely include the asset.
+ * Identity conclusions carry a canonical asset only when resolved. For
+ * inclusion, `excluded` is a final omission while `blocked` means accounting
+ * cannot proceed until a missing identity or technical fact is supplied.
  */
 export type AssetOverrideSystemConclusion =
   | {
       readonly _tag: "identity"
       readonly state: "resolved" | "unresolved" | "excluded"
       readonly assetId: string | null
+      /** Machine-readable blocker when a stale active choice can no longer be applied. */
+      readonly reason?: string | null
     }
   | {
       readonly _tag: "inclusion"
@@ -109,9 +112,11 @@ export const ASSET_OVERRIDE_VALIDATION_ERROR_CODES = [
   "override_kind_mismatch",
   "asset_not_found",
   "asset_type_mismatch",
+  "fiat_not_overrideable",
   "missing_decimals",
   "unsupported_asset_type",
   "cyclic_replay_dependency",
+  "cross_principal_replay_dependency",
   "reason_required",
   "no_active_override",
 ] as const

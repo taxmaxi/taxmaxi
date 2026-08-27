@@ -7,7 +7,7 @@ AS $$
 DECLARE
   owner_source_ids uuid[];
   dependent_source_ids uuid[];
-  active_replay_cycle_exists boolean;
+  active_override_cycle_exists boolean;
 BEGIN
   IF TG_TABLE_NAME = 'disposal_matches' THEN
     SELECT
@@ -76,42 +76,39 @@ BEGIN
     INNER JOIN reachable
       ON reachable.origin_source_id = new_edge.dependent_source_id
       AND reachable.source_id = new_edge.owner_source_id
-    INNER JOIN sources owner_source ON owner_source.id = new_edge.owner_source_id
     WHERE EXISTS (
       SELECT 1
-      FROM processing_jobs active_replay_job
-      WHERE active_replay_job.principal_id = owner_source.principal_id
-        AND active_replay_job.status IN ('pending', 'processing')
+      FROM principal_asset_override_applications active_application
+      INNER JOIN principal_asset_overrides active_override
+        ON active_override.id = active_application.override_id
+      WHERE active_application.superseded_at IS NULL
+        AND active_override.action = 'set'
         AND (
-          active_replay_job.mode = 'replay'
-          OR active_replay_job.follow_up_mode = 'replay'
-        )
-        AND (
-          active_replay_job.source_id = new_edge.dependent_source_id
+          active_application.source_id = new_edge.dependent_source_id
           OR EXISTS (
             SELECT 1
-            FROM reachable path_to_replay
-            WHERE path_to_replay.origin_source_id = new_edge.dependent_source_id
-              AND path_to_replay.source_id = active_replay_job.source_id
+            FROM reachable path_to_application
+            WHERE path_to_application.origin_source_id = new_edge.dependent_source_id
+              AND path_to_application.source_id = active_application.source_id
           )
         )
         AND (
-          active_replay_job.source_id = new_edge.owner_source_id
+          active_application.source_id = new_edge.owner_source_id
           OR EXISTS (
             SELECT 1
             FROM reachable path_to_owner
-            WHERE path_to_owner.origin_source_id = active_replay_job.source_id
+            WHERE path_to_owner.origin_source_id = active_application.source_id
               AND path_to_owner.source_id = new_edge.owner_source_id
           )
         )
     )
   )
-  INTO active_replay_cycle_exists;
+  INTO active_override_cycle_exists;
 
-  IF active_replay_cycle_exists THEN
+  IF active_override_cycle_exists THEN
     RAISE EXCEPTION USING
       ERRCODE = '23514',
-      MESSAGE = 'A cross-source FIFO dependency cycle cannot be added while asset overrides are replaying.';
+      MESSAGE = 'A cross-source FIFO dependency cycle cannot be added while an active asset override depends on it.';
   END IF;
 
   RETURN NULL;

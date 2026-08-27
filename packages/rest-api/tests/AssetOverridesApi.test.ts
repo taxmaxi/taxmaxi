@@ -36,9 +36,11 @@ describe("asset override API errors", () => {
     "override_kind_mismatch",
     "asset_not_found",
     "asset_type_mismatch",
+    "fiat_not_overrideable",
     "missing_decimals",
     "unsupported_asset_type",
     "cyclic_replay_dependency",
+    "cross_principal_replay_dependency",
     "reason_required",
     "no_active_override",
   ] as const)("exposes the stable %s validation code", (code) => {

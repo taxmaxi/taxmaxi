@@ -119,6 +119,7 @@ const makeExecutorLayer = ({
   failReplayReset = false,
   failReplayDependencyPending = false,
   failReplaySchedulingPending = false,
+  canonicalizationPendingSourceIds = [],
   holdReplayCreditReservation = false,
   holdReplayReset = false,
   heartbeatFailureAt,
@@ -151,6 +152,7 @@ const makeExecutorLayer = ({
   readonly failReplayReset?: boolean
   readonly failReplayDependencyPending?: boolean
   readonly failReplaySchedulingPending?: boolean
+  readonly canonicalizationPendingSourceIds?: ReadonlyArray<string>
   readonly holdReplayCreditReservation?: boolean
   readonly holdReplayReset?: boolean
   readonly heartbeatFailureAt?: number
@@ -666,7 +668,9 @@ const makeExecutorLayer = ({
     applyDeterministicInternalTransferCanonicalization: ({ sourceId }) =>
       Effect.sync(() => {
         events.push(`canonicalize:${sourceId}`)
-        return { canonicalizedPairs: 0 }
+        return canonicalizationPendingSourceIds.length === 0
+          ? { canonicalizedPairs: 0 }
+          : { canonicalizedPairs: 0, pendingOverrideSourceIds: canonicalizationPendingSourceIds }
       }),
   })
   const SyncEngineTransactionTestLive = Layer.succeed(
@@ -1279,6 +1283,41 @@ describe("SourceSyncJobExecutor", () => {
     if (result._tag === "Failure") {
       expect(result.failure._tag).toBe("SourceSyncJobRetryableExecutionError")
     }
+    expect(events).toContain(`retry:${message}:1:${nextRetryAt.toISOString()}`)
+    expect(events).not.toContain(`fail:${message}`)
+  })
+
+  it("retries the canonicalization coordinator while connected override jobs are pending", async () => {
+    const events: Array<string> = []
+    const nextRetryAt = new Date("2026-01-01T00:05:00.000Z")
+    const message = "Replay source source-1 after inventory owners owner-source-2"
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const executor = yield* SourceSyncJobExecutor
+        return yield* executor.execute({
+          jobId: "job-1",
+          workerId: "worker-1",
+          retryPolicy: { attemptNumber: 1, maxAttempts: 3, nextRetryAt },
+        })
+      }).pipe(
+        Effect.result,
+        Effect.provide(
+          makeExecutorLayer({
+            mode: "replay",
+            replayRawRecords: [makeReplayRawRecord(1)],
+            prepareReplayTransactions: true,
+            canonicalizationPendingSourceIds: ["owner-source-2"],
+            events,
+          })
+        )
+      )
+    )
+
+    expect(result._tag).toBe("Failure")
+    if (result._tag === "Failure") {
+      expect(result.failure._tag).toBe("SourceSyncJobRetryableExecutionError")
+    }
+    expect(events).toContain(`failure-metadata:${message}`)
     expect(events).toContain(`retry:${message}:1:${nextRetryAt.toISOString()}`)
     expect(events).not.toContain(`fail:${message}`)
   })

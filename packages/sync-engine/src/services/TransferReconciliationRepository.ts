@@ -127,6 +127,8 @@ export interface UpsertTransferReconciliationResult {
  */
 export interface DeterministicTransferCanonicalizationSummary {
   readonly canonicalizedPairs: number
+  /** Connected sources whose active override replay must settle before this pass can run. */
+  readonly pendingOverrideSourceIds?: ReadonlyArray<string>
 }
 
 /**

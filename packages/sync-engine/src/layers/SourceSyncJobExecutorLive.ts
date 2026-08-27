@@ -671,7 +671,10 @@ const make = Effect.gen(function* () {
     readonly workerId: string
     readonly provider: string
     readonly spanPrefix: "source-sync" | "source-replay"
-  }): Effect.Effect<PrincipalReconciliationSummary, SyncEngineStorageError> =>
+  }): Effect.Effect<
+    PrincipalReconciliationSummary,
+    SyncEngineStorageError | SourceReplayDependencyPendingError
+  > =>
     Effect.gen(function* () {
       const principalSources = yield* sourceRepository.listPrincipalSourceSyncContexts({
         principalId,
@@ -738,6 +741,12 @@ const make = Effect.gen(function* () {
                   kind: "client",
                 })
               )
+            if ((canonicalization.pendingOverrideSourceIds?.length ?? 0) > 0) {
+              return yield* new SourceReplayDependencyPendingError({
+                sourceId: candidateSource.id,
+                ownerSourceIds: canonicalization.pendingOverrideSourceIds ?? [],
+              })
+            }
             yield* heartbeatSourceSyncJob({ jobId, workerId })
 
             return {

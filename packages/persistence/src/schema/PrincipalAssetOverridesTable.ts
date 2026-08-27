@@ -54,9 +54,7 @@ export const principalAssetOverrides = pgTable(
     representationType: assetRepresentationTypeEnum("representation_type"),
     contractAddress: text("contract_address"),
     mintAddress: text("mint_address"),
-    providerAssetRowId: uuid("provider_asset_row_id").references(() => providerAssets.id, {
-      onDelete: "cascade",
-    }),
+    providerAssetRowId: uuid("provider_asset_row_id").references(() => providerAssets.id),
     action: principalAssetOverrideActionEnum("action").notNull(),
     inspectedSystemRevision: text("inspected_system_revision").notNull(),
     inspectedIdentityState: principalAssetIdentityStateEnum("inspected_identity_state"),

@@ -10,6 +10,7 @@ import {
   and,
   asc,
   count,
+  desc,
   eq,
   gt,
   gte,
@@ -38,7 +39,11 @@ import {
   type TransferReconciliationRepositoryShape,
 } from "@my/sync-engine/services"
 import { drizzle } from "./PgClientLive.ts"
-import { nowDate, wrapSyncEngineSqlError } from "./SyncEngineRepositorySupport.ts"
+import {
+  decodeSourceSyncJobProgressSnapshot,
+  nowDate,
+  wrapSyncEngineSqlError,
+} from "./SyncEngineRepositorySupport.ts"
 import { schema } from "../schema/index.ts"
 import { sourceInventoryLockQuery } from "./SourceInventoryLock.ts"
 
@@ -77,6 +82,128 @@ const make = Effect.gen(function* () {
   type TransferReconciliationExecutor = Pick<typeof db, "select">
   const providerTransactionTable = aliasedTable(schema.transactions, "provider_transaction")
   const canonicalTransactionTable = aliasedTable(schema.transactions, "canonical_transaction")
+
+  const loadEffectiveOverrideAsset = ({
+    executor,
+    principalId,
+    assetId,
+    assetRepresentationId,
+    observedBlockchainId,
+    observedContractAddress,
+    observedMintAddress,
+    observedRepresentationType,
+    providerAssetId,
+  }: {
+    readonly executor: TransferReconciliationExecutor
+    readonly principalId: string
+    readonly assetId: string | null
+    readonly assetRepresentationId: string | null
+    readonly observedBlockchainId: string | null
+    readonly observedContractAddress: string | null
+    readonly observedMintAddress: string | null
+    readonly observedRepresentationType: "native" | "token" | "nft" | null
+    readonly providerAssetId: string | null
+  }) =>
+    Effect.gen(function* () {
+      const representationCondition =
+        observedBlockchainId === null || observedRepresentationType === null
+          ? null
+          : and(
+              eq(schema.principalAssetOverrides.targetKind, "representation"),
+              eq(schema.principalAssetOverrides.blockchainId, observedBlockchainId),
+              eq(schema.principalAssetOverrides.representationType, observedRepresentationType),
+              observedContractAddress === null
+                ? isNull(schema.principalAssetOverrides.contractAddress)
+                : sql`lower(${schema.principalAssetOverrides.contractAddress}) = lower(${observedContractAddress})`,
+              observedMintAddress === null
+                ? isNull(schema.principalAssetOverrides.mintAddress)
+                : eq(schema.principalAssetOverrides.mintAddress, observedMintAddress)
+            )
+      const providerAssetCondition =
+        representationCondition !== null || providerAssetId === null
+          ? null
+          : and(
+              eq(schema.principalAssetOverrides.targetKind, "provider_asset"),
+              eq(schema.principalAssetOverrides.providerAssetRowId, providerAssetId)
+            )
+      const targetCondition = representationCondition ?? providerAssetCondition
+      if (targetCondition === null) return { assetId, assetRepresentationId }
+
+      const overrides = yield* executor
+        .select({
+          kind: schema.principalAssetOverrides.kind,
+          action: schema.principalAssetOverrides.action,
+          replacementAssetId: schema.principalAssetOverrides.replacementAssetId,
+          replacementInclusionState: schema.principalAssetOverrides.replacementInclusionState,
+        })
+        .from(schema.principalAssetOverrides)
+        .where(and(eq(schema.principalAssetOverrides.principalId, principalId), targetCondition))
+        .orderBy(
+          desc(schema.principalAssetOverrides.createdAt),
+          desc(schema.principalAssetOverrides.id)
+        )
+        .pipe(
+          wrapSyncEngineSqlError(
+            "transferReconciliationRepository.loadEffectiveOverrideAsset.selectOverrides"
+          )
+        )
+      const identity = overrides.find((override) => override.kind === "identity")
+      const inclusion = overrides.find((override) => override.kind === "inclusion")
+      if (inclusion?.action === "set" && inclusion.replacementInclusionState === "excluded") {
+        return null
+      }
+      if (identity?.action === "set" && identity.replacementAssetId !== null) {
+        const [replacementAsset] = yield* executor
+          .select({ type: schema.assets.type })
+          .from(schema.assets)
+          .where(eq(schema.assets.id, identity.replacementAssetId))
+          .limit(1)
+          .pipe(
+            wrapSyncEngineSqlError(
+              "transferReconciliationRepository.loadEffectiveOverrideAsset.selectReplacementAsset"
+            )
+          )
+        const expectedAssetType =
+          observedRepresentationType !== null
+            ? observedRepresentationType === "nft"
+              ? "nft"
+              : "fungible"
+            : providerAssetId === null
+              ? null
+              : yield* executor
+                  .select({ providerType: schema.providerAssets.providerType })
+                  .from(schema.providerAssets)
+                  .where(eq(schema.providerAssets.id, providerAssetId))
+                  .limit(1)
+                  .pipe(
+                    wrapSyncEngineSqlError(
+                      "transferReconciliationRepository.loadEffectiveOverrideAsset.selectProviderType"
+                    ),
+                    Effect.map(([providerAsset]) => {
+                      if (providerAsset?.providerType === "nft") return "nft" as const
+                      if (
+                        providerAsset?.providerType === "crypto" ||
+                        providerAsset?.providerType === "fiat" ||
+                        providerAsset?.providerType === "native" ||
+                        providerAsset?.providerType === "spl-token" ||
+                        providerAsset?.providerType === "spl-token-2022"
+                      ) {
+                        return "fungible" as const
+                      }
+                      return null
+                    })
+                  )
+        if (
+          replacementAsset !== undefined &&
+          expectedAssetType !== null &&
+          replacementAsset.type !== expectedAssetType
+        ) {
+          return null
+        }
+        return { assetId: identity.replacementAssetId, assetRepresentationId: null }
+      }
+      return { assetId, assetRepresentationId }
+    })
   const onchainProviderTransferTable = aliasedTable(
     schema.providerTransfers,
     "onchain_provider_transfer"
@@ -777,6 +904,10 @@ const make = Effect.gen(function* () {
           providerSourceId: schema.providerTransfers.sourceId,
           providerTransactionId: schema.providerTransfers.transactionId,
           providerAssetId: schema.providerTransfers.providerAssetId,
+          observedBlockchainId: schema.providerTransfers.observedBlockchainId,
+          observedRepresentationType: schema.providerTransfers.observedRepresentationType,
+          observedContractAddress: schema.providerTransfers.observedContractAddress,
+          observedMintAddress: schema.providerTransfers.observedMintAddress,
           canonicalAssetId: schema.providerAssetMappings.canonicalAssetId,
           assetRepresentationId: schema.providerAssetMappings.assetRepresentationId,
           timestamp: schema.providerTransfers.timestamp,
@@ -818,6 +949,33 @@ const make = Effect.gen(function* () {
         .pipe(
           wrapSyncEngineSqlError(
             "transferReconciliationRepository.listProviderTransfersForReconciliation"
+          ),
+          Effect.flatMap((rows) =>
+            Effect.forEach(rows, (row) =>
+              loadEffectiveOverrideAsset({
+                executor: db,
+                principalId,
+                assetId: row.canonicalAssetId,
+                assetRepresentationId: row.assetRepresentationId,
+                observedBlockchainId: row.observedBlockchainId,
+                observedContractAddress: row.observedContractAddress,
+                observedMintAddress: row.observedMintAddress,
+                observedRepresentationType: row.observedRepresentationType,
+                providerAssetId: row.providerAssetId,
+              }).pipe(
+                Effect.map((effective) =>
+                  effective === null
+                    ? []
+                    : [
+                        {
+                          ...row,
+                          canonicalAssetId: effective.assetId,
+                          assetRepresentationId: effective.assetRepresentationId,
+                        },
+                      ]
+                )
+              )
+            ).pipe(Effect.map((resolvedRows) => resolvedRows.flat()))
           )
         )
 
@@ -1037,7 +1195,33 @@ const make = Effect.gen(function* () {
       .orderBy(asc(onchainProviderTransferTable.timestamp), asc(onchainProviderTransferTable.id))
 
     return Effect.all([canonicalCandidates, observedCandidates]).pipe(
-      Effect.map(([canonical, observed]) => [...canonical, ...observed]),
+      Effect.flatMap(([canonical, observed]) =>
+        Effect.forEach([...canonical, ...observed], (candidate) =>
+          loadEffectiveOverrideAsset({
+            executor,
+            principalId,
+            assetId: candidate.assetId,
+            assetRepresentationId: candidate.assetRepresentationId,
+            observedBlockchainId: candidate.blockchainId,
+            observedContractAddress: candidate.contractAddress,
+            observedMintAddress: candidate.mintAddress,
+            observedRepresentationType: candidate.representationType,
+            providerAssetId: candidate.providerAssetRowId,
+          }).pipe(
+            Effect.map((effective) =>
+              effective === null
+                ? []
+                : [
+                    {
+                      ...candidate,
+                      assetId: effective.assetId,
+                      assetRepresentationId: effective.assetRepresentationId,
+                    },
+                  ]
+            )
+          )
+        ).pipe(Effect.map((resolvedCandidates) => resolvedCandidates.flat()))
+      ),
       wrapSyncEngineSqlError("transferReconciliationRepository.findOnchainTransferCandidates")
     )
   }
@@ -2265,6 +2449,24 @@ const make = Effect.gen(function* () {
         .transaction((tx) =>
           Effect.gen(function* () {
             const now = nowDate()
+            const [currentOverrideApplication] =
+              currentJobId === undefined
+                ? []
+                : yield* tx
+                    .select({ sourceId: schema.principalAssetOverrideApplications.sourceId })
+                    .from(schema.principalAssetOverrideApplications)
+                    .where(
+                      and(
+                        eq(schema.principalAssetOverrideApplications.replayJobId, currentJobId),
+                        isNull(schema.principalAssetOverrideApplications.supersededAt)
+                      )
+                    )
+                    .limit(1)
+                    .pipe(
+                      wrapSyncEngineSqlError(
+                        "transferReconciliationRepository.applyDeterministicInternalTransferCanonicalization.selectCurrentOverrideApplication"
+                      )
+                    )
 
             const loadEligibleReconciliations = () =>
               tx
@@ -2273,6 +2475,7 @@ const make = Effect.gen(function* () {
                   reconciliationStatus: schema.transferReconciliations.status,
                   reviewMetadata: schema.transferReconciliations.reviewMetadata,
                   providerTransferId: schema.providerTransfers.id,
+                  providerAssetId: schema.providerTransfers.providerAssetId,
                   providerTransferSourceId: schema.providerTransfers.sourceId,
                   providerDirection: schema.providerTransfers.direction,
                   providerTimestamp: schema.providerTransfers.timestamp,
@@ -2281,6 +2484,10 @@ const make = Effect.gen(function* () {
                   providerNetworkName: schema.providerTransfers.networkName,
                   providerNetworkHash: schema.providerTransfers.networkHash,
                   providerAmount: schema.providerTransfers.amount,
+                  observedBlockchainId: schema.providerTransfers.observedBlockchainId,
+                  observedRepresentationType: schema.providerTransfers.observedRepresentationType,
+                  observedContractAddress: schema.providerTransfers.observedContractAddress,
+                  observedMintAddress: schema.providerTransfers.observedMintAddress,
                   providerTransactionId: schema.providerTransfers.transactionId,
                   canonicalTransferId: schema.transferReconciliations.canonicalTransferId,
                   canonicalTransactionId: schema.transferReconciliations.canonicalTransactionId,
@@ -2345,6 +2552,23 @@ const make = Effect.gen(function* () {
                 .pipe(
                   wrapSyncEngineSqlError(
                     "transferReconciliationRepository.applyDeterministicInternalTransferCanonicalization.selectEligibleReconciliations"
+                  ),
+                  Effect.flatMap((rows) =>
+                    Effect.forEach(rows, (row) =>
+                      loadEffectiveOverrideAsset({ executor: tx, principalId, ...row }).pipe(
+                        Effect.map((effective) =>
+                          effective === null || effective.assetId === null
+                            ? []
+                            : [
+                                {
+                                  ...row,
+                                  assetId: effective.assetId,
+                                  assetRepresentationId: effective.assetRepresentationId,
+                                },
+                              ]
+                        )
+                      )
+                    ).pipe(Effect.map((resolvedRows) => resolvedRows.flat()))
                   )
                 )
 
@@ -2424,7 +2648,9 @@ const make = Effect.gen(function* () {
             ) =>
               rows.filter(
                 (row) =>
-                  row.providerTransferSourceId === sourceId &&
+                  (row.providerTransferSourceId === sourceId ||
+                    (currentOverrideApplication?.sourceId === sourceId &&
+                      row.canonicalTransactionSourceId === sourceId)) &&
                   (reconciliationId === undefined || row.reconciliationId === reconciliationId)
               )
 
@@ -2578,41 +2804,105 @@ const make = Effect.gen(function* () {
               })
             }
 
-            // Canonicalization must not read inventory that still waits for an
-            // override replay. Applications owned by the job running this pass
-            // are exempt: that replay is the job applying them. A pending
-            // application skips this pass instead of failing the job; a later
-            // pass canonicalizes once the replay has completed.
-            const [pendingOverrideApplication] = yield* tx
-              .select({ id: schema.principalAssetOverrideApplications.id })
+            // One application at the end of this connected source graph owns
+            // canonicalization. Earlier replay jobs may finish after rebuilding
+            // their source; the coordinator retries until every other
+            // application is complete, then runs the principal-wide pass.
+            const overrideApplications = yield* tx
+              .select({
+                overrideId: schema.principalAssetOverrideApplications.overrideId,
+                sourceId: schema.principalAssetOverrideApplications.sourceId,
+                replayJobId: schema.principalAssetOverrideApplications.replayJobId,
+                dependsOnSourceIds: schema.principalAssetOverrideApplications.dependsOnSourceIds,
+                jobStatus: schema.processingJobs.status,
+                progressDetails: schema.processingJobs.progressDetails,
+              })
               .from(schema.principalAssetOverrideApplications)
+              .innerJoin(
+                schema.principalAssetOverrides,
+                eq(
+                  schema.principalAssetOverrides.id,
+                  schema.principalAssetOverrideApplications.overrideId
+                )
+              )
               .leftJoin(
                 schema.processingJobs,
                 eq(schema.processingJobs.id, schema.principalAssetOverrideApplications.replayJobId)
               )
               .where(
                 and(
+                  eq(schema.principalAssetOverrides.principalId, principalId),
                   inArray(schema.principalAssetOverrideApplications.sourceId, inventorySourceIds),
-                  isNull(schema.principalAssetOverrideApplications.supersededAt),
-                  currentJobId === undefined
-                    ? undefined
-                    : sql`${schema.principalAssetOverrideApplications.replayJobId} is distinct from ${currentJobId}::uuid`,
-                  or(
-                    isNull(schema.principalAssetOverrideApplications.replayJobId),
-                    ne(schema.processingJobs.status, "completed"),
-                    sql`${schema.processingJobs.progressDetails} ->> 'failedRecords' is distinct from '0'`
+                  isNull(schema.principalAssetOverrideApplications.supersededAt)
+                )
+              )
+            const applicationsWithProgress = yield* Effect.forEach(
+              overrideApplications,
+              (application) =>
+                decodeSourceSyncJobProgressSnapshot(application.progressDetails).pipe(
+                  Effect.map((progress) => ({ application, progress }))
+                )
+            )
+            const pendingOverrideApplications = applicationsWithProgress
+              .filter(
+                ({ application, progress }) =>
+                  application.replayJobId === null ||
+                  application.jobStatus !== "completed" ||
+                  (progress?.failedRecords ?? 0) !== 0
+              )
+              .map(({ application }) => application)
+            if (pendingOverrideApplications.length > 0) {
+              const applicationSourceIds = new Set(
+                overrideApplications.map((application) => application.sourceId)
+              )
+              const ownerSourceIds = new Set(
+                overrideApplications.flatMap((application) =>
+                  application.dependsOnSourceIds.filter((ownerSourceId) =>
+                    applicationSourceIds.has(ownerSourceId)
                   )
                 )
               )
-              .limit(1)
-            if (pendingOverrideApplication !== undefined) {
-              yield* Effect.logInfo(
-                { principalId, sourceId, currentJobId: currentJobId ?? null },
-                "transfer-reconciliation:canonicalization-skipped-pending-override-replay"
+              const sinkSourceIds = [...applicationSourceIds].filter(
+                (applicationSourceId) => !ownerSourceIds.has(applicationSourceId)
               )
-              return {
-                canonicalizedPairs: 0,
-              } satisfies DeterministicTransferCanonicalizationSummary
+              const coordinatorSourceId = (
+                sinkSourceIds.length === 0 ? [...applicationSourceIds] : sinkSourceIds
+              )
+                .sort()
+                .at(-1)
+              const currentApplication =
+                currentJobId === undefined
+                  ? undefined
+                  : overrideApplications.find(
+                      (application) => application.replayJobId === currentJobId
+                    )
+              if (
+                currentApplication !== undefined &&
+                currentApplication.sourceId !== coordinatorSourceId
+              ) {
+                return { canonicalizedPairs: 0 }
+              }
+              const pendingOverrideSourceIds = pendingOverrideApplications
+                .filter((application) => application.replayJobId !== currentJobId)
+                .map(({ sourceId: pendingSourceId }) => pendingSourceId)
+                .sort()
+              if (pendingOverrideSourceIds.length > 0) {
+                yield* Effect.logInfo(
+                  {
+                    principalId,
+                    sourceId,
+                    currentJobId: currentJobId ?? null,
+                    pendingOverrideSourceIds,
+                  },
+                  "transfer-reconciliation:canonicalization-skipped-pending-override-replay"
+                )
+                return {
+                  canonicalizedPairs: 0,
+                  pendingOverrideSourceIds,
+                } satisfies DeterministicTransferCanonicalizationSummary
+              }
+              // The coordinator itself is marked processing until this method
+              // returns; every other application is settled, so it may proceed.
             }
 
             // The initial read only discovers which source rows must be locked. Replay or

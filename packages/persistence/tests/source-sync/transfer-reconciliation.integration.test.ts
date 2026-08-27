@@ -848,6 +848,276 @@ describe("TransferReconciliationServiceLive", () => {
     )
   })
 
+  it("creates a reconciliation relationship after a provider identity override changes the economic asset", async () => {
+    const walletAddress = "bc1qownedwalletidentityoverride000000000000000"
+    const timestamp = new Date("2025-04-10T11:00:00.000Z")
+    const providerAssetRowId = await runPg(
+      seedApprovedProviderAsset({ providerAssetId: "btc-provider-identity-override" })
+    )
+    await runPg(seedOwnedOnchainSource({ walletAddress }))
+    const providerTransferId = await runPg(
+      seedProviderTransfer({
+        providerAssetRowId,
+        externalId: "provider-transfer-identity-override",
+        timestamp,
+        amount: "0.10000000",
+        toAddress: walletAddress,
+        networkHash: "identity-override-hash",
+      })
+    )
+    const receipt = await runPg(
+      seedOnchainReceipt({
+        externalId: "onchain-receipt-identity-override",
+        txHash: "identity-override-hash",
+        timestamp: new Date("2025-04-10T11:05:00.000Z"),
+        amount: "0.10000000",
+        walletAddress,
+        blockchainId: fixture.bitcoinBlockchainId,
+        assetId: TEST_EUR_ASSET_ID,
+        assetRepresentationId: TEST_EUR_REPRESENTATION_ID,
+      })
+    )
+
+    await runTransferReconciliation(
+      Effect.flatMap(TransferReconciliationService, (service) =>
+        service.reconcileTransferCandidates({
+          principalId: TEST_PRINCIPAL_ID,
+          sourceId: TEST_SOURCE_ID,
+        })
+      )
+    )
+    const [beforeOverride] = await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        return yield* db
+          .select({
+            canonicalTransferId: schema.transferReconciliations.canonicalTransferId,
+            matchReason: schema.transferReconciliations.matchReason,
+            status: schema.transferReconciliations.status,
+          })
+          .from(schema.transferReconciliations)
+          .where(eq(schema.transferReconciliations.providerTransferId, providerTransferId))
+      })
+    )
+    expect(beforeOverride).toEqual({
+      canonicalTransferId: null,
+      matchReason: "representation_economic_asset_conflict",
+      status: "needs_review",
+    })
+
+    await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        yield* db.insert(schema.principalAssetOverrides).values({
+          principalId: TEST_PRINCIPAL_ID,
+          kind: "identity",
+          targetKind: "provider_asset",
+          providerAssetRowId,
+          action: "set",
+          inspectedSystemRevision: "identity-override-reconciliation-revision",
+          inspectedIdentityState: "resolved",
+          inspectedAssetId: TEST_BTC_ASSET_ID,
+          replacementAssetId: TEST_EUR_ASSET_ID,
+          actorId: fixture.userId,
+          reason: "Match the reviewed provider identity to the destination economic asset.",
+        })
+      })
+    )
+
+    const summary = await runTransferReconciliation(
+      Effect.flatMap(TransferReconciliationService, (service) =>
+        service.reconcileTransferCandidates({
+          principalId: TEST_PRINCIPAL_ID,
+          sourceId: TEST_SOURCE_ID,
+        })
+      )
+    )
+    const [afterOverride] = await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        return yield* db
+          .select({
+            canonicalTransferId: schema.transferReconciliations.canonicalTransferId,
+            matchReason: schema.transferReconciliations.matchReason,
+            status: schema.transferReconciliations.status,
+          })
+          .from(schema.transferReconciliations)
+          .where(eq(schema.transferReconciliations.providerTransferId, providerTransferId))
+      })
+    )
+
+    expect(summary).toEqual(expect.objectContaining({ autoApplied: 1 }))
+    expect(afterOverride).toEqual({
+      canonicalTransferId: receipt.transferId,
+      matchReason: "deterministic_wallet_receipt_match",
+      status: "auto_applied",
+    })
+  })
+
+  it("lets an override replay coordinator canonicalize after connected source jobs settle", async () => {
+    const walletAddress = "bc1qownedwalletreplaycoordinator00000000000000"
+    const timestamp = new Date("2025-04-10T11:30:00.000Z")
+    const providerAssetRowId = await runPg(
+      seedApprovedProviderAsset({ providerAssetId: "btc-provider-replay-coordinator" })
+    )
+    await runPg(seedOwnedOnchainSource({ walletAddress }))
+    const providerTransferId = await runPg(
+      seedProviderTransfer({
+        providerAssetRowId,
+        externalId: "provider-transfer-replay-coordinator",
+        timestamp,
+        amount: "0.10000000",
+        toAddress: walletAddress,
+        networkHash: "replay-coordinator-hash",
+      })
+    )
+    await runPg(
+      seedCustodyInventory({
+        amount: "0.10000000",
+        externalId: "replay-coordinator",
+        providerTransferId,
+        timestamp,
+      })
+    )
+    await runPg(
+      seedOnchainReceipt({
+        externalId: "onchain-receipt-replay-coordinator",
+        txHash: "replay-coordinator-hash",
+        timestamp: new Date("2025-04-10T11:35:00.000Z"),
+        amount: "0.10000000",
+        walletAddress,
+        blockchainId: fixture.bitcoinBlockchainId,
+      })
+    )
+    await runTransferReconciliation(
+      Effect.flatMap(TransferReconciliationService, (service) =>
+        service.reconcileTransferCandidates({
+          principalId: TEST_PRINCIPAL_ID,
+          sourceId: TEST_SOURCE_ID,
+        })
+      )
+    )
+
+    const jobs = await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const [override] = yield* db
+          .insert(schema.principalAssetOverrides)
+          .values({
+            principalId: TEST_PRINCIPAL_ID,
+            kind: "inclusion",
+            targetKind: "provider_asset",
+            providerAssetRowId,
+            action: "set",
+            inspectedSystemRevision: "replay-coordinator-revision",
+            inspectedInclusionState: "included",
+            replacementInclusionState: "included",
+            actorId: fixture.userId,
+            reason: "Exercise the connected replay coordinator.",
+          })
+          .returning({ id: schema.principalAssetOverrides.id })
+        if (override === undefined) return yield* Effect.die("Failed to seed override")
+        const replayJobs = yield* db
+          .insert(schema.processingJobs)
+          .values([
+            {
+              principalId: TEST_PRINCIPAL_ID,
+              sourceId: TEST_SOURCE_ID,
+              mode: "replay" as const,
+              status: "processing" as const,
+            },
+            {
+              principalId: TEST_PRINCIPAL_ID,
+              sourceId: ONCHAIN_SOURCE_ID,
+              mode: "replay" as const,
+              status: "processing" as const,
+            },
+          ])
+          .returning({ id: schema.processingJobs.id, sourceId: schema.processingJobs.sourceId })
+        const jobBySourceId = new Map(replayJobs.map((job) => [job.sourceId, job.id] as const))
+        const ownerJobId = jobBySourceId.get(TEST_SOURCE_ID)
+        const coordinatorJobId = jobBySourceId.get(ONCHAIN_SOURCE_ID)
+        if (ownerJobId === undefined || coordinatorJobId === undefined) {
+          return yield* Effect.die("Failed to seed replay jobs")
+        }
+        yield* db.insert(schema.principalAssetOverrideApplications).values([
+          {
+            overrideId: override.id,
+            sourceId: TEST_SOURCE_ID,
+            replayJobId: ownerJobId,
+            dependsOnSourceIds: [],
+          },
+          {
+            overrideId: override.id,
+            sourceId: ONCHAIN_SOURCE_ID,
+            replayJobId: coordinatorJobId,
+            dependsOnSourceIds: [TEST_SOURCE_ID],
+          },
+        ])
+        return { ownerJobId, coordinatorJobId }
+      })
+    )
+
+    const ownerSummary = await runTransferReconciliation(
+      Effect.flatMap(TransferReconciliationService, (service) =>
+        service.applyDeterministicInternalTransferCanonicalization({
+          principalId: TEST_PRINCIPAL_ID,
+          sourceId: TEST_SOURCE_ID,
+          currentJobId: jobs.ownerJobId,
+        })
+      )
+    )
+    expect(ownerSummary).toEqual({ canonicalizedPairs: 0 })
+
+    const waitingCoordinatorSummary = await runTransferReconciliation(
+      Effect.flatMap(TransferReconciliationService, (service) =>
+        service.applyDeterministicInternalTransferCanonicalization({
+          principalId: TEST_PRINCIPAL_ID,
+          sourceId: ONCHAIN_SOURCE_ID,
+          currentJobId: jobs.coordinatorJobId,
+        })
+      )
+    )
+    expect(waitingCoordinatorSummary).toEqual({
+      canonicalizedPairs: 0,
+      pendingOverrideSourceIds: [TEST_SOURCE_ID],
+    })
+
+    await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        yield* db
+          .update(schema.processingJobs)
+          .set({ status: "completed", progressDetails: { failedRecords: 0 } })
+          .where(eq(schema.processingJobs.id, jobs.ownerJobId))
+      })
+    )
+    const coordinatorSummary = await runTransferReconciliation(
+      Effect.flatMap(TransferReconciliationService, (service) =>
+        service.applyDeterministicInternalTransferCanonicalization({
+          principalId: TEST_PRINCIPAL_ID,
+          sourceId: ONCHAIN_SOURCE_ID,
+          currentJobId: jobs.coordinatorJobId,
+        })
+      )
+    )
+    const [canonicalizedReconciliation] = await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        return yield* db
+          .select({
+            status: schema.transferReconciliations.status,
+            matchReason: schema.transferReconciliations.matchReason,
+          })
+          .from(schema.transferReconciliations)
+      })
+    )
+    expect({ coordinatorSummary, canonicalizedReconciliation }).toEqual({
+      coordinatorSummary: { canonicalizedPairs: 1 },
+      canonicalizedReconciliation: expect.objectContaining({ status: "auto_applied" }),
+    })
+  })
+
   it.each([
     ["approved", "provider"],
     ["changed", "provider"],

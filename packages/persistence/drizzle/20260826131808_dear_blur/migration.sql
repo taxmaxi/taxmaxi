@@ -177,7 +177,7 @@ ALTER TABLE "principal_asset_override_applications" ADD CONSTRAINT "principal_as
 ALTER TABLE "principal_asset_override_applications" ADD CONSTRAINT "principal_asset_override_applications_VvSwSMmYpRl5_fkey" FOREIGN KEY ("replay_job_id") REFERENCES "processing_jobs"("id") ON DELETE SET NULL;--> statement-breakpoint
 ALTER TABLE "principal_asset_overrides" ADD CONSTRAINT "principal_asset_overrides_principal_id_principals_id_fkey" FOREIGN KEY ("principal_id") REFERENCES "principals"("id") ON DELETE CASCADE;--> statement-breakpoint
 ALTER TABLE "principal_asset_overrides" ADD CONSTRAINT "principal_asset_overrides_blockchain_id_blockchains_id_fkey" FOREIGN KEY ("blockchain_id") REFERENCES "blockchains"("id");--> statement-breakpoint
-ALTER TABLE "principal_asset_overrides" ADD CONSTRAINT "principal_asset_overrides_cS2sDYiBVOvP_fkey" FOREIGN KEY ("provider_asset_row_id") REFERENCES "provider_assets"("id") ON DELETE CASCADE;--> statement-breakpoint
+ALTER TABLE "principal_asset_overrides" ADD CONSTRAINT "principal_asset_overrides_cS2sDYiBVOvP_fkey" FOREIGN KEY ("provider_asset_row_id") REFERENCES "provider_assets"("id") ON DELETE NO ACTION;--> statement-breakpoint
 ALTER TABLE "principal_asset_overrides" ADD CONSTRAINT "principal_asset_overrides_inspected_asset_id_assets_id_fkey" FOREIGN KEY ("inspected_asset_id") REFERENCES "assets"("id");--> statement-breakpoint
 ALTER TABLE "principal_asset_overrides" ADD CONSTRAINT "principal_asset_overrides_replacement_asset_id_assets_id_fkey" FOREIGN KEY ("replacement_asset_id") REFERENCES "assets"("id");--> statement-breakpoint
 ALTER TABLE "principal_asset_overrides" ADD CONSTRAINT "principal_asset_overrides_actor_id_users_id_fkey" FOREIGN KEY ("actor_id") REFERENCES "users"("id");--> statement-breakpoint

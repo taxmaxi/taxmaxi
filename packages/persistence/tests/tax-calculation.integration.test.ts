@@ -458,7 +458,7 @@ const insertRejectedOverrideFixture = ({
   readonly observedContracts?: ReadonlyArray<string>
   readonly observedDecimals?: number | null
   readonly observedRepresentationType?: "token" | null
-  readonly providerType?: "crypto" | "unsupported" | null
+  readonly providerType?: "crypto" | "nft" | "unsupported" | null
 } = {}) =>
   Effect.gen(function* () {
     const db = yield* drizzle
@@ -587,20 +587,30 @@ const insertInclusionOverride = ({
       })
     if (override === undefined) return yield* Effect.die("Failed to insert inclusion override")
     if (replayStatus !== null) {
-      yield* db.insert(schema.processingJobs).values({
+      const [job] = yield* db
+        .insert(schema.processingJobs)
+        .values({
+          sourceId,
+          principalId,
+          mode: "replay",
+          status: replayStatus,
+          createdAt: sql`(
+            select ${schema.principalAssetOverrides.createdAt}
+            from ${schema.principalAssetOverrides}
+            where ${schema.principalAssetOverrides.id} = ${override.id}
+          )`,
+          progressDetails:
+            replayStatus === "completed" ? { failedRecords: replayFailedRecords } : null,
+          completedAt:
+            replayStatus === "completed" ? new Date(override.createdAt.getTime() + 1) : null,
+        })
+        .returning({ id: schema.processingJobs.id })
+      if (job === undefined) return yield* Effect.die("Failed to insert inclusion replay job")
+      yield* db.insert(schema.principalAssetOverrideApplications).values({
+        overrideId: override.id,
         sourceId,
-        principalId,
-        mode: "replay",
-        status: replayStatus,
-        createdAt: sql`(
-          select ${schema.principalAssetOverrides.createdAt}
-          from ${schema.principalAssetOverrides}
-          where ${schema.principalAssetOverrides.id} = ${override.id}
-        )`,
-        progressDetails:
-          replayStatus === "completed" ? { failedRecords: replayFailedRecords } : null,
-        completedAt:
-          replayStatus === "completed" ? new Date(override.createdAt.getTime() + 1) : null,
+        replayJobId: job.id,
+        requiresReplay: true,
       })
     }
     return override.createdAt
@@ -647,18 +657,28 @@ const insertIdentityOverride = ({
       })
     if (override === undefined) return yield* Effect.die("Failed to insert identity override")
 
-    yield* db.insert(schema.processingJobs).values({
+    const [job] = yield* db
+      .insert(schema.processingJobs)
+      .values({
+        sourceId,
+        principalId,
+        mode: "replay",
+        status: "completed",
+        progressDetails: { failedRecords: 0 },
+        createdAt: sql`(
+          select ${schema.principalAssetOverrides.createdAt}
+          from ${schema.principalAssetOverrides}
+          where ${schema.principalAssetOverrides.id} = ${override.id}
+        )`,
+        completedAt: new Date(override.createdAt.getTime() + 1),
+      })
+      .returning({ id: schema.processingJobs.id })
+    if (job === undefined) return yield* Effect.die("Failed to insert identity replay job")
+    yield* db.insert(schema.principalAssetOverrideApplications).values({
+      overrideId: override.id,
       sourceId,
-      principalId,
-      mode: "replay",
-      status: "completed",
-      progressDetails: { failedRecords: 0 },
-      createdAt: sql`(
-        select ${schema.principalAssetOverrides.createdAt}
-        from ${schema.principalAssetOverrides}
-        where ${schema.principalAssetOverrides.id} = ${override.id}
-      )`,
-      completedAt: new Date(override.createdAt.getTime() + 1),
+      replayJobId: job.id,
+      requiresReplay: true,
     })
     return override
   }).pipe(Effect.provide(context.TestPgClientLive))
@@ -707,6 +727,158 @@ const insertProviderlessExactObservation = ({
     return blockchain.id
   }).pipe(Effect.provide(context.TestPgClientLive))
 
+const insertDependentSources = () =>
+  Effect.gen(function* () {
+    const db = yield* drizzle
+    const [coinbaseCex] = yield* db
+      .select({ id: schema.cex.id })
+      .from(schema.cex)
+      .where(eq(schema.cex.name, "coinbase"))
+      .limit(1)
+    if (coinbaseCex === undefined) return yield* Effect.die("Missing dependent source CEX")
+
+    const accounts = yield* db
+      .insert(schema.cexAccount)
+      .values(
+        ["b", "c", "sibling"].map((suffix) => ({
+          cexId: coinbaseCex.id,
+          principalId,
+          providerUserId: `dependent-user-${suffix}`,
+          providerAccountId: `dependent-account-${suffix}`,
+          accessToken: "test-access-token",
+          refreshToken: "test-refresh-token",
+          expiresAt: new Date(Date.now() + 60 * 60 * 1000),
+          scopes: "wallet:accounts:read wallet:transactions:read",
+        }))
+      )
+      .returning({
+        id: schema.cexAccount.id,
+        providerAccountId: schema.cexAccount.providerAccountId,
+      })
+    const dependentSources = accounts.map((account) => ({
+      providerAccountId: account.providerAccountId,
+      insert: {
+        id: crypto.randomUUID(),
+        name: account.providerAccountId ?? "dependent-account",
+        providerKey: "coinbase",
+        sourceableType: "cex" as const,
+        cexAccountId: account.id,
+        principalId,
+      },
+    }))
+    yield* db.insert(schema.sources).values(dependentSources.map(({ insert }) => insert))
+    const sourceIds = new Map(
+      dependentSources.map(
+        ({ insert, providerAccountId }) => [providerAccountId, insert.id] as const
+      )
+    )
+    const dependentSourceId = sourceIds.get("dependent-account-b")
+    const transitiveSourceId = sourceIds.get("dependent-account-c")
+    const siblingSourceId = sourceIds.get("dependent-account-sibling")
+    if (
+      dependentSourceId === undefined ||
+      transitiveSourceId === undefined ||
+      siblingSourceId === undefined
+    ) {
+      return yield* Effect.die("Failed to create dependent source fixtures")
+    }
+    return { dependentSourceId, transitiveSourceId, siblingSourceId }
+  }).pipe(Effect.provide(context.TestPgClientLive))
+
+const holdPendingOverrideReplayMutation = ({
+  acquired,
+  release,
+}: {
+  readonly acquired: Deferred.Deferred<void>
+  readonly release: Deferred.Deferred<void>
+}) =>
+  context.runPg(
+    Effect.gen(function* () {
+      const db = yield* drizzle
+      yield* db.transaction((tx) =>
+        Effect.gen(function* () {
+          yield* tx.execute(sourceInventoryLockQuery([sourceId]))
+          const [representation] = yield* tx
+            .select({
+              assetId: schema.assetRepresentations.assetId,
+              blockchainId: schema.assetRepresentations.blockchainId,
+              contractAddress: schema.assetRepresentations.contractAddress,
+              mintAddress: schema.assetRepresentations.mintAddress,
+              type: schema.assetRepresentations.type,
+            })
+            .from(schema.assetRepresentations)
+            .where(eq(schema.assetRepresentations.contractAddress, btcContractAddress))
+            .limit(1)
+          if (representation === undefined) {
+            return yield* Effect.die("Missing tax race representation fixture")
+          }
+          const [override] = yield* tx
+            .insert(schema.principalAssetOverrides)
+            .values({
+              principalId,
+              kind: "identity",
+              targetKind: "representation",
+              blockchainId: representation.blockchainId,
+              representationType: representation.type,
+              contractAddress: representation.contractAddress,
+              mintAddress: representation.mintAddress,
+              action: "set",
+              inspectedSystemRevision: "tax-race-system-revision",
+              inspectedIdentityState: "resolved",
+              inspectedAssetId: representation.assetId,
+              replacementAssetId: representation.assetId,
+              actorId: userId,
+              reason: "Exercise the tax/replay inventory lock contract.",
+            })
+            .returning({ id: schema.principalAssetOverrides.id })
+          const [job] = yield* tx
+            .insert(schema.processingJobs)
+            .values({
+              sourceId,
+              principalId,
+              mode: "replay",
+              status: "pending",
+            })
+            .returning({ id: schema.processingJobs.id })
+          if (override === undefined || job === undefined) {
+            return yield* Effect.die("Failed to seed tax race override replay")
+          }
+          yield* tx.insert(schema.principalAssetOverrideApplications).values({
+            overrideId: override.id,
+            sourceId,
+            replayJobId: job.id,
+            requiresReplay: true,
+          })
+          yield* tx.update(schema.disposalMatches).set({ gainLoss: "0.00" })
+          yield* Deferred.succeed(acquired, undefined)
+          yield* Deferred.await(release)
+        })
+      )
+    })
+  )
+
+const holdTaxReadDependencyTableLock = ({
+  acquired,
+  release,
+}: {
+  readonly acquired: Deferred.Deferred<void>
+  readonly release: Deferred.Deferred<void>
+}) =>
+  context.runPg(
+    Effect.gen(function* () {
+      const db = yield* drizzle
+      yield* db.transaction((tx) =>
+        Effect.gen(function* () {
+          yield* tx.execute(
+            sql`lock table ${schema.providerAssetSourceUses} in access exclusive mode`
+          )
+          yield* Deferred.succeed(acquired, undefined)
+          yield* Deferred.await(release)
+        })
+      )
+    })
+  )
+
 await Effect.runPromise(context.recreateTestDatabase())
 
 describe("TaxCalculationServiceLive", () => {
@@ -731,6 +903,55 @@ describe("TaxCalculationServiceLive", () => {
         expect(tax.incomeTotal).toBe(700)
       })
     )
+  })
+
+  it("returns the complete old snapshot when tax owns the inventory lock before replay mutation", async () => {
+    const tableLockAcquired = await Effect.runPromise(Deferred.make<void>())
+    const releaseTableLock = await Effect.runPromise(Deferred.make<void>())
+    const heldTableLock = holdTaxReadDependencyTableLock({
+      acquired: tableLockAcquired,
+      release: releaseTableLock,
+    })
+    await Effect.runPromise(Deferred.await(tableLockAcquired))
+
+    const taxCalculation = Effect.runPromise(calculateTax())
+    await context.waitForQueryBlockedOnLock({ queryIncludes: "provider_asset_source_uses" })
+
+    const mutationLockAcquired = await Effect.runPromise(Deferred.make<void>())
+    const releaseMutationLock = await Effect.runPromise(Deferred.make<void>())
+    const mutation = holdPendingOverrideReplayMutation({
+      acquired: mutationLockAcquired,
+      release: releaseMutationLock,
+    })
+    await context.waitForQueryBlockedOnLock({ queryIncludes: "source-inventory:" })
+
+    await Effect.runPromise(Deferred.succeed(releaseTableLock, undefined))
+    const tax = await taxCalculation
+    expect(tax).toMatchObject({ taxableGains: 2000, incomeTotal: 700 })
+
+    await Effect.runPromise(Deferred.await(mutationLockAcquired))
+    await Effect.runPromise(Deferred.succeed(releaseMutationLock, undefined))
+    await Promise.all([heldTableLock, mutation])
+  })
+
+  it("returns pending instead of partial totals when replay mutation owns the inventory lock first", async () => {
+    const mutationLockAcquired = await Effect.runPromise(Deferred.make<void>())
+    const releaseMutationLock = await Effect.runPromise(Deferred.make<void>())
+    const mutation = holdPendingOverrideReplayMutation({
+      acquired: mutationLockAcquired,
+      release: releaseMutationLock,
+    })
+    await Effect.runPromise(Deferred.await(mutationLockAcquired))
+
+    const taxCalculation = Effect.runPromise(calculateTax().pipe(Effect.flip))
+    await context.waitForQueryBlockedOnLock({ queryIncludes: "source-inventory:" })
+    await Effect.runPromise(Deferred.succeed(releaseMutationLock, undefined))
+
+    const [error] = await Promise.all([taxCalculation, mutation])
+    expect(error).toMatchObject({
+      _tag: "TaxCalculationPendingRecomputationError",
+      pendingOverrideReplay: true,
+    })
   })
 
   it("returns a partial calculation when income valuation data is incomplete", async () => {
@@ -1004,6 +1225,26 @@ describe("TaxCalculationServiceLive", () => {
     expect(tax.taxableGains).toBe(2000)
   })
 
+  it("blocks tax when later provider evidence makes an identity override type-incompatible", async () => {
+    const fixture = await Effect.runPromise(insertRejectedOverrideFixture({ providerType: null }))
+    await Effect.runPromise(
+      insertIdentityOverride({ providerAssetRowId: fixture.providerAssetRowId })
+    )
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        yield* db
+          .update(schema.providerAssets)
+          .set({ providerType: "nft", evidenceRevision: 2 })
+          .where(eq(schema.providerAssets.id, fixture.providerAssetRowId))
+      }).pipe(Effect.provide(context.TestPgClientLive))
+    )
+
+    const error = await Effect.runPromise(calculateTax().pipe(Effect.flip))
+
+    expect(error._tag).toBe("TaxCalculationPendingObservationsError")
+  })
+
   it("allows a provider-asset identity override without an inclusion override", async () => {
     const fixture = await Effect.runPromise(insertRejectedOverrideFixture())
     await Effect.runPromise(
@@ -1013,6 +1254,22 @@ describe("TaxCalculationServiceLive", () => {
     const tax = await Effect.runPromise(calculateTax())
 
     expect(tax.taxableGains).toBe(2000)
+  })
+
+  it("returns partial tax after an identity override clears mapping review but valuation is missing", async () => {
+    const fixture = await Effect.runPromise(insertRejectedOverrideFixture())
+    await Effect.runPromise(
+      insertIdentityOverride({ providerAssetRowId: fixture.providerAssetRowId })
+    )
+    await Effect.runPromise(insertIncompleteIncomeLeg())
+
+    const tax = await Effect.runPromise(calculateTax())
+
+    expect(tax).toMatchObject({
+      calculationState: "partial",
+      unpricedEventCount: 1,
+      taxableGains: 2000,
+    })
   })
 
   it("keeps a provider identity override blocked when its exponent is missing", async () => {
@@ -1765,6 +2022,116 @@ describe("TaxCalculationServiceLive", () => {
     expect(error._tag).toBe("TaxCalculationPendingRecomputationError")
   })
 
+  it("follows direct and transitive replay dependencies without blocking on siblings", async () => {
+    const fixture = await Effect.runPromise(insertRejectedOverrideFixture())
+    await Effect.runPromise(
+      insertInclusionOverride({ providerAssetRowId: fixture.providerAssetRowId })
+    )
+    const { dependentSourceId, transitiveSourceId, siblingSourceId } =
+      await Effect.runPromise(insertDependentSources())
+    const jobIds = await Effect.runPromise(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const [override] = yield* db
+          .select({ id: schema.principalAssetOverrides.id })
+          .from(schema.principalAssetOverrides)
+          .limit(1)
+        if (override === undefined) return yield* Effect.die("Missing replay closure override")
+        const jobs = yield* db
+          .insert(schema.processingJobs)
+          .values([
+            {
+              sourceId: dependentSourceId,
+              principalId,
+              mode: "replay" as const,
+              status: "completed" as const,
+              progressDetails: { failedRecords: 0 },
+            },
+            {
+              sourceId: transitiveSourceId,
+              principalId,
+              mode: "replay" as const,
+              status: "pending" as const,
+            },
+            {
+              sourceId: siblingSourceId,
+              principalId,
+              mode: "replay" as const,
+              status: "pending" as const,
+            },
+          ])
+          .returning({ id: schema.processingJobs.id, sourceId: schema.processingJobs.sourceId })
+        const jobIdBySource = new Map(jobs.map((job) => [job.sourceId, job.id] as const))
+        yield* db.insert(schema.principalAssetOverrideApplications).values([
+          {
+            overrideId: override.id,
+            sourceId: dependentSourceId,
+            replayJobId: jobIdBySource.get(dependentSourceId),
+            dependsOnSourceIds: [sourceId],
+          },
+          {
+            overrideId: override.id,
+            sourceId: transitiveSourceId,
+            replayJobId: jobIdBySource.get(transitiveSourceId),
+            dependsOnSourceIds: [dependentSourceId],
+          },
+          {
+            overrideId: override.id,
+            sourceId: siblingSourceId,
+            replayJobId: jobIdBySource.get(siblingSourceId),
+            dependsOnSourceIds: [],
+          },
+        ])
+        return {
+          dependentJobId: jobIdBySource.get(dependentSourceId),
+          transitiveJobId: jobIdBySource.get(transitiveSourceId),
+        }
+      }).pipe(Effect.provide(context.TestPgClientLive))
+    )
+
+    await expect(Effect.runPromise(calculateTax().pipe(Effect.flip))).resolves.toMatchObject({
+      _tag: "TaxCalculationPendingRecomputationError",
+      pendingOverrideReplay: true,
+    })
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        if (jobIds.transitiveJobId === undefined) return yield* Effect.die("Missing transitive job")
+        yield* db
+          .update(schema.processingJobs)
+          .set({ status: "completed", progressDetails: { failedRecords: 0 } })
+          .where(eq(schema.processingJobs.id, jobIds.transitiveJobId))
+      }).pipe(Effect.provide(context.TestPgClientLive))
+    )
+    await expect(Effect.runPromise(calculateTax())).resolves.toMatchObject({ taxableGains: 2000 })
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        if (jobIds.dependentJobId === undefined) return yield* Effect.die("Missing dependent job")
+        const [retryJob] = yield* db
+          .insert(schema.processingJobs)
+          .values({
+            sourceId: dependentSourceId,
+            principalId,
+            mode: "replay",
+            status: "failed",
+          })
+          .returning({ id: schema.processingJobs.id })
+        if (retryJob === undefined) return yield* Effect.die("Missing repointed retry job")
+        yield* db
+          .update(schema.principalAssetOverrideApplications)
+          .set({ replayJobId: retryJob.id })
+          .where(eq(schema.principalAssetOverrideApplications.sourceId, dependentSourceId))
+      }).pipe(Effect.provide(context.TestPgClientLive))
+    )
+    await expect(Effect.runPromise(calculateTax().pipe(Effect.flip))).resolves.toMatchObject({
+      _tag: "TaxCalculationPendingRecomputationError",
+      pendingOverrideReplay: true,
+    })
+  })
+
   it("keeps representation replay pending after transaction evidence is deleted", async () => {
     const contractAddress = "0x0000000000000000000000000000000000000099"
     const blockchainId = await Effect.runPromise(
@@ -1909,14 +2276,31 @@ describe("TaxCalculationServiceLive", () => {
               eq(schema.providerAssetSourceUses.providerAssetRowId, fixture.providerAssetRowId)
             )
           )
-        yield* db.insert(schema.processingJobs).values({
+        const [override] = yield* db
+          .select({ id: schema.principalAssetOverrides.id })
+          .from(schema.principalAssetOverrides)
+          .limit(1)
+        const [job] = yield* db
+          .insert(schema.processingJobs)
+          .values({
+            sourceId,
+            principalId,
+            mode: "sync",
+            status: "completed",
+            progressDetails: { failedRecords: 0 },
+            createdAt: new Date(overrideCreatedAt.getTime() - 1),
+            completedAt: new Date(overrideCreatedAt.getTime() + 2),
+          })
+          .returning({ id: schema.processingJobs.id })
+        if (override === undefined || job === undefined) {
+          return yield* Effect.die("Failed to create late override application fixture")
+        }
+        yield* db.insert(schema.principalAssetOverrideApplications).values({
+          overrideId: override.id,
           sourceId,
-          principalId,
-          mode: "sync",
-          status: "completed",
-          progressDetails: { failedRecords: 0 },
-          createdAt: new Date(overrideCreatedAt.getTime() - 1),
-          completedAt: new Date(overrideCreatedAt.getTime() + 2),
+          replayJobId: job.id,
+          requiresReplay: false,
+          createdAt: new Date(overrideCreatedAt.getTime() + 2),
         })
       }).pipe(Effect.provide(context.TestPgClientLive))
     )

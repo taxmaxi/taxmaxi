@@ -15227,7 +15227,7 @@
       "tableTo": "provider_assets",
       "columnsTo": ["id"],
       "onUpdate": "NO ACTION",
-      "onDelete": "CASCADE",
+      "onDelete": "NO ACTION",
       "name": "principal_asset_overrides_cS2sDYiBVOvP_fkey",
       "entityType": "fks",
       "schema": "public",
