@@ -32,6 +32,10 @@ import { SyncEngineStorageError } from "../services/SyncEngineStorageError.ts"
 
 const COINBASE_PROVIDER_KEY = "coinbase"
 const COINBASE_TRANSACTION_RECORD_TYPE = "coinbase_transaction"
+const EMPTY_DEFAULT_MAPPINGS_REFRESH = {
+  defaultTransactionMappingCount: 0,
+  defaultProviderAssetMappingCount: 0,
+} as const
 
 const toReferenceDataError = (
   error: CoinbaseReferenceDataServiceError
@@ -72,6 +76,8 @@ const makeCoinbaseProviderModule = (
   fetchRawBatch: coinbaseSourceSyncProvider.fetchRawBatch,
   refreshReferenceData: () =>
     coinbaseSourceSyncProvider.refreshReferenceData().pipe(Effect.mapError(toReferenceDataError)),
+  refreshDefaultMappings: () =>
+    coinbaseSourceSyncProvider.refreshDefaultMappings().pipe(Effect.mapError(toReferenceDataError)),
   makeRawRecordNormalizer: () =>
     coinbaseSourceSyncProvider.loadNormalizationLookups().pipe(
       Effect.map(
@@ -124,6 +130,7 @@ const makeHeliusSolanaProviderModule = (
 ): SourceProviderModuleShape => ({
   fetchRawBatch: heliusSolanaSourceSyncProvider.fetchRawBatch,
   refreshReferenceData: heliusSolanaSourceSyncProvider.refreshReferenceData,
+  refreshDefaultMappings: () => Effect.succeed(EMPTY_DEFAULT_MAPPINGS_REFRESH),
   makeRawRecordNormalizer: () =>
     heliusSolanaSourceSyncProvider.loadNormalizationLookups().pipe(
       Effect.map(

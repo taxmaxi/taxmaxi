@@ -336,6 +336,11 @@ const makeExecutorLayer = ({
         defaultTransactionMappingCount: 0,
         defaultProviderAssetMappingCount: 0,
       }),
+    refreshDefaultMappings: () =>
+      Effect.succeed({
+        defaultTransactionMappingCount: 0,
+        defaultProviderAssetMappingCount: 0,
+      }),
     makeRawRecordNormalizer: () =>
       Effect.succeed(({ source, sourceRecord }) => {
         events.push(`normalize:${sourceRecord.id}`)
@@ -422,6 +427,11 @@ const makeExecutorLayer = ({
           defaultProviderAssetMappingCount: 0,
         }
       }),
+    refreshDefaultMappings: () =>
+      Effect.succeed({
+        defaultTransactionMappingCount: 0,
+        defaultProviderAssetMappingCount: 0,
+      }),
     makeRawRecordNormalizer: () =>
       Effect.sync(() => {
         events.push("stub:make-normalizer")
@@ -463,6 +473,11 @@ const makeExecutorLayer = ({
           defaultTransactionMappingCount: 0,
           defaultProviderAssetMappingCount: 0,
         }
+      }),
+    refreshDefaultMappings: () =>
+      Effect.succeed({
+        defaultTransactionMappingCount: 0,
+        defaultProviderAssetMappingCount: 0,
       }),
     makeRawRecordNormalizer: () =>
       Effect.sync(() => {
