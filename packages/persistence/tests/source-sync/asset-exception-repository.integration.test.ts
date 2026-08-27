@@ -63,6 +63,7 @@ const seedException = (
       yield* db.insert(schema.assetResolutionJobs).values({
         providerAssetRowId: providerAsset.id,
         evidenceRevision: 2,
+        policyRevision: "test-policy.1",
         status: "completed",
       })
       // The actionable evaluation is created after the observation was first
@@ -554,6 +555,138 @@ describe("AssetExceptionRepositoryLive", () => {
       expect.objectContaining({ providerAssetRowId: fixture.providerAssetRowId }),
     ])
     expect(noMatch).toEqual([])
+  })
+
+  it("keeps a conclusive evaluation that disagrees with the conclusion discoverable", async () => {
+    const fixture = await seedException("-conclusive-disagreement")
+
+    // Settle the observation as excluded, then let a later evidence revision
+    // produce a conclusive attach recommendation. The conclusion stays in
+    // force, but the case must not vanish from the review queue.
+    await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const [conclusion] = yield* db
+          .insert(schema.assetResolutionDecisions)
+          .values({
+            providerAssetRowId: fixture.providerAssetRowId,
+            evidenceRevision: 2,
+            policyRevision: "test-policy.settled.1",
+            outcome: "excluded",
+            reason: "spam_evidence",
+            actor: "system:asset-resolution-policy",
+          })
+          .returning({ id: schema.assetResolutionDecisions.id })
+        if (conclusion === undefined) {
+          return yield* Effect.die("Failed to seed excluded conclusion")
+        }
+        yield* db
+          .update(schema.providerAssets)
+          .set({ evidenceRevision: 3 })
+          .where(eq(schema.providerAssets.id, fixture.providerAssetRowId))
+        yield* db.insert(schema.assetResolutionJobs).values({
+          providerAssetRowId: fixture.providerAssetRowId,
+          evidenceRevision: 3,
+          policyRevision: "test-policy.1",
+          status: "completed",
+        })
+        const [reversalEvaluation] = yield* db
+          .insert(schema.assetResolutionDecisions)
+          .values({
+            providerAssetRowId: fixture.providerAssetRowId,
+            evidenceRevision: 3,
+            policyRevision: "test-policy.1",
+            outcome: "attach",
+            reason: null,
+            actor: "system:asset-resolution-policy",
+            createdAt: new Date("2025-01-06T00:00:00.000Z"),
+          })
+          .returning({ id: schema.assetResolutionDecisions.id })
+        if (reversalEvaluation === undefined) {
+          return yield* Effect.die("Failed to seed conclusive evaluation")
+        }
+        yield* db
+          .update(schema.assetResolutionCurrentState)
+          .set({
+            currentConclusionId: conclusion.id,
+            currentPolicyEvaluationId: reversalEvaluation.id,
+          })
+          .where(
+            eq(schema.assetResolutionCurrentState.providerAssetRowId, fixture.providerAssetRowId)
+          )
+      })
+    )
+
+    const disagreement = await runRepository(
+      Effect.flatMap(AssetExceptionRepository, (repository) =>
+        repository.listExceptions({ cursor: null, limit: 10, query: null })
+      )
+    )
+    expect(disagreement).toEqual([
+      expect.objectContaining({
+        providerAssetRowId: fixture.providerAssetRowId,
+        reason: "conclusion_disagreement",
+        severity: "high",
+      }),
+    ])
+
+    // An evaluation that agrees with the conclusion has nothing to review.
+    await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        yield* db
+          .update(schema.assetResolutionDecisions)
+          .set({ outcome: "excluded", reason: "spam_evidence" })
+          .where(
+            and(
+              eq(schema.assetResolutionDecisions.providerAssetRowId, fixture.providerAssetRowId),
+              eq(schema.assetResolutionDecisions.evidenceRevision, 3)
+            )
+          )
+      })
+    )
+    const agreement = await runRepository(
+      Effect.flatMap(AssetExceptionRepository, (repository) =>
+        repository.listExceptions({ cursor: null, limit: 10, query: null })
+      )
+    )
+    expect(agreement).toEqual([])
+
+    // A human conclusion at the evaluation's evidence revision already
+    // answered this evidence, so the disagreement stays hidden.
+    await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        yield* db
+          .update(schema.assetResolutionDecisions)
+          .set({ outcome: "attach", reason: null })
+          .where(
+            and(
+              eq(schema.assetResolutionDecisions.providerAssetRowId, fixture.providerAssetRowId),
+              eq(schema.assetResolutionDecisions.evidenceRevision, 3)
+            )
+          )
+        yield* db
+          .update(schema.assetResolutionDecisions)
+          .set({
+            evidenceRevision: 3,
+            humanClaim: { _tag: "exclusion", reason: "confirmed_spam" },
+            actor: `user:${TEST_USER_ID}`,
+          })
+          .where(
+            and(
+              eq(schema.assetResolutionDecisions.providerAssetRowId, fixture.providerAssetRowId),
+              eq(schema.assetResolutionDecisions.outcome, "excluded")
+            )
+          )
+      })
+    )
+    const humanSettled = await runRepository(
+      Effect.flatMap(AssetExceptionRepository, (repository) =>
+        repository.listExceptions({ cursor: null, limit: 10, query: null })
+      )
+    )
+    expect(humanSettled).toEqual([])
   })
 
   it("previews and atomically accepts a typed exclusion without a free-text rationale", async () => {

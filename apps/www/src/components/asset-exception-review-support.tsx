@@ -665,6 +665,8 @@ export function reasonText(reason: string | null | undefined): string {
       return m["assetCatalog.exceptions.reviewUi.exclusion.artifactLabel"]()
     case "manual_exclusion_reversal":
       return m["assetCatalog.exceptions.labels.reason.manualExclusionReversal"]()
+    case "conclusion_disagreement":
+      return m["assetCatalog.exceptions.labels.reason.conclusionDisagreement"]()
     default:
       return m["assetCatalog.exceptions.unknown"]()
   }

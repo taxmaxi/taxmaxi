@@ -898,6 +898,7 @@ describe("asset resolution attach and rebuild", () => {
             id: laterJobId,
             providerAssetRowId: providerAsset.id,
             evidenceRevision: 2,
+            policyRevision: "test-policy.1",
             status: "pending",
           })
           return providerAsset.id
@@ -1473,6 +1474,7 @@ describe("asset resolution attach and rebuild", () => {
               id: staleJobId,
               providerAssetRowId: providerAsset.id,
               evidenceRevision: 2,
+              policyRevision: "test-policy.1",
               status: "pending",
             })
           }).pipe(Effect.provide(TestPgClientLive))
@@ -1998,6 +2000,7 @@ describe("asset resolution attach and rebuild", () => {
             id: secondJobId,
             providerAssetRowId: providerAsset.id,
             evidenceRevision: 2,
+            policyRevision: "test-policy.1",
             status: "pending",
           })
         }).pipe(Effect.provide(TestPgClientLive))
@@ -2049,6 +2052,7 @@ describe("asset resolution attach and rebuild", () => {
             id: thirdJobId,
             providerAssetRowId: providerAsset.id,
             evidenceRevision: 3,
+            policyRevision: "test-policy.1",
             status: "pending",
           })
         }).pipe(Effect.provide(TestPgClientLive))
@@ -2150,6 +2154,7 @@ describe("asset resolution attach and rebuild", () => {
             id: secondJobId,
             providerAssetRowId: providerAsset.id,
             evidenceRevision: 2,
+            policyRevision: "test-policy.1",
             status: "pending",
           })
         }).pipe(Effect.provide(TestPgClientLive))

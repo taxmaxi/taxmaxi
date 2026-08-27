@@ -120,6 +120,7 @@ export {
   TaxMaxiError,
   getTaxMaxiAssetDecisionConflict,
   getTaxMaxiAssetDecisionErrorCode,
+  getTaxMaxiAssetLookupErrorCode,
   getTaxMaxiCreditRequired,
   isTaxMaxiUnauthorizedError,
   toTaxMaxiError,
@@ -127,6 +128,7 @@ export {
 export type {
   TaxMaxiAssetDecisionConflict,
   TaxMaxiAssetDecisionErrorCode,
+  TaxMaxiAssetLookupErrorCode,
   TaxMaxiCreditRequired,
   TaxMaxiFieldError,
 } from "./errors.ts"

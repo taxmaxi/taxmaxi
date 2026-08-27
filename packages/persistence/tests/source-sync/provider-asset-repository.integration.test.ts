@@ -29,6 +29,7 @@ import {
   SyncEngineStorageError,
   SyncEngineTransaction,
 } from "@my/sync-engine/services"
+import { ASSET_RESOLUTION_POLICY_ACTOR, ASSET_RESOLUTION_POLICY_REVISION } from "@my/core/assets"
 
 const context = makeIntegrationTestDatabaseContext({
   databaseNamePrefix: "taxmaxi_provider_asset_repo",
@@ -755,6 +756,173 @@ describe("ProviderAssetRepositoryLive", () => {
           claimKind: "mapping_conclusion",
           evidenceRevision: 1,
         },
+      ])
+    })
+
+    it("reevaluates a settled fiat mapping only when the provider reclassifies it", async () => {
+      const upsertFiatEntry = ({
+        name,
+        providerType,
+        version,
+      }: {
+        readonly name: string
+        readonly providerType: string
+        readonly version: number
+      }) =>
+        runRepository(
+          Effect.flatMap(ProviderAssetRepository, (repository) =>
+            repository.upsertProviderAssets({
+              providerKey: "coinbase",
+              entries: [
+                {
+                  providerAssetId: "fiat-reclassified",
+                  naturalKey: null,
+                  currencyCode: "PLN",
+                  name,
+                  exponent: 2,
+                  providerType,
+                  payload: { version },
+                },
+              ],
+            })
+          )
+        )
+
+      await upsertFiatEntry({ name: "Polish Zloty", providerType: "fiat", version: 1 })
+      const providerAsset = await runRepository(
+        Effect.gen(function* () {
+          const repository = yield* ProviderAssetRepository
+          const found = yield* repository.findProviderAssetByProviderAssetId({
+            providerKey: "coinbase",
+            providerAssetId: "fiat-reclassified",
+          })
+          if (Option.isNone(found)) {
+            return yield* Effect.die("Expected fiat provider asset")
+          }
+          yield* repository.seedProviderAssetMappingsIfMissing({
+            mappings: [
+              {
+                providerAssetRowId: found.value.id,
+                mappingKind: "fiat",
+                canonicalAssetId: null,
+                assetRepresentationId: null,
+                canonicalFiatCurrency: "PLN",
+                mappingStatus: "approved",
+                reviewerNotes: null,
+                sourceNotes: "Trusted fiat mapping",
+              },
+            ],
+          })
+          return found.value
+        })
+      )
+
+      const loadJobs = () =>
+        runPg(
+          Effect.gen(function* () {
+            const db = yield* drizzle
+            return yield* db
+              .select({
+                evidenceRevision: schema.assetResolutionJobs.evidenceRevision,
+                policyRevision: schema.assetResolutionJobs.policyRevision,
+              })
+              .from(schema.assetResolutionJobs)
+              .where(eq(schema.assetResolutionJobs.providerAssetRowId, providerAsset.id))
+          })
+        )
+
+      await upsertFiatEntry({ name: "Zloty", providerType: "fiat", version: 2 })
+      expect(await loadJobs()).toEqual([])
+
+      await upsertFiatEntry({ name: "Zloty", providerType: "crypto", version: 3 })
+      expect(await loadJobs()).toEqual([
+        { evidenceRevision: 3, policyRevision: ASSET_RESOLUTION_POLICY_REVISION },
+      ])
+    })
+
+    it("schedules a fresh evaluation when the resolution policy revision changes", async () => {
+      const upsertEntry = () =>
+        runRepository(
+          Effect.flatMap(ProviderAssetRepository, (repository) =>
+            repository.upsertProviderAssets({
+              providerKey: "coinbase",
+              entries: [
+                {
+                  providerAssetId: "policy-revision-bump",
+                  naturalKey: null,
+                  currencyCode: "BTC",
+                  name: "Bitcoin",
+                  exponent: 8,
+                  providerType: "crypto",
+                  payload: { version: 1 },
+                },
+              ],
+            })
+          )
+        )
+
+      await upsertEntry()
+      const providerAsset = await runRepository(
+        Effect.gen(function* () {
+          const repository = yield* ProviderAssetRepository
+          const found = yield* repository.findProviderAssetByProviderAssetId({
+            providerKey: "coinbase",
+            providerAssetId: "policy-revision-bump",
+          })
+          if (Option.isNone(found)) {
+            return yield* Effect.die("Expected provider asset")
+          }
+          yield* repository.seedProviderAssetMappingsIfMissing({
+            mappings: [
+              {
+                providerAssetRowId: found.value.id,
+                mappingKind: "asset",
+                canonicalAssetId: TEST_BTC_ASSET_ID,
+                assetRepresentationId: TEST_BTC_REPRESENTATION_ID,
+                canonicalFiatCurrency: null,
+                mappingStatus: "approved",
+                reviewerNotes: null,
+                sourceNotes: "Trusted reference mapping",
+              },
+            ],
+          })
+          return found.value
+        })
+      )
+
+      const loadJobs = () =>
+        runPg(
+          Effect.gen(function* () {
+            const db = yield* drizzle
+            return yield* db
+              .select({
+                evidenceRevision: schema.assetResolutionJobs.evidenceRevision,
+                policyRevision: schema.assetResolutionJobs.policyRevision,
+              })
+              .from(schema.assetResolutionJobs)
+              .where(eq(schema.assetResolutionJobs.providerAssetRowId, providerAsset.id))
+          })
+        )
+
+      // A trusted conclusion carries its own policy revision; a resolution
+      // policy change does not redo it.
+      await upsertEntry()
+      expect(await loadJobs()).toEqual([])
+
+      // The same evaluation stamped by an older resolution policy revision
+      // is stale and gets a fresh job at the unchanged evidence revision.
+      await runPg(
+        Effect.gen(function* () {
+          const db = yield* drizzle
+          yield* db
+            .update(schema.assetResolutionDecisions)
+            .set({ actor: ASSET_RESOLUTION_POLICY_ACTOR, policyRevision: "old-policy.1" })
+            .where(eq(schema.assetResolutionDecisions.providerAssetRowId, providerAsset.id))
+        })
+      )
+      await upsertEntry()
+      expect(await loadJobs()).toEqual([
+        { evidenceRevision: 1, policyRevision: ASSET_RESOLUTION_POLICY_REVISION },
       ])
     })
 

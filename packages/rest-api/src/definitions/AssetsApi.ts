@@ -32,6 +32,22 @@ export class AssetNotFoundError extends Schema.TaggedError<AssetNotFoundError>()
   { httpApiStatus: 404 }
 ) {}
 
+export class AssetLookupValidationError extends Schema.TaggedError<AssetLookupValidationError>()(
+  "AssetLookupValidationError",
+  {
+    code: Schema.Literal("invalid_lookup"),
+  },
+  { httpApiStatus: 400 }
+) {}
+
+export class AssetLookupNotFoundError extends Schema.TaggedError<AssetLookupNotFoundError>()(
+  "AssetLookupNotFoundError",
+  {
+    code: Schema.Literal("observation_not_found"),
+  },
+  { httpApiStatus: 404 }
+) {}
+
 export class AssetStaleRevisionError extends Schema.TaggedError<AssetStaleRevisionError>()(
   "AssetStaleRevisionError",
   {
@@ -622,7 +638,7 @@ const lookupAssetException = HttpApiEndpoint.get(
   {
     query: AssetExceptionLookupQuery,
     success: AssetExceptionDetailResponse,
-    error: [AssetBadRequestError, AssetNotFoundError, InternalServerError],
+    error: [AssetLookupValidationError, AssetLookupNotFoundError, InternalServerError],
   }
 )
   .annotateMerge(

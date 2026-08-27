@@ -584,7 +584,8 @@
           "spamEvidence": "Spam-Evidenz",
           "unsupportedRepresentationType": "Nicht unterstützter Abbildungstyp",
           "unverifiedAsset": "Kein Register bürgt für diesen Token",
-          "manualExclusionReversal": "Manuelle Aufhebung des Ausschlusses"
+          "manualExclusionReversal": "Manuelle Aufhebung des Ausschlusses",
+          "conclusionDisagreement": "Richtlinienauswertung widerspricht der aktuellen Schlussfolgerung"
         },
         "preview": {
           "reuse": "Bestehendes verwenden",
@@ -608,6 +609,7 @@
         "action": "Suchen",
         "loading": "Wird geöffnet…",
         "invalid": "Gib einen Provider und genau eine Beobachtungs-ID oder einen natürlichen Schlüssel ein.",
+        "notFound": "Keine Beobachtung passt zu diesem Provider-Schlüssel.",
         "error": "Die geprüfte Beobachtung konnte nicht geöffnet werden."
       },
       "impact": {

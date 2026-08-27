@@ -382,15 +382,26 @@ const make = Effect.gen(function* () {
     where ${schema.transactions.providerFiatCurrency} = 'EUR'
   )`
 
-  // The reasons are compile-time literals from ACTIONABLE_REASONS, so raw
-  // interpolation is safe and the ranking numbers stay single-sourced in the
-  // core severity mapping.
+  // The queue reason for a pending or fail-closed evaluation is the policy
+  // reason itself. A conclusive evaluation only enters the queue when it
+  // disagrees with the current conclusion, and its policy decision carries no
+  // actionable reason, so the queue synthesizes one.
+  const queueReasonSql = sql<string>`case
+    when ${schema.assetResolutionDecisions.outcome} in ('pending', 'fail_closed')
+      then ${schema.assetResolutionDecisions.reason}
+    else 'conclusion_disagreement'
+  end`
+
+  // The reasons are compile-time literals, so raw interpolation is safe and
+  // the ranking numbers stay single-sourced in the core severity mapping.
   const severityRankCases = sql.raw(
-    ACTIONABLE_REASONS.map(
-      (reason) => `when '${reason}' then ${severityRank(assetExceptionSeverityForReason(reason))}`
-    ).join(" ")
+    [...ACTIONABLE_REASONS, "conclusion_disagreement" as const]
+      .map(
+        (reason) => `when '${reason}' then ${severityRank(assetExceptionSeverityForReason(reason))}`
+      )
+      .join(" ")
   )
-  const severityRankSql = sql<number>`case ${schema.assetResolutionDecisions.reason} ${severityRankCases} else 4 end`
+  const severityRankSql = sql<number>`case ${queueReasonSql} ${severityRankCases} else 4 end`
 
   // "Oldest case first" ranks by the age of the current actionable
   // evaluation, not the provider observation: a later actionable evidence
@@ -435,7 +446,7 @@ const make = Effect.gen(function* () {
         ilike(schema.providerAssets.naturalKey, pattern),
         ilike(schema.providerAssets.currencyCode, pattern),
         ilike(schema.providerAssets.name, pattern),
-        ilike(schema.assetResolutionDecisions.reason, pattern)
+        ilike(queueReasonSql, pattern)
       )
     )
 
@@ -448,7 +459,7 @@ const make = Effect.gen(function* () {
         currencyCode: schema.providerAssets.currencyCode,
         name: schema.providerAssets.name,
         providerType: schema.providerAssets.providerType,
-        reason: schema.assetResolutionDecisions.reason,
+        reason: queueReasonSql,
         evidenceRevision: schema.providerAssets.evidenceRevision,
         policyRevision: schema.assetResolutionDecisions.policyRevision,
         currentConclusionRevision: sql<string>`coalesce(
@@ -474,14 +485,6 @@ const make = Effect.gen(function* () {
         eq(schema.assetResolutionCurrentState.providerAssetRowId, schema.providerAssets.id)
       )
       .innerJoin(
-        schema.assetResolutionJobs,
-        and(
-          eq(schema.assetResolutionJobs.providerAssetRowId, schema.providerAssets.id),
-          eq(schema.assetResolutionJobs.evidenceRevision, schema.providerAssets.evidenceRevision),
-          eq(schema.assetResolutionJobs.status, "completed")
-        )
-      )
-      .innerJoin(
         schema.assetResolutionDecisions,
         and(
           eq(schema.assetResolutionDecisions.providerAssetRowId, schema.providerAssets.id),
@@ -493,21 +496,63 @@ const make = Effect.gen(function* () {
             schema.assetResolutionCurrentState.currentPolicyEvaluationId,
             schema.assetResolutionDecisions.id
           ),
-          inArray(schema.assetResolutionDecisions.outcome, ["pending", "fail_closed"]),
-          inArray(schema.assetResolutionDecisions.reason, [...ACTIONABLE_REASONS]),
           or(
-            isNull(schema.assetResolutionCurrentState.currentConclusionId),
-            sql`not exists (
-              select 1
-              from ${schema.assetResolutionDecisions} current_conclusion
-              where current_conclusion.id = ${schema.assetResolutionCurrentState.currentConclusionId}
-                and current_conclusion.human_claim is not null
-                and current_conclusion.evidence_revision >= ${schema.assetResolutionDecisions.evidenceRevision}
-            )`
+            and(
+              inArray(schema.assetResolutionDecisions.outcome, ["pending", "fail_closed"]),
+              inArray(schema.assetResolutionDecisions.reason, [...ACTIONABLE_REASONS]),
+              or(
+                isNull(schema.assetResolutionCurrentState.currentConclusionId),
+                sql`not exists (
+                  select 1
+                  from ${schema.assetResolutionDecisions} current_conclusion
+                  where current_conclusion.id = ${schema.assetResolutionCurrentState.currentConclusionId}
+                    and current_conclusion.human_claim is not null
+                    and current_conclusion.evidence_revision >= ${schema.assetResolutionDecisions.evidenceRevision}
+                )`
+              )
+            ),
+            // A conclusive evaluation that answers differently than the
+            // current conclusion stays discoverable: an excluded observation
+            // the policy now wants to attach must not vanish from the queue.
+            // A human conclusion at the evaluation's evidence revision or
+            // later already answered this evidence, so it stays hidden.
+            and(
+              inArray(schema.assetResolutionDecisions.outcome, [
+                "attach",
+                "create_standalone",
+                "excluded",
+              ]),
+              sql`exists (
+                select 1
+                from ${schema.assetResolutionDecisions} current_conclusion
+                where current_conclusion.id = ${schema.assetResolutionCurrentState.currentConclusionId}
+                  and not (
+                    current_conclusion.human_claim is not null
+                    and current_conclusion.evidence_revision >= ${schema.assetResolutionDecisions.evidenceRevision}
+                  )
+                  and (
+                    (current_conclusion.outcome = 'excluded')
+                      <> (${schema.assetResolutionDecisions.outcome} = 'excluded')
+                    or current_conclusion.asset_id is distinct from ${schema.assetResolutionDecisions.assetId}
+                  )
+              )`
+            )
           )
         )
       )
-      .where(and(...searchFilters, cursor === null ? undefined : rankAfterCursor(cursor)))
+      .where(
+        and(
+          sql`exists (
+            select 1
+            from ${schema.assetResolutionJobs} completed_job
+            where completed_job.provider_asset_row_id = ${schema.providerAssets.id}
+              and completed_job.evidence_revision = ${schema.providerAssets.evidenceRevision}
+              and completed_job.status = 'completed'
+          )`,
+          ...searchFilters,
+          cursor === null ? undefined : rankAfterCursor(cursor)
+        )
+      )
       .orderBy(
         desc(blockedReportsSql),
         desc(affectedPrincipalsSql),

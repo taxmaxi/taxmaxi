@@ -41,6 +41,8 @@ import {
   AssetExceptionListRowResponse,
   AssetExceptionPreviewResponse,
   AssetExceptionRematerializationResponse,
+  AssetLookupNotFoundError,
+  AssetLookupValidationError,
   AssetStaleRevisionError,
   AssetCanonicalizationEvidenceResponse,
   AssetCanonicalizationResponse,
@@ -471,9 +473,7 @@ export const AssetsApiLive = HttpApiBuilder.group(TaxMaxiApi, "assets", (handler
             return null
           })()
           if (lookup === null) {
-            return yield* new AssetBadRequestError({
-              message: "Provide exactly one of providerAssetId or naturalKey.",
-            })
+            return yield* new AssetLookupValidationError({ code: "invalid_lookup" })
           }
 
           const detail = yield* assetExceptionRepository
@@ -483,7 +483,7 @@ export const AssetsApiLive = HttpApiBuilder.group(TaxMaxiApi, "assets", (handler
             )
           return yield* Option.match(detail, {
             onNone: () =>
-              Effect.fail(new AssetNotFoundError({ message: "Asset observation not found." })),
+              Effect.fail(new AssetLookupNotFoundError({ code: "observation_not_found" })),
             onSome: (value) => Effect.succeed(toAssetExceptionDetailResponse(value)),
           })
         })

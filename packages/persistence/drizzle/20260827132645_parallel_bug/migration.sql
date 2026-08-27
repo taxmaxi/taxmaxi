@@ -8,8 +8,15 @@ CREATE TABLE "asset_resolution_current_state" (
 ALTER TABLE "asset_representation_ownership_decisions" DROP CONSTRAINT "asset_representation_ownership_owner_matches_fk";--> statement-breakpoint
 DROP INDEX "asset_representation_ownership_active_unique";--> statement-breakpoint
 DROP INDEX "asset_resolution_decisions_active_observation_revision_unique";--> statement-breakpoint
+ALTER TABLE "asset_resolution_jobs" ADD COLUMN "policy_revision" text;--> statement-breakpoint
+-- Every existing job was scheduled under the only resolution policy
+-- revision that has existed so far.
+UPDATE "asset_resolution_jobs" SET "policy_revision" = '2026-08-26.standalone-positive-signal.1';--> statement-breakpoint
+ALTER TABLE "asset_resolution_jobs" ALTER COLUMN "policy_revision" SET NOT NULL;--> statement-breakpoint
 ALTER TABLE "asset_representation_ownership_decisions" DROP COLUMN "status";--> statement-breakpoint
 ALTER TABLE "asset_resolution_decisions" DROP COLUMN "status";--> statement-breakpoint
+DROP INDEX "asset_resolution_jobs_observation_revision_unique";--> statement-breakpoint
+CREATE UNIQUE INDEX "asset_resolution_jobs_observation_revision_unique" ON "asset_resolution_jobs" ("provider_asset_row_id","evidence_revision","policy_revision");--> statement-breakpoint
 CREATE UNIQUE INDEX "asset_representation_ownership_record_unique" ON "asset_representation_ownership_decisions" ("asset_representation_id") WHERE "supersedes_decision_id" is null;--> statement-breakpoint
 CREATE UNIQUE INDEX "asset_representation_ownership_representation_id_unique" ON "asset_representation_ownership_decisions" ("asset_representation_id","id");--> statement-breakpoint
 CREATE UNIQUE INDEX "asset_resolution_decisions_policy_evaluation_unique" ON "asset_resolution_decisions" ("provider_asset_row_id","evidence_revision","policy_revision") WHERE "human_claim" is null and "supersedes_decision_id" is null;--> statement-breakpoint

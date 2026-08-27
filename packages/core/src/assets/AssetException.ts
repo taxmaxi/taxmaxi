@@ -27,6 +27,10 @@ export const AssetExceptionReason = Schema.Literals([
   "spam_evidence",
   "unsupported_representation_type",
   "unverified_asset",
+  // The current policy evaluation reached a conclusive answer that differs
+  // from the current global conclusion. The queue synthesizes this reason;
+  // the policy itself never emits it.
+  "conclusion_disagreement",
 ])
 
 export type AssetExceptionReason = typeof AssetExceptionReason.Type
@@ -46,6 +50,7 @@ const ASSET_EXCEPTION_SEVERITY_BY_REASON = {
   spam_evidence: "low",
   unsupported_representation_type: "low",
   unverified_asset: "low",
+  conclusion_disagreement: "high",
 } as const satisfies Readonly<Record<AssetExceptionReason, AssetExceptionSeverity>>
 
 /** Return the versioned severity for one actionable resolver reason. */

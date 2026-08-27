@@ -1,5 +1,6 @@
 import { ShieldAlert } from "lucide-react"
 import { type FormEvent, useState } from "react"
+import { getTaxMaxiAssetLookupErrorCode } from "taxmaxi"
 
 import type { AssetExceptionActions } from "#/components/asset-catalog-context"
 import type { TaxMaxiAssetException } from "#/components/asset-catalog-model"
@@ -48,8 +49,15 @@ export function AssetExceptionDetailPane({
           : { provider: normalizedProvider, naturalKey: normalizedNaturalKey }
       )
       setDetail(nextDetail)
-    } catch {
-      setLookupError(m["assetCatalog.exceptions.lookup.error"]())
+    } catch (error) {
+      const code = getTaxMaxiAssetLookupErrorCode(error)
+      setLookupError(
+        code === "observation_not_found"
+          ? m["assetCatalog.exceptions.lookup.notFound"]()
+          : code === "invalid_lookup"
+            ? m["assetCatalog.exceptions.lookup.invalid"]()
+            : m["assetCatalog.exceptions.lookup.error"]()
+      )
     } finally {
       setLookupLoading(false)
     }

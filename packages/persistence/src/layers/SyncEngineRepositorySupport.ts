@@ -4,6 +4,7 @@
  * @module SyncEngineRepositorySupport
  */
 
+import { ASSET_RESOLUTION_POLICY_ACTOR, ASSET_RESOLUTION_POLICY_REVISION } from "@my/core/assets"
 import * as Timestamp from "@my/core/shared/values/Timestamp"
 import { eq, inArray, sql } from "drizzle-orm"
 import * as Effect from "effect/Effect"
@@ -124,8 +125,9 @@ export const CATALOG_REVIEWABLE_STATUSES: ReadonlyArray<ResolutionJobMappingStat
 
 /**
  * Insert one pending resolution job per eligible provider asset at its current
- * evidence revision, inside the caller's transaction. Existing jobs
- * for the same (observation, revision) pair are left untouched. Shared by
+ * evidence revision and the current policy revision, inside the caller's
+ * transaction. Existing jobs for the same (observation, evidence revision,
+ * policy revision) triple are left untouched. Shared by
  * AssetResolutionJobRepositoryLive (the standalone scheduling API) and
  * ProviderAssetRepositoryLive (scheduling inside observation transactions)
  * so both paths follow the same unresolved-status and conflict rules.
@@ -153,9 +155,12 @@ export const insertResolutionJobsForMappings = ({
       .select({
         providerAssetRowId: schema.providerAssets.id,
         evidenceRevision: schema.providerAssets.evidenceRevision,
+        providerType: schema.providerAssets.providerType,
         mappingKind: schema.providerAssetMappings.mappingKind,
         mappingStatus: schema.providerAssetMappings.mappingStatus,
         currentPolicyEvidenceRevision: schema.assetResolutionDecisions.evidenceRevision,
+        currentPolicyRevision: schema.assetResolutionDecisions.policyRevision,
+        currentPolicyActor: schema.assetResolutionDecisions.actor,
       })
       .from(schema.providerAssets)
       .leftJoin(
@@ -185,10 +190,24 @@ export const insertResolutionJobsForMappings = ({
       if (!settled) {
         return true
       }
-      return (
-        candidate.mappingKind === "asset" &&
-        candidate.currentPolicyEvidenceRevision !== candidate.evidenceRevision
-      )
+      // A policy-revision change only makes automatic evaluations stale.
+      // Trusted seeds, canonicalization, and human decisions carry their own
+      // policy revisions and are not redone when the resolution policy ships
+      // a new revision.
+      const evaluationCurrent =
+        candidate.currentPolicyEvidenceRevision === candidate.evidenceRevision &&
+        (candidate.currentPolicyActor !== ASSET_RESOLUTION_POLICY_ACTOR ||
+          candidate.currentPolicyRevision === ASSET_RESOLUTION_POLICY_REVISION)
+      if (evaluationCurrent) {
+        return false
+      }
+      // A settled fiat mapping stays settled while the provider still reports
+      // the currency as fiat; the resolution policy only answers questions
+      // about crypto assets. When the provider reclassifies the currency, the
+      // old fiat approval must not keep deciding accounting, so the
+      // observation is reevaluated. A null provider type is no report at all.
+      const reportedFiat = candidate.providerType?.trim().toLowerCase() === "fiat"
+      return candidate.mappingKind === "asset" || (candidate.providerType !== null && !reportedFiat)
     })
     if (eligible.length === 0) {
       return []
@@ -200,6 +219,7 @@ export const insertResolutionJobsForMappings = ({
         eligible.map((candidate) => ({
           providerAssetRowId: candidate.providerAssetRowId,
           evidenceRevision: candidate.evidenceRevision,
+          policyRevision: ASSET_RESOLUTION_POLICY_REVISION,
           status: "pending" as const,
           createdAt: now,
           updatedAt: now,
@@ -209,6 +229,7 @@ export const insertResolutionJobsForMappings = ({
         target: [
           schema.assetResolutionJobs.providerAssetRowId,
           schema.assetResolutionJobs.evidenceRevision,
+          schema.assetResolutionJobs.policyRevision,
         ],
       })
       .returning({

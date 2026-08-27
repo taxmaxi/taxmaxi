@@ -18,6 +18,7 @@ import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import * as Option from "effect/Option"
 import {
+  ASSET_RESOLUTION_POLICY_ACTOR,
   AssetResolutionConflictingEvidence,
   AssetResolutionMalformedPayload,
   canonicalizeAddress,
@@ -57,7 +58,7 @@ import {
 } from "../providers/jupiter/services/AssetResolutionJupiterClient.ts"
 import { nowDate } from "./internal/SourceSyncTelemetry.ts"
 
-const RESOLUTION_POLICY_ACTOR = "system:asset-resolution-policy"
+const RESOLUTION_POLICY_ACTOR = ASSET_RESOLUTION_POLICY_ACTOR
 const DEFAULT_ASSET_RESOLUTION_WORKER_ID = "asset-resolution-inline-executor"
 const ASSET_RESOLUTION_JOB_STALE_AFTER_MS = 5 * 60 * 1000
 

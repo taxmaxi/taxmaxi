@@ -584,7 +584,8 @@
           "spamEvidence": "Spam evidence",
           "unsupportedRepresentationType": "Unsupported representation type",
           "unverifiedAsset": "No registry vouches for this token",
-          "manualExclusionReversal": "Manual exclusion reversal"
+          "manualExclusionReversal": "Manual exclusion reversal",
+          "conclusionDisagreement": "Policy evaluation disagrees with the current conclusion"
         },
         "preview": {
           "reuse": "Reuse existing",
@@ -608,6 +609,7 @@
         "action": "Look up",
         "loading": "Opening…",
         "invalid": "Enter a provider and exactly one observation ID or natural key.",
+        "notFound": "No observation matches this provider key.",
         "error": "The reviewed observation could not be opened."
       },
       "impact": {

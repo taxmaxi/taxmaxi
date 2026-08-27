@@ -1316,8 +1316,18 @@ describe("AssetsApiLive", () => {
           },
         ])
         yield* db.insert(schema.assetResolutionJobs).values([
-          { providerAssetRowId: firstId, evidenceRevision: 1, status: "completed" },
-          { providerAssetRowId: secondId, evidenceRevision: 1, status: "completed" },
+          {
+            providerAssetRowId: firstId,
+            evidenceRevision: 1,
+            policyRevision: "test-policy.1",
+            status: "completed",
+          },
+          {
+            providerAssetRowId: secondId,
+            evidenceRevision: 1,
+            policyRevision: "test-policy.1",
+            status: "completed",
+          },
         ])
         const decisions = yield* db
           .insert(schema.assetResolutionDecisions)
@@ -1419,6 +1429,7 @@ describe("AssetsApiLive", () => {
         yield* db.insert(schema.assetResolutionJobs).values({
           providerAssetRowId: providerAsset.id,
           evidenceRevision: 3,
+          policyRevision: "test-policy.1",
           status: "completed",
         })
         const [decision] = yield* db
@@ -1551,5 +1562,31 @@ describe("AssetsApiLive", () => {
       rematerialization: { status: "pending", affectedSourceCount: 1 },
     })
     expect(staleStatus).toBe(409)
+  })
+
+  it("returns machine-readable codes for lookup failures", async () => {
+    const invalid = await Effect.runPromise(
+      getAdminJson({
+        path: "/v1/assets/exceptions/lookup?provider=coinbase",
+        responseSchema: Schema.Struct({
+          _tag: Schema.Literal("AssetLookupValidationError"),
+          code: Schema.Literal("invalid_lookup"),
+        }),
+      }).pipe(Effect.provide(HttpLive), Effect.scoped)
+    )
+    const missing = await Effect.runPromise(
+      getAdminJson({
+        path: "/v1/assets/exceptions/lookup?provider=coinbase&providerAssetId=missing-observation",
+        responseSchema: Schema.Struct({
+          _tag: Schema.Literal("AssetLookupNotFoundError"),
+          code: Schema.Literal("observation_not_found"),
+        }),
+      }).pipe(Effect.provide(HttpLive), Effect.scoped)
+    )
+
+    expect(invalid.status).toBe(400)
+    expect(invalid.body.code).toBe("invalid_lookup")
+    expect(missing.status).toBe(404)
+    expect(missing.body.code).toBe("observation_not_found")
   })
 })

@@ -13,9 +13,12 @@ import { jobStatusEnum } from "./ProcessingJobsTable.ts"
 import { providerAssets } from "./ProviderAssetsTable.ts"
 
 /**
- * One durable background resolution job per provider observation and evidence revision.
+ * One durable background resolution job per provider observation, evidence
+ * revision, and policy revision.
  *
- * Identity is global: it is not keyed by user, source, or transaction.
+ * Identity is global: it is not keyed by user, source, or transaction. The
+ * policy revision is part of the identity so a policy change can schedule a
+ * fresh evaluation for evidence that has not changed.
  */
 export const assetResolutionJobs = pgTable(
   "asset_resolution_jobs",
@@ -25,6 +28,7 @@ export const assetResolutionJobs = pgTable(
       .notNull()
       .references(() => providerAssets.id, { onDelete: "cascade" }),
     evidenceRevision: integer("evidence_revision").notNull(),
+    policyRevision: text("policy_revision").notNull(),
     status: jobStatusEnum("status").notNull().default("pending"),
     attemptCount: integer("attempt_count").notNull().default(0),
     maxAttempts: integer("max_attempts").notNull().default(3),
@@ -39,7 +43,8 @@ export const assetResolutionJobs = pgTable(
   (table) => [
     uniqueIndex("asset_resolution_jobs_observation_revision_unique").on(
       table.providerAssetRowId,
-      table.evidenceRevision
+      table.evidenceRevision,
+      table.policyRevision
     ),
     index("idx_asset_resolution_jobs_status").on(table.status),
     index("idx_asset_resolution_jobs_heartbeat_at").on(table.heartbeatAt),
