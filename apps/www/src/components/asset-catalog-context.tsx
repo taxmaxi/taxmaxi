@@ -148,9 +148,10 @@ function useAssetCatalogController({
   const changeScope = useCallback(
     (nextScope: CatalogScope) => {
       setScope(nextScope)
+      selection.closeExactLookup()
       paging.resetVisibleItems()
     },
-    [paging.resetVisibleItems]
+    [paging.resetVisibleItems, selection.closeExactLookup]
   )
 
   return useMemo(

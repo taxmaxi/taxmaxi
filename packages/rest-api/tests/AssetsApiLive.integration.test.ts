@@ -1574,6 +1574,24 @@ describe("AssetsApiLive", () => {
         }),
       }).pipe(Effect.provide(HttpLive), Effect.scoped)
     )
+    const blankKey = await Effect.runPromise(
+      getAdminJson({
+        path: "/v1/assets/exceptions/lookup?provider=coinbase&providerAssetId=%20%20",
+        responseSchema: Schema.Struct({
+          _tag: Schema.Literal("AssetLookupValidationError"),
+          code: Schema.Literal("invalid_lookup"),
+        }),
+      }).pipe(Effect.provide(HttpLive), Effect.scoped)
+    )
+    const blankProvider = await Effect.runPromise(
+      getAdminJson({
+        path: "/v1/assets/exceptions/lookup?provider=%20&providerAssetId=some-observation",
+        responseSchema: Schema.Struct({
+          _tag: Schema.Literal("AssetLookupValidationError"),
+          code: Schema.Literal("invalid_lookup"),
+        }),
+      }).pipe(Effect.provide(HttpLive), Effect.scoped)
+    )
     const missing = await Effect.runPromise(
       getAdminJson({
         path: "/v1/assets/exceptions/lookup?provider=coinbase&providerAssetId=missing-observation",
@@ -1586,6 +1604,10 @@ describe("AssetsApiLive", () => {
 
     expect(invalid.status).toBe(400)
     expect(invalid.body.code).toBe("invalid_lookup")
+    expect(blankKey.status).toBe(400)
+    expect(blankKey.body.code).toBe("invalid_lookup")
+    expect(blankProvider.status).toBe(400)
+    expect(blankProvider.body.code).toBe("invalid_lookup")
     expect(missing.status).toBe(404)
     expect(missing.body.code).toBe("observation_not_found")
   })

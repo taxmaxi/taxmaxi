@@ -93,6 +93,12 @@ export function useAssetCatalogSelection({
     setMobileDetailOpen(true)
   }, [])
 
+  // A scope change leaves the lookup context behind; keeping the pane open
+  // would also keep selection repair disabled in the new scope.
+  const closeExactLookup = useCallback(() => {
+    setExactLookupOpen(false)
+  }, [])
+
   useEffect(() => {
     const desktopQuery = window.matchMedia(ASSET_CATALOG_DESKTOP_MEDIA_QUERY)
     const moveFocusToDesktopList = (matches: boolean) => {
@@ -186,6 +192,7 @@ export function useAssetCatalogSelection({
   }, [mobileDetailOpen, selectItem, selectedItem, selectedItemKey, visibleItems])
 
   return {
+    closeExactLookup,
     exactLookupKey,
     exactLookupOpen,
     mobileBackButtonRef,

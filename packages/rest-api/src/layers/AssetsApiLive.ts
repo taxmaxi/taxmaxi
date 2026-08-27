@@ -455,20 +455,25 @@ export const AssetsApiLive = HttpApiBuilder.group(TaxMaxiApi, "assets", (handler
       )
       .handle("lookupAssetException", ({ query: urlParams }) =>
         Effect.gen(function* () {
+          // Blank keys are validation failures, not lookups: direct API and
+          // SDK callers must get the typed invalid_lookup code instead of a
+          // not-found answer for a key that was never usable.
+          const provider = urlParams.provider.trim()
+          const providerAssetId = urlParams.providerAssetId?.trim()
+          const naturalKey = urlParams.naturalKey?.trim()
           const lookup = (() => {
-            if (urlParams.providerAssetId !== undefined && urlParams.naturalKey === undefined) {
-              return {
-                _tag: "provider_asset_id" as const,
-                provider: urlParams.provider,
-                providerAssetId: urlParams.providerAssetId,
-              }
+            if (provider.length === 0) {
+              return null
             }
-            if (urlParams.naturalKey !== undefined && urlParams.providerAssetId === undefined) {
-              return {
-                _tag: "natural_key" as const,
-                provider: urlParams.provider,
-                naturalKey: urlParams.naturalKey,
-              }
+            if (providerAssetId !== undefined && naturalKey === undefined) {
+              return providerAssetId.length === 0
+                ? null
+                : { _tag: "provider_asset_id" as const, provider, providerAssetId }
+            }
+            if (naturalKey !== undefined && providerAssetId === undefined) {
+              return naturalKey.length === 0
+                ? null
+                : { _tag: "natural_key" as const, provider, naturalKey }
             }
             return null
           })()
