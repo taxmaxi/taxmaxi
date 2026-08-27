@@ -1,41 +1,60 @@
 {
   "version": "8",
   "dialect": "postgres",
-  "id": "98e5c282-e1b3-45ad-af3b-3d96c13498e3",
-  "prevIds": ["7b74384a-37ad-43d3-aa4f-fbd97f1312b3"],
+  "id": "794d3b36-6169-4fee-a33e-c9d5f888d8da",
+  "prevIds": [
+    "f4986735-ef37-4b53-bf6f-f47678f36ec8"
+  ],
   "ddl": [
     {
-      "values": ["evm", "solana", "bitcoin"],
+      "values": [
+        "evm",
+        "solana",
+        "bitcoin"
+      ],
       "name": "address_type",
       "entityType": "enums",
       "schema": "public"
     },
     {
-      "values": ["pending", "running", "complete", "operator_attention"],
+      "values": [
+        "pending",
+        "running",
+        "complete",
+        "operator_attention"
+      ],
       "name": "asset_rematerialization_status",
       "entityType": "enums",
       "schema": "public"
     },
     {
-      "values": ["native", "token", "nft"],
+      "values": [
+        "native",
+        "token",
+        "nft"
+      ],
       "name": "asset_representation_type",
       "entityType": "enums",
       "schema": "public"
     },
     {
-      "values": ["active", "superseded"],
-      "name": "asset_resolution_decision_status",
-      "entityType": "enums",
-      "schema": "public"
-    },
-    {
-      "values": ["attach", "create_standalone", "identity", "excluded", "pending", "fail_closed"],
+      "values": [
+        "attach",
+        "create_standalone",
+        "identity",
+        "excluded",
+        "pending",
+        "fail_closed"
+      ],
       "name": "asset_resolution_outcome",
       "entityType": "enums",
       "schema": "public"
     },
     {
-      "values": ["fungible", "nft"],
+      "values": [
+        "fungible",
+        "nft"
+      ],
       "name": "asset_type",
       "entityType": "enums",
       "schema": "public"
@@ -56,109 +75,176 @@
       "schema": "public"
     },
     {
-      "values": ["annual_grant", "top_up", "transaction_usage", "manual_adjustment"],
+      "values": [
+        "annual_grant",
+        "top_up",
+        "transaction_usage",
+        "manual_adjustment"
+      ],
       "name": "credit_entry_kind",
       "entityType": "enums",
       "schema": "public"
     },
     {
-      "values": ["known", "pending_review"],
+      "values": [
+        "known",
+        "pending_review"
+      ],
       "name": "fifo_lot_cost_basis_status",
       "entityType": "enums",
       "schema": "public"
     },
     {
-      "values": ["local", "google", "coinbase"],
+      "values": [
+        "local",
+        "google",
+        "coinbase"
+      ],
       "name": "auth_provider_type",
       "entityType": "enums",
       "schema": "public"
     },
     {
-      "values": ["inbound", "outbound"],
+      "values": [
+        "inbound",
+        "outbound"
+      ],
       "name": "inventory_movement_direction",
       "entityType": "enums",
       "schema": "public"
     },
     {
-      "values": ["principal", "fee", "reward"],
+      "values": [
+        "principal",
+        "fee",
+        "reward"
+      ],
       "name": "inventory_movement_purpose",
       "entityType": "enums",
       "schema": "public"
     },
     {
-      "values": ["unmatched", "matched", "needs_review"],
+      "values": [
+        "unmatched",
+        "matched",
+        "needs_review"
+      ],
       "name": "inventory_movement_reconciliation_status",
       "entityType": "enums",
       "schema": "public"
     },
     {
-      "values": ["taxable", "non_taxable", "pending_review"],
+      "values": [
+        "taxable",
+        "non_taxable",
+        "pending_review"
+      ],
       "name": "inventory_movement_tax_treatment",
       "entityType": "enums",
       "schema": "public"
     },
     {
-      "values": ["login", "link"],
+      "values": [
+        "login",
+        "link"
+      ],
       "name": "oauth_intent",
       "entityType": "enums",
       "schema": "public"
     },
     {
-      "values": ["pending", "completed", "failed"],
+      "values": [
+        "pending",
+        "completed",
+        "failed"
+      ],
       "name": "oauth_state_status",
       "entityType": "enums",
       "schema": "public"
     },
     {
-      "values": ["x402_receipt", "siwx_wallet", "cli_claim_token"],
+      "values": [
+        "x402_receipt",
+        "siwx_wallet",
+        "cli_claim_token"
+      ],
       "name": "principal_claim_type",
       "entityType": "enums",
       "schema": "public"
     },
     {
-      "values": ["user", "anonymous_wallet"],
+      "values": [
+        "user",
+        "anonymous_wallet"
+      ],
       "name": "principal_kind",
       "entityType": "enums",
       "schema": "public"
     },
     {
-      "values": ["sync", "replay"],
+      "values": [
+        "sync",
+        "replay"
+      ],
       "name": "job_mode",
       "entityType": "enums",
       "schema": "public"
     },
     {
-      "values": ["pending", "processing", "completed", "failed", "credit_required"],
+      "values": [
+        "pending",
+        "processing",
+        "completed",
+        "failed",
+        "credit_required"
+      ],
       "name": "job_status",
       "entityType": "enums",
       "schema": "public"
     },
     {
-      "values": ["dune"],
+      "values": [
+        "dune"
+      ],
       "name": "protocol_candidate_observation_onchain_data_source",
       "entityType": "enums",
       "schema": "public"
     },
     {
-      "values": ["sample_signature", "normalized_fixture", "dune_observation", "review_note"],
+      "values": [
+        "sample_signature",
+        "normalized_fixture",
+        "dune_observation",
+        "review_note"
+      ],
       "name": "protocol_mapping_evidence_kind",
       "entityType": "enums",
       "schema": "public"
     },
     {
-      "values": ["token_out_and_token_in"],
+      "values": [
+        "token_out_and_token_in"
+      ],
       "name": "protocol_movement_pattern",
       "entityType": "enums",
       "schema": "public"
     },
     {
-      "values": ["asset", "fiat"],
+      "values": [
+        "asset",
+        "fiat"
+      ],
       "name": "provider_asset_mapping_kind",
       "entityType": "enums",
       "schema": "public"
     },
     {
-      "values": ["approved", "pending_review", "rejected", "excluded"],
+      "values": [
+        "approved",
+        "pending_review",
+        "rejected",
+        "excluded"
+      ],
       "name": "provider_asset_mapping_status",
       "entityType": "enums",
       "schema": "public"
@@ -177,79 +263,140 @@
       "schema": "public"
     },
     {
-      "values": ["approved", "pending_review", "rejected"],
+      "values": [
+        "approved",
+        "pending_review",
+        "rejected"
+      ],
       "name": "provider_mapping_status",
       "entityType": "enums",
       "schema": "public"
     },
     {
-      "values": ["static", "amount_sign", "venue_side", "paired_spread_fee", "no_leg"],
+      "values": [
+        "static",
+        "amount_sign",
+        "venue_side",
+        "paired_spread_fee",
+        "no_leg"
+      ],
       "name": "provider_resolution_strategy",
       "entityType": "enums",
       "schema": "public"
     },
     {
-      "values": ["taxable_by_default", "non_taxable_by_default", "requires_additional_rule_logic"],
+      "values": [
+        "taxable_by_default",
+        "non_taxable_by_default",
+        "requires_additional_rule_logic"
+      ],
       "name": "provider_tax_treatment",
       "entityType": "enums",
       "schema": "public"
     },
     {
-      "values": ["inbound", "outbound"],
+      "values": [
+        "inbound",
+        "outbound"
+      ],
       "name": "provider_transfer_direction",
       "entityType": "enums",
       "schema": "public"
     },
     {
-      "values": ["accounting_and_evidence", "accounting_only", "evidence_only", "stale"],
+      "values": [
+        "accounting_and_evidence",
+        "accounting_only",
+        "evidence_only",
+        "stale"
+      ],
       "name": "provider_transfer_processing_mode",
       "entityType": "enums",
       "schema": "public"
     },
     {
-      "values": ["onchain", "cex", "dex"],
+      "values": [
+        "onchain",
+        "cex",
+        "dex"
+      ],
       "name": "sourceable_type",
       "entityType": "enums",
       "schema": "public"
     },
     {
-      "values": ["queued", "running", "completed", "failed"],
+      "values": [
+        "queued",
+        "running",
+        "completed",
+        "failed"
+      ],
       "name": "sync_run_item_status",
       "entityType": "enums",
       "schema": "public"
     },
     {
-      "values": ["queued", "running", "completed", "failed", "partially_failed"],
+      "values": [
+        "queued",
+        "running",
+        "completed",
+        "failed",
+        "partially_failed"
+      ],
       "name": "sync_run_status",
       "entityType": "enums",
       "schema": "public"
     },
     {
-      "values": ["acquisition", "disposal", "income", "fee"],
+      "values": [
+        "acquisition",
+        "disposal",
+        "income",
+        "fee"
+      ],
       "name": "leg_kind",
       "entityType": "enums",
       "schema": "public"
     },
     {
-      "values": ["deterministic", "rule", "ai", "manual"],
+      "values": [
+        "deterministic",
+        "rule",
+        "ai",
+        "manual"
+      ],
       "name": "leg_provenance",
       "entityType": "enums",
       "schema": "public"
     },
     {
-      "values": ["auto_applied", "needs_review", "approved", "changed"],
+      "values": [
+        "auto_applied",
+        "needs_review",
+        "approved",
+        "changed"
+      ],
       "name": "review_status",
       "entityType": "enums",
       "schema": "public"
     },
     {
-      "values": ["cex", "dex"],
+      "values": [
+        "cex",
+        "dex"
+      ],
       "name": "transaction_venue_type",
       "entityType": "enums",
       "schema": "public"
     },
     {
-      "values": ["pending", "needs_review", "approved", "rejected", "auto_applied"],
+      "values": [
+        "pending",
+        "needs_review",
+        "approved",
+        "rejected",
+        "auto_applied"
+      ],
       "name": "transfer_reconciliation_status",
       "entityType": "enums",
       "schema": "public"
@@ -275,7 +422,10 @@
       "schema": "public"
     },
     {
-      "values": ["user", "admin"],
+      "values": [
+        "user",
+        "admin"
+      ],
       "name": "user_role",
       "entityType": "enums",
       "schema": "public"
@@ -1394,19 +1544,6 @@
       "generated": null,
       "identity": null,
       "name": "outcome",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "asset_resolution_decisions"
-    },
-    {
-      "type": "asset_resolution_decision_status",
-      "typeSchema": "public",
-      "notNull": true,
-      "dimensions": 0,
-      "default": "'active'",
-      "generated": null,
-      "identity": null,
-      "name": "status",
       "entityType": "columns",
       "schema": "public",
       "table": "asset_resolution_decisions"
@@ -13724,10 +13861,14 @@
     },
     {
       "nameExplicit": false,
-      "columns": ["principal_id"],
+      "columns": [
+        "principal_id"
+      ],
       "schemaTo": "public",
       "tableTo": "principals",
-      "columnsTo": ["id"],
+      "columnsTo": [
+        "id"
+      ],
       "onUpdate": "NO ACTION",
       "onDelete": "CASCADE",
       "name": "addresses_principal_id_principals_id_fkey",
@@ -13737,10 +13878,14 @@
     },
     {
       "nameExplicit": false,
-      "columns": ["decision_id"],
+      "columns": [
+        "decision_id"
+      ],
       "schemaTo": "public",
       "tableTo": "asset_resolution_decisions",
-      "columnsTo": ["id"],
+      "columnsTo": [
+        "id"
+      ],
       "onUpdate": "NO ACTION",
       "onDelete": "CASCADE",
       "name": "asset_decision_rematerializations_YSjlTCEOr6u4_fkey",
@@ -13750,10 +13895,14 @@
     },
     {
       "nameExplicit": false,
-      "columns": ["source_id"],
+      "columns": [
+        "source_id"
+      ],
       "schemaTo": "public",
       "tableTo": "sources",
-      "columnsTo": ["id"],
+      "columnsTo": [
+        "id"
+      ],
       "onUpdate": "NO ACTION",
       "onDelete": "CASCADE",
       "name": "asset_decision_rematerializations_source_id_sources_id_fkey",
@@ -13763,10 +13912,14 @@
     },
     {
       "nameExplicit": false,
-      "columns": ["processing_job_id"],
+      "columns": [
+        "processing_job_id"
+      ],
       "schemaTo": "public",
       "tableTo": "processing_jobs",
-      "columnsTo": ["id"],
+      "columnsTo": [
+        "id"
+      ],
       "onUpdate": "NO ACTION",
       "onDelete": "SET NULL",
       "name": "asset_decision_rematerializations_7CJWRfWydXy0_fkey",
@@ -13776,10 +13929,14 @@
     },
     {
       "nameExplicit": false,
-      "columns": ["asset_id"],
+      "columns": [
+        "asset_id"
+      ],
       "schemaTo": "public",
       "tableTo": "assets",
-      "columnsTo": ["id"],
+      "columnsTo": [
+        "id"
+      ],
       "onUpdate": "NO ACTION",
       "onDelete": "CASCADE",
       "name": "asset_prices_asset_id_assets_id_fkey",
@@ -13789,10 +13946,14 @@
     },
     {
       "nameExplicit": false,
-      "columns": ["asset_representation_id"],
+      "columns": [
+        "asset_representation_id"
+      ],
       "schemaTo": "public",
       "tableTo": "asset_representations",
-      "columnsTo": ["id"],
+      "columnsTo": [
+        "id"
+      ],
       "onUpdate": "NO ACTION",
       "onDelete": "NO ACTION",
       "name": "asset_representation_ownership_decisions_9YVjItPMGEXN_fkey",
@@ -13802,10 +13963,14 @@
     },
     {
       "nameExplicit": true,
-      "columns": ["asset_id"],
+      "columns": [
+        "asset_id"
+      ],
       "schemaTo": "public",
       "tableTo": "assets",
-      "columnsTo": ["id"],
+      "columnsTo": [
+        "id"
+      ],
       "onUpdate": "NO ACTION",
       "onDelete": "NO ACTION",
       "name": "asset_representation_ownership_asset_id_fk",
@@ -13815,10 +13980,16 @@
     },
     {
       "nameExplicit": true,
-      "columns": ["asset_representation_id", "supersedes_decision_id"],
+      "columns": [
+        "asset_representation_id",
+        "supersedes_decision_id"
+      ],
       "schemaTo": "public",
       "tableTo": "asset_representation_ownership_decisions",
-      "columnsTo": ["asset_representation_id", "id"],
+      "columnsTo": [
+        "asset_representation_id",
+        "id"
+      ],
       "onUpdate": "NO ACTION",
       "onDelete": "NO ACTION",
       "name": "asset_representation_ownership_supersedes_fk",
@@ -13828,10 +13999,14 @@
     },
     {
       "nameExplicit": false,
-      "columns": ["asset_id"],
+      "columns": [
+        "asset_id"
+      ],
       "schemaTo": "public",
       "tableTo": "assets",
-      "columnsTo": ["id"],
+      "columnsTo": [
+        "id"
+      ],
       "onUpdate": "NO ACTION",
       "onDelete": "NO ACTION",
       "name": "asset_representations_asset_id_assets_id_fkey",
@@ -13841,10 +14016,14 @@
     },
     {
       "nameExplicit": false,
-      "columns": ["blockchain_id"],
+      "columns": [
+        "blockchain_id"
+      ],
       "schemaTo": "public",
       "tableTo": "blockchains",
-      "columnsTo": ["id"],
+      "columnsTo": [
+        "id"
+      ],
       "onUpdate": "NO ACTION",
       "onDelete": "NO ACTION",
       "name": "asset_representations_blockchain_id_blockchains_id_fkey",
@@ -13854,10 +14033,14 @@
     },
     {
       "nameExplicit": false,
-      "columns": ["provider_asset_row_id"],
+      "columns": [
+        "provider_asset_row_id"
+      ],
       "schemaTo": "public",
       "tableTo": "provider_assets",
-      "columnsTo": ["id"],
+      "columnsTo": [
+        "id"
+      ],
       "onUpdate": "NO ACTION",
       "onDelete": "CASCADE",
       "name": "asset_resolution_current_state_lrqfOBAPkLcX_fkey",
@@ -13867,10 +14050,14 @@
     },
     {
       "nameExplicit": false,
-      "columns": ["current_conclusion_id"],
+      "columns": [
+        "current_conclusion_id"
+      ],
       "schemaTo": "public",
       "tableTo": "asset_resolution_decisions",
-      "columnsTo": ["id"],
+      "columnsTo": [
+        "id"
+      ],
       "onUpdate": "NO ACTION",
       "onDelete": "NO ACTION",
       "name": "asset_resolution_current_state_Kdbpd4S2hgX1_fkey",
@@ -13880,10 +14067,14 @@
     },
     {
       "nameExplicit": false,
-      "columns": ["current_policy_evaluation_id"],
+      "columns": [
+        "current_policy_evaluation_id"
+      ],
       "schemaTo": "public",
       "tableTo": "asset_resolution_decisions",
-      "columnsTo": ["id"],
+      "columnsTo": [
+        "id"
+      ],
       "onUpdate": "NO ACTION",
       "onDelete": "NO ACTION",
       "name": "asset_resolution_current_state_fXBYBFHYv8zf_fkey",
@@ -13893,10 +14084,16 @@
     },
     {
       "nameExplicit": true,
-      "columns": ["provider_asset_row_id", "current_conclusion_id"],
+      "columns": [
+        "provider_asset_row_id",
+        "current_conclusion_id"
+      ],
       "schemaTo": "public",
       "tableTo": "asset_resolution_decisions",
-      "columnsTo": ["provider_asset_row_id", "id"],
+      "columnsTo": [
+        "provider_asset_row_id",
+        "id"
+      ],
       "onUpdate": "NO ACTION",
       "onDelete": "NO ACTION",
       "name": "asset_resolution_current_conclusion_observation_fk",
@@ -13906,10 +14103,16 @@
     },
     {
       "nameExplicit": true,
-      "columns": ["provider_asset_row_id", "current_policy_evaluation_id"],
+      "columns": [
+        "provider_asset_row_id",
+        "current_policy_evaluation_id"
+      ],
       "schemaTo": "public",
       "tableTo": "asset_resolution_decisions",
-      "columnsTo": ["provider_asset_row_id", "id"],
+      "columnsTo": [
+        "provider_asset_row_id",
+        "id"
+      ],
       "onUpdate": "NO ACTION",
       "onDelete": "NO ACTION",
       "name": "asset_resolution_current_policy_evaluation_observation_fk",
@@ -13919,10 +14122,14 @@
     },
     {
       "nameExplicit": false,
-      "columns": ["decision_id"],
+      "columns": [
+        "decision_id"
+      ],
       "schemaTo": "public",
       "tableTo": "asset_resolution_decisions",
-      "columnsTo": ["id"],
+      "columnsTo": [
+        "id"
+      ],
       "onUpdate": "NO ACTION",
       "onDelete": "CASCADE",
       "name": "asset_resolution_decision_evidence_links_BBxNJFzQqlEL_fkey",
@@ -13932,10 +14139,14 @@
     },
     {
       "nameExplicit": false,
-      "columns": ["evidence_id"],
+      "columns": [
+        "evidence_id"
+      ],
       "schemaTo": "public",
       "tableTo": "asset_resolution_evidence",
-      "columnsTo": ["id"],
+      "columnsTo": [
+        "id"
+      ],
       "onUpdate": "NO ACTION",
       "onDelete": "NO ACTION",
       "name": "asset_resolution_decision_evidence_links_9d1io6Eys9OC_fkey",
@@ -13945,10 +14156,14 @@
     },
     {
       "nameExplicit": false,
-      "columns": ["provider_asset_row_id"],
+      "columns": [
+        "provider_asset_row_id"
+      ],
       "schemaTo": "public",
       "tableTo": "provider_assets",
-      "columnsTo": ["id"],
+      "columnsTo": [
+        "id"
+      ],
       "onUpdate": "NO ACTION",
       "onDelete": "CASCADE",
       "name": "asset_resolution_decisions_z5wvnNDSeDWF_fkey",
@@ -13958,10 +14173,14 @@
     },
     {
       "nameExplicit": false,
-      "columns": ["asset_id"],
+      "columns": [
+        "asset_id"
+      ],
       "schemaTo": "public",
       "tableTo": "assets",
-      "columnsTo": ["id"],
+      "columnsTo": [
+        "id"
+      ],
       "onUpdate": "NO ACTION",
       "onDelete": "NO ACTION",
       "name": "asset_resolution_decisions_asset_id_assets_id_fkey",
@@ -13971,10 +14190,14 @@
     },
     {
       "nameExplicit": false,
-      "columns": ["asset_representation_id"],
+      "columns": [
+        "asset_representation_id"
+      ],
       "schemaTo": "public",
       "tableTo": "asset_representations",
-      "columnsTo": ["id"],
+      "columnsTo": [
+        "id"
+      ],
       "onUpdate": "NO ACTION",
       "onDelete": "NO ACTION",
       "name": "asset_resolution_decisions_QbAUryyGxFkm_fkey",
@@ -13984,10 +14207,16 @@
     },
     {
       "nameExplicit": true,
-      "columns": ["provider_asset_row_id", "supersedes_decision_id"],
+      "columns": [
+        "provider_asset_row_id",
+        "supersedes_decision_id"
+      ],
       "schemaTo": "public",
       "tableTo": "asset_resolution_decisions",
-      "columnsTo": ["provider_asset_row_id", "id"],
+      "columnsTo": [
+        "provider_asset_row_id",
+        "id"
+      ],
       "onUpdate": "NO ACTION",
       "onDelete": "NO ACTION",
       "name": "asset_resolution_decisions_supersedes_decision_id_fk",
@@ -13997,10 +14226,14 @@
     },
     {
       "nameExplicit": false,
-      "columns": ["decision_id"],
+      "columns": [
+        "decision_id"
+      ],
       "schemaTo": "public",
       "tableTo": "asset_resolution_decisions",
-      "columnsTo": ["id"],
+      "columnsTo": [
+        "id"
+      ],
       "onUpdate": "NO ACTION",
       "onDelete": "CASCADE",
       "name": "asset_resolution_evidence_13op32dmB3hM_fkey",
@@ -14010,10 +14243,14 @@
     },
     {
       "nameExplicit": false,
-      "columns": ["provider_asset_row_id"],
+      "columns": [
+        "provider_asset_row_id"
+      ],
       "schemaTo": "public",
       "tableTo": "provider_assets",
-      "columnsTo": ["id"],
+      "columnsTo": [
+        "id"
+      ],
       "onUpdate": "NO ACTION",
       "onDelete": "CASCADE",
       "name": "asset_resolution_jobs_VHrqXS8DXhzo_fkey",
@@ -14023,10 +14260,14 @@
     },
     {
       "nameExplicit": false,
-      "columns": ["user_id"],
+      "columns": [
+        "user_id"
+      ],
       "schemaTo": "public",
       "tableTo": "users",
-      "columnsTo": ["id"],
+      "columnsTo": [
+        "id"
+      ],
       "onUpdate": "NO ACTION",
       "onDelete": "CASCADE",
       "name": "billing_accounts_user_id_users_id_fkey",
@@ -14036,10 +14277,14 @@
     },
     {
       "nameExplicit": false,
-      "columns": ["user_id"],
+      "columns": [
+        "user_id"
+      ],
       "schemaTo": "public",
       "tableTo": "users",
-      "columnsTo": ["id"],
+      "columnsTo": [
+        "id"
+      ],
       "onUpdate": "NO ACTION",
       "onDelete": "CASCADE",
       "name": "credit_ledger_user_id_users_id_fkey",
@@ -14049,10 +14294,14 @@
     },
     {
       "nameExplicit": false,
-      "columns": ["cex_id"],
+      "columns": [
+        "cex_id"
+      ],
       "schemaTo": "public",
       "tableTo": "cex",
-      "columnsTo": ["id"],
+      "columnsTo": [
+        "id"
+      ],
       "onUpdate": "NO ACTION",
       "onDelete": "CASCADE",
       "name": "cex_account_cex_id_cex_id_fkey",
@@ -14062,10 +14311,14 @@
     },
     {
       "nameExplicit": false,
-      "columns": ["principal_id"],
+      "columns": [
+        "principal_id"
+      ],
       "schemaTo": "public",
       "tableTo": "principals",
-      "columnsTo": ["id"],
+      "columnsTo": [
+        "id"
+      ],
       "onUpdate": "NO ACTION",
       "onDelete": "CASCADE",
       "name": "cex_account_principal_id_principals_id_fkey",
@@ -14075,10 +14328,14 @@
     },
     {
       "nameExplicit": false,
-      "columns": ["disposal_leg_id"],
+      "columns": [
+        "disposal_leg_id"
+      ],
       "schemaTo": "public",
       "tableTo": "transaction_legs",
-      "columnsTo": ["id"],
+      "columnsTo": [
+        "id"
+      ],
       "onUpdate": "NO ACTION",
       "onDelete": "CASCADE",
       "name": "disposal_matches_disposal_leg_id_transaction_legs_id_fkey",
@@ -14088,10 +14345,14 @@
     },
     {
       "nameExplicit": false,
-      "columns": ["fifo_lot_id"],
+      "columns": [
+        "fifo_lot_id"
+      ],
       "schemaTo": "public",
       "tableTo": "fifo_lots",
-      "columnsTo": ["id"],
+      "columnsTo": [
+        "id"
+      ],
       "onUpdate": "NO ACTION",
       "onDelete": "CASCADE",
       "name": "disposal_matches_fifo_lot_id_fifo_lots_id_fkey",
@@ -14101,10 +14362,14 @@
     },
     {
       "nameExplicit": false,
-      "columns": ["observation_id"],
+      "columns": [
+        "observation_id"
+      ],
       "schemaTo": "public",
       "tableTo": "protocol_candidate_observations",
-      "columnsTo": ["id"],
+      "columnsTo": [
+        "id"
+      ],
       "onUpdate": "NO ACTION",
       "onDelete": "CASCADE",
       "name": "dune_protocol_candidate_observations_6fVTEm5envHJ_fkey",
@@ -14114,10 +14379,14 @@
     },
     {
       "nameExplicit": false,
-      "columns": ["user_id"],
+      "columns": [
+        "user_id"
+      ],
       "schemaTo": "public",
       "tableTo": "users",
-      "columnsTo": ["id"],
+      "columnsTo": [
+        "id"
+      ],
       "onUpdate": "NO ACTION",
       "onDelete": "CASCADE",
       "name": "email_verification_requests_user_id_users_id_fkey",
@@ -14127,10 +14396,14 @@
     },
     {
       "nameExplicit": false,
-      "columns": ["principal_id"],
+      "columns": [
+        "principal_id"
+      ],
       "schemaTo": "public",
       "tableTo": "principals",
-      "columnsTo": ["id"],
+      "columnsTo": [
+        "id"
+      ],
       "onUpdate": "NO ACTION",
       "onDelete": "CASCADE",
       "name": "fifo_lots_principal_id_principals_id_fkey",
@@ -14140,10 +14413,14 @@
     },
     {
       "nameExplicit": false,
-      "columns": ["source_id"],
+      "columns": [
+        "source_id"
+      ],
       "schemaTo": "public",
       "tableTo": "sources",
-      "columnsTo": ["id"],
+      "columnsTo": [
+        "id"
+      ],
       "onUpdate": "NO ACTION",
       "onDelete": "NO ACTION",
       "name": "fifo_lots_source_id_sources_id_fkey",
@@ -14153,10 +14430,14 @@
     },
     {
       "nameExplicit": false,
-      "columns": ["asset_id"],
+      "columns": [
+        "asset_id"
+      ],
       "schemaTo": "public",
       "tableTo": "assets",
-      "columnsTo": ["id"],
+      "columnsTo": [
+        "id"
+      ],
       "onUpdate": "NO ACTION",
       "onDelete": "NO ACTION",
       "name": "fifo_lots_asset_id_assets_id_fkey",
@@ -14166,10 +14447,14 @@
     },
     {
       "nameExplicit": false,
-      "columns": ["source_leg_id"],
+      "columns": [
+        "source_leg_id"
+      ],
       "schemaTo": "public",
       "tableTo": "transaction_legs",
-      "columnsTo": ["id"],
+      "columnsTo": [
+        "id"
+      ],
       "onUpdate": "NO ACTION",
       "onDelete": "CASCADE",
       "name": "fifo_lots_source_leg_id_transaction_legs_id_fkey",
@@ -14179,10 +14464,14 @@
     },
     {
       "nameExplicit": false,
-      "columns": ["source_provider_transfer_id"],
+      "columns": [
+        "source_provider_transfer_id"
+      ],
       "schemaTo": "public",
       "tableTo": "provider_transfers",
-      "columnsTo": ["id"],
+      "columnsTo": [
+        "id"
+      ],
       "onUpdate": "NO ACTION",
       "onDelete": "CASCADE",
       "name": "fifo_lots_zo6btAURiYIu_fkey",
@@ -14192,10 +14481,16 @@
     },
     {
       "nameExplicit": true,
-      "columns": ["asset_id", "asset_representation_id"],
+      "columns": [
+        "asset_id",
+        "asset_representation_id"
+      ],
       "schemaTo": "public",
       "tableTo": "asset_representations",
-      "columnsTo": ["asset_id", "id"],
+      "columnsTo": [
+        "asset_id",
+        "id"
+      ],
       "onUpdate": "NO ACTION",
       "onDelete": "NO ACTION",
       "name": "fifo_lots_representation_matches_asset_fk",
@@ -14205,10 +14500,14 @@
     },
     {
       "nameExplicit": false,
-      "columns": ["user_id"],
+      "columns": [
+        "user_id"
+      ],
       "schemaTo": "public",
       "tableTo": "users",
-      "columnsTo": ["id"],
+      "columnsTo": [
+        "id"
+      ],
       "onUpdate": "NO ACTION",
       "onDelete": "CASCADE",
       "name": "auth_identities_user_id_users_id_fkey",
@@ -14218,10 +14517,14 @@
     },
     {
       "nameExplicit": false,
-      "columns": ["inventory_movement_id"],
+      "columns": [
+        "inventory_movement_id"
+      ],
       "schemaTo": "public",
       "tableTo": "inventory_movements",
-      "columnsTo": ["id"],
+      "columnsTo": [
+        "id"
+      ],
       "onUpdate": "NO ACTION",
       "onDelete": "CASCADE",
       "name": "inventory_movement_allocations_iAO6csLCSW6D_fkey",
@@ -14231,10 +14534,14 @@
     },
     {
       "nameExplicit": false,
-      "columns": ["fifo_lot_id"],
+      "columns": [
+        "fifo_lot_id"
+      ],
       "schemaTo": "public",
       "tableTo": "fifo_lots",
-      "columnsTo": ["id"],
+      "columnsTo": [
+        "id"
+      ],
       "onUpdate": "NO ACTION",
       "onDelete": "CASCADE",
       "name": "inventory_movement_allocations_fifo_lot_id_fifo_lots_id_fkey",
@@ -14244,10 +14551,14 @@
     },
     {
       "nameExplicit": false,
-      "columns": ["principal_id"],
+      "columns": [
+        "principal_id"
+      ],
       "schemaTo": "public",
       "tableTo": "principals",
-      "columnsTo": ["id"],
+      "columnsTo": [
+        "id"
+      ],
       "onUpdate": "NO ACTION",
       "onDelete": "CASCADE",
       "name": "inventory_movements_principal_id_principals_id_fkey",
@@ -14257,10 +14568,14 @@
     },
     {
       "nameExplicit": false,
-      "columns": ["source_id"],
+      "columns": [
+        "source_id"
+      ],
       "schemaTo": "public",
       "tableTo": "sources",
-      "columnsTo": ["id"],
+      "columnsTo": [
+        "id"
+      ],
       "onUpdate": "NO ACTION",
       "onDelete": "CASCADE",
       "name": "inventory_movements_source_id_sources_id_fkey",
@@ -14270,10 +14585,14 @@
     },
     {
       "nameExplicit": false,
-      "columns": ["source_raw_record_id"],
+      "columns": [
+        "source_raw_record_id"
+      ],
       "schemaTo": "public",
       "tableTo": "source_records_raw",
-      "columnsTo": ["id"],
+      "columnsTo": [
+        "id"
+      ],
       "onUpdate": "NO ACTION",
       "onDelete": "SET NULL",
       "name": "inventory_movements_g3T9P1auBFr8_fkey",
@@ -14283,10 +14602,14 @@
     },
     {
       "nameExplicit": false,
-      "columns": ["transaction_id"],
+      "columns": [
+        "transaction_id"
+      ],
       "schemaTo": "public",
       "tableTo": "transactions",
-      "columnsTo": ["id"],
+      "columnsTo": [
+        "id"
+      ],
       "onUpdate": "NO ACTION",
       "onDelete": "CASCADE",
       "name": "inventory_movements_transaction_id_transactions_id_fkey",
@@ -14296,10 +14619,14 @@
     },
     {
       "nameExplicit": false,
-      "columns": ["provider_transfer_id"],
+      "columns": [
+        "provider_transfer_id"
+      ],
       "schemaTo": "public",
       "tableTo": "provider_transfers",
-      "columnsTo": ["id"],
+      "columnsTo": [
+        "id"
+      ],
       "onUpdate": "NO ACTION",
       "onDelete": "CASCADE",
       "name": "inventory_movements_Hu4boO3PhauI_fkey",
@@ -14309,10 +14636,14 @@
     },
     {
       "nameExplicit": false,
-      "columns": ["transaction_leg_id"],
+      "columns": [
+        "transaction_leg_id"
+      ],
       "schemaTo": "public",
       "tableTo": "transaction_legs",
-      "columnsTo": ["id"],
+      "columnsTo": [
+        "id"
+      ],
       "onUpdate": "NO ACTION",
       "onDelete": "CASCADE",
       "name": "inventory_movements_transaction_leg_id_transaction_legs_id_fkey",
@@ -14322,10 +14653,14 @@
     },
     {
       "nameExplicit": false,
-      "columns": ["asset_id"],
+      "columns": [
+        "asset_id"
+      ],
       "schemaTo": "public",
       "tableTo": "assets",
-      "columnsTo": ["id"],
+      "columnsTo": [
+        "id"
+      ],
       "onUpdate": "NO ACTION",
       "onDelete": "NO ACTION",
       "name": "inventory_movements_asset_id_assets_id_fkey",
@@ -14335,10 +14670,16 @@
     },
     {
       "nameExplicit": true,
-      "columns": ["asset_id", "asset_representation_id"],
+      "columns": [
+        "asset_id",
+        "asset_representation_id"
+      ],
       "schemaTo": "public",
       "tableTo": "asset_representations",
-      "columnsTo": ["asset_id", "id"],
+      "columnsTo": [
+        "asset_id",
+        "id"
+      ],
       "onUpdate": "NO ACTION",
       "onDelete": "NO ACTION",
       "name": "inventory_movements_representation_matches_asset_fk",
@@ -14348,10 +14689,14 @@
     },
     {
       "nameExplicit": false,
-      "columns": ["rule_set_id"],
+      "columns": [
+        "rule_set_id"
+      ],
       "schemaTo": "public",
       "tableTo": "jurisdiction_rule_sets",
-      "columnsTo": ["id"],
+      "columnsTo": [
+        "id"
+      ],
       "onUpdate": "NO ACTION",
       "onDelete": "CASCADE",
       "name": "jurisdiction_rule_set_rules_l8WA6MhMvBx4_fkey",
@@ -14361,10 +14706,14 @@
     },
     {
       "nameExplicit": false,
-      "columns": ["rule_id"],
+      "columns": [
+        "rule_id"
+      ],
       "schemaTo": "public",
       "tableTo": "legal_rules",
-      "columnsTo": ["id"],
+      "columnsTo": [
+        "id"
+      ],
       "onUpdate": "NO ACTION",
       "onDelete": "CASCADE",
       "name": "jurisdiction_rule_set_rules_rule_id_legal_rules_id_fkey",
@@ -14374,10 +14723,14 @@
     },
     {
       "nameExplicit": false,
-      "columns": ["source_id"],
+      "columns": [
+        "source_id"
+      ],
       "schemaTo": "public",
       "tableTo": "legal_sources",
-      "columnsTo": ["id"],
+      "columnsTo": [
+        "id"
+      ],
       "onUpdate": "NO ACTION",
       "onDelete": "CASCADE",
       "name": "legal_clauses_source_id_legal_sources_id_fkey",
@@ -14387,10 +14740,14 @@
     },
     {
       "nameExplicit": false,
-      "columns": ["rule_id"],
+      "columns": [
+        "rule_id"
+      ],
       "schemaTo": "public",
       "tableTo": "legal_rules",
-      "columnsTo": ["id"],
+      "columnsTo": [
+        "id"
+      ],
       "onUpdate": "NO ACTION",
       "onDelete": "CASCADE",
       "name": "legal_rule_citations_rule_id_legal_rules_id_fkey",
@@ -14400,10 +14757,14 @@
     },
     {
       "nameExplicit": false,
-      "columns": ["clause_id"],
+      "columns": [
+        "clause_id"
+      ],
       "schemaTo": "public",
       "tableTo": "legal_clauses",
-      "columnsTo": ["id"],
+      "columnsTo": [
+        "id"
+      ],
       "onUpdate": "NO ACTION",
       "onDelete": "CASCADE",
       "name": "legal_rule_citations_clause_id_legal_clauses_id_fkey",
@@ -14413,10 +14774,14 @@
     },
     {
       "nameExplicit": false,
-      "columns": ["transaction_type_key"],
+      "columns": [
+        "transaction_type_key"
+      ],
       "schemaTo": "public",
       "tableTo": "transaction_types",
-      "columnsTo": ["type_key"],
+      "columnsTo": [
+        "type_key"
+      ],
       "onUpdate": "NO ACTION",
       "onDelete": "CASCADE",
       "name": "transaction_type_legal_rules_8XfTWuJYmG0D_fkey",
@@ -14426,10 +14791,14 @@
     },
     {
       "nameExplicit": false,
-      "columns": ["rule_id"],
+      "columns": [
+        "rule_id"
+      ],
       "schemaTo": "public",
       "tableTo": "legal_rules",
-      "columnsTo": ["id"],
+      "columnsTo": [
+        "id"
+      ],
       "onUpdate": "NO ACTION",
       "onDelete": "CASCADE",
       "name": "transaction_type_legal_rules_rule_id_legal_rules_id_fkey",
@@ -14439,10 +14808,14 @@
     },
     {
       "nameExplicit": false,
-      "columns": ["user_id"],
+      "columns": [
+        "user_id"
+      ],
       "schemaTo": "public",
       "tableTo": "users",
-      "columnsTo": ["id"],
+      "columnsTo": [
+        "id"
+      ],
       "onUpdate": "NO ACTION",
       "onDelete": "CASCADE",
       "name": "oauth_states_user_id_users_id_fkey",
@@ -14452,10 +14825,14 @@
     },
     {
       "nameExplicit": false,
-      "columns": ["principal_id"],
+      "columns": [
+        "principal_id"
+      ],
       "schemaTo": "public",
       "tableTo": "principals",
-      "columnsTo": ["id"],
+      "columnsTo": [
+        "id"
+      ],
       "onUpdate": "NO ACTION",
       "onDelete": "CASCADE",
       "name": "principal_claims_principal_id_principals_id_fkey",
@@ -14465,10 +14842,14 @@
     },
     {
       "nameExplicit": false,
-      "columns": ["source_id"],
+      "columns": [
+        "source_id"
+      ],
       "schemaTo": "public",
       "tableTo": "sources",
-      "columnsTo": ["id"],
+      "columnsTo": [
+        "id"
+      ],
       "onUpdate": "NO ACTION",
       "onDelete": "CASCADE",
       "name": "principal_claims_source_id_sources_id_fkey",
@@ -14478,10 +14859,14 @@
     },
     {
       "nameExplicit": false,
-      "columns": ["user_id"],
+      "columns": [
+        "user_id"
+      ],
       "schemaTo": "public",
       "tableTo": "users",
-      "columnsTo": ["id"],
+      "columnsTo": [
+        "id"
+      ],
       "onUpdate": "NO ACTION",
       "onDelete": "CASCADE",
       "name": "principals_user_id_users_id_fkey",
@@ -14491,10 +14876,14 @@
     },
     {
       "nameExplicit": false,
-      "columns": ["source_id"],
+      "columns": [
+        "source_id"
+      ],
       "schemaTo": "public",
       "tableTo": "sources",
-      "columnsTo": ["id"],
+      "columnsTo": [
+        "id"
+      ],
       "onUpdate": "NO ACTION",
       "onDelete": "CASCADE",
       "name": "processing_jobs_source_id_sources_id_fkey",
@@ -14504,10 +14893,14 @@
     },
     {
       "nameExplicit": false,
-      "columns": ["principal_id"],
+      "columns": [
+        "principal_id"
+      ],
       "schemaTo": "public",
       "tableTo": "principals",
-      "columnsTo": ["id"],
+      "columnsTo": [
+        "id"
+      ],
       "onUpdate": "NO ACTION",
       "onDelete": "CASCADE",
       "name": "processing_jobs_principal_id_principals_id_fkey",
@@ -14517,10 +14910,14 @@
     },
     {
       "nameExplicit": true,
-      "columns": ["follow_up_job_id"],
+      "columns": [
+        "follow_up_job_id"
+      ],
       "schemaTo": "public",
       "tableTo": "processing_jobs",
-      "columnsTo": ["id"],
+      "columnsTo": [
+        "id"
+      ],
       "onUpdate": "NO ACTION",
       "onDelete": "SET NULL",
       "name": "processing_jobs_follow_up_job_id_fk",
@@ -14530,10 +14927,14 @@
     },
     {
       "nameExplicit": false,
-      "columns": ["candidate_id"],
+      "columns": [
+        "candidate_id"
+      ],
       "schemaTo": "public",
       "tableTo": "protocol_candidates",
-      "columnsTo": ["id"],
+      "columnsTo": [
+        "id"
+      ],
       "onUpdate": "NO ACTION",
       "onDelete": "CASCADE",
       "name": "protocol_candidate_observations_jXDjBJXsnfVQ_fkey",
@@ -14543,10 +14944,14 @@
     },
     {
       "nameExplicit": false,
-      "columns": ["blockchain_id"],
+      "columns": [
+        "blockchain_id"
+      ],
       "schemaTo": "public",
       "tableTo": "blockchains",
-      "columnsTo": ["id"],
+      "columnsTo": [
+        "id"
+      ],
       "onUpdate": "NO ACTION",
       "onDelete": "NO ACTION",
       "name": "protocol_candidates_blockchain_id_blockchains_id_fkey",
@@ -14556,10 +14961,14 @@
     },
     {
       "nameExplicit": false,
-      "columns": ["mapping_id"],
+      "columns": [
+        "mapping_id"
+      ],
       "schemaTo": "public",
       "tableTo": "protocol_transaction_type_mappings",
-      "columnsTo": ["id"],
+      "columnsTo": [
+        "id"
+      ],
       "onUpdate": "NO ACTION",
       "onDelete": "CASCADE",
       "name": "protocol_mapping_evidence_n1VJSCxTe9Nv_fkey",
@@ -14569,10 +14978,14 @@
     },
     {
       "nameExplicit": false,
-      "columns": ["candidate_observation_id"],
+      "columns": [
+        "candidate_observation_id"
+      ],
       "schemaTo": "public",
       "tableTo": "protocol_candidate_observations",
-      "columnsTo": ["id"],
+      "columnsTo": [
+        "id"
+      ],
       "onUpdate": "NO ACTION",
       "onDelete": "SET NULL",
       "name": "protocol_mapping_evidence_Qx3cGe0oz1f5_fkey",
@@ -14582,10 +14995,14 @@
     },
     {
       "nameExplicit": false,
-      "columns": ["candidate_id"],
+      "columns": [
+        "candidate_id"
+      ],
       "schemaTo": "public",
       "tableTo": "protocol_candidates",
-      "columnsTo": ["id"],
+      "columnsTo": [
+        "id"
+      ],
       "onUpdate": "NO ACTION",
       "onDelete": "SET NULL",
       "name": "protocol_transaction_type_mappings_z2ZsJYAbplik_fkey",
@@ -14595,10 +15012,14 @@
     },
     {
       "nameExplicit": false,
-      "columns": ["blockchain_id"],
+      "columns": [
+        "blockchain_id"
+      ],
       "schemaTo": "public",
       "tableTo": "blockchains",
-      "columnsTo": ["id"],
+      "columnsTo": [
+        "id"
+      ],
       "onUpdate": "NO ACTION",
       "onDelete": "NO ACTION",
       "name": "protocol_transaction_type_mappings_eRAvAZmyZKBj_fkey",
@@ -14608,10 +15029,14 @@
     },
     {
       "nameExplicit": false,
-      "columns": ["transaction_type_key"],
+      "columns": [
+        "transaction_type_key"
+      ],
       "schemaTo": "public",
       "tableTo": "transaction_types",
-      "columnsTo": ["type_key"],
+      "columnsTo": [
+        "type_key"
+      ],
       "onUpdate": "NO ACTION",
       "onDelete": "NO ACTION",
       "name": "protocol_transaction_type_mappings_shs1CvnFjFtO_fkey",
@@ -14621,10 +15046,14 @@
     },
     {
       "nameExplicit": false,
-      "columns": ["provider_asset_row_id"],
+      "columns": [
+        "provider_asset_row_id"
+      ],
       "schemaTo": "public",
       "tableTo": "provider_assets",
-      "columnsTo": ["id"],
+      "columnsTo": [
+        "id"
+      ],
       "onUpdate": "NO ACTION",
       "onDelete": "NO ACTION",
       "name": "provider_asset_mappings_VWjtxlloj6Ae_fkey",
@@ -14634,10 +15063,14 @@
     },
     {
       "nameExplicit": false,
-      "columns": ["canonical_asset_id"],
+      "columns": [
+        "canonical_asset_id"
+      ],
       "schemaTo": "public",
       "tableTo": "assets",
-      "columnsTo": ["id"],
+      "columnsTo": [
+        "id"
+      ],
       "onUpdate": "NO ACTION",
       "onDelete": "NO ACTION",
       "name": "provider_asset_mappings_canonical_asset_id_assets_id_fkey",
@@ -14647,10 +15080,16 @@
     },
     {
       "nameExplicit": true,
-      "columns": ["canonical_asset_id", "asset_representation_id"],
+      "columns": [
+        "canonical_asset_id",
+        "asset_representation_id"
+      ],
       "schemaTo": "public",
       "tableTo": "asset_representations",
-      "columnsTo": ["asset_id", "id"],
+      "columnsTo": [
+        "asset_id",
+        "id"
+      ],
       "onUpdate": "NO ACTION",
       "onDelete": "NO ACTION",
       "name": "provider_asset_mappings_representation_matches_asset_fk",
@@ -14660,10 +15099,14 @@
     },
     {
       "nameExplicit": false,
-      "columns": ["provider_asset_row_id"],
+      "columns": [
+        "provider_asset_row_id"
+      ],
       "schemaTo": "public",
       "tableTo": "provider_assets",
-      "columnsTo": ["id"],
+      "columnsTo": [
+        "id"
+      ],
       "onUpdate": "NO ACTION",
       "onDelete": "CASCADE",
       "name": "provider_asset_source_uses_QG8VOjaj7Uvp_fkey",
@@ -14673,10 +15116,14 @@
     },
     {
       "nameExplicit": false,
-      "columns": ["source_id"],
+      "columns": [
+        "source_id"
+      ],
       "schemaTo": "public",
       "tableTo": "sources",
-      "columnsTo": ["id"],
+      "columnsTo": [
+        "id"
+      ],
       "onUpdate": "NO ACTION",
       "onDelete": "CASCADE",
       "name": "provider_asset_source_uses_source_id_sources_id_fkey",
@@ -14686,10 +15133,14 @@
     },
     {
       "nameExplicit": false,
-      "columns": ["provider_asset_row_id"],
+      "columns": [
+        "provider_asset_row_id"
+      ],
       "schemaTo": "public",
       "tableTo": "provider_assets",
-      "columnsTo": ["id"],
+      "columnsTo": [
+        "id"
+      ],
       "onUpdate": "NO ACTION",
       "onDelete": "CASCADE",
       "name": "provider_asset_transaction_uses_sx1UgNJ7ia12_fkey",
@@ -14699,10 +15150,14 @@
     },
     {
       "nameExplicit": false,
-      "columns": ["transaction_id"],
+      "columns": [
+        "transaction_id"
+      ],
       "schemaTo": "public",
       "tableTo": "transactions",
-      "columnsTo": ["id"],
+      "columnsTo": [
+        "id"
+      ],
       "onUpdate": "NO ACTION",
       "onDelete": "CASCADE",
       "name": "provider_asset_transaction_uses_E1wZ83ePvlu9_fkey",
@@ -14712,10 +15167,14 @@
     },
     {
       "nameExplicit": false,
-      "columns": ["source_id"],
+      "columns": [
+        "source_id"
+      ],
       "schemaTo": "public",
       "tableTo": "sources",
-      "columnsTo": ["id"],
+      "columnsTo": [
+        "id"
+      ],
       "onUpdate": "NO ACTION",
       "onDelete": "CASCADE",
       "name": "provider_asset_transaction_uses_source_id_sources_id_fkey",
@@ -14725,10 +15184,14 @@
     },
     {
       "nameExplicit": false,
-      "columns": ["transaction_type_key"],
+      "columns": [
+        "transaction_type_key"
+      ],
       "schemaTo": "public",
       "tableTo": "transaction_types",
-      "columnsTo": ["type_key"],
+      "columnsTo": [
+        "type_key"
+      ],
       "onUpdate": "NO ACTION",
       "onDelete": "NO ACTION",
       "name": "provider_transaction_type_mappings_shs1ErzDsl7H_fkey",
@@ -14738,10 +15201,14 @@
     },
     {
       "nameExplicit": false,
-      "columns": ["source_id"],
+      "columns": [
+        "source_id"
+      ],
       "schemaTo": "public",
       "tableTo": "sources",
-      "columnsTo": ["id"],
+      "columnsTo": [
+        "id"
+      ],
       "onUpdate": "NO ACTION",
       "onDelete": "CASCADE",
       "name": "provider_transfers_source_id_sources_id_fkey",
@@ -14751,10 +15218,14 @@
     },
     {
       "nameExplicit": false,
-      "columns": ["source_raw_record_id"],
+      "columns": [
+        "source_raw_record_id"
+      ],
       "schemaTo": "public",
       "tableTo": "source_records_raw",
-      "columnsTo": ["id"],
+      "columnsTo": [
+        "id"
+      ],
       "onUpdate": "NO ACTION",
       "onDelete": "SET NULL",
       "name": "provider_transfers_XA1TFONMDvBX_fkey",
@@ -14764,10 +15235,14 @@
     },
     {
       "nameExplicit": false,
-      "columns": ["transaction_id"],
+      "columns": [
+        "transaction_id"
+      ],
       "schemaTo": "public",
       "tableTo": "transactions",
-      "columnsTo": ["id"],
+      "columnsTo": [
+        "id"
+      ],
       "onUpdate": "NO ACTION",
       "onDelete": "CASCADE",
       "name": "provider_transfers_transaction_id_transactions_id_fkey",
@@ -14777,10 +15252,14 @@
     },
     {
       "nameExplicit": false,
-      "columns": ["provider_asset_id"],
+      "columns": [
+        "provider_asset_id"
+      ],
       "schemaTo": "public",
       "tableTo": "provider_assets",
-      "columnsTo": ["id"],
+      "columnsTo": [
+        "id"
+      ],
       "onUpdate": "NO ACTION",
       "onDelete": "SET NULL",
       "name": "provider_transfers_provider_asset_id_provider_assets_id_fkey",
@@ -14790,10 +15269,14 @@
     },
     {
       "nameExplicit": false,
-      "columns": ["observed_blockchain_id"],
+      "columns": [
+        "observed_blockchain_id"
+      ],
       "schemaTo": "public",
       "tableTo": "blockchains",
-      "columnsTo": ["id"],
+      "columnsTo": [
+        "id"
+      ],
       "onUpdate": "NO ACTION",
       "onDelete": "NO ACTION",
       "name": "provider_transfers_observed_blockchain_id_blockchains_id_fkey",
@@ -14803,10 +15286,14 @@
     },
     {
       "nameExplicit": false,
-      "columns": ["user_id"],
+      "columns": [
+        "user_id"
+      ],
       "schemaTo": "public",
       "tableTo": "users",
-      "columnsTo": ["id"],
+      "columnsTo": [
+        "id"
+      ],
       "onUpdate": "NO ACTION",
       "onDelete": "CASCADE",
       "name": "sessions_user_id_users_id_fkey",
@@ -14816,10 +15303,14 @@
     },
     {
       "nameExplicit": false,
-      "columns": ["source_id"],
+      "columns": [
+        "source_id"
+      ],
       "schemaTo": "public",
       "tableTo": "sources",
-      "columnsTo": ["id"],
+      "columnsTo": [
+        "id"
+      ],
       "onUpdate": "NO ACTION",
       "onDelete": "CASCADE",
       "name": "source_records_raw_source_id_sources_id_fkey",
@@ -14829,10 +15320,14 @@
     },
     {
       "nameExplicit": false,
-      "columns": ["address_id"],
+      "columns": [
+        "address_id"
+      ],
       "schemaTo": "public",
       "tableTo": "addresses",
-      "columnsTo": ["id"],
+      "columnsTo": [
+        "id"
+      ],
       "onUpdate": "NO ACTION",
       "onDelete": "CASCADE",
       "name": "sources_address_id_addresses_id_fkey",
@@ -14842,10 +15337,14 @@
     },
     {
       "nameExplicit": false,
-      "columns": ["cex_account_id"],
+      "columns": [
+        "cex_account_id"
+      ],
       "schemaTo": "public",
       "tableTo": "cex_account",
-      "columnsTo": ["id"],
+      "columnsTo": [
+        "id"
+      ],
       "onUpdate": "NO ACTION",
       "onDelete": "CASCADE",
       "name": "sources_cex_account_id_cex_account_id_fkey",
@@ -14855,10 +15354,14 @@
     },
     {
       "nameExplicit": false,
-      "columns": ["principal_id"],
+      "columns": [
+        "principal_id"
+      ],
       "schemaTo": "public",
       "tableTo": "principals",
-      "columnsTo": ["id"],
+      "columnsTo": [
+        "id"
+      ],
       "onUpdate": "NO ACTION",
       "onDelete": "CASCADE",
       "name": "sources_principal_id_principals_id_fkey",
@@ -14868,10 +15371,14 @@
     },
     {
       "nameExplicit": false,
-      "columns": ["source_id"],
+      "columns": [
+        "source_id"
+      ],
       "schemaTo": "public",
       "tableTo": "sources",
-      "columnsTo": ["id"],
+      "columnsTo": [
+        "id"
+      ],
       "onUpdate": "NO ACTION",
       "onDelete": "CASCADE",
       "name": "source_sync_state_source_id_sources_id_fkey",
@@ -14881,10 +15388,14 @@
     },
     {
       "nameExplicit": false,
-      "columns": ["checkpoint_raw_record_id"],
+      "columns": [
+        "checkpoint_raw_record_id"
+      ],
       "schemaTo": "public",
       "tableTo": "source_records_raw",
-      "columnsTo": ["id"],
+      "columnsTo": [
+        "id"
+      ],
       "onUpdate": "NO ACTION",
       "onDelete": "SET NULL",
       "name": "source_sync_state_2VTS0oV0EXbd_fkey",
@@ -14894,10 +15405,14 @@
     },
     {
       "nameExplicit": false,
-      "columns": ["run_id"],
+      "columns": [
+        "run_id"
+      ],
       "schemaTo": "public",
       "tableTo": "sync_runs",
-      "columnsTo": ["id"],
+      "columnsTo": [
+        "id"
+      ],
       "onUpdate": "NO ACTION",
       "onDelete": "CASCADE",
       "name": "sync_run_items_run_id_sync_runs_id_fkey",
@@ -14907,10 +15422,14 @@
     },
     {
       "nameExplicit": false,
-      "columns": ["source_id"],
+      "columns": [
+        "source_id"
+      ],
       "schemaTo": "public",
       "tableTo": "sources",
-      "columnsTo": ["id"],
+      "columnsTo": [
+        "id"
+      ],
       "onUpdate": "NO ACTION",
       "onDelete": "CASCADE",
       "name": "sync_run_items_source_id_sources_id_fkey",
@@ -14920,10 +15439,14 @@
     },
     {
       "nameExplicit": false,
-      "columns": ["processing_job_id"],
+      "columns": [
+        "processing_job_id"
+      ],
       "schemaTo": "public",
       "tableTo": "processing_jobs",
-      "columnsTo": ["id"],
+      "columnsTo": [
+        "id"
+      ],
       "onUpdate": "NO ACTION",
       "onDelete": "SET NULL",
       "name": "sync_run_items_processing_job_id_processing_jobs_id_fkey",
@@ -14933,10 +15456,14 @@
     },
     {
       "nameExplicit": false,
-      "columns": ["principal_id"],
+      "columns": [
+        "principal_id"
+      ],
       "schemaTo": "public",
       "tableTo": "principals",
-      "columnsTo": ["id"],
+      "columnsTo": [
+        "id"
+      ],
       "onUpdate": "NO ACTION",
       "onDelete": "CASCADE",
       "name": "sync_runs_principal_id_principals_id_fkey",
@@ -14946,10 +15473,14 @@
     },
     {
       "nameExplicit": false,
-      "columns": ["source_id"],
+      "columns": [
+        "source_id"
+      ],
       "schemaTo": "public",
       "tableTo": "sources",
-      "columnsTo": ["id"],
+      "columnsTo": [
+        "id"
+      ],
       "onUpdate": "NO ACTION",
       "onDelete": "CASCADE",
       "name": "transaction_legs_source_id_sources_id_fkey",
@@ -14959,10 +15490,14 @@
     },
     {
       "nameExplicit": false,
-      "columns": ["source_raw_record_id"],
+      "columns": [
+        "source_raw_record_id"
+      ],
       "schemaTo": "public",
       "tableTo": "source_records_raw",
-      "columnsTo": ["id"],
+      "columnsTo": [
+        "id"
+      ],
       "onUpdate": "NO ACTION",
       "onDelete": "SET NULL",
       "name": "transaction_legs_08IySLTIAriv_fkey",
@@ -14972,10 +15507,14 @@
     },
     {
       "nameExplicit": false,
-      "columns": ["principal_id"],
+      "columns": [
+        "principal_id"
+      ],
       "schemaTo": "public",
       "tableTo": "principals",
-      "columnsTo": ["id"],
+      "columnsTo": [
+        "id"
+      ],
       "onUpdate": "NO ACTION",
       "onDelete": "CASCADE",
       "name": "transaction_legs_principal_id_principals_id_fkey",
@@ -14985,10 +15524,14 @@
     },
     {
       "nameExplicit": false,
-      "columns": ["address_id"],
+      "columns": [
+        "address_id"
+      ],
       "schemaTo": "public",
       "tableTo": "addresses",
-      "columnsTo": ["id"],
+      "columnsTo": [
+        "id"
+      ],
       "onUpdate": "NO ACTION",
       "onDelete": "CASCADE",
       "name": "transaction_legs_address_id_addresses_id_fkey",
@@ -14998,10 +15541,14 @@
     },
     {
       "nameExplicit": false,
-      "columns": ["asset_id"],
+      "columns": [
+        "asset_id"
+      ],
       "schemaTo": "public",
       "tableTo": "assets",
-      "columnsTo": ["id"],
+      "columnsTo": [
+        "id"
+      ],
       "onUpdate": "NO ACTION",
       "onDelete": "NO ACTION",
       "name": "transaction_legs_asset_id_assets_id_fkey",
@@ -15011,10 +15558,14 @@
     },
     {
       "nameExplicit": false,
-      "columns": ["transaction_id"],
+      "columns": [
+        "transaction_id"
+      ],
       "schemaTo": "public",
       "tableTo": "transactions",
-      "columnsTo": ["id"],
+      "columnsTo": [
+        "id"
+      ],
       "onUpdate": "NO ACTION",
       "onDelete": "CASCADE",
       "name": "transaction_legs_transaction_id_transactions_id_fkey",
@@ -15024,10 +15575,14 @@
     },
     {
       "nameExplicit": false,
-      "columns": ["source_transfer_id"],
+      "columns": [
+        "source_transfer_id"
+      ],
       "schemaTo": "public",
       "tableTo": "transfers",
-      "columnsTo": ["id"],
+      "columnsTo": [
+        "id"
+      ],
       "onUpdate": "NO ACTION",
       "onDelete": "CASCADE",
       "name": "transaction_legs_source_transfer_id_transfers_id_fkey",
@@ -15037,10 +15592,14 @@
     },
     {
       "nameExplicit": false,
-      "columns": ["fee_for_transaction_id"],
+      "columns": [
+        "fee_for_transaction_id"
+      ],
       "schemaTo": "public",
       "tableTo": "transactions",
-      "columnsTo": ["id"],
+      "columnsTo": [
+        "id"
+      ],
       "onUpdate": "NO ACTION",
       "onDelete": "CASCADE",
       "name": "transaction_legs_fee_for_transaction_id_transactions_id_fkey",
@@ -15050,10 +15609,16 @@
     },
     {
       "nameExplicit": true,
-      "columns": ["asset_id", "asset_representation_id"],
+      "columns": [
+        "asset_id",
+        "asset_representation_id"
+      ],
       "schemaTo": "public",
       "tableTo": "asset_representations",
-      "columnsTo": ["asset_id", "id"],
+      "columnsTo": [
+        "asset_id",
+        "id"
+      ],
       "onUpdate": "NO ACTION",
       "onDelete": "NO ACTION",
       "name": "transaction_legs_representation_matches_asset_fk",
@@ -15063,10 +15628,14 @@
     },
     {
       "nameExplicit": false,
-      "columns": ["transaction_id"],
+      "columns": [
+        "transaction_id"
+      ],
       "schemaTo": "public",
       "tableTo": "transactions",
-      "columnsTo": ["id"],
+      "columnsTo": [
+        "id"
+      ],
       "onUpdate": "NO ACTION",
       "onDelete": "CASCADE",
       "name": "transaction_onchain_context_transaction_id_transactions_id_fkey",
@@ -15076,10 +15645,14 @@
     },
     {
       "nameExplicit": false,
-      "columns": ["blockchain_id"],
+      "columns": [
+        "blockchain_id"
+      ],
       "schemaTo": "public",
       "tableTo": "blockchains",
-      "columnsTo": ["id"],
+      "columnsTo": [
+        "id"
+      ],
       "onUpdate": "NO ACTION",
       "onDelete": "NO ACTION",
       "name": "transaction_onchain_context_blockchain_id_blockchains_id_fkey",
@@ -15089,10 +15662,14 @@
     },
     {
       "nameExplicit": false,
-      "columns": ["address_id"],
+      "columns": [
+        "address_id"
+      ],
       "schemaTo": "public",
       "tableTo": "addresses",
-      "columnsTo": ["id"],
+      "columnsTo": [
+        "id"
+      ],
       "onUpdate": "NO ACTION",
       "onDelete": "CASCADE",
       "name": "transaction_onchain_context_address_id_addresses_id_fkey",
@@ -15102,10 +15679,14 @@
     },
     {
       "nameExplicit": false,
-      "columns": ["fee_asset_id"],
+      "columns": [
+        "fee_asset_id"
+      ],
       "schemaTo": "public",
       "tableTo": "assets",
-      "columnsTo": ["id"],
+      "columnsTo": [
+        "id"
+      ],
       "onUpdate": "NO ACTION",
       "onDelete": "NO ACTION",
       "name": "transaction_onchain_context_fee_asset_id_assets_id_fkey",
@@ -15115,10 +15696,14 @@
     },
     {
       "nameExplicit": false,
-      "columns": ["transaction_id"],
+      "columns": [
+        "transaction_id"
+      ],
       "schemaTo": "public",
       "tableTo": "transactions",
-      "columnsTo": ["id"],
+      "columnsTo": [
+        "id"
+      ],
       "onUpdate": "NO ACTION",
       "onDelete": "CASCADE",
       "name": "transaction_reviews_transaction_id_transactions_id_fkey",
@@ -15128,10 +15713,14 @@
     },
     {
       "nameExplicit": false,
-      "columns": ["principal_id"],
+      "columns": [
+        "principal_id"
+      ],
       "schemaTo": "public",
       "tableTo": "principals",
-      "columnsTo": ["id"],
+      "columnsTo": [
+        "id"
+      ],
       "onUpdate": "NO ACTION",
       "onDelete": "CASCADE",
       "name": "transaction_reviews_principal_id_principals_id_fkey",
@@ -15141,10 +15730,14 @@
     },
     {
       "nameExplicit": false,
-      "columns": ["source_id"],
+      "columns": [
+        "source_id"
+      ],
       "schemaTo": "public",
       "tableTo": "sources",
-      "columnsTo": ["id"],
+      "columnsTo": [
+        "id"
+      ],
       "onUpdate": "NO ACTION",
       "onDelete": "CASCADE",
       "name": "transactions_source_id_sources_id_fkey",
@@ -15154,10 +15747,14 @@
     },
     {
       "nameExplicit": false,
-      "columns": ["source_raw_record_id"],
+      "columns": [
+        "source_raw_record_id"
+      ],
       "schemaTo": "public",
       "tableTo": "source_records_raw",
-      "columnsTo": ["id"],
+      "columnsTo": [
+        "id"
+      ],
       "onUpdate": "NO ACTION",
       "onDelete": "SET NULL",
       "name": "transactions_source_raw_record_id_source_records_raw_id_fkey",
@@ -15167,10 +15764,14 @@
     },
     {
       "nameExplicit": false,
-      "columns": ["principal_id"],
+      "columns": [
+        "principal_id"
+      ],
       "schemaTo": "public",
       "tableTo": "principals",
-      "columnsTo": ["id"],
+      "columnsTo": [
+        "id"
+      ],
       "onUpdate": "NO ACTION",
       "onDelete": "CASCADE",
       "name": "transactions_principal_id_principals_id_fkey",
@@ -15180,10 +15781,14 @@
     },
     {
       "nameExplicit": true,
-      "columns": ["transaction_type"],
+      "columns": [
+        "transaction_type"
+      ],
       "schemaTo": "public",
       "tableTo": "transaction_types",
-      "columnsTo": ["type_key"],
+      "columnsTo": [
+        "type_key"
+      ],
       "onUpdate": "NO ACTION",
       "onDelete": "NO ACTION",
       "name": "transactions_transaction_type_fk",
@@ -15193,10 +15798,14 @@
     },
     {
       "nameExplicit": true,
-      "columns": ["category_key"],
+      "columns": [
+        "category_key"
+      ],
       "schemaTo": "public",
       "tableTo": "transaction_categories",
-      "columnsTo": ["category_key"],
+      "columnsTo": [
+        "category_key"
+      ],
       "onUpdate": "NO ACTION",
       "onDelete": "NO ACTION",
       "name": "transaction_types_category_key_fk",
@@ -15206,10 +15815,14 @@
     },
     {
       "nameExplicit": true,
-      "columns": ["subcategory_key"],
+      "columns": [
+        "subcategory_key"
+      ],
       "schemaTo": "public",
       "tableTo": "transaction_subcategories",
-      "columnsTo": ["subcategory_key"],
+      "columnsTo": [
+        "subcategory_key"
+      ],
       "onUpdate": "NO ACTION",
       "onDelete": "NO ACTION",
       "name": "transaction_types_subcategory_key_fk",
@@ -15219,10 +15832,14 @@
     },
     {
       "nameExplicit": false,
-      "columns": ["transaction_id"],
+      "columns": [
+        "transaction_id"
+      ],
       "schemaTo": "public",
       "tableTo": "transactions",
-      "columnsTo": ["id"],
+      "columnsTo": [
+        "id"
+      ],
       "onUpdate": "NO ACTION",
       "onDelete": "CASCADE",
       "name": "transaction_venue_context_transaction_id_transactions_id_fkey",
@@ -15232,10 +15849,14 @@
     },
     {
       "nameExplicit": false,
-      "columns": ["cex_account_id"],
+      "columns": [
+        "cex_account_id"
+      ],
       "schemaTo": "public",
       "tableTo": "cex_account",
-      "columnsTo": ["id"],
+      "columnsTo": [
+        "id"
+      ],
       "onUpdate": "NO ACTION",
       "onDelete": "SET NULL",
       "name": "transaction_venue_context_cex_account_id_cex_account_id_fkey",
@@ -15245,10 +15866,14 @@
     },
     {
       "nameExplicit": false,
-      "columns": ["principal_id"],
+      "columns": [
+        "principal_id"
+      ],
       "schemaTo": "public",
       "tableTo": "principals",
-      "columnsTo": ["id"],
+      "columnsTo": [
+        "id"
+      ],
       "onUpdate": "NO ACTION",
       "onDelete": "CASCADE",
       "name": "transfer_reconciliations_principal_id_principals_id_fkey",
@@ -15258,10 +15883,14 @@
     },
     {
       "nameExplicit": false,
-      "columns": ["provider_transfer_id"],
+      "columns": [
+        "provider_transfer_id"
+      ],
       "schemaTo": "public",
       "tableTo": "provider_transfers",
-      "columnsTo": ["id"],
+      "columnsTo": [
+        "id"
+      ],
       "onUpdate": "NO ACTION",
       "onDelete": "CASCADE",
       "name": "transfer_reconciliations_0LTGRXfYOC6D_fkey",
@@ -15271,10 +15900,14 @@
     },
     {
       "nameExplicit": false,
-      "columns": ["canonical_transfer_id"],
+      "columns": [
+        "canonical_transfer_id"
+      ],
       "schemaTo": "public",
       "tableTo": "transfers",
-      "columnsTo": ["id"],
+      "columnsTo": [
+        "id"
+      ],
       "onUpdate": "NO ACTION",
       "onDelete": "CASCADE",
       "name": "transfer_reconciliations_aLMaGGKWBcB8_fkey",
@@ -15284,10 +15917,14 @@
     },
     {
       "nameExplicit": false,
-      "columns": ["canonical_transaction_id"],
+      "columns": [
+        "canonical_transaction_id"
+      ],
       "schemaTo": "public",
       "tableTo": "transactions",
-      "columnsTo": ["id"],
+      "columnsTo": [
+        "id"
+      ],
       "onUpdate": "NO ACTION",
       "onDelete": "CASCADE",
       "name": "transfer_reconciliations_np3pcnm4mPC4_fkey",
@@ -15297,10 +15934,14 @@
     },
     {
       "nameExplicit": false,
-      "columns": ["source_id"],
+      "columns": [
+        "source_id"
+      ],
       "schemaTo": "public",
       "tableTo": "sources",
-      "columnsTo": ["id"],
+      "columnsTo": [
+        "id"
+      ],
       "onUpdate": "NO ACTION",
       "onDelete": "CASCADE",
       "name": "transfers_source_id_sources_id_fkey",
@@ -15310,10 +15951,14 @@
     },
     {
       "nameExplicit": false,
-      "columns": ["source_raw_record_id"],
+      "columns": [
+        "source_raw_record_id"
+      ],
       "schemaTo": "public",
       "tableTo": "source_records_raw",
-      "columnsTo": ["id"],
+      "columnsTo": [
+        "id"
+      ],
       "onUpdate": "NO ACTION",
       "onDelete": "SET NULL",
       "name": "transfers_source_raw_record_id_source_records_raw_id_fkey",
@@ -15323,10 +15968,14 @@
     },
     {
       "nameExplicit": false,
-      "columns": ["principal_id"],
+      "columns": [
+        "principal_id"
+      ],
       "schemaTo": "public",
       "tableTo": "principals",
-      "columnsTo": ["id"],
+      "columnsTo": [
+        "id"
+      ],
       "onUpdate": "NO ACTION",
       "onDelete": "CASCADE",
       "name": "transfers_principal_id_principals_id_fkey",
@@ -15336,10 +15985,14 @@
     },
     {
       "nameExplicit": false,
-      "columns": ["address_id"],
+      "columns": [
+        "address_id"
+      ],
       "schemaTo": "public",
       "tableTo": "addresses",
-      "columnsTo": ["id"],
+      "columnsTo": [
+        "id"
+      ],
       "onUpdate": "NO ACTION",
       "onDelete": "CASCADE",
       "name": "transfers_address_id_addresses_id_fkey",
@@ -15349,10 +16002,14 @@
     },
     {
       "nameExplicit": false,
-      "columns": ["blockchain_id"],
+      "columns": [
+        "blockchain_id"
+      ],
       "schemaTo": "public",
       "tableTo": "blockchains",
-      "columnsTo": ["id"],
+      "columnsTo": [
+        "id"
+      ],
       "onUpdate": "NO ACTION",
       "onDelete": "NO ACTION",
       "name": "transfers_blockchain_id_blockchains_id_fkey",
@@ -15362,10 +16019,14 @@
     },
     {
       "nameExplicit": false,
-      "columns": ["asset_id"],
+      "columns": [
+        "asset_id"
+      ],
       "schemaTo": "public",
       "tableTo": "assets",
-      "columnsTo": ["id"],
+      "columnsTo": [
+        "id"
+      ],
       "onUpdate": "NO ACTION",
       "onDelete": "NO ACTION",
       "name": "transfers_asset_id_assets_id_fkey",
@@ -15375,10 +16036,16 @@
     },
     {
       "nameExplicit": true,
-      "columns": ["asset_id", "asset_representation_id"],
+      "columns": [
+        "asset_id",
+        "asset_representation_id"
+      ],
       "schemaTo": "public",
       "tableTo": "asset_representations",
-      "columnsTo": ["asset_id", "id"],
+      "columnsTo": [
+        "asset_id",
+        "id"
+      ],
       "onUpdate": "NO ACTION",
       "onDelete": "NO ACTION",
       "name": "transfers_representation_matches_asset_fk",
@@ -15387,7 +16054,10 @@
       "table": "transfers"
     },
     {
-      "columns": ["decision_id", "source_id"],
+      "columns": [
+        "decision_id",
+        "source_id"
+      ],
       "nameExplicit": false,
       "name": "asset_decision_rematerializations_pkey",
       "entityType": "pks",
@@ -15395,7 +16065,10 @@
       "table": "asset_decision_rematerializations"
     },
     {
-      "columns": ["decision_id", "evidence_id"],
+      "columns": [
+        "decision_id",
+        "evidence_id"
+      ],
       "nameExplicit": false,
       "name": "asset_resolution_decision_evidence_links_pkey",
       "entityType": "pks",
@@ -15403,7 +16076,10 @@
       "table": "asset_resolution_decision_evidence_links"
     },
     {
-      "columns": ["payment_reference", "reversal_group"],
+      "columns": [
+        "payment_reference",
+        "reversal_group"
+      ],
       "nameExplicit": false,
       "name": "billing_payment_reversals_pkey",
       "entityType": "pks",
@@ -15411,7 +16087,10 @@
       "table": "billing_payment_reversals"
     },
     {
-      "columns": ["provider_asset_row_id", "source_id"],
+      "columns": [
+        "provider_asset_row_id",
+        "source_id"
+      ],
       "nameExplicit": false,
       "name": "provider_asset_source_uses_pkey",
       "entityType": "pks",
@@ -15419,7 +16098,10 @@
       "table": "provider_asset_source_uses"
     },
     {
-      "columns": ["provider_asset_row_id", "transaction_id"],
+      "columns": [
+        "provider_asset_row_id",
+        "transaction_id"
+      ],
       "nameExplicit": false,
       "name": "provider_asset_transaction_uses_pkey",
       "entityType": "pks",
@@ -15427,7 +16109,9 @@
       "table": "provider_asset_transaction_uses"
     },
     {
-      "columns": ["id"],
+      "columns": [
+        "id"
+      ],
       "nameExplicit": false,
       "name": "addresses_pkey",
       "schema": "public",
@@ -15435,7 +16119,9 @@
       "entityType": "pks"
     },
     {
-      "columns": ["id"],
+      "columns": [
+        "id"
+      ],
       "nameExplicit": false,
       "name": "asset_prices_pkey",
       "schema": "public",
@@ -15443,7 +16129,9 @@
       "entityType": "pks"
     },
     {
-      "columns": ["id"],
+      "columns": [
+        "id"
+      ],
       "nameExplicit": false,
       "name": "asset_representation_ownership_decisions_pkey",
       "schema": "public",
@@ -15451,7 +16139,9 @@
       "entityType": "pks"
     },
     {
-      "columns": ["id"],
+      "columns": [
+        "id"
+      ],
       "nameExplicit": false,
       "name": "asset_representations_pkey",
       "schema": "public",
@@ -15459,7 +16149,9 @@
       "entityType": "pks"
     },
     {
-      "columns": ["provider_asset_row_id"],
+      "columns": [
+        "provider_asset_row_id"
+      ],
       "nameExplicit": false,
       "name": "asset_resolution_current_state_pkey",
       "schema": "public",
@@ -15467,7 +16159,9 @@
       "entityType": "pks"
     },
     {
-      "columns": ["id"],
+      "columns": [
+        "id"
+      ],
       "nameExplicit": false,
       "name": "asset_resolution_decisions_pkey",
       "schema": "public",
@@ -15475,7 +16169,9 @@
       "entityType": "pks"
     },
     {
-      "columns": ["id"],
+      "columns": [
+        "id"
+      ],
       "nameExplicit": false,
       "name": "asset_resolution_evidence_pkey",
       "schema": "public",
@@ -15483,7 +16179,9 @@
       "entityType": "pks"
     },
     {
-      "columns": ["id"],
+      "columns": [
+        "id"
+      ],
       "nameExplicit": false,
       "name": "asset_resolution_jobs_pkey",
       "schema": "public",
@@ -15491,7 +16189,9 @@
       "entityType": "pks"
     },
     {
-      "columns": ["id"],
+      "columns": [
+        "id"
+      ],
       "nameExplicit": false,
       "name": "assets_pkey",
       "schema": "public",
@@ -15499,7 +16199,9 @@
       "entityType": "pks"
     },
     {
-      "columns": ["user_id"],
+      "columns": [
+        "user_id"
+      ],
       "nameExplicit": false,
       "name": "billing_accounts_pkey",
       "schema": "public",
@@ -15507,7 +16209,9 @@
       "entityType": "pks"
     },
     {
-      "columns": ["id"],
+      "columns": [
+        "id"
+      ],
       "nameExplicit": false,
       "name": "credit_ledger_pkey",
       "schema": "public",
@@ -15515,7 +16219,9 @@
       "entityType": "pks"
     },
     {
-      "columns": ["id"],
+      "columns": [
+        "id"
+      ],
       "nameExplicit": false,
       "name": "stripe_events_pkey",
       "schema": "public",
@@ -15523,7 +16229,9 @@
       "entityType": "pks"
     },
     {
-      "columns": ["id"],
+      "columns": [
+        "id"
+      ],
       "nameExplicit": false,
       "name": "blockchains_pkey",
       "schema": "public",
@@ -15531,7 +16239,9 @@
       "entityType": "pks"
     },
     {
-      "columns": ["id"],
+      "columns": [
+        "id"
+      ],
       "nameExplicit": false,
       "name": "cex_account_pkey",
       "schema": "public",
@@ -15539,7 +16249,9 @@
       "entityType": "pks"
     },
     {
-      "columns": ["id"],
+      "columns": [
+        "id"
+      ],
       "nameExplicit": false,
       "name": "cex_pkey",
       "schema": "public",
@@ -15547,7 +16259,9 @@
       "entityType": "pks"
     },
     {
-      "columns": ["id"],
+      "columns": [
+        "id"
+      ],
       "nameExplicit": false,
       "name": "disposal_matches_pkey",
       "schema": "public",
@@ -15555,7 +16269,9 @@
       "entityType": "pks"
     },
     {
-      "columns": ["observation_id"],
+      "columns": [
+        "observation_id"
+      ],
       "nameExplicit": false,
       "name": "dune_protocol_candidate_observations_pkey",
       "schema": "public",
@@ -15563,7 +16279,9 @@
       "entityType": "pks"
     },
     {
-      "columns": ["id"],
+      "columns": [
+        "id"
+      ],
       "nameExplicit": false,
       "name": "email_verification_requests_pkey",
       "schema": "public",
@@ -15571,7 +16289,9 @@
       "entityType": "pks"
     },
     {
-      "columns": ["id"],
+      "columns": [
+        "id"
+      ],
       "nameExplicit": false,
       "name": "fifo_lots_pkey",
       "schema": "public",
@@ -15579,7 +16299,9 @@
       "entityType": "pks"
     },
     {
-      "columns": ["id"],
+      "columns": [
+        "id"
+      ],
       "nameExplicit": false,
       "name": "auth_identities_pkey",
       "schema": "public",
@@ -15587,7 +16309,9 @@
       "entityType": "pks"
     },
     {
-      "columns": ["id"],
+      "columns": [
+        "id"
+      ],
       "nameExplicit": false,
       "name": "inventory_movement_allocations_pkey",
       "schema": "public",
@@ -15595,7 +16319,9 @@
       "entityType": "pks"
     },
     {
-      "columns": ["id"],
+      "columns": [
+        "id"
+      ],
       "nameExplicit": false,
       "name": "inventory_movements_pkey",
       "schema": "public",
@@ -15603,7 +16329,9 @@
       "entityType": "pks"
     },
     {
-      "columns": ["id"],
+      "columns": [
+        "id"
+      ],
       "nameExplicit": false,
       "name": "jurisdiction_rule_set_rules_pkey",
       "schema": "public",
@@ -15611,7 +16339,9 @@
       "entityType": "pks"
     },
     {
-      "columns": ["id"],
+      "columns": [
+        "id"
+      ],
       "nameExplicit": false,
       "name": "jurisdiction_rule_sets_pkey",
       "schema": "public",
@@ -15619,7 +16349,9 @@
       "entityType": "pks"
     },
     {
-      "columns": ["id"],
+      "columns": [
+        "id"
+      ],
       "nameExplicit": false,
       "name": "legal_clauses_pkey",
       "schema": "public",
@@ -15627,7 +16359,9 @@
       "entityType": "pks"
     },
     {
-      "columns": ["id"],
+      "columns": [
+        "id"
+      ],
       "nameExplicit": false,
       "name": "legal_rule_citations_pkey",
       "schema": "public",
@@ -15635,7 +16369,9 @@
       "entityType": "pks"
     },
     {
-      "columns": ["id"],
+      "columns": [
+        "id"
+      ],
       "nameExplicit": false,
       "name": "legal_rules_pkey",
       "schema": "public",
@@ -15643,7 +16379,9 @@
       "entityType": "pks"
     },
     {
-      "columns": ["id"],
+      "columns": [
+        "id"
+      ],
       "nameExplicit": false,
       "name": "legal_sources_pkey",
       "schema": "public",
@@ -15651,7 +16389,9 @@
       "entityType": "pks"
     },
     {
-      "columns": ["id"],
+      "columns": [
+        "id"
+      ],
       "nameExplicit": false,
       "name": "transaction_type_legal_rules_pkey",
       "schema": "public",
@@ -15659,7 +16399,9 @@
       "entityType": "pks"
     },
     {
-      "columns": ["state"],
+      "columns": [
+        "state"
+      ],
       "nameExplicit": false,
       "name": "oauth_states_pkey",
       "schema": "public",
@@ -15667,7 +16409,9 @@
       "entityType": "pks"
     },
     {
-      "columns": ["id"],
+      "columns": [
+        "id"
+      ],
       "nameExplicit": false,
       "name": "principal_claims_pkey",
       "schema": "public",
@@ -15675,7 +16419,9 @@
       "entityType": "pks"
     },
     {
-      "columns": ["id"],
+      "columns": [
+        "id"
+      ],
       "nameExplicit": false,
       "name": "principals_pkey",
       "schema": "public",
@@ -15683,7 +16429,9 @@
       "entityType": "pks"
     },
     {
-      "columns": ["id"],
+      "columns": [
+        "id"
+      ],
       "nameExplicit": false,
       "name": "processing_jobs_pkey",
       "schema": "public",
@@ -15691,7 +16439,9 @@
       "entityType": "pks"
     },
     {
-      "columns": ["id"],
+      "columns": [
+        "id"
+      ],
       "nameExplicit": false,
       "name": "protocol_candidate_observations_pkey",
       "schema": "public",
@@ -15699,7 +16449,9 @@
       "entityType": "pks"
     },
     {
-      "columns": ["id"],
+      "columns": [
+        "id"
+      ],
       "nameExplicit": false,
       "name": "protocol_candidates_pkey",
       "schema": "public",
@@ -15707,7 +16459,9 @@
       "entityType": "pks"
     },
     {
-      "columns": ["id"],
+      "columns": [
+        "id"
+      ],
       "nameExplicit": false,
       "name": "protocol_mapping_evidence_pkey",
       "schema": "public",
@@ -15715,7 +16469,9 @@
       "entityType": "pks"
     },
     {
-      "columns": ["id"],
+      "columns": [
+        "id"
+      ],
       "nameExplicit": false,
       "name": "protocol_transaction_type_mappings_pkey",
       "schema": "public",
@@ -15723,7 +16479,9 @@
       "entityType": "pks"
     },
     {
-      "columns": ["id"],
+      "columns": [
+        "id"
+      ],
       "nameExplicit": false,
       "name": "provider_asset_mappings_pkey",
       "schema": "public",
@@ -15731,7 +16489,9 @@
       "entityType": "pks"
     },
     {
-      "columns": ["id"],
+      "columns": [
+        "id"
+      ],
       "nameExplicit": false,
       "name": "provider_assets_pkey",
       "schema": "public",
@@ -15739,7 +16499,9 @@
       "entityType": "pks"
     },
     {
-      "columns": ["id"],
+      "columns": [
+        "id"
+      ],
       "nameExplicit": false,
       "name": "provider_transaction_type_catalog_pkey",
       "schema": "public",
@@ -15747,7 +16509,9 @@
       "entityType": "pks"
     },
     {
-      "columns": ["id"],
+      "columns": [
+        "id"
+      ],
       "nameExplicit": false,
       "name": "provider_transaction_type_mappings_pkey",
       "schema": "public",
@@ -15755,7 +16519,9 @@
       "entityType": "pks"
     },
     {
-      "columns": ["id"],
+      "columns": [
+        "id"
+      ],
       "nameExplicit": false,
       "name": "provider_transfers_pkey",
       "schema": "public",
@@ -15763,7 +16529,9 @@
       "entityType": "pks"
     },
     {
-      "columns": ["id"],
+      "columns": [
+        "id"
+      ],
       "nameExplicit": false,
       "name": "sessions_pkey",
       "schema": "public",
@@ -15771,7 +16539,9 @@
       "entityType": "pks"
     },
     {
-      "columns": ["id"],
+      "columns": [
+        "id"
+      ],
       "nameExplicit": false,
       "name": "source_records_raw_pkey",
       "schema": "public",
@@ -15779,7 +16549,9 @@
       "entityType": "pks"
     },
     {
-      "columns": ["id"],
+      "columns": [
+        "id"
+      ],
       "nameExplicit": false,
       "name": "sources_pkey",
       "schema": "public",
@@ -15787,7 +16559,9 @@
       "entityType": "pks"
     },
     {
-      "columns": ["source_id"],
+      "columns": [
+        "source_id"
+      ],
       "nameExplicit": false,
       "name": "source_sync_state_pkey",
       "schema": "public",
@@ -15795,7 +16569,9 @@
       "entityType": "pks"
     },
     {
-      "columns": ["id"],
+      "columns": [
+        "id"
+      ],
       "nameExplicit": false,
       "name": "sync_run_items_pkey",
       "schema": "public",
@@ -15803,7 +16579,9 @@
       "entityType": "pks"
     },
     {
-      "columns": ["id"],
+      "columns": [
+        "id"
+      ],
       "nameExplicit": false,
       "name": "sync_runs_pkey",
       "schema": "public",
@@ -15811,7 +16589,9 @@
       "entityType": "pks"
     },
     {
-      "columns": ["category_key"],
+      "columns": [
+        "category_key"
+      ],
       "nameExplicit": false,
       "name": "transaction_categories_pkey",
       "schema": "public",
@@ -15819,7 +16599,9 @@
       "entityType": "pks"
     },
     {
-      "columns": ["id"],
+      "columns": [
+        "id"
+      ],
       "nameExplicit": false,
       "name": "transaction_legs_pkey",
       "schema": "public",
@@ -15827,7 +16609,9 @@
       "entityType": "pks"
     },
     {
-      "columns": ["transaction_id"],
+      "columns": [
+        "transaction_id"
+      ],
       "nameExplicit": false,
       "name": "transaction_onchain_context_pkey",
       "schema": "public",
@@ -15835,7 +16619,9 @@
       "entityType": "pks"
     },
     {
-      "columns": ["id"],
+      "columns": [
+        "id"
+      ],
       "nameExplicit": false,
       "name": "transaction_reviews_pkey",
       "schema": "public",
@@ -15843,7 +16629,9 @@
       "entityType": "pks"
     },
     {
-      "columns": ["id"],
+      "columns": [
+        "id"
+      ],
       "nameExplicit": false,
       "name": "transactions_pkey",
       "schema": "public",
@@ -15851,7 +16639,9 @@
       "entityType": "pks"
     },
     {
-      "columns": ["subcategory_key"],
+      "columns": [
+        "subcategory_key"
+      ],
       "nameExplicit": false,
       "name": "transaction_subcategories_pkey",
       "schema": "public",
@@ -15859,7 +16649,9 @@
       "entityType": "pks"
     },
     {
-      "columns": ["type_key"],
+      "columns": [
+        "type_key"
+      ],
       "nameExplicit": false,
       "name": "transaction_types_pkey",
       "schema": "public",
@@ -15867,7 +16659,9 @@
       "entityType": "pks"
     },
     {
-      "columns": ["transaction_id"],
+      "columns": [
+        "transaction_id"
+      ],
       "nameExplicit": false,
       "name": "transaction_venue_context_pkey",
       "schema": "public",
@@ -15875,7 +16669,9 @@
       "entityType": "pks"
     },
     {
-      "columns": ["id"],
+      "columns": [
+        "id"
+      ],
       "nameExplicit": false,
       "name": "transfer_reconciliations_pkey",
       "schema": "public",
@@ -15883,7 +16679,9 @@
       "entityType": "pks"
     },
     {
-      "columns": ["id"],
+      "columns": [
+        "id"
+      ],
       "nameExplicit": false,
       "name": "transfers_pkey",
       "schema": "public",
@@ -15891,7 +16689,9 @@
       "entityType": "pks"
     },
     {
-      "columns": ["id"],
+      "columns": [
+        "id"
+      ],
       "nameExplicit": false,
       "name": "users_pkey",
       "schema": "public",
@@ -15899,7 +16699,9 @@
       "entityType": "pks"
     },
     {
-      "columns": ["id"],
+      "columns": [
+        "id"
+      ],
       "nameExplicit": false,
       "name": "wallet_name_cache_pkey",
       "schema": "public",
@@ -15908,7 +16710,10 @@
     },
     {
       "nameExplicit": true,
-      "columns": ["address", "principal_id"],
+      "columns": [
+        "address",
+        "principal_id"
+      ],
       "nullsNotDistinct": false,
       "name": "addresses_principal_address_unique",
       "entityType": "uniques",
@@ -15917,7 +16722,11 @@
     },
     {
       "nameExplicit": true,
-      "columns": ["asset_id", "timestamp", "currency"],
+      "columns": [
+        "asset_id",
+        "timestamp",
+        "currency"
+      ],
       "nullsNotDistinct": false,
       "name": "unique_asset_price_idx",
       "entityType": "uniques",
@@ -15926,7 +16735,10 @@
     },
     {
       "nameExplicit": true,
-      "columns": ["rule_set_id", "rule_id"],
+      "columns": [
+        "rule_set_id",
+        "rule_id"
+      ],
       "nullsNotDistinct": false,
       "name": "jurisdiction_rule_set_rules_unique",
       "entityType": "uniques",
@@ -15935,7 +16747,10 @@
     },
     {
       "nameExplicit": true,
-      "columns": ["jurisdiction_code", "version"],
+      "columns": [
+        "jurisdiction_code",
+        "version"
+      ],
       "nullsNotDistinct": false,
       "name": "jurisdiction_rule_sets_jurisdiction_version_unique",
       "entityType": "uniques",
@@ -15944,7 +16759,9 @@
     },
     {
       "nameExplicit": true,
-      "columns": ["clause_key"],
+      "columns": [
+        "clause_key"
+      ],
       "nullsNotDistinct": false,
       "name": "legal_clauses_clause_key_unique",
       "entityType": "uniques",
@@ -15953,7 +16770,10 @@
     },
     {
       "nameExplicit": true,
-      "columns": ["source_id", "randnummer"],
+      "columns": [
+        "source_id",
+        "randnummer"
+      ],
       "nullsNotDistinct": false,
       "name": "legal_clauses_source_randnummer_unique",
       "entityType": "uniques",
@@ -15962,7 +16782,10 @@
     },
     {
       "nameExplicit": true,
-      "columns": ["rule_id", "clause_id"],
+      "columns": [
+        "rule_id",
+        "clause_id"
+      ],
       "nullsNotDistinct": false,
       "name": "legal_rule_citations_rule_clause_unique",
       "entityType": "uniques",
@@ -15971,7 +16794,9 @@
     },
     {
       "nameExplicit": true,
-      "columns": ["rule_key"],
+      "columns": [
+        "rule_key"
+      ],
       "nullsNotDistinct": false,
       "name": "legal_rules_rule_key_unique",
       "entityType": "uniques",
@@ -15980,7 +16805,9 @@
     },
     {
       "nameExplicit": true,
-      "columns": ["source_key"],
+      "columns": [
+        "source_key"
+      ],
       "nullsNotDistinct": false,
       "name": "legal_sources_source_key_unique",
       "entityType": "uniques",
@@ -15989,7 +16816,10 @@
     },
     {
       "nameExplicit": true,
-      "columns": ["transaction_type_key", "rule_id"],
+      "columns": [
+        "transaction_type_key",
+        "rule_id"
+      ],
       "nullsNotDistinct": false,
       "name": "transaction_type_legal_rules_unique",
       "entityType": "uniques",
@@ -15998,7 +16828,9 @@
     },
     {
       "nameExplicit": false,
-      "columns": ["name"],
+      "columns": [
+        "name"
+      ],
       "nullsNotDistinct": false,
       "name": "blockchains_name_key",
       "schema": "public",
@@ -16007,7 +16839,9 @@
     },
     {
       "nameExplicit": false,
-      "columns": ["name"],
+      "columns": [
+        "name"
+      ],
       "nullsNotDistinct": false,
       "name": "cex_name_key",
       "schema": "public",
@@ -16016,7 +16850,9 @@
     },
     {
       "nameExplicit": false,
-      "columns": ["transaction_id"],
+      "columns": [
+        "transaction_id"
+      ],
       "nullsNotDistinct": false,
       "name": "transaction_reviews_transaction_id_key",
       "schema": "public",
@@ -16025,7 +16861,9 @@
     },
     {
       "nameExplicit": false,
-      "columns": ["email"],
+      "columns": [
+        "email"
+      ],
       "nullsNotDistinct": false,
       "name": "users_email_key",
       "schema": "public",
