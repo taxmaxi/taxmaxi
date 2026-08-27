@@ -13,6 +13,7 @@ import { schema } from "../../src/schema/index.ts"
 import {
   TEST_BTC_ASSET_ID,
   TEST_BTC_REPRESENTATION_ID,
+  TEST_EUR_ASSET_ID,
   TEST_EUR_REPRESENTATION_ID,
   TEST_PRINCIPAL_ID,
   TEST_SOURCE_ID,
@@ -2923,6 +2924,92 @@ describe("ProviderAssetRepositoryLive", () => {
         providerAssetId: null,
         currencyCode: "HYPE",
       })
+    })
+
+    it("finds a nonpreferred source-owned stable override and fails closed on conflicts", async () => {
+      const rows = await runPg(
+        Effect.gen(function* () {
+          const db = yield* drizzle
+          const providerAssets = yield* db
+            .insert(schema.providerAssets)
+            .values([
+              {
+                provider: "coinbase",
+                providerAssetId: "duplicate-stable-old",
+                currencyCode: "DUP",
+                retrievedAt: new Date("2025-01-01T00:00:00.000Z"),
+              },
+              {
+                provider: "coinbase",
+                providerAssetId: "duplicate-stable-new",
+                currencyCode: "DUP",
+                retrievedAt: new Date("2025-01-02T00:00:00.000Z"),
+              },
+            ])
+            .returning({ id: schema.providerAssets.id })
+          const [older, newer] = providerAssets
+          if (older === undefined || newer === undefined) {
+            return yield* Effect.die("Failed to seed duplicate stable provider assets")
+          }
+          yield* db.insert(schema.providerAssetSourceUses).values([
+            { providerAssetRowId: older.id, sourceId: TEST_SOURCE_ID },
+            { providerAssetRowId: newer.id, sourceId: TEST_SOURCE_ID },
+          ])
+          yield* db.insert(schema.principalAssetOverrides).values({
+            principalId: TEST_PRINCIPAL_ID,
+            kind: "identity",
+            targetKind: "provider_asset",
+            providerAssetRowId: older.id,
+            action: "set",
+            inspectedSystemRevision: "duplicate-stable-old",
+            inspectedIdentityState: "unresolved",
+            inspectedAssetId: null,
+            replacementAssetId: TEST_BTC_ASSET_ID,
+            actorId: "00000000-0000-0000-0000-000000000181",
+            reason: "Use the source-owned older stable identity.",
+          })
+          return { olderId: older.id, newerId: newer.id }
+        })
+      )
+
+      const findOverride = () =>
+        runRepository(
+          Effect.flatMap(ProviderAssetRepository, (repository) =>
+            repository.findSourcePrincipalProviderAssetOverride({
+              principalId: TEST_PRINCIPAL_ID,
+              sourceId: TEST_SOURCE_ID,
+              providerKey: "coinbase",
+              currencyCode: "DUP",
+            })
+          )
+        )
+
+      expect(await findOverride()).toMatchObject({
+        _tag: "resolved",
+        providerAssetRowId: rows.olderId,
+        assetId: TEST_BTC_ASSET_ID,
+      })
+
+      await runPg(
+        Effect.gen(function* () {
+          const db = yield* drizzle
+          yield* db.insert(schema.principalAssetOverrides).values({
+            principalId: TEST_PRINCIPAL_ID,
+            kind: "identity",
+            targetKind: "provider_asset",
+            providerAssetRowId: rows.newerId,
+            action: "set",
+            inspectedSystemRevision: "duplicate-stable-new",
+            inspectedIdentityState: "unresolved",
+            inspectedAssetId: null,
+            replacementAssetId: TEST_EUR_ASSET_ID,
+            actorId: "00000000-0000-0000-0000-000000000181",
+            reason: "Create a conflicting source-owned identity.",
+          })
+        })
+      )
+
+      expect(await findOverride()).toEqual({ _tag: "conflict" })
     })
 
     it("keeps excluded natural-key mappings preferred over newer unmapped stable ids", async () => {

@@ -170,6 +170,7 @@ const makeProviderLayer = ({
           findProviderAssetByNaturalKey: () => Effect.succeed(Option.none()),
           findProviderAssetByCurrencyCode: () => Effect.succeed(Option.none()),
           findPrincipalIdentityOverrideAssetId: () => Effect.succeed(Option.none()),
+          findSourcePrincipalProviderAssetOverride: () => Effect.succeed({ _tag: "none" as const }),
           listProviderAssetObservedRepresentations: () => Effect.succeed([]),
           findProviderAssetReviewById: () => Effect.succeed(Option.none()),
           listProviderAssetReviews: () => Effect.succeed([]),

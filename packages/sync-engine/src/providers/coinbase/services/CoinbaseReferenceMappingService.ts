@@ -118,6 +118,10 @@ export interface ResolveCoinbaseCurrencyParams {
   readonly rawSourcePayload?: unknown
 }
 
+export interface ResolveCoinbaseProviderAssetParams extends ResolveCoinbaseCurrencyParams {
+  readonly providerAssetRowId: string
+}
+
 /**
  * CoinbaseReferenceMappingServiceShape - Coinbase mapping lifecycle and deterministic resolution.
  */
@@ -136,6 +140,10 @@ export interface CoinbaseReferenceMappingServiceShape {
 
   readonly resolveCurrency: (
     params: ResolveCoinbaseCurrencyParams
+  ) => Effect.Effect<CoinbaseResolvedCurrencyMapping, CoinbaseReferenceMappingServiceError>
+
+  readonly resolveProviderAsset: (
+    params: ResolveCoinbaseProviderAssetParams
   ) => Effect.Effect<CoinbaseResolvedCurrencyMapping, CoinbaseReferenceMappingServiceError>
 
   readonly resolveAssetId: (

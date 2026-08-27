@@ -88,6 +88,7 @@ const runWithProvider = <A, E>(
             ensureDefaultMappings: () => Effect.die("ensureDefaultMappings should not be called"),
             resolveTransactionType: () => Effect.die("resolveTransactionType should not be called"),
             resolveCurrency: () => Effect.die("resolveCurrency should not be called"),
+            resolveProviderAsset: () => Effect.die("resolveProviderAsset should not be called"),
             resolveAssetId: () => Effect.die("resolveAssetId should not be called"),
           })
         ),
@@ -147,6 +148,8 @@ const runWithProvider = <A, E>(
             findProviderAssetByCurrencyCode: () =>
               Effect.die("findProviderAssetByCurrencyCode should not be called"),
             findPrincipalIdentityOverrideAssetId: () => Effect.succeed(Option.none()),
+            findSourcePrincipalProviderAssetOverride: () =>
+              Effect.succeed({ _tag: "none" as const }),
             findProviderAssetReviewById: () =>
               Effect.die("findProviderAssetReviewById should not be called"),
             listProviderAssetReviews: () =>

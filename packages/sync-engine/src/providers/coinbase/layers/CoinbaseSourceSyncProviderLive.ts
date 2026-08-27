@@ -975,82 +975,160 @@ const make = Effect.gen(function* () {
     }
   }
 
-  /**
-   * When the shared mapping leaves a currency unresolved, the principal's
-   * active identity override still names the asset. Falling back to it lets an
-   * override replay rebuild fee transfers instead of silently dropping them.
-   */
-  const resolvePrincipalOverrideAsset = ({
+  /** Resolve the principal's source-owned override before shared provider mapping. */
+  const resolvePrincipalProviderAssetOverride = ({
     currencyCode,
     principalId,
+    sourceId,
   }: {
     readonly currencyCode: string
     readonly principalId: string
+    readonly sourceId: string
   }) =>
-    loadProviderAssetIdentity({ currencyCode: currencyCode.toUpperCase() }).pipe(
-      Effect.flatMap((providerAssetRowId) =>
-        providerAssetRowId === null
-          ? Effect.succeed(Option.none<string>())
-          : providerAssetRepository.findPrincipalIdentityOverrideAssetId({
-              principalId,
-              providerAssetRowId,
-            })
-      )
-    )
+    providerAssetRepository.findSourcePrincipalProviderAssetOverride({
+      principalId,
+      sourceId,
+      providerKey: COINBASE_PROVIDER_KEY,
+      currencyCode,
+    })
 
   const resolveOptionalAssetForReviewableNormalization = ({
     currencyCode,
     principalId,
     rawSourcePayload,
+    sourceId,
   }: {
     readonly currencyCode: string
     readonly principalId: string
     readonly rawSourcePayload: unknown
+    readonly sourceId: string
   }) =>
-    coinbaseReferenceMappingService
-      .resolveCurrency({
+    Effect.gen(function* () {
+      const overrideResolution = yield* resolvePrincipalProviderAssetOverride({
         currencyCode,
-        rawSourcePayload,
+        principalId,
+        sourceId,
       })
-      .pipe(
-        Effect.map((mapping) => ({
-          assetId: Option.fromNullishOr(mapping.canonicalAssetId),
-          requiresReview:
-            mapping.kind !== "excluded" &&
-            mapping.mappingKind !== "fiat" &&
-            mapping.canonicalAssetId === null,
-          excluded: mapping.kind === "excluded",
-        })),
-        Effect.catchTag("CoinbaseProviderAssetMappingNotFoundError", () =>
-          Effect.succeed({
+
+      if (overrideResolution._tag === "resolved") {
+        const excluded =
+          overrideResolution.inclusionState === "excluded" ||
+          overrideResolution.inclusionState === "blocked"
+        if (excluded) {
+          return {
             assetId: Option.none<string>(),
-            requiresReview: true,
+            overrideConflict: false,
+            overrideProviderAssetRowId: overrideResolution.providerAssetRowId,
+            requiresReview: false,
+            excluded: true,
+          }
+        }
+        if (
+          overrideResolution.assetId !== null &&
+          overrideResolution.inclusionState === "included"
+        ) {
+          return {
+            assetId: Option.some(overrideResolution.assetId),
+            overrideConflict: false,
+            overrideProviderAssetRowId: overrideResolution.providerAssetRowId,
+            requiresReview: false,
             excluded: false,
+          }
+        }
+
+        const exactMapping = yield* coinbaseReferenceMappingService
+          .resolveProviderAsset({
+            currencyCode,
+            providerAssetRowId: overrideResolution.providerAssetRowId,
+            rawSourcePayload,
           })
-        ),
-        Effect.catchTag("CoinbasePendingProviderAssetMappingError", () =>
-          Effect.succeed({
-            assetId: Option.none<string>(),
-            requiresReview: true,
-            excluded: false,
-          })
-        ),
-        Effect.flatMap((resolution) =>
-          Option.isSome(resolution.assetId)
-            ? Effect.succeed(resolution)
-            : resolvePrincipalOverrideAsset({ currencyCode, principalId }).pipe(
-                Effect.map((overrideAssetId) =>
-                  Option.isSome(overrideAssetId)
-                    ? {
-                        assetId: overrideAssetId,
-                        requiresReview: false,
-                        excluded: resolution.excluded,
-                      }
-                    : resolution
-                )
-              )
+          .pipe(
+            Effect.map((mapping) => ({
+              assetId: Option.fromNullishOr(mapping.canonicalAssetId),
+              requiresReview:
+                mapping.kind !== "excluded" &&
+                mapping.mappingKind !== "fiat" &&
+                mapping.canonicalAssetId === null,
+              excluded: mapping.kind === "excluded",
+            })),
+            Effect.catchTags({
+              CoinbaseProviderAssetMappingNotFoundError: () =>
+                Effect.succeed({
+                  assetId: Option.none<string>(),
+                  requiresReview: true,
+                  excluded: false,
+                }),
+              CoinbasePendingProviderAssetMappingError: () =>
+                Effect.succeed({
+                  assetId: Option.none<string>(),
+                  requiresReview: true,
+                  excluded: false,
+                }),
+            })
+          )
+        if (overrideResolution.assetId !== null) {
+          return {
+            assetId: exactMapping.excluded
+              ? Option.none<string>()
+              : Option.some(overrideResolution.assetId),
+            overrideConflict: false,
+            overrideProviderAssetRowId: overrideResolution.providerAssetRowId,
+            requiresReview: false,
+            excluded: exactMapping.excluded,
+          }
+        }
+        return {
+          ...exactMapping,
+          overrideConflict: false,
+          overrideProviderAssetRowId: overrideResolution.providerAssetRowId,
+        }
+      }
+      if (overrideResolution._tag === "conflict") {
+        return {
+          assetId: Option.none<string>(),
+          overrideConflict: true,
+          overrideProviderAssetRowId: null,
+          requiresReview: true,
+          excluded: false,
+        }
+      }
+
+      return yield* coinbaseReferenceMappingService
+        .resolveCurrency({
+          currencyCode,
+          rawSourcePayload,
+        })
+        .pipe(
+          Effect.map((mapping) => ({
+            assetId: Option.fromNullishOr(mapping.canonicalAssetId),
+            overrideConflict: false,
+            overrideProviderAssetRowId: null,
+            requiresReview:
+              mapping.kind !== "excluded" &&
+              mapping.mappingKind !== "fiat" &&
+              mapping.canonicalAssetId === null,
+            excluded: mapping.kind === "excluded",
+          })),
+          Effect.catchTag("CoinbaseProviderAssetMappingNotFoundError", () =>
+            Effect.succeed({
+              assetId: Option.none<string>(),
+              overrideConflict: false,
+              overrideProviderAssetRowId: null,
+              requiresReview: true,
+              excluded: false,
+            })
+          ),
+          Effect.catchTag("CoinbasePendingProviderAssetMappingError", () =>
+            Effect.succeed({
+              assetId: Option.none<string>(),
+              overrideConflict: false,
+              overrideProviderAssetRowId: null,
+              requiresReview: true,
+              excluded: false,
+            })
+          )
         )
-      )
+    })
 
   const loadProviderAssetIdentity = ({ currencyCode }: { readonly currencyCode: string }) =>
     Effect.gen(function* () {
@@ -1072,6 +1150,8 @@ const make = Effect.gen(function* () {
   }) =>
     Effect.gen(function* () {
       const excludedAssetCurrencies = new Set<string>()
+      const conflictingAssetCurrencies = new Set<string>()
+      const overrideProviderAssetIdsByCurrency = new Map<string, string>()
       const resolvedAssetCurrencies = new Set<string>()
       const normalized = yield* coinbaseRecordNormalizer.normalize({
         source,
@@ -1081,12 +1161,22 @@ const make = Effect.gen(function* () {
             currencyCode,
             principalId: source.principalId,
             rawSourcePayload: sourceRecord.payload,
+            sourceId: source.id,
           }).pipe(
             Effect.map((resolution) => {
               const normalizedCurrencyCode = currencyCode.toUpperCase()
               resolvedAssetCurrencies.add(normalizedCurrencyCode)
               if (resolution.excluded) {
                 excludedAssetCurrencies.add(normalizedCurrencyCode)
+              }
+              if (resolution.overrideConflict) {
+                conflictingAssetCurrencies.add(normalizedCurrencyCode)
+              }
+              if (resolution.overrideProviderAssetRowId !== null) {
+                overrideProviderAssetIdsByCurrency.set(
+                  normalizedCurrencyCode,
+                  resolution.overrideProviderAssetRowId
+                )
               }
               return resolution.assetId
             }),
@@ -1114,7 +1204,16 @@ const make = Effect.gen(function* () {
           ),
           (currencyCode) =>
             loadProviderAssetIdentity({ currencyCode }).pipe(
-              Effect.map((providerAssetRowId) => [currencyCode, providerAssetRowId] as const)
+              Effect.map(
+                (providerAssetRowId) =>
+                  [
+                    currencyCode,
+                    conflictingAssetCurrencies.has(currencyCode)
+                      ? null
+                      : (overrideProviderAssetIdsByCurrency.get(currencyCode) ??
+                        providerAssetRowId),
+                  ] as const
+              )
             )
         )
       )
@@ -1146,7 +1245,19 @@ const make = Effect.gen(function* () {
         currencyCode: normalized.primaryAssetCurrency,
         principalId: source.principalId,
         rawSourcePayload: sourceRecord.payload,
+        sourceId: source.id,
       })
+      if (primaryAssetResolution.overrideProviderAssetRowId !== null) {
+        providerAssetIdsByCurrency.set(
+          normalized.primaryAssetCurrency.toUpperCase(),
+          primaryAssetResolution.overrideProviderAssetRowId
+        )
+      }
+      if (primaryAssetResolution.overrideConflict) {
+        const primaryCurrencyCode = normalized.primaryAssetCurrency.toUpperCase()
+        conflictingAssetCurrencies.add(primaryCurrencyCode)
+        providerAssetIdsByCurrency.set(primaryCurrencyCode, null)
+      }
       const maybePrimaryAsset = yield* Option.match(primaryAssetResolution.assetId, {
         onNone: () => Effect.succeed(Option.none()),
         onSome: (assetId) =>
@@ -1209,7 +1320,8 @@ const make = Effect.gen(function* () {
         primaryAsset: Option.getOrNull(maybePrimaryAsset),
         primaryProviderAssetId,
         feeProviderAssetIdsByExternalId,
-        canDeriveWithAssetOverrides: baseTransactionReview === null,
+        canDeriveWithAssetOverrides:
+          baseTransactionReview === null && conflictingAssetCurrencies.size === 0,
         legDerivationStrategy: unresolvedAssetCurrencies.length === 0 ? "derive" : "skip",
         overrideMaterializationAllowed: false,
         deriveMainLeg: !primaryAssetResolution.excluded,

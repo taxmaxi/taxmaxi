@@ -496,6 +496,78 @@ const replaySource = () =>
     })
   }).pipe(Effect.provide(TestLayer))
 
+const seedSourceOwnedHypeDuplicate = ({
+  identityAssetId = null,
+  inclusionState = null,
+  mappingAssetId = null,
+  naturalKey = null,
+  providerAssetId = null,
+}: {
+  readonly identityAssetId?: string | null
+  readonly inclusionState?: "included" | "excluded" | null
+  readonly mappingAssetId?: string | null
+  readonly naturalKey?: string | null
+  readonly providerAssetId?: string | null
+}) =>
+  Effect.gen(function* () {
+    const db = yield* drizzle
+    const [providerAsset] = yield* db
+      .insert(schema.providerAssets)
+      .values({
+        provider: "coinbase",
+        providerAssetId,
+        naturalKey,
+        currencyCode: "HYPE",
+        name: "Hyperliquid duplicate",
+        exponent: 8,
+        providerType: "crypto",
+        retrievedAt: new Date("2024-12-31T00:00:00.000Z"),
+      })
+      .returning({ id: schema.providerAssets.id })
+    if (providerAsset === undefined) return yield* Effect.die("Failed to seed HYPE duplicate")
+    yield* db.insert(schema.providerAssetMappings).values({
+      providerAssetRowId: providerAsset.id,
+      mappingKind: "asset",
+      mappingStatus: mappingAssetId === null ? "pending_review" : "approved",
+      canonicalAssetId: mappingAssetId,
+    })
+    yield* db.insert(schema.providerAssetSourceUses).values({
+      providerAssetRowId: providerAsset.id,
+      sourceId,
+      hasChainlessObservation: true,
+    })
+    if (identityAssetId !== null) {
+      yield* db.insert(schema.principalAssetOverrides).values({
+        principalId,
+        kind: "identity",
+        targetKind: "provider_asset",
+        providerAssetRowId: providerAsset.id,
+        action: "set",
+        inspectedSystemRevision: "duplicate-hype-identity",
+        inspectedIdentityState: "unresolved",
+        replacementAssetId: identityAssetId,
+        actorId: userId,
+        reason: "Use the source-owned duplicate identity.",
+      })
+    }
+    if (inclusionState !== null) {
+      yield* db.insert(schema.principalAssetOverrides).values({
+        principalId,
+        kind: "inclusion",
+        targetKind: "provider_asset",
+        providerAssetRowId: providerAsset.id,
+        action: "set",
+        inspectedSystemRevision: "duplicate-hype-inclusion",
+        inspectedInclusionState: "blocked",
+        inspectedInclusionReason: "provider_asset_mapping_pending",
+        replacementInclusionState: inclusionState,
+        actorId: userId,
+        reason: "Apply the source-owned duplicate inclusion choice.",
+      })
+    }
+    return providerAsset.id
+  }).pipe(Effect.provide(TestPgClientLive))
+
 const executeOverrideReplay = ({ overrideId }: { readonly overrideId: string }) =>
   Effect.gen(function* () {
     const db = yield* drizzle
@@ -1659,6 +1731,533 @@ describe("coinbase normalization persistence", () => {
             derivationRule: "coinbase_buy",
           }),
         ])
+      }).pipe(Effect.provide(TestLayer))
+    )
+  })
+
+  it("prefers a source-owned natural-key override over an approved stable-id duplicate", async () => {
+    activeSyncRecords = makeHypeReviewableSyncRecords()
+    activeCryptoCurrencies = [...defaultCryptoCurrencies, hypeCryptoCurrency]
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        yield* seedPendingProviderAssetMapping({
+          currencyCode: "HYPE",
+          providerAssetId: "hype-provider-asset",
+          providerType: "crypto",
+        })
+        yield* runSync()
+
+        const naturalKeyProviderAssetRowId = yield* Effect.gen(function* () {
+          const db = yield* drizzle
+          const [stableProviderAsset] = yield* db
+            .select({ id: schema.providerAssets.id })
+            .from(schema.providerAssets)
+            .where(eq(schema.providerAssets.providerAssetId, "hype-provider-asset"))
+          if (stableProviderAsset === undefined) {
+            return yield* Effect.die("Missing stable-id HYPE provider asset")
+          }
+          yield* db
+            .update(schema.providerAssetMappings)
+            .set({
+              canonicalAssetId: BTC_ASSET_ID,
+              mappingStatus: "approved",
+            })
+            .where(eq(schema.providerAssetMappings.providerAssetRowId, stableProviderAsset.id))
+          const [providerAsset] = yield* db
+            .insert(schema.providerAssets)
+            .values({
+              provider: "coinbase",
+              providerAssetId: null,
+              naturalKey: "currency_code:HYPE",
+              currencyCode: "HYPE",
+              name: "Hyperliquid",
+              exponent: 8,
+              providerType: "crypto",
+              rawProviderPayload: { code: "HYPE" },
+              retrievedAt: new Date("2024-12-31T00:00:00.000Z"),
+            })
+            .returning({ id: schema.providerAssets.id })
+          if (providerAsset === undefined) {
+            return yield* Effect.die("Failed to seed natural-key HYPE provider asset")
+          }
+          yield* db.insert(schema.providerAssetMappings).values({
+            providerAssetRowId: providerAsset.id,
+            mappingKind: "asset",
+            mappingStatus: "pending_review",
+          })
+          yield* db.insert(schema.providerAssetSourceUses).values({
+            providerAssetRowId: providerAsset.id,
+            sourceId,
+            hasChainlessObservation: true,
+          })
+          return providerAsset.id
+        }).pipe(Effect.provide(TestPgClientLive))
+
+        const assetId = yield* seedCanonicalAsset({ symbol: "HYPE" })
+        const repository = yield* AssetOverrideRepository
+        const target = {
+          _tag: "provider_asset" as const,
+          providerAssetRowId: naturalKeyProviderAssetRowId,
+        }
+        const initial = yield* repository.getProjection({
+          principalId,
+          kind: "identity",
+          target,
+        })
+        const created = yield* repository.setOverride({
+          principalId,
+          actorId: userId,
+          kind: "identity",
+          target,
+          expectedSystemRevision: initial.systemRevision,
+          expectedActiveOverrideId: null,
+          replacement: { _tag: "identity", assetId },
+          reason: "The older Coinbase source row identifies this HYPE asset.",
+        })
+        expect(created._tag).toBe("accepted")
+        if (created._tag !== "accepted" || created.projection.activeOverride === null) return
+
+        activeSyncRecords = []
+        const replay = yield* executeOverrideReplay({
+          overrideId: created.projection.activeOverride.id,
+        })
+        const counts = yield* fetchCounts()
+        const providerAssetTransactionUses = yield* Effect.gen(function* () {
+          const db = yield* drizzle
+          return yield* db
+            .select({ providerAssetRowId: schema.providerAssetTransactionUses.providerAssetRowId })
+            .from(schema.providerAssetTransactionUses)
+            .where(eq(schema.providerAssetTransactionUses.sourceId, sourceId))
+        }).pipe(Effect.provide(TestPgClientLive))
+
+        expect(replay.status).toBe("completed")
+        expect(providerAssetTransactionUses).toContainEqual({
+          providerAssetRowId: naturalKeyProviderAssetRowId,
+        })
+        expect(counts.transactionReviews).toHaveLength(0)
+        expect(counts.legs).toEqual([
+          expect.objectContaining({
+            assetId,
+            kind: "acquisition",
+            derivationRule: "coinbase_buy",
+          }),
+        ])
+      }).pipe(Effect.provide(TestLayer))
+    )
+  })
+
+  it("replays through an identity override on a nonpreferred stable-id duplicate", async () => {
+    activeSyncRecords = makeHypeReviewableSyncRecords()
+    activeCryptoCurrencies = [...defaultCryptoCurrencies, hypeCryptoCurrency]
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        yield* seedPendingProviderAssetMapping({
+          currencyCode: "HYPE",
+          providerAssetId: "hype-provider-asset",
+          providerType: "crypto",
+        })
+        yield* runSync()
+        const assetId = yield* seedCanonicalAsset({ symbol: "HYPE" })
+        const duplicateRowId = yield* seedSourceOwnedHypeDuplicate({
+          providerAssetId: "hype-provider-asset-legacy",
+          identityAssetId: assetId,
+        })
+
+        activeSyncRecords = []
+        const replay = yield* replaySource()
+        const counts = yield* fetchCounts()
+        const uses = yield* Effect.gen(function* () {
+          const db = yield* drizzle
+          return yield* db
+            .select({ providerAssetRowId: schema.providerAssetTransactionUses.providerAssetRowId })
+            .from(schema.providerAssetTransactionUses)
+            .where(eq(schema.providerAssetTransactionUses.sourceId, sourceId))
+        }).pipe(Effect.provide(TestPgClientLive))
+
+        expect(replay.status).toBe("completed")
+        expect(uses).toEqual([{ providerAssetRowId: duplicateRowId }])
+        expect(counts.legs).toEqual([expect.objectContaining({ assetId, kind: "acquisition" })])
+      }).pipe(Effect.provide(TestLayer))
+    )
+  })
+
+  it("keeps a source-owned duplicate excluded instead of using the preferred mapping", async () => {
+    activeSyncRecords = makeHypeReviewableSyncRecords()
+    activeCryptoCurrencies = [...defaultCryptoCurrencies, hypeCryptoCurrency]
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        yield* seedPendingProviderAssetMapping({
+          currencyCode: "HYPE",
+          providerAssetId: "hype-provider-asset",
+          providerType: "crypto",
+        })
+        yield* runSync()
+        yield* Effect.gen(function* () {
+          const db = yield* drizzle
+          const [stable] = yield* db
+            .select({ id: schema.providerAssets.id })
+            .from(schema.providerAssets)
+            .where(eq(schema.providerAssets.providerAssetId, "hype-provider-asset"))
+          if (stable === undefined) return yield* Effect.die("Missing stable HYPE row")
+          yield* db
+            .update(schema.providerAssetMappings)
+            .set({ mappingStatus: "approved", canonicalAssetId: BTC_ASSET_ID })
+            .where(eq(schema.providerAssetMappings.providerAssetRowId, stable.id))
+        }).pipe(Effect.provide(TestPgClientLive))
+        const duplicateRowId = yield* seedSourceOwnedHypeDuplicate({
+          naturalKey: "currency_code:HYPE",
+          inclusionState: "excluded",
+        })
+
+        activeSyncRecords = []
+        const replay = yield* replaySource()
+        const counts = yield* fetchCounts()
+        const uses = yield* Effect.gen(function* () {
+          const db = yield* drizzle
+          return yield* db
+            .select({ providerAssetRowId: schema.providerAssetTransactionUses.providerAssetRowId })
+            .from(schema.providerAssetTransactionUses)
+            .where(eq(schema.providerAssetTransactionUses.sourceId, sourceId))
+        }).pipe(Effect.provide(TestPgClientLive))
+
+        expect(replay.status).toBe("completed")
+        expect(uses).toEqual([{ providerAssetRowId: duplicateRowId }])
+        expect(counts.legs).toHaveLength(0)
+        expect(counts.transactionReviews).toHaveLength(0)
+      }).pipe(Effect.provide(TestLayer))
+    )
+  })
+
+  it("uses the exact-row approved mapping for an included source-owned duplicate", async () => {
+    activeSyncRecords = makeHypeReviewableSyncRecords()
+    activeCryptoCurrencies = [...defaultCryptoCurrencies, hypeCryptoCurrency]
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        yield* seedPendingProviderAssetMapping({
+          currencyCode: "HYPE",
+          providerAssetId: "hype-provider-asset",
+          providerType: "crypto",
+        })
+        yield* runSync()
+        const duplicateRowId = yield* seedSourceOwnedHypeDuplicate({
+          naturalKey: "currency_code:HYPE",
+          inclusionState: "included",
+          mappingAssetId: BTC_ASSET_ID,
+        })
+
+        activeSyncRecords = []
+        const replay = yield* replaySource()
+        const counts = yield* fetchCounts()
+        const uses = yield* Effect.gen(function* () {
+          const db = yield* drizzle
+          return yield* db
+            .select({ providerAssetRowId: schema.providerAssetTransactionUses.providerAssetRowId })
+            .from(schema.providerAssetTransactionUses)
+            .where(eq(schema.providerAssetTransactionUses.sourceId, sourceId))
+        }).pipe(Effect.provide(TestPgClientLive))
+
+        expect(replay.status).toBe("completed")
+        expect(uses).toEqual([{ providerAssetRowId: duplicateRowId }])
+        expect(counts.legs).toEqual([
+          expect.objectContaining({ assetId: BTC_ASSET_ID, kind: "acquisition" }),
+        ])
+      }).pipe(Effect.provide(TestLayer))
+    )
+  })
+
+  it("keeps an identity override excluded until the principal explicitly includes it", async () => {
+    activeSyncRecords = makeHypeReviewableSyncRecords()
+    activeCryptoCurrencies = [...defaultCryptoCurrencies, hypeCryptoCurrency]
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        yield* seedPendingProviderAssetMapping({
+          currencyCode: "HYPE",
+          providerAssetId: "hype-provider-asset",
+          providerType: "crypto",
+        })
+        yield* runSync()
+        const assetId = yield* seedCanonicalAsset({ symbol: "HYPE" })
+        const providerAssetRowId = yield* Effect.gen(function* () {
+          const db = yield* drizzle
+          const [providerAsset] = yield* db
+            .select({ id: schema.providerAssets.id })
+            .from(schema.providerAssets)
+            .where(eq(schema.providerAssets.providerAssetId, "hype-provider-asset"))
+          if (providerAsset === undefined) return yield* Effect.die("Missing HYPE provider asset")
+          return providerAsset.id
+        }).pipe(Effect.provide(TestPgClientLive))
+
+        const repository = yield* AssetOverrideRepository
+        const target = { _tag: "provider_asset" as const, providerAssetRowId }
+        const initial = yield* repository.getProjection({
+          principalId,
+          kind: "identity",
+          target,
+        })
+        const created = yield* repository.setOverride({
+          principalId,
+          actorId: userId,
+          kind: "identity",
+          target,
+          expectedSystemRevision: initial.systemRevision,
+          expectedActiveOverrideId: null,
+          replacement: { _tag: "identity", assetId },
+          reason: "Identify the excluded HYPE provider asset.",
+        })
+        expect(created._tag).toBe("accepted")
+        if (created._tag !== "accepted" || created.projection.activeOverride === null) return
+
+        yield* Effect.gen(function* () {
+          const db = yield* drizzle
+          yield* db
+            .update(schema.providerAssetMappings)
+            .set({
+              mappingStatus: "excluded",
+              canonicalAssetId: null,
+              assetRepresentationId: null,
+            })
+            .where(eq(schema.providerAssetMappings.providerAssetRowId, providerAssetRowId))
+        }).pipe(Effect.provide(TestPgClientLive))
+
+        const hypeRecord = makeHypeReviewableSyncRecords().find(
+          (record) => record.recordType === "coinbase_transaction"
+        )
+        if (hypeRecord === undefined) return yield* Effect.die("Missing HYPE transaction fixture")
+        const provider = yield* CoinbaseSourceSyncProvider
+        const lookups = yield* provider.loadNormalizationLookups()
+        const prepared = yield* provider.prepareNormalization({
+          source: {
+            id: sourceId,
+            principalId,
+            providerKey: "coinbase",
+            cexAccountId: null,
+            addressId: null,
+            walletAddress: null,
+          },
+          sourceRecord: {
+            id: "00000000-0000-4000-8000-000000000210",
+            sourceId,
+            provider: "coinbase",
+            recordType: hypeRecord.recordType,
+            externalAccountId: hypeRecord.externalAccountId,
+            externalRecordId: hypeRecord.externalRecordId,
+            externalParentId: hypeRecord.externalParentId,
+            occurredAt: hypeRecord.occurredAt,
+            payload: hypeRecord.payload,
+            importedAt: new Date("2025-05-01T10:01:00.000Z"),
+            normalizedAt: null,
+            normalizationError: null,
+            createdAt: new Date("2025-05-01T10:01:00.000Z"),
+            updatedAt: new Date("2025-05-01T10:01:00.000Z"),
+          },
+          lookups,
+        })
+        expect(prepared.deriveMainLeg).toBe(false)
+        expect(prepared.primaryAsset).toBeNull()
+
+        activeSyncRecords = []
+        const replay = yield* executeOverrideReplay({
+          overrideId: created.projection.activeOverride.id,
+        })
+        const counts = yield* fetchCounts()
+        const inventoryMovements = yield* Effect.gen(function* () {
+          const db = yield* drizzle
+          return yield* db
+            .select({ id: schema.inventoryMovements.id })
+            .from(schema.inventoryMovements)
+            .where(eq(schema.inventoryMovements.sourceId, sourceId))
+        }).pipe(Effect.provide(TestPgClientLive))
+
+        expect(replay.status).toBe("completed")
+        expect(counts.transactionReviews).toHaveLength(0)
+        expect(counts.legs).toHaveLength(0)
+        expect(counts.fifoLots).toHaveLength(0)
+        expect(inventoryMovements).toHaveLength(0)
+      }).pipe(Effect.provide(TestLayer))
+    )
+  })
+
+  it("fails closed when included duplicate rows fall back to different approved mappings", async () => {
+    activeSyncRecords = makeHypeReviewableSyncRecords()
+    activeCryptoCurrencies = [...defaultCryptoCurrencies, hypeCryptoCurrency]
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        yield* seedPendingProviderAssetMapping({
+          currencyCode: "HYPE",
+          providerAssetId: "hype-provider-asset",
+          providerType: "crypto",
+        })
+        yield* runSync()
+        const conflictingAssetId = yield* seedCanonicalAsset({ symbol: "HYPE" })
+        yield* seedSourceOwnedHypeDuplicate({
+          providerAssetId: "hype-provider-asset-included",
+          inclusionState: "included",
+          mappingAssetId: BTC_ASSET_ID,
+        })
+        yield* seedSourceOwnedHypeDuplicate({
+          naturalKey: "currency_code:HYPE",
+          inclusionState: "included",
+          mappingAssetId: conflictingAssetId,
+        })
+
+        activeSyncRecords = []
+        const replay = yield* replaySource()
+        const counts = yield* fetchCounts()
+        const derivedState = yield* Effect.gen(function* () {
+          const db = yield* drizzle
+          const providerAssetUses = yield* db
+            .select({
+              providerAssetRowId: schema.providerAssetTransactionUses.providerAssetRowId,
+            })
+            .from(schema.providerAssetTransactionUses)
+            .where(eq(schema.providerAssetTransactionUses.sourceId, sourceId))
+          const inventoryMovements = yield* db
+            .select({ id: schema.inventoryMovements.id })
+            .from(schema.inventoryMovements)
+            .where(eq(schema.inventoryMovements.sourceId, sourceId))
+          return { inventoryMovements, providerAssetUses }
+        }).pipe(Effect.provide(TestPgClientLive))
+
+        expect(replay.status).toBe("completed")
+        expect(counts.transactionReviews).toEqual([
+          expect.objectContaining({
+            matchedLayer: "provider_asset_mapping",
+            reviewStatus: "needs_review",
+          }),
+        ])
+        expect(counts.legs).toHaveLength(0)
+        expect(counts.fifoLots).toHaveLength(0)
+        expect(derivedState.inventoryMovements).toHaveLength(0)
+        expect(derivedState.providerAssetUses).toHaveLength(0)
+      }).pipe(Effect.provide(TestLayer))
+    )
+  })
+
+  it("fails closed when identical duplicate identities inherit different mapping inclusion", async () => {
+    activeSyncRecords = makeHypeReviewableSyncRecords()
+    activeCryptoCurrencies = [...defaultCryptoCurrencies, hypeCryptoCurrency]
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        yield* seedPendingProviderAssetMapping({
+          currencyCode: "HYPE",
+          providerAssetId: "hype-provider-asset",
+          providerType: "crypto",
+        })
+        yield* runSync()
+        const assetId = yield* seedCanonicalAsset({ symbol: "HYPE" })
+        const excludedRowId = yield* seedSourceOwnedHypeDuplicate({
+          providerAssetId: "hype-provider-asset-identity-excluded",
+          identityAssetId: assetId,
+          mappingAssetId: BTC_ASSET_ID,
+        })
+        yield* Effect.gen(function* () {
+          const db = yield* drizzle
+          yield* db
+            .update(schema.providerAssetMappings)
+            .set({
+              mappingStatus: "excluded",
+              canonicalAssetId: null,
+              assetRepresentationId: null,
+            })
+            .where(eq(schema.providerAssetMappings.providerAssetRowId, excludedRowId))
+        }).pipe(Effect.provide(TestPgClientLive))
+        yield* seedSourceOwnedHypeDuplicate({
+          naturalKey: "currency_code:HYPE",
+          identityAssetId: assetId,
+          mappingAssetId: BTC_ASSET_ID,
+        })
+
+        activeSyncRecords = []
+        const replay = yield* replaySource()
+        const counts = yield* fetchCounts()
+        const derivedState = yield* Effect.gen(function* () {
+          const db = yield* drizzle
+          const providerAssetUses = yield* db
+            .select({
+              providerAssetRowId: schema.providerAssetTransactionUses.providerAssetRowId,
+            })
+            .from(schema.providerAssetTransactionUses)
+            .where(eq(schema.providerAssetTransactionUses.sourceId, sourceId))
+          const inventoryMovements = yield* db
+            .select({ id: schema.inventoryMovements.id })
+            .from(schema.inventoryMovements)
+            .where(eq(schema.inventoryMovements.sourceId, sourceId))
+          return { inventoryMovements, providerAssetUses }
+        }).pipe(Effect.provide(TestPgClientLive))
+
+        expect(replay.status).toBe("completed")
+        expect(counts.transactionReviews).toEqual([
+          expect.objectContaining({
+            matchedLayer: "provider_asset_mapping",
+            reviewStatus: "needs_review",
+          }),
+        ])
+        expect(counts.legs).toHaveLength(0)
+        expect(counts.fifoLots).toHaveLength(0)
+        expect(derivedState.inventoryMovements).toHaveLength(0)
+        expect(derivedState.providerAssetUses).toHaveLength(0)
+      }).pipe(Effect.provide(TestLayer))
+    )
+  })
+
+  it("fails closed when source-owned duplicate overrides conflict", async () => {
+    activeSyncRecords = makeHypeReviewableSyncRecords()
+    activeCryptoCurrencies = [...defaultCryptoCurrencies, hypeCryptoCurrency]
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        yield* seedPendingProviderAssetMapping({
+          currencyCode: "HYPE",
+          providerAssetId: "hype-provider-asset",
+          providerType: "crypto",
+        })
+        yield* runSync()
+        const conflictingAssetId = yield* seedCanonicalAsset({ symbol: "HYPE" })
+        yield* seedSourceOwnedHypeDuplicate({
+          providerAssetId: "hype-provider-asset-conflict",
+          identityAssetId: BTC_ASSET_ID,
+        })
+        yield* seedSourceOwnedHypeDuplicate({
+          naturalKey: "currency_code:HYPE",
+          identityAssetId: conflictingAssetId,
+        })
+
+        activeSyncRecords = []
+        const replay = yield* replaySource()
+        const counts = yield* fetchCounts()
+        const derivedState = yield* Effect.gen(function* () {
+          const db = yield* drizzle
+          const providerAssetUses = yield* db
+            .select({
+              providerAssetRowId: schema.providerAssetTransactionUses.providerAssetRowId,
+            })
+            .from(schema.providerAssetTransactionUses)
+            .where(eq(schema.providerAssetTransactionUses.sourceId, sourceId))
+          const inventoryMovements = yield* db
+            .select({ id: schema.inventoryMovements.id })
+            .from(schema.inventoryMovements)
+            .where(eq(schema.inventoryMovements.sourceId, sourceId))
+          return { inventoryMovements, providerAssetUses }
+        }).pipe(Effect.provide(TestPgClientLive))
+
+        expect(replay.status).toBe("completed")
+        expect(counts.transactionReviews).toEqual([
+          expect.objectContaining({
+            matchedLayer: "provider_asset_mapping",
+            reviewStatus: "needs_review",
+          }),
+        ])
+        expect(counts.legs).toHaveLength(0)
+        expect(counts.fifoLots).toHaveLength(0)
+        expect(derivedState.inventoryMovements).toHaveLength(0)
+        expect(derivedState.providerAssetUses).toHaveLength(0)
       }).pipe(Effect.provide(TestLayer))
     )
   })

@@ -13,6 +13,8 @@ import { AssetResolutionJobRepository } from "../../../services/AssetResolutionJ
 import {
   ProviderAssetRepository,
   type ProviderAssetMappingDraft,
+  type ProviderAssetMappingState,
+  type ProviderAssetRecord,
 } from "../../../services/ProviderAssetRepository.ts"
 import { ProviderReferenceRepository } from "../../../services/ProviderReferenceRepository.ts"
 import { SyncEngineStorageError } from "../../../services/SyncEngineStorageError.ts"
@@ -511,20 +513,17 @@ const make = Effect.gen(function* () {
       } satisfies CoinbaseResolvedTransactionTypeMapping
     })
 
-  const resolveCurrency: CoinbaseReferenceMappingServiceShape["resolveCurrency"] = ({
+  const resolvePersistedCurrency = ({
     currencyCode,
-    rawSourcePayload,
+    persistedMapping,
+    providerAssetRecord,
+  }: {
+    readonly currencyCode: string
+    readonly persistedMapping: ProviderAssetMappingState | null
+    readonly providerAssetRecord: ProviderAssetRecord
   }) =>
     Effect.gen(function* () {
       const upperCurrencyCode = currencyCode.toUpperCase()
-      const providerAssetRecord = yield* ensureProviderAssetRecord({
-        currencyCode: upperCurrencyCode,
-        rawSourcePayload: rawSourcePayload ?? { currencyCode: upperCurrencyCode },
-      })
-      const persistedMapping = yield* loadProviderAssetMapping({
-        providerAssetRowId: providerAssetRecord.id,
-      })
-
       if (persistedMapping === null) {
         return yield* failMissingProviderAssetMapping({
           currencyCode: upperCurrencyCode,
@@ -591,6 +590,58 @@ const make = Effect.gen(function* () {
       } satisfies CoinbaseResolvedCurrencyMapping
     })
 
+  const resolveCurrency: CoinbaseReferenceMappingServiceShape["resolveCurrency"] = ({
+    currencyCode,
+    rawSourcePayload,
+  }) =>
+    Effect.gen(function* () {
+      const upperCurrencyCode = currencyCode.toUpperCase()
+      const providerAssetRecord = yield* ensureProviderAssetRecord({
+        currencyCode: upperCurrencyCode,
+        rawSourcePayload: rawSourcePayload ?? { currencyCode: upperCurrencyCode },
+      })
+      const persistedMapping = yield* loadProviderAssetMapping({
+        providerAssetRowId: providerAssetRecord.id,
+      })
+      return yield* resolvePersistedCurrency({
+        currencyCode: upperCurrencyCode,
+        persistedMapping,
+        providerAssetRecord,
+      })
+    })
+
+  const resolveProviderAsset: CoinbaseReferenceMappingServiceShape["resolveProviderAsset"] = ({
+    currencyCode,
+    providerAssetRowId,
+  }) =>
+    Effect.gen(function* () {
+      const review = yield* providerAssetRepository.findProviderAssetReviewById({
+        providerAssetRowId,
+      })
+      if (Option.isNone(review)) {
+        return yield* new CoinbaseProviderAssetMappingNotFoundError({
+          currencyCode: currencyCode.toUpperCase(),
+          providerAssetRowId,
+          message: `Coinbase provider asset row ${providerAssetRowId} does not exist.`,
+        })
+      }
+      if (
+        review.value.providerAsset.provider !== COINBASE_PROVIDER ||
+        review.value.providerAsset.currencyCode !== currencyCode.toUpperCase()
+      ) {
+        return yield* new CoinbaseProviderAssetMappingNotFoundError({
+          currencyCode: currencyCode.toUpperCase(),
+          providerAssetRowId,
+          message: `Coinbase provider asset row ${providerAssetRowId} does not match ${currencyCode.toUpperCase()}.`,
+        })
+      }
+      return yield* resolvePersistedCurrency({
+        currencyCode,
+        persistedMapping: review.value.mapping,
+        providerAssetRecord: review.value.providerAsset,
+      })
+    })
+
   const resolveAssetId: CoinbaseReferenceMappingServiceShape["resolveAssetId"] = (params) =>
     resolveCurrency(params).pipe(
       Effect.flatMap((mapping) => {
@@ -612,6 +663,7 @@ const make = Effect.gen(function* () {
     ensureDefaultMappings,
     resolveTransactionType,
     resolveCurrency,
+    resolveProviderAsset,
     resolveAssetId,
   } satisfies CoinbaseReferenceMappingServiceShape)
 })

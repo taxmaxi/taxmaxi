@@ -209,6 +209,265 @@ const seedUpstreamConsumption = ({
     return { lotId: lot.id }
   })
 
+const seedDownstreamConsumption = ({
+  dependentSourceId,
+  relationshipKind,
+  suffix,
+}: {
+  readonly dependentSourceId: string
+  readonly relationshipKind: "inventory allocation" | "disposal match"
+  readonly suffix: string
+}) =>
+  Effect.gen(function* () {
+    const db = yield* drizzle
+    const [address] = yield* db
+      .insert(schema.addresses)
+      .values({
+        address: `bc1qdownstream-replay-${suffix}`,
+        type: "bitcoin",
+        name: `Downstream replay consumer ${suffix}`,
+        principalId: TEST_PRINCIPAL_ID,
+      })
+      .returning({ id: schema.addresses.id })
+    if (address === undefined) {
+      return yield* Effect.die("Failed to create downstream replay address")
+    }
+
+    yield* db.insert(schema.sources).values({
+      id: dependentSourceId,
+      principalId: TEST_PRINCIPAL_ID,
+      name: `Downstream replay consumer ${suffix}`,
+      providerKey: "bitcoin-rpc",
+      sourceableType: "onchain",
+      cexAccountId: null,
+      addressId: address.id,
+    })
+    const [ownerTransaction] = yield* db
+      .insert(schema.transactions)
+      .values({
+        sourceId: TEST_SOURCE_ID,
+        externalId: `downstream-owner-${suffix}`,
+        timestamp: new Date("2025-01-01T08:00:00.000Z"),
+        principalId: TEST_PRINCIPAL_ID,
+      })
+      .returning({ id: schema.transactions.id })
+    const [consumerTransaction] = yield* db
+      .insert(schema.transactions)
+      .values({
+        sourceId: dependentSourceId,
+        externalId: `downstream-consumer-${suffix}`,
+        timestamp: new Date("2025-01-02T08:00:00.000Z"),
+        principalId: TEST_PRINCIPAL_ID,
+      })
+      .returning({ id: schema.transactions.id })
+    if (ownerTransaction === undefined || consumerTransaction === undefined) {
+      return yield* Effect.die("Failed to create downstream replay transactions")
+    }
+
+    const [ownerLeg] = yield* db
+      .insert(schema.transactionLegs)
+      .values({
+        sourceId: TEST_SOURCE_ID,
+        externalId: `downstream-owner-leg-${suffix}`,
+        timestamp: new Date("2025-01-01T08:00:00.000Z"),
+        principalId: TEST_PRINCIPAL_ID,
+        assetId: TEST_BTC_ASSET_ID,
+        amount: "1.00000000",
+        kind: "acquisition",
+        provenance: "deterministic",
+        transactionId: ownerTransaction.id,
+      })
+      .returning({ id: schema.transactionLegs.id })
+    const [consumerLeg] = yield* db
+      .insert(schema.transactionLegs)
+      .values({
+        sourceId: dependentSourceId,
+        externalId: `downstream-consumer-leg-${suffix}`,
+        timestamp: new Date("2025-01-02T08:00:00.000Z"),
+        principalId: TEST_PRINCIPAL_ID,
+        assetId: TEST_BTC_ASSET_ID,
+        amount: "-0.20000000",
+        kind: relationshipKind === "inventory allocation" ? "fee" : "disposal",
+        provenance: "deterministic",
+        transactionId: consumerTransaction.id,
+      })
+      .returning({ id: schema.transactionLegs.id })
+    if (ownerLeg === undefined || consumerLeg === undefined) {
+      return yield* Effect.die("Failed to create downstream replay legs")
+    }
+
+    const [lot] = yield* db
+      .insert(schema.fifoLots)
+      .values({
+        principalId: TEST_PRINCIPAL_ID,
+        sourceId: TEST_SOURCE_ID,
+        assetId: TEST_BTC_ASSET_ID,
+        acquiredAt: new Date("2025-01-01T08:00:00.000Z"),
+        originalAmount: "1.00000000",
+        remainingAmount: "0.80000000",
+        costBasisPerToken: "10000.00",
+        costBasisCurrency: "EUR",
+        sourceLegId: ownerLeg.id,
+      })
+      .returning({ id: schema.fifoLots.id })
+    if (lot === undefined) {
+      return yield* Effect.die("Failed to create downstream replay inventory")
+    }
+
+    if (relationshipKind === "inventory allocation") {
+      const [movement] = yield* db
+        .insert(schema.inventoryMovements)
+        .values({
+          principalId: TEST_PRINCIPAL_ID,
+          sourceId: dependentSourceId,
+          transactionId: consumerTransaction.id,
+          transactionLegId: consumerLeg.id,
+          assetId: TEST_BTC_ASSET_ID,
+          timestamp: new Date("2025-01-02T08:00:00.000Z"),
+          direction: "outbound",
+          purpose: "fee",
+          taxTreatment: "pending_review",
+          reconciliationStatus: "unmatched",
+          amount: "0.20000000",
+        })
+        .returning({ id: schema.inventoryMovements.id })
+      if (movement === undefined) {
+        return yield* Effect.die("Failed to create downstream replay movement")
+      }
+      yield* db.insert(schema.inventoryMovementAllocations).values({
+        inventoryMovementId: movement.id,
+        fifoLotId: lot.id,
+        matchedAmount: "0.20000000",
+      })
+    } else {
+      yield* db.insert(schema.disposalMatches).values({
+        disposalLegId: consumerLeg.id,
+        fifoLotId: lot.id,
+        matchedAmount: "0.20000000",
+        costBasis: "2000.00",
+        proceeds: "2500.00",
+        gainLoss: "500.00",
+      })
+    }
+  })
+
+const seedIndependentReplayInventory = ({
+  createSource,
+  sourceId,
+  suffix,
+}: {
+  readonly createSource: boolean
+  readonly sourceId: string
+  readonly suffix: string
+}) =>
+  Effect.gen(function* () {
+    const db = yield* drizzle
+    if (createSource) {
+      const [address] = yield* db
+        .insert(schema.addresses)
+        .values({
+          address: `bc1qindependent-replay-${suffix}`,
+          type: "bitcoin",
+          name: `Independent replay ${suffix}`,
+          principalId: TEST_PRINCIPAL_ID,
+        })
+        .returning({ id: schema.addresses.id })
+      if (address === undefined) {
+        return yield* Effect.die("Failed to create independent replay address")
+      }
+
+      yield* db.insert(schema.sources).values({
+        id: sourceId,
+        principalId: TEST_PRINCIPAL_ID,
+        name: `Independent replay ${suffix}`,
+        providerKey: "bitcoin-rpc",
+        sourceableType: "onchain",
+        cexAccountId: null,
+        addressId: address.id,
+      })
+    }
+
+    const [transaction] = yield* db
+      .insert(schema.transactions)
+      .values({
+        sourceId,
+        externalId: `independent-replay-${suffix}`,
+        timestamp: new Date("2025-01-01T08:00:00.000Z"),
+        principalId: TEST_PRINCIPAL_ID,
+      })
+      .returning({ id: schema.transactions.id })
+    if (transaction === undefined) {
+      return yield* Effect.die("Failed to create independent replay transaction")
+    }
+
+    const [acquisitionLeg, disposalLeg] = yield* db
+      .insert(schema.transactionLegs)
+      .values([
+        {
+          sourceId,
+          externalId: `independent-replay-acquisition-${suffix}`,
+          timestamp: new Date("2025-01-01T08:00:00.000Z"),
+          principalId: TEST_PRINCIPAL_ID,
+          assetId: TEST_BTC_ASSET_ID,
+          amount: "1.00000000",
+          kind: "acquisition" as const,
+          provenance: "deterministic" as const,
+          transactionId: transaction.id,
+        },
+        {
+          sourceId,
+          externalId: `independent-replay-disposal-${suffix}`,
+          timestamp: new Date("2025-01-02T08:00:00.000Z"),
+          principalId: TEST_PRINCIPAL_ID,
+          assetId: TEST_BTC_ASSET_ID,
+          amount: "-0.20000000",
+          kind: "disposal" as const,
+          provenance: "deterministic" as const,
+          transactionId: transaction.id,
+        },
+      ])
+      .returning({ id: schema.transactionLegs.id, kind: schema.transactionLegs.kind })
+    if (acquisitionLeg === undefined || disposalLeg === undefined) {
+      return yield* Effect.die("Failed to create independent replay legs")
+    }
+
+    const legsByKind = new Map(
+      [acquisitionLeg, disposalLeg].map((leg) => [leg.kind, leg.id] as const)
+    )
+    const acquisitionLegId = legsByKind.get("acquisition")
+    const disposalLegId = legsByKind.get("disposal")
+    if (acquisitionLegId === undefined || disposalLegId === undefined) {
+      return yield* Effect.die("Failed to identify independent replay legs")
+    }
+
+    const [lot] = yield* db
+      .insert(schema.fifoLots)
+      .values({
+        principalId: TEST_PRINCIPAL_ID,
+        sourceId,
+        assetId: TEST_BTC_ASSET_ID,
+        acquiredAt: new Date("2025-01-01T08:00:00.000Z"),
+        originalAmount: "1.00000000",
+        remainingAmount: "0.80000000",
+        costBasisPerToken: "10000.00",
+        costBasisCurrency: "EUR",
+        sourceLegId: acquisitionLegId,
+      })
+      .returning({ id: schema.fifoLots.id })
+    if (lot === undefined) {
+      return yield* Effect.die("Failed to create independent replay lot")
+    }
+
+    yield* db.insert(schema.disposalMatches).values({
+      disposalLegId,
+      fifoLotId: lot.id,
+      matchedAmount: "0.20000000",
+      costBasis: "2000.00",
+      proceeds: "2500.00",
+      gainLoss: "500.00",
+    })
+  })
+
 const holdSourceInventoryLock = ({
   sourceId,
   acquired,
@@ -387,6 +646,187 @@ describe("SourceReplayRepositoryLive", () => {
       expect(lot?.remainingAmount).toContain("1.00000000")
     }
   )
+
+  it.each([
+    { relationshipKind: "inventory allocation", consumerSourceSuffix: "307" },
+    { relationshipKind: "disposal match", consumerSourceSuffix: "308" },
+  ] as const)(
+    "waits for a downstream FIFO consumer inventory lock for a $relationshipKind",
+    async ({ relationshipKind, consumerSourceSuffix }) => {
+      const dependentSourceId = `00000000-0000-0000-0000-000000000${consumerSourceSuffix}`
+      await runPg(
+        seedDownstreamConsumption({
+          dependentSourceId,
+          relationshipKind,
+          suffix: `consumer-lock-${consumerSourceSuffix}`,
+        })
+      )
+      const lockAcquired = await Effect.runPromise(Deferred.make<void>())
+      const releaseLock = await Effect.runPromise(Deferred.make<void>())
+      const heldLock = holdSourceInventoryLock({
+        sourceId: dependentSourceId,
+        acquired: lockAcquired,
+        release: releaseLock,
+      })
+      await Effect.runPromise(Deferred.await(lockAcquired))
+
+      const replay = runReplayRepository(
+        Effect.flatMap(SourceReplayRepository, (repository) =>
+          repository.resetSourceDerivedState({ sourceId: TEST_SOURCE_ID })
+        )
+      )
+
+      await context.waitForQueryBlockedOnLock({ queryIncludes: "source-inventory:" })
+      await Effect.runPromise(Deferred.succeed(releaseLock, undefined))
+      await Promise.all([heldLock, replay])
+
+      const [dependentReplay] = await runPg(
+        Effect.gen(function* () {
+          const db = yield* drizzle
+          return yield* db
+            .select({ mode: schema.processingJobs.mode, status: schema.processingJobs.status })
+            .from(schema.processingJobs)
+            .where(eq(schema.processingJobs.sourceId, dependentSourceId))
+        })
+      )
+      expect(dependentReplay).toEqual({ mode: "replay", status: "pending" })
+    }
+  )
+
+  it("retries with a newly discovered downstream FIFO consumer locked", async () => {
+    const firstConsumerSourceId = "00000000-0000-0000-0000-000000000309"
+    const secondConsumerSourceId = "00000000-0000-0000-0000-000000000310"
+    await runPg(
+      seedDownstreamConsumption({
+        dependentSourceId: firstConsumerSourceId,
+        relationshipKind: "inventory allocation",
+        suffix: "first-consumer",
+      })
+    )
+
+    const firstLockAcquired = await Effect.runPromise(Deferred.make<void>())
+    const releaseFirstLock = await Effect.runPromise(Deferred.make<void>())
+    const firstHeldLock = holdSourceInventoryLock({
+      sourceId: firstConsumerSourceId,
+      acquired: firstLockAcquired,
+      release: releaseFirstLock,
+    })
+    await Effect.runPromise(Deferred.await(firstLockAcquired))
+
+    const replay = runReplayRepository(
+      Effect.flatMap(SourceReplayRepository, (repository) =>
+        repository.resetSourceDerivedState({ sourceId: TEST_SOURCE_ID })
+      )
+    )
+    await context.waitForQueryBlockedOnLock({ queryIncludes: "source-inventory:" })
+
+    const secondLockAcquired = await Effect.runPromise(Deferred.make<void>())
+    const releaseSecondLock = await Effect.runPromise(Deferred.make<void>())
+    const secondHeldLock = holdSourceInventoryLock({
+      sourceId: secondConsumerSourceId,
+      acquired: secondLockAcquired,
+      release: releaseSecondLock,
+    })
+    await Effect.runPromise(Deferred.await(secondLockAcquired))
+    await runPg(
+      seedDownstreamConsumption({
+        dependentSourceId: secondConsumerSourceId,
+        relationshipKind: "disposal match",
+        suffix: "second-consumer",
+      })
+    )
+
+    await Effect.runPromise(Deferred.succeed(releaseFirstLock, undefined))
+    await firstHeldLock
+    await context.waitForQueryBlockedOnLock({ queryIncludes: "source-inventory:" })
+
+    await Effect.runPromise(Deferred.succeed(releaseSecondLock, undefined))
+    await Promise.all([secondHeldLock, replay])
+
+    const dependentSourceIds = await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const jobs = yield* db
+          .select({ sourceId: schema.processingJobs.sourceId })
+          .from(schema.processingJobs)
+          .where(eq(schema.processingJobs.mode, "replay"))
+        return jobs.map(({ sourceId }) => sourceId).sort()
+      })
+    )
+    expect(dependentSourceIds).toEqual([firstConsumerSourceId, secondConsumerSourceId].sort())
+  })
+
+  it("runs two disjoint replay resets concurrently without deadlocking", async () => {
+    const otherSourceId = "00000000-0000-0000-0000-000000000312"
+    await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        yield* seedIndependentReplayInventory({
+          createSource: false,
+          sourceId: TEST_SOURCE_ID,
+          suffix: "first",
+        })
+        yield* seedIndependentReplayInventory({
+          createSource: true,
+          sourceId: otherSourceId,
+          suffix: "second",
+        })
+        yield* db.execute(
+          sql.raw(`
+            create function pause_source_replay_leg_delete()
+            returns trigger
+            language plpgsql
+            as $$
+            begin
+              perform pg_sleep(1);
+              return null;
+            end;
+            $$
+          `)
+        )
+        yield* db.execute(
+          sql.raw(`
+            create trigger pause_source_replay_leg_delete
+            before delete on transaction_legs
+            for each statement execute function pause_source_replay_leg_delete()
+          `)
+        )
+      })
+    )
+
+    const replay = (sourceId: string) =>
+      runReplayRepository(
+        Effect.flatMap(SourceReplayRepository, (repository) =>
+          repository.resetSourceDerivedState({ sourceId })
+        ).pipe(Effect.result)
+      )
+    const replays = [replay(TEST_SOURCE_ID), replay(otherSourceId)]
+    await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        for (let attempt = 0; attempt < 200; attempt += 1) {
+          const [activity] = yield* db.$client<{ readonly count: string }>`
+            select count(*)::text as count
+            from pg_stat_activity
+            where datname = current_database()
+              and state = 'active'
+              and wait_event = 'PgSleep'
+              and position('delete from "transaction_legs"' in query) > 0
+          `
+          if (Number(activity?.count ?? "0") >= 2) return
+          yield* Effect.sleep("10 millis")
+        }
+        return yield* Effect.die("Disjoint replay deletes did not overlap")
+      })
+    )
+
+    const results = await Promise.all(replays)
+
+    expect(results).toEqual([
+      expect.objectContaining({ _tag: "Success" }),
+      expect.objectContaining({ _tag: "Success" }),
+    ])
+  })
 
   it("defers a consumer replay until its active inventory-owner replay finishes", async () => {
     const ownerSourceId = "00000000-0000-0000-0000-000000000295"
@@ -572,6 +1012,118 @@ describe("SourceReplayRepositoryLive", () => {
       replayJobId: expect.any(String),
       dependsOnSourceIds: [ownerSourceId],
     })
+  })
+
+  it("links the owner application to the current replay before scheduling its consumer", async () => {
+    const ownerSourceId = "00000000-0000-0000-0000-000000000311"
+    await runPg(
+      seedUpstreamConsumption({
+        ownerSourceId,
+        relationshipKind: "disposal match",
+        suffix: "current-owner-replay",
+      })
+    )
+    const seeded = await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const [override] = yield* db
+          .insert(schema.principalAssetOverrides)
+          .values({
+            principalId: TEST_PRINCIPAL_ID,
+            kind: "identity",
+            targetKind: "representation",
+            blockchainId: fixture.baseBlockchainId,
+            representationType: "token",
+            contractAddress: "current-owner-replay",
+            mintAddress: null,
+            action: "set",
+            inspectedSystemRevision: "current-owner-replay-revision",
+            inspectedIdentityState: "resolved",
+            inspectedAssetId: TEST_BTC_ASSET_ID,
+            replacementAssetId: TEST_BTC_ASSET_ID,
+            actorId: fixture.userId,
+            reason: "Keep consumers behind the replay that is resetting their owner.",
+          })
+          .returning({ id: schema.principalAssetOverrides.id })
+        const [staleJob] = yield* db
+          .insert(schema.processingJobs)
+          .values({
+            sourceId: ownerSourceId,
+            principalId: TEST_PRINCIPAL_ID,
+            mode: "replay",
+            status: "completed",
+            completedAt: new Date("2025-01-01T00:00:00.000Z"),
+            progressDetails: { failedRecords: 0 },
+          })
+          .returning({ id: schema.processingJobs.id })
+        const [currentJob] = yield* db
+          .insert(schema.processingJobs)
+          .values({
+            sourceId: ownerSourceId,
+            principalId: TEST_PRINCIPAL_ID,
+            mode: "replay",
+            status: "processing",
+          })
+          .returning({ id: schema.processingJobs.id })
+        if (override === undefined || staleJob === undefined || currentJob === undefined) {
+          return yield* Effect.die("Failed to seed current owner replay")
+        }
+        yield* db.insert(schema.principalAssetOverrideApplications).values({
+          overrideId: override.id,
+          sourceId: ownerSourceId,
+          replayJobId: staleJob.id,
+          dependsOnSourceIds: [],
+        })
+        return { currentJobId: currentJob.id, overrideId: override.id }
+      })
+    )
+
+    await runReplayRepository(
+      Effect.flatMap(SourceReplayRepository, (repository) =>
+        repository.resetSourceDerivedState({ sourceId: ownerSourceId })
+      )
+    )
+
+    const applications = await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        return yield* db
+          .select({
+            sourceId: schema.principalAssetOverrideApplications.sourceId,
+            replayJobId: schema.principalAssetOverrideApplications.replayJobId,
+            dependsOnSourceIds: schema.principalAssetOverrideApplications.dependsOnSourceIds,
+          })
+          .from(schema.principalAssetOverrideApplications)
+          .where(eq(schema.principalAssetOverrideApplications.overrideId, seeded.overrideId))
+      })
+    )
+    const ownerApplication = applications.find(({ sourceId }) => sourceId === ownerSourceId)
+    const consumerApplication = applications.find(({ sourceId }) => sourceId === TEST_SOURCE_ID)
+
+    expect(ownerApplication).toEqual({
+      sourceId: ownerSourceId,
+      replayJobId: seeded.currentJobId,
+      dependsOnSourceIds: [],
+    })
+    expect(consumerApplication).toEqual({
+      sourceId: TEST_SOURCE_ID,
+      replayJobId: expect.any(String),
+      dependsOnSourceIds: [ownerSourceId],
+    })
+    const consumerReplayJobId = consumerApplication?.replayJobId
+    expect(consumerReplayJobId).toEqual(expect.any(String))
+    if (consumerReplayJobId === null || consumerReplayJobId === undefined) return
+
+    const dispatchable = await runJobRepository(
+      Effect.flatMap(SourceSyncJobRepository, (repository) =>
+        repository.listPendingJobsNeedingDispatch({
+          jobId: consumerReplayJobId,
+          staleBefore: new Date("2030-01-01T00:00:00.000Z"),
+          limit: 1,
+        })
+      )
+    )
+    expect(dispatchable).toEqual([])
   })
 
   it("links a late FIFO-dependent application to an active replay", async () => {

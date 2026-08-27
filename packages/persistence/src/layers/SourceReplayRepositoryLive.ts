@@ -96,8 +96,68 @@ const make = Effect.gen(function* () {
               ].sort()
             })
 
+          const loadReferencedConsumerSourceIds = () =>
+            Effect.gen(function* () {
+              const allocationConsumers = yield* tx
+                .selectDistinct({ sourceId: schema.inventoryMovements.sourceId })
+                .from(schema.inventoryMovementAllocations)
+                .innerJoin(
+                  schema.inventoryMovements,
+                  eq(
+                    schema.inventoryMovements.id,
+                    schema.inventoryMovementAllocations.inventoryMovementId
+                  )
+                )
+                .innerJoin(
+                  schema.fifoLots,
+                  eq(schema.fifoLots.id, schema.inventoryMovementAllocations.fifoLotId)
+                )
+                .where(
+                  and(
+                    eq(schema.fifoLots.sourceId, sourceId),
+                    ne(schema.inventoryMovements.sourceId, sourceId)
+                  )
+                )
+                .pipe(
+                  wrapSyncEngineSqlError(
+                    "sourceReplayRepository.resetSourceDerivedState.loadAllocationConsumers"
+                  )
+                )
+              const disposalConsumers = yield* tx
+                .selectDistinct({ sourceId: schema.transactionLegs.sourceId })
+                .from(schema.disposalMatches)
+                .innerJoin(
+                  schema.transactionLegs,
+                  eq(schema.transactionLegs.id, schema.disposalMatches.disposalLegId)
+                )
+                .innerJoin(
+                  schema.fifoLots,
+                  eq(schema.fifoLots.id, schema.disposalMatches.fifoLotId)
+                )
+                .where(
+                  and(
+                    eq(schema.fifoLots.sourceId, sourceId),
+                    ne(schema.transactionLegs.sourceId, sourceId)
+                  )
+                )
+                .pipe(
+                  wrapSyncEngineSqlError(
+                    "sourceReplayRepository.resetSourceDerivedState.loadDisposalConsumers"
+                  )
+                )
+
+              return [
+                ...new Set(
+                  [...allocationConsumers, ...disposalConsumers].map((row) => row.sourceId)
+                ),
+              ].sort()
+            })
+
           const referencedOwnerSourceIds = yield* loadReferencedOwnerSourceIds()
-          const lockedSourceIds = [...new Set([sourceId, ...referencedOwnerSourceIds])].sort()
+          const referencedConsumerSourceIds = yield* loadReferencedConsumerSourceIds()
+          const lockedSourceIds = [
+            ...new Set([sourceId, ...referencedOwnerSourceIds, ...referencedConsumerSourceIds]),
+          ].sort()
           yield* tx
             .execute(sourceInventoryLockQuery(lockedSourceIds))
             .pipe(
@@ -137,6 +197,37 @@ const make = Effect.gen(function* () {
                 ...new Set(crossPrincipalOwnerSources.map((source) => source.principalId)),
               ].sort(),
             })
+          }
+
+          // Lock the replayed source's existing lots after taking the known source
+          // locks. A concurrent FIFO edge insert must take a key-share lock on its
+          // referenced lot, so the recheck below sees that edge after the insert
+          // commits. The source inventory lock prevents new owner lots meanwhile.
+          yield* tx
+            .select({ id: schema.fifoLots.id })
+            .from(schema.fifoLots)
+            .where(eq(schema.fifoLots.sourceId, sourceId))
+            .orderBy(asc(schema.fifoLots.id))
+            .for("update")
+            .pipe(
+              wrapSyncEngineSqlError(
+                "sourceReplayRepository.resetSourceDerivedState.lockOwnedFifoLots"
+              )
+            )
+
+          const revalidatedOwnerSourceIds = yield* loadReferencedOwnerSourceIds()
+          const revalidatedConsumerSourceIds = yield* loadReferencedConsumerSourceIds()
+          if (
+            revalidatedOwnerSourceIds.length !== referencedOwnerSourceIds.length ||
+            revalidatedOwnerSourceIds.some(
+              (ownerSourceId, index) => ownerSourceId !== referencedOwnerSourceIds[index]
+            ) ||
+            revalidatedConsumerSourceIds.length !== referencedConsumerSourceIds.length ||
+            revalidatedConsumerSourceIds.some(
+              (consumerSourceId, index) => consumerSourceId !== referencedConsumerSourceIds[index]
+            )
+          ) {
+            return yield* new ReplayInventoryOwnerSetChanged()
           }
 
           const allocationDependencies = yield* tx
@@ -280,16 +371,6 @@ const make = Effect.gen(function* () {
             })
           }
 
-          const revalidatedOwnerSourceIds = yield* loadReferencedOwnerSourceIds()
-          if (
-            revalidatedOwnerSourceIds.length !== referencedOwnerSourceIds.length ||
-            revalidatedOwnerSourceIds.some(
-              (ownerSourceId, index) => ownerSourceId !== referencedOwnerSourceIds[index]
-            )
-          ) {
-            return yield* new ReplayInventoryOwnerSetChanged()
-          }
-
           if (referencedOwnerSourceIds.length > 0) {
             const activeOwnerJobs = yield* tx
               .selectDistinct({ sourceId: schema.processingJobs.sourceId })
@@ -390,6 +471,44 @@ const make = Effect.gen(function* () {
             new Set(crossSourceDependencies.map((row) => row.dependentSourceId))
           ).sort()
           const replayRequestedAt = nowDate()
+
+          if (dependentSourceIds.length > 0 && dependentApplications.length > 0) {
+            const [currentReplayJob] = yield* tx
+              .select({ id: schema.processingJobs.id })
+              .from(schema.processingJobs)
+              .where(
+                and(
+                  eq(schema.processingJobs.sourceId, sourceId),
+                  eq(schema.processingJobs.principalId, sourcePrincipalId),
+                  eq(schema.processingJobs.mode, "replay"),
+                  eq(schema.processingJobs.status, "processing")
+                )
+              )
+              .limit(1)
+              .pipe(
+                wrapSyncEngineSqlError(
+                  "sourceReplayRepository.resetSourceDerivedState.loadCurrentReplayJob"
+                )
+              )
+
+            if (currentReplayJob !== undefined) {
+              yield* tx
+                .update(schema.principalAssetOverrideApplications)
+                .set({ replayJobId: currentReplayJob.id })
+                .where(
+                  and(
+                    eq(schema.principalAssetOverrideApplications.sourceId, sourceId),
+                    isNull(schema.principalAssetOverrideApplications.supersededAt)
+                  )
+                )
+                .pipe(
+                  wrapSyncEngineSqlError(
+                    "sourceReplayRepository.resetSourceDerivedState.linkCurrentOwnerReplay"
+                  )
+                )
+            }
+          }
+
           yield* Effect.forEach(
             dependentSourceIds,
             (dependentSourceId) =>

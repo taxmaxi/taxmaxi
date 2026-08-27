@@ -47,6 +47,19 @@ export interface ProviderAssetRecord {
   readonly retrievedAt: Date
 }
 
+/** Active principal choices selected for one source-owned provider asset row. */
+export interface SourcePrincipalProviderAssetOverride {
+  readonly providerAssetRowId: string
+  readonly assetId: string | null
+  readonly inclusionState: "included" | "excluded" | "blocked" | null
+}
+
+/** Source-scoped principal override lookup, including fail-closed conflicts. */
+export type SourcePrincipalProviderAssetOverrideResolution =
+  | { readonly _tag: "none" }
+  | ({ readonly _tag: "resolved" } & SourcePrincipalProviderAssetOverride)
+  | { readonly _tag: "conflict" }
+
 /**
  * ProviderAssetMappingDraft - Default or reviewed provider-asset mapping upsert.
  */
@@ -328,6 +341,19 @@ export interface ProviderAssetRepositoryShape {
     readonly principalId: string
     readonly providerAssetRowId: string
   }) => Effect.Effect<Option.Option<string>, SyncEngineStorageError>
+
+  /**
+   * Load the principal's active choices from source-relevant provider asset
+   * rows that match one currency. Rows remain relevant while the source uses
+   * them or has an unfinished override application. Conflicting active choices
+   * return a conflict so normalization stays on the review path.
+   */
+  readonly findSourcePrincipalProviderAssetOverride: (params: {
+    readonly principalId: string
+    readonly sourceId: string
+    readonly providerKey: string
+    readonly currencyCode: string
+  }) => Effect.Effect<SourcePrincipalProviderAssetOverrideResolution, SyncEngineStorageError>
 
   /**
    * Load one provider asset row with its mapping review state.

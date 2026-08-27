@@ -1470,6 +1470,118 @@ const make = Effect.gen(function* () {
           : Option.none()
       })
 
+  const findSourcePrincipalProviderAssetOverride: ProviderAssetRepositoryShape["findSourcePrincipalProviderAssetOverride"] =
+    ({ principalId, sourceId, providerKey, currencyCode }) =>
+      Effect.gen(function* () {
+        const overrides = yield* db
+          .select({
+            providerAssetRowId: schema.providerAssets.id,
+            kind: schema.principalAssetOverrides.kind,
+            action: schema.principalAssetOverrides.action,
+            replacementAssetId: schema.principalAssetOverrides.replacementAssetId,
+            replacementInclusionState: schema.principalAssetOverrides.replacementInclusionState,
+          })
+          .from(schema.providerAssets)
+          .innerJoin(
+            schema.principalAssetOverrides,
+            and(
+              eq(schema.principalAssetOverrides.providerAssetRowId, schema.providerAssets.id),
+              eq(schema.principalAssetOverrides.principalId, principalId),
+              eq(schema.principalAssetOverrides.targetKind, "provider_asset")
+            )
+          )
+          .where(
+            and(
+              eq(schema.providerAssets.provider, providerKey),
+              eq(schema.providerAssets.currencyCode, currencyCode.toUpperCase()),
+              or(
+                sql`exists (
+                  select 1
+                  from ${schema.providerAssetSourceUses} source_use
+                  where source_use.provider_asset_row_id = ${schema.providerAssets.id}
+                    and source_use.source_id = ${sourceId}::uuid
+                )`,
+                sql`exists (
+                  select 1
+                  from ${schema.principalAssetOverrides} relevant_override
+                  inner join ${schema.principalAssetOverrideApplications} relevant_application
+                    on relevant_application.override_id = relevant_override.id
+                  where relevant_override.provider_asset_row_id = ${schema.providerAssets.id}
+                    and relevant_override.principal_id = ${principalId}::uuid
+                    and relevant_application.source_id = ${sourceId}::uuid
+                    and relevant_application.superseded_at is null
+                )`
+              )
+            )
+          )
+          .orderBy(
+            desc(schema.principalAssetOverrides.createdAt),
+            desc(schema.principalAssetOverrides.id)
+          )
+          .pipe(
+            wrapSyncEngineSqlError(
+              "providerAssetRepository.findSourcePrincipalProviderAssetOverride"
+            )
+          )
+
+        const overridesByProviderAsset = new Map<
+          string,
+          ReadonlyArray<(typeof overrides)[number]>
+        >()
+        for (const override of overrides) {
+          overridesByProviderAsset.set(override.providerAssetRowId, [
+            ...(overridesByProviderAsset.get(override.providerAssetRowId) ?? []),
+            override,
+          ])
+        }
+
+        const activeOverrides = Array.from(overridesByProviderAsset.entries()).flatMap(
+          ([providerAssetRowId, providerAssetOverrides]) => {
+            const latestIdentity = providerAssetOverrides.find(
+              (override) => override.kind === "identity"
+            )
+            const latestInclusion = providerAssetOverrides.find(
+              (override) => override.kind === "inclusion"
+            )
+            const hasActiveIdentity = latestIdentity?.action === "set"
+            const hasActiveInclusion = latestInclusion?.action === "set"
+
+            return hasActiveIdentity || hasActiveInclusion
+              ? [
+                  {
+                    providerAssetRowId,
+                    assetId: hasActiveIdentity ? latestIdentity.replacementAssetId : null,
+                    inclusionState: hasActiveInclusion
+                      ? latestInclusion.replacementInclusionState
+                      : null,
+                  },
+                ]
+              : []
+          }
+        )
+        const distinctOverrideResults = new Set(
+          activeOverrides.map(({ assetId, inclusionState }) =>
+            JSON.stringify([assetId, inclusionState])
+          )
+        )
+        const hasExactMappingFallback = activeOverrides.some(
+          ({ assetId, inclusionState }) =>
+            inclusionState === null || (inclusionState === "included" && assetId === null)
+        )
+
+        if (
+          distinctOverrideResults.size > 1 ||
+          (activeOverrides.length > 1 && hasExactMappingFallback)
+        ) {
+          return { _tag: "conflict" as const }
+        }
+
+        const [activeOverride] = activeOverrides
+        return activeOverride === undefined
+          ? { _tag: "none" as const }
+          : { _tag: "resolved" as const, ...activeOverride }
+      })
+
   const providerAssetReviewProjection = {
     providerAsset: {
       id: schema.providerAssets.id,
@@ -1751,6 +1863,7 @@ const make = Effect.gen(function* () {
     findProviderAssetByNaturalKey,
     findProviderAssetByCurrencyCode,
     findPrincipalIdentityOverrideAssetId,
+    findSourcePrincipalProviderAssetOverride,
     findProviderAssetReviewById,
     listProviderAssetReviews,
     listProviderAssetObservedRepresentations,

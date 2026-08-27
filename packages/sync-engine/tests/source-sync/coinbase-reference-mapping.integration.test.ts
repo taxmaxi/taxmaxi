@@ -525,7 +525,6 @@ describe("coinbase reference mappings", () => {
     await runReferenceMapping(
       Effect.flatMap(CoinbaseReferenceMappingService, (service) => service.ensureDefaultMappings())
     )
-
     const mappings = await Effect.runPromise(fetchProviderAssetMappingRows())
     const adaMapping = mappings.find((mapping) => mapping.currencyCode === "ADA")
     const dotMapping = mappings.find((mapping) => mapping.currencyCode === "DOT")
@@ -808,6 +807,10 @@ describe("coinbase reference mappings", () => {
     await runReferenceMapping(
       Effect.flatMap(CoinbaseReferenceMappingService, (service) => service.ensureDefaultMappings())
     )
+    const reviewedBtcMapping = (await Effect.runPromise(fetchProviderAssetMappingRows())).find(
+      (mapping) => mapping.currencyCode === "BTC"
+    )
+    if (reviewedBtcMapping === undefined) expect.fail("Expected BTC provider asset mapping")
 
     // A later catalog refresh reclassifies BTC as fiat. The approved asset
     // mapping was reviewed under the old type and must not decide accounting.
@@ -828,7 +831,12 @@ describe("coinbase reference mappings", () => {
 
     const failure = await runReferenceMapping(
       Effect.flatMap(CoinbaseReferenceMappingService, (service) =>
-        service.resolveCurrency({ currencyCode: "BTC" }).pipe(Effect.flip)
+        service
+          .resolveProviderAsset({
+            currencyCode: "BTC",
+            providerAssetRowId: reviewedBtcMapping.providerAssetRowId,
+          })
+          .pipe(Effect.flip)
       )
     )
 
@@ -852,11 +860,16 @@ describe("coinbase reference mappings", () => {
     await runReferenceMapping(
       Effect.flatMap(CoinbaseReferenceMappingService, (service) => service.ensureDefaultMappings())
     )
+    const reviewedEurMapping = (await Effect.runPromise(fetchProviderAssetMappingRows())).find(
+      (mapping) => mapping.currencyCode === "EUR"
+    )
+    if (reviewedEurMapping === undefined) expect.fail("Expected EUR provider asset mapping")
 
     const eurMapping = await runReferenceMapping(
       Effect.flatMap(CoinbaseReferenceMappingService, (service) =>
-        service.resolveCurrency({
+        service.resolveProviderAsset({
           currencyCode: "EUR",
+          providerAssetRowId: reviewedEurMapping.providerAssetRowId,
         })
       )
     )
