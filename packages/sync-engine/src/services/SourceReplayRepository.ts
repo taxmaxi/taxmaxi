@@ -77,6 +77,39 @@ export class SourceReplayDependencyError extends Schema.TaggedError<SourceReplay
   }
 }
 
+/** A replay closure contains a FIFO dependency cycle and cannot be ordered safely. */
+export class SourceReplayDependencyCycleError extends Schema.TaggedError<SourceReplayDependencyCycleError>()(
+  "SourceReplayDependencyCycleError",
+  { sourceId: Schema.String }
+) {
+  override get message(): string {
+    return `Cannot replay source ${this.sourceId}; its FIFO dependencies form a cycle.`
+  }
+}
+
+/** An active job for a dependent source must finish before replay planning retries. */
+export class SourceReplaySchedulingPendingError extends Schema.TaggedError<SourceReplaySchedulingPendingError>()(
+  "SourceReplaySchedulingPendingError",
+  {
+    sourceId: Schema.String,
+    dependentSourceId: Schema.String,
+  }
+) {
+  override get message(): string {
+    return `Replay source ${this.sourceId} after the active job finishes for dependent source ${this.dependentSourceId}.`
+  }
+}
+
+/** One downstream replay that must wait for its FIFO owner replays. */
+export interface SourceReplayDependentPlan extends SourceReplayPlan {
+  readonly sourceId: string
+}
+
+/** Result of resetting one source and durably planning its direct FIFO consumers. */
+export interface SourceReplayResetResult {
+  readonly dependentReplays: ReadonlyArray<SourceReplayDependentPlan>
+}
+
 /**
  * SourceReplayRepositoryShape - Replay reset semantics used by the sync engine.
  */
@@ -86,8 +119,15 @@ export interface SourceReplayRepositoryShape {
    * and durable checkpoint state.
    */
   readonly resetSourceDerivedState: (params: {
+    readonly jobId: string
     readonly sourceId: string
-  }) => Effect.Effect<void, SourceReplayDependencyError | SyncEngineStorageError>
+  }) => Effect.Effect<
+    SourceReplayResetResult,
+    | SourceReplayDependencyCycleError
+    | SourceReplayDependencyError
+    | SourceReplaySchedulingPendingError
+    | SyncEngineStorageError
+  >
 }
 
 /**

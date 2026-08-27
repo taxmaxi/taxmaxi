@@ -24,8 +24,10 @@ import {
   ProviderAssetRepository,
   SourceNotFoundError,
   SourceRawRecordRepository,
+  SourceReplayDependencyCycleError,
   SourceReplayDependencyError,
   SourceReplayRepository,
+  SourceReplaySchedulingPendingError,
   SourceRepository,
   type SourceRawRecord,
   type SourceSyncCreditExhaustedError,
@@ -110,7 +112,9 @@ type PreparedReplayRecord =
 type SourceSyncExecutionError =
   | UnsupportedProviderError
   | SourceProviderModuleError
+  | SourceReplayDependencyCycleError
   | SourceReplayDependencyError
+  | SourceReplaySchedulingPendingError
   | SyncEngineStorageError
   | SourceSyncCreditExhaustedError
 
@@ -161,7 +165,8 @@ const errorMessage = (error: unknown): string => {
 }
 
 const isRetryableExecutionError = (error: SourceSyncExecutionError): boolean =>
-  error._tag === "SourceSyncProviderFailureError" && "retryable" in error && error.retryable
+  error._tag === "SourceReplaySchedulingPendingError" ||
+  (error._tag === "SourceSyncProviderFailureError" && "retryable" in error && error.retryable)
 
 const make = Effect.gen(function* () {
   const sourceProviderRegistry = yield* SourceProviderRegistry
@@ -1109,7 +1114,10 @@ const make = Effect.gen(function* () {
               yield* transferReconciliationService.rollbackReconciliationsForSourceReplay({
                 sourceId: source.id,
               })
-              yield* sourceReplayRepository.resetSourceDerivedState({ sourceId: source.id })
+              yield* sourceReplayRepository.resetSourceDerivedState({
+                jobId,
+                sourceId: source.id,
+              })
             }).pipe(
               sourceSyncSpan({
                 name: "source-replay.reset-derived-state",
@@ -1366,7 +1374,7 @@ const make = Effect.gen(function* () {
       })
     )
 
-  const recordRetryableSyncFailure = ({
+  const persistRetryableSyncFailure = ({
     sourceId,
     jobId,
     provider,
@@ -1385,11 +1393,10 @@ const make = Effect.gen(function* () {
     readonly maxAttempts: number
     readonly nextRetryAt: Date
   }): Effect.Effect<
-    never,
+    void,
     | SyncEngineStorageError
     | SourceSyncJobExecutionNotFoundError
     | SourceSyncJobExecutionConflictError
-    | SourceSyncJobRetryableExecutionError
   > =>
     Effect.gen(function* () {
       const message = errorMessage(error)
@@ -1443,19 +1450,47 @@ const make = Effect.gen(function* () {
         },
         "source-sync:retryable-failure"
       )
-
-      return yield* new SourceSyncJobRetryableExecutionError({
-        jobId,
-        message,
-        attemptNumber,
-        maxAttempts,
-        nextRetryAt,
-      })
     }).pipe(
       sourceSyncSpan({
         name: "source-sync.record-retryable-failure",
         attributes: { sourceId, jobId, provider, mode, attemptNumber, maxAttempts },
       })
+    )
+
+  const recordRetryableSyncFailure = (
+    params: Parameters<typeof persistRetryableSyncFailure>[0]
+  ): Effect.Effect<
+    never,
+    | SyncEngineStorageError
+    | SourceSyncJobExecutionNotFoundError
+    | SourceSyncJobExecutionConflictError
+    | SourceSyncJobRetryableExecutionError
+  > =>
+    persistRetryableSyncFailure(params).pipe(
+      Effect.andThen(
+        Effect.fail(
+          new SourceSyncJobRetryableExecutionError({
+            jobId: params.jobId,
+            message: errorMessage(params.error),
+            attemptNumber: params.attemptNumber,
+            maxAttempts: params.maxAttempts,
+            nextRetryAt: params.nextRetryAt,
+          })
+        )
+      )
+    )
+
+  const returnReplaySchedulingToDispatcher = (
+    params: Parameters<typeof persistRetryableSyncFailure>[0]
+  ) =>
+    persistRetryableSyncFailure(params).pipe(
+      Effect.as(
+        makePlainSourceSyncJobSummary({
+          sourceId: params.sourceId,
+          jobId: params.jobId,
+          status: "queued",
+        })
+      )
     )
 
   const execute: SourceSyncJobExecutorShape["execute"] = ({
@@ -1536,6 +1571,20 @@ const make = Effect.gen(function* () {
               attemptNumber: retryPolicy.attemptNumber,
               maxAttempts: retryPolicy.maxAttempts,
               nextRetryAt: retryPolicy.nextRetryAt,
+            })
+          }
+
+          if (error._tag === "SourceReplaySchedulingPendingError") {
+            const nextRetryAt = retryPolicy?.nextRetryAt ?? new Date(nowDate().getTime() + 30_000)
+            return returnReplaySchedulingToDispatcher({
+              sourceId: source.id,
+              jobId,
+              provider,
+              mode,
+              error,
+              attemptNumber: retryPolicy?.attemptNumber ?? 0,
+              maxAttempts: retryPolicy?.maxAttempts ?? 3,
+              nextRetryAt,
             })
           }
 

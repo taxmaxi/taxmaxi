@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest"
 import { SourceSyncServiceLive } from "../../src/layers/SourceSyncServiceLive.ts"
 import {
   SourceRepository,
+  SourceSyncJobExecutionRecordConflictError,
   SourceSyncJobRepository,
   SourceSyncQueue,
   SourceSyncQueueError,
@@ -67,12 +68,14 @@ const makeServiceLayer = ({
   enqueued,
   repositoryEvents,
   enqueueFailure = false,
+  dispatchBlocked = false,
 }: {
   readonly activeJobs?: ReadonlyArray<SourceSyncActiveJob>
   readonly createResult?: CreateOrReuseSourceSyncJobResult
   readonly enqueued: Array<SourceSyncQueuePayload>
   readonly repositoryEvents: Array<string>
   readonly enqueueFailure?: boolean
+  readonly dispatchBlocked?: boolean
 }) => {
   const SourceRepositoryTestLive = Layer.succeed(SourceRepository, {
     findOwnedSourceSyncContext: () => Effect.succeed(Option.some(source)),
@@ -106,7 +109,21 @@ const makeServiceLayer = ({
     failCreditRequiredJob: () => Effect.die("failCreditRequiredJob should not be called"),
     completeJob: () => Effect.die("completeJob should not be called"),
     getJob: () => Effect.die("getJob should not be called"),
-    getExecutionJob: () => Effect.die("getExecutionJob should not be called"),
+    getExecutionJob: ({ jobId }) =>
+      dispatchBlocked
+        ? Effect.fail(
+            new SourceSyncJobExecutionRecordConflictError({
+              jobId,
+              reason: "Prerequisite replay has not completed.",
+            })
+          )
+        : Effect.succeed({
+            id: jobId,
+            sourceId: source.id,
+            principalId: source.principalId,
+            mode: "replay" as const,
+            status: "pending" as const,
+          }),
   })
 
   const SourceSyncQueueTestLive = Layer.succeed(SourceSyncQueue, {
@@ -238,6 +255,33 @@ describe("SourceSyncService queue orchestration", () => {
       principalId: source.principalId,
       mode: "sync",
     })
+  })
+
+  it("leaves a reused replay unqueued until its prerequisites complete", async () => {
+    const enqueued: Array<SourceSyncQueuePayload> = []
+    const repositoryEvents: Array<string> = []
+
+    const result = await runStart({
+      mode: "replay",
+      layer: makeServiceLayer({
+        createResult: {
+          _tag: "ReusedSourceSyncJob",
+          id: "job-dependent-replay",
+          sourceId: source.id,
+          principalId: source.principalId,
+          mode: "replay",
+          status: "pending",
+          queueName: null,
+          queueJobId: null,
+        },
+        enqueued,
+        repositoryEvents,
+        dispatchBlocked: true,
+      }),
+    })
+
+    expect(result).toMatchObject({ jobId: "job-dependent-replay", status: "queued" })
+    expect(enqueued).toEqual([])
   })
 
   it("does not enqueue a reused processing job", async () => {

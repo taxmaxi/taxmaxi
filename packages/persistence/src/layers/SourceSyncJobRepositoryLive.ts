@@ -5,7 +5,7 @@
  */
 
 import { SyncCreditReasonCode } from "@my/core/billing"
-import { and, asc, eq, inArray, isNotNull, isNull, lt, ne, or } from "drizzle-orm"
+import { and, asc, eq, inArray, isNotNull, isNull, lt, ne, or, sql } from "drizzle-orm"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import * as Schema from "effect/Schema"
@@ -44,6 +44,17 @@ const ACTIVE_JOB_STATUSES = [
   "processing",
 ] as const satisfies ReadonlyArray<ActiveSourceSyncJobStatus>
 const MAX_CREATE_OR_REUSE_RACE_ATTEMPTS = 3
+const processingJobPrerequisitesSucceeded = sql<boolean>`not exists (
+  select 1
+  from processing_job_dependencies dependency
+  inner join processing_jobs prerequisite
+    on prerequisite.id = dependency.prerequisite_job_id
+  where dependency.job_id = ${schema.processingJobs.id}
+    and (
+      prerequisite.status <> 'completed'
+      or coalesce((prerequisite.progress_details ->> 'failedRecords')::integer, 0) <> 0
+    )
+)`
 
 interface PersistedExecutionJobRow {
   readonly id: string
@@ -495,7 +506,8 @@ const make = Effect.gen(function* () {
           and(
             eq(schema.processingJobs.id, jobId),
             eq(schema.processingJobs.status, "pending"),
-            isNotNull(schema.processingJobs.principalId)
+            isNotNull(schema.processingJobs.principalId),
+            processingJobPrerequisitesSucceeded
           )
         )
         .returning(selectExecutionJobFields)
@@ -505,7 +517,7 @@ const make = Effect.gen(function* () {
         return yield* failExpectedState({
           jobId,
           operation: "sourceSyncJobRepository.claimJob.select",
-          reason: "Only pending jobs can be claimed.",
+          reason: "Only pending jobs with successful prerequisites can be claimed.",
         })
       }
 
@@ -926,9 +938,23 @@ const make = Effect.gen(function* () {
     })
 
   const getExecutionJob: SourceSyncJobRepositoryShape["getExecutionJob"] = ({ jobId }) =>
-    loadExecutionJobById({
-      jobId,
-      operation: "sourceSyncJobRepository.getExecutionJob.select",
+    Effect.gen(function* () {
+      const [job] = yield* db
+        .select(selectExecutionJobFields)
+        .from(schema.processingJobs)
+        .where(and(eq(schema.processingJobs.id, jobId), processingJobPrerequisitesSucceeded))
+        .limit(1)
+        .pipe(wrapSyncEngineSqlError("sourceSyncJobRepository.getExecutionJob.select"))
+
+      if (job === undefined) {
+        return yield* failExpectedState({
+          jobId,
+          operation: "sourceSyncJobRepository.getExecutionJob.loadBlockedJob",
+          reason: "Only jobs with successful prerequisites can be dispatched.",
+        })
+      }
+
+      return yield* toExecutionJob({ job, jobId })
     })
 
   const listStaleActiveJobs: SourceSyncJobRepositoryShape["listStaleActiveJobs"] = ({
@@ -1009,6 +1035,7 @@ const make = Effect.gen(function* () {
       .where(
         and(
           isNotNull(schema.processingJobs.principalId),
+          processingJobPrerequisitesSucceeded,
           or(
             and(
               eq(schema.processingJobs.status, "pending"),
@@ -1080,6 +1107,7 @@ const make = Effect.gen(function* () {
           and(
             isNotNull(schema.processingJobs.principalId),
             eq(schema.processingJobs.status, "pending"),
+            processingJobPrerequisitesSucceeded,
             or(
               isNull(schema.processingJobs.queueName),
               isNull(schema.processingJobs.queueJobId),

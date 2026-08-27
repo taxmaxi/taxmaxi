@@ -5817,6 +5817,62 @@ describe("TransferReconciliationServiceLive", () => {
           proceeds: "5000.00",
           gainLoss: "1000.00",
         })
+
+        const [dependentLotOriginLeg, rootConsumerLeg] = yield* db
+          .insert(schema.transactionLegs)
+          .values([
+            {
+              transactionId: dependentTransaction.id,
+              sourceId: dependentSourceId,
+              externalId: "replay-atomicity-dependent-lot-origin-leg",
+              timestamp: new Date("2025-04-02T12:00:00.000Z"),
+              principalId: TEST_PRINCIPAL_ID,
+              assetId: TEST_BTC_ASSET_ID,
+              amount: "1.00000000",
+              kind: "acquisition",
+              provenance: "deterministic",
+            },
+            {
+              transactionId: originTransaction.id,
+              sourceId: TEST_SOURCE_ID,
+              externalId: "replay-atomicity-root-consumer-leg",
+              timestamp: new Date("2025-04-03T11:00:00.000Z"),
+              principalId: TEST_PRINCIPAL_ID,
+              assetId: TEST_BTC_ASSET_ID,
+              amount: "-0.10000000",
+              kind: "disposal",
+              provenance: "deterministic",
+            },
+          ])
+          .returning({ id: schema.transactionLegs.id })
+        if (dependentLotOriginLeg === undefined || rootConsumerLeg === undefined) {
+          return yield* Effect.die("Failed to create replay dependency cycle legs")
+        }
+        const [dependentLot] = yield* db
+          .insert(schema.fifoLots)
+          .values({
+            principalId: TEST_PRINCIPAL_ID,
+            sourceId: dependentSourceId,
+            assetId: TEST_BTC_ASSET_ID,
+            acquiredAt: new Date("2025-04-02T12:00:00.000Z"),
+            originalAmount: "1.00000000",
+            remainingAmount: "0.90000000",
+            costBasisPerToken: "11000.00",
+            costBasisCurrency: "EUR",
+            sourceLegId: dependentLotOriginLeg.id,
+          })
+          .returning({ id: schema.fifoLots.id })
+        if (dependentLot === undefined) {
+          return yield* Effect.die("Failed to create replay dependency cycle lot")
+        }
+        yield* db.insert(schema.disposalMatches).values({
+          disposalLegId: rootConsumerLeg.id,
+          fifoLotId: dependentLot.id,
+          matchedAmount: "0.10000000",
+          costBasis: "1100.00",
+          proceeds: "1200.00",
+          gainLoss: "100.00",
+        })
       })
     )
 
@@ -5831,7 +5887,10 @@ describe("TransferReconciliationServiceLive", () => {
               yield* reconciliationRepository.rollbackReconciliationsForSourceReplay({
                 sourceId: TEST_SOURCE_ID,
               })
-              yield* replayRepository.resetSourceDerivedState({ sourceId: TEST_SOURCE_ID })
+              yield* replayRepository.resetSourceDerivedState({
+                jobId: "00000000-0000-0000-0000-000000005834",
+                sourceId: TEST_SOURCE_ID,
+              })
             })
           )
         })
@@ -5840,10 +5899,8 @@ describe("TransferReconciliationServiceLive", () => {
     expect(replayResult).toMatchObject({
       _tag: "Failure",
       failure: {
-        _tag: "SourceReplayDependencyError",
+        _tag: "SourceReplayDependencyCycleError",
         sourceId: TEST_SOURCE_ID,
-        dependentSourceIds: [dependentSourceId],
-        affectedPrincipalIds: [TEST_PRINCIPAL_ID],
       },
     })
 
