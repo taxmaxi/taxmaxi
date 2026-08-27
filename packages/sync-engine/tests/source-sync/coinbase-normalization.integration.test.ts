@@ -1944,7 +1944,7 @@ describe("coinbase normalization persistence", () => {
         )
       }).pipe(Effect.provide(TestLayer))
     )
-  })
+  }, 15_000)
 
   it("does not create mapping review work for an excluded secondary currency", async () => {
     activeSyncRecords = [

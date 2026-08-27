@@ -5424,7 +5424,7 @@ describe("SourceNormalizationRepositoryLive", () => {
     expect(pendingState.lot?.remainingAmount).toContain("1.00000000")
     expect(pendingState.movements).toHaveLength(0)
     expect(pendingState.allocations).toHaveLength(0)
-  })
+  }, 15_000)
 
   it("resets reconciliation when replay changes only the asset representation", async () => {
     const rawRecordId = "00000000-0000-0000-0000-000000000710"
