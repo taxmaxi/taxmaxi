@@ -46,6 +46,35 @@ export const formatPlain = (value: BigDecimal.BigDecimal): string => {
 export const absoluteDecimal = (value: string): string =>
   value.startsWith("-") ? value.slice(1) : value
 
+/**
+ * Subtract a same-asset network fee from the total wallet debit. Coinbase
+ * reports an outbound `amount` as the full debit including the network fee,
+ * so the principal that leaves toward the recipient is `|amount| - fee` and
+ * the fee movement covers the rest. Fails via `onFeeAboveDebit` when the fee
+ * is larger than the debit itself.
+ */
+export const subtractFeeFromDebit = <E>({
+  debitAmount,
+  feeAmount,
+  onFeeAboveDebit,
+  onInvalid,
+}: {
+  readonly debitAmount: string
+  readonly feeAmount: string
+  readonly onFeeAboveDebit: () => E
+  readonly onInvalid: (value: string) => E
+}): Effect.Effect<string, E> =>
+  Effect.gen(function* () {
+    const debit = BigDecimal.abs(yield* parseAmount(debitAmount, onInvalid))
+    const fee = BigDecimal.abs(yield* parseAmount(feeAmount, onInvalid))
+
+    if (BigDecimal.isGreaterThan(fee, debit)) {
+      return yield* Effect.fail(onFeeAboveDebit())
+    }
+
+    return formatPlain(BigDecimal.subtract(debit, fee))
+  })
+
 export const isNegativeAmount = (value: string): boolean => value.trim().startsWith("-")
 
 export const isZeroAmount = (value: string): boolean => /^[+-]?0*(\.0*)?$/.test(value.trim())
