@@ -527,6 +527,37 @@ const revertTxMappingToNoLeg = () =>
       )
   }).pipe(Effect.provide(TestPgClientLive))
 
+const fetchProviderTransferInventoryState = () =>
+  Effect.gen(function* () {
+    const db = yield* drizzle
+
+    const providerTransferRows = yield* db
+      .select({
+        id: schema.providerTransfers.id,
+        externalId: schema.providerTransfers.externalId,
+        direction: schema.providerTransfers.direction,
+        amount: schema.providerTransfers.amount,
+      })
+      .from(schema.providerTransfers)
+      .where(eq(schema.providerTransfers.sourceId, sourceId))
+
+    const providerLots = yield* db
+      .select({
+        sourceProviderTransferId: schema.fifoLots.sourceProviderTransferId,
+        assetId: schema.fifoLots.assetId,
+        originalAmount: schema.fifoLots.originalAmount,
+        remainingAmount: schema.fifoLots.remainingAmount,
+        costBasisStatus: schema.fifoLots.costBasisStatus,
+      })
+      .from(schema.fifoLots)
+      .where(eq(schema.fifoLots.sourceId, sourceId))
+
+    return {
+      providerTransferRows,
+      providerLots,
+    }
+  }).pipe(Effect.provide(TestPgClientLive))
+
 const makeReceiveSyncRecords = ({
   walletAddress,
   txHash,
@@ -1352,6 +1383,83 @@ describe("coinbase normalization persistence", () => {
         const taxAfterSync = yield* calculateTax()
         expect(taxAfterSync.taxableGains).toBe(2000)
         expect(taxAfterSync.incomeTotal).toBe(700)
+      })
+    )
+  })
+
+  it("treats a positive-amount Coinbase send as a deposit that adds inventory", async () => {
+    activeSyncRecords = [
+      ...defaultSyncRecords,
+      makeCoinbaseRecord({
+        externalRecordId: "tx-deposit-send-1",
+        occurredAt: new Date("2025-05-01T10:00:00.000Z"),
+        payload: {
+          id: "tx-deposit-send-1",
+          type: "send",
+          status: "completed",
+          amount: { amount: "87.9500000000", currency: "DOT" },
+          native_amount: { amount: "300.00", currency: "EUR" },
+          created_at: "2025-05-01T10:00:00.000Z",
+          resource_path: "/v2/accounts/coinbase-account-1/transactions/tx-deposit-send-1",
+          description: "Staked DOT moved into Coinbase",
+          network: {
+            status: "confirmed",
+            hash: "tx-deposit-send-hash-1",
+            network_name: "polkadot",
+          },
+          from: {
+            address: "1exampledotorigin",
+            resource: "address",
+          },
+        },
+      }),
+    ]
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        yield* runSync()
+
+        const state = yield* fetchProviderTransferInventoryState()
+
+        const depositTransfer = state.providerTransferRows.find(
+          (row) => row.externalId === "tx-deposit-send-1:principal"
+        )
+        expect(depositTransfer).toBeDefined()
+        expect(depositTransfer?.direction).toBe("inbound")
+        expectDecimalAmount(String(depositTransfer?.amount), "87.95")
+
+        const withdrawalTransfer = state.providerTransferRows.find(
+          (row) => row.externalId === "tx-send-1:principal"
+        )
+        expect(withdrawalTransfer?.direction).toBe("outbound")
+
+        const depositLot = state.providerLots.find(
+          (lot) => lot.sourceProviderTransferId === depositTransfer?.id
+        )
+        expect(depositLot).toBeDefined()
+        expect(depositLot?.assetId).toBe(DOT_ASSET_ID)
+        expect(depositLot?.costBasisStatus).toBe("pending_review")
+        expectDecimalAmount(String(depositLot?.originalAmount), "87.95")
+        expectDecimalAmount(String(depositLot?.remainingAmount), "87.95")
+
+        const replay = yield* replaySource()
+        expect(replay.status).toBe("completed")
+
+        const replayedState = yield* fetchProviderTransferInventoryState()
+        const replayedDepositTransfer = replayedState.providerTransferRows.find(
+          (row) => row.externalId === "tx-deposit-send-1:principal"
+        )
+        expect(replayedDepositTransfer?.direction).toBe("inbound")
+        const replayedDepositLot = replayedState.providerLots.find(
+          (lot) => lot.sourceProviderTransferId === replayedDepositTransfer?.id
+        )
+        expectDecimalAmount(String(replayedDepositLot?.remainingAmount), "87.95")
+
+        const positions = yield* fetchPortfolioPositions()
+        const dotPosition = positions.find((position) => position.assetId === DOT_ASSET_ID)
+        expect(dotPosition).toBeDefined()
+        expectDecimalAmount(String(dotPosition?.amount), "87.970123619236")
+        expect(dotPosition?.costBasisStatus).toBe("pending_review")
       })
     )
   })
