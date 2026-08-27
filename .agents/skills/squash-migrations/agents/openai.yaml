@@ -1,0 +1,4 @@
+interface:
+  display_name: "Squash Migrations"
+  short_description: "Collapse branch migrations into one pair"
+  default_prompt: "Use $squash-migrations to replace this branch’s database migrations with one migration and snapshot pair, then verify it."
