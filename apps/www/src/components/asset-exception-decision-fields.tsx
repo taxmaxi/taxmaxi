@@ -210,6 +210,11 @@ function CandidatePicker({ draft }: { readonly draft: DecisionDraft }) {
       .catch(() => {
         if (latestSearchId.current === searchId) {
           setCandidates([])
+          // A failed search renders an empty candidate list; a preserved
+          // prefilled ID would still enable preview with no visible pick.
+          if (!clearSelection && draft.assetId.length > 0) {
+            draft.setAssetId("")
+          }
         }
       })
       .finally(() => {

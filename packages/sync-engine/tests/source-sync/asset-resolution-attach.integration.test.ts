@@ -2150,6 +2150,16 @@ describe("asset resolution attach and rebuild", () => {
           currentConclusion: null,
           currentPolicyEvaluation: { id: evaluation?.id, outcome: "excluded" },
         })
+
+        // With no conclusion to compare, the conclusive evaluation must
+        // still rank as a disagreement in the exception queue.
+        const listed = yield* repository.listExceptions({ cursor: null, limit: 10, query: null })
+        expect(listed).toEqual([
+          expect.objectContaining({
+            providerAssetRowId,
+            reason: "conclusion_disagreement",
+          }),
+        ])
       }).pipe(Effect.provide(TestLayer))
     )
   })

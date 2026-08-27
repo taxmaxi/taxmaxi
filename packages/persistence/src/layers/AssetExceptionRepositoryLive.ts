@@ -519,13 +519,18 @@ const make = Effect.gen(function* () {
             // conclusion's representation blocks sync and needs review too.
             // A human conclusion at the evaluation's evidence revision or
             // later already answered this evidence, so it stays hidden.
+            // No conclusion at all is also a disagreement: a settled trusted
+            // mapping has none, and its conclusive reevaluation is recorded
+            // as a policy evaluation only, so nothing else surfaces it.
             and(
               inArray(schema.assetResolutionDecisions.outcome, [
                 "attach",
                 "create_standalone",
                 "excluded",
               ]),
-              sql`exists (
+              or(
+                isNull(schema.assetResolutionCurrentState.currentConclusionId),
+                sql`exists (
                 select 1
                 from ${schema.assetResolutionDecisions} current_conclusion
                 where current_conclusion.id = ${schema.assetResolutionCurrentState.currentConclusionId}
@@ -565,6 +570,7 @@ const make = Effect.gen(function* () {
                     )
                   )
               )`
+              )
             )
           )
         )
