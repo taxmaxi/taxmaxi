@@ -327,33 +327,37 @@ const buildPrincipalProviderTransfers = ({
   normalizeParams,
   transaction,
   timestamp,
-  outboundPrincipalAmount,
 }: {
   readonly normalizeParams: NormalizeCoinbaseRecordParams
   readonly transaction: CoinbaseTransaction
   readonly timestamp: Date
-  readonly outboundPrincipalAmount: string
-}): ReadonlyArray<CoinbaseRecordNormalizationResult["providerTransfers"][number]> => {
-  // A debit fully covered by its network fee leaves no principal to move, so
+}): Effect.Effect<
+  ReadonlyArray<CoinbaseRecordNormalizationResult["providerTransfers"][number]>,
+  CoinbaseRecordNormalizationError
+> => {
+  // Only an outbound row carries the fee inside its debit; an inbound row's
+  // fee was paid by the sender, so the credited amount stays untouched. A
+  // debit fully covered by its network fee leaves no principal to move, so
   // the fee transfer alone accounts for the row.
-  const buildForDirection = (direction: "inbound" | "outbound") => {
-    const amount =
-      direction === "outbound"
-        ? outboundPrincipalAmount
-        : normalizeUnsignedAmount(transaction.amount.amount)
+  const buildForDirection = (direction: "inbound" | "outbound") =>
+    Effect.gen(function* () {
+      const amount =
+        direction === "outbound"
+          ? yield* deriveOutboundPrincipalAmount(transaction)
+          : normalizeUnsignedAmount(transaction.amount.amount)
 
-    return isZeroAmount(amount)
-      ? []
-      : [
-          buildPrincipalProviderTransfer({
-            normalizeParams,
-            transaction,
-            timestamp,
-            direction,
-            amount,
-          }),
-        ]
-  }
+      return isZeroAmount(amount)
+        ? []
+        : [
+            buildPrincipalProviderTransfer({
+              normalizeParams,
+              transaction,
+              timestamp,
+              direction,
+              amount,
+            }),
+          ]
+    })
 
   switch (transaction.type) {
     case "receive":
@@ -365,10 +369,10 @@ const buildPrincipalProviderTransfers = ({
     case "intx_withdrawal":
     case "transfer": {
       const direction = movementDirectionFromSignedAmount(transaction.amount.amount)
-      return direction === null ? [] : buildForDirection(direction)
+      return direction === null ? Effect.succeed([]) : buildForDirection(direction)
     }
     default:
-      return []
+      return Effect.succeed([])
   }
 }
 
@@ -511,12 +515,10 @@ const normalizeCoinbaseRecord = (params: NormalizeCoinbaseRecordParams) =>
     const canonicalTransfers = feeTransferResults.flatMap((result) =>
       result.transfer === null ? [] : [result.transfer]
     )
-    const outboundPrincipalAmount = yield* deriveOutboundPrincipalAmount(transactionPayload)
-    const providerTransfers = buildPrincipalProviderTransfers({
+    const providerTransfers = yield* buildPrincipalProviderTransfers({
       normalizeParams: params,
       transaction: transactionPayload,
       timestamp: createdAt,
-      outboundPrincipalAmount,
     })
     const unresolvedAssetCurrencies = Array.from(
       new Set(

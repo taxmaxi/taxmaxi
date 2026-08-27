@@ -4853,6 +4853,59 @@ describe("SourceNormalizationRepositoryLive", () => {
     expect(state.review?.matchedLayer ?? "").not.toContain("fifo_inventory")
   })
 
+  it("keeps a receive whose sender-paid network fee exceeds the credited amount", async () => {
+    const receiveRawRecordId = "00000000-0000-0000-0000-000000000729"
+    const receivedAt = new Date("2025-04-02T10:00:00.000Z")
+    const receivePayload = {
+      id: "tx-small-receive",
+      type: "receive",
+      status: "completed",
+      amount: { amount: "0.00005000", currency: "BTC" },
+      native_amount: { amount: "0.50", currency: "EUR" },
+      created_at: receivedAt.toISOString(),
+      resource_path: "/v2/accounts/coinbase-account-1/transactions/tx-small-receive",
+      network: {
+        status: "confirmed",
+        hash: "tx-small-receive-hash",
+        network_name: "base",
+        transaction_fee: { amount: "0.00010000", currency: "BTC" },
+      },
+      from: {
+        address: "bc1qsmallreceiveorigin",
+        resource: "address",
+      },
+    }
+
+    await runPg(
+      seedRawRecord({
+        rawRecordId: receiveRawRecordId,
+        externalRecordId: "raw-small-receive",
+        occurredAt: receivedAt,
+        payload: receivePayload,
+      })
+    )
+
+    const result = await runCoinbaseNormalization(
+      persistCoinbaseNormalization({
+        source: buildCoinbaseSource({ cexAccountId: fixture.cexAccountId }),
+        sourceRecord: buildSeededRawRecord({
+          rawRecordId: receiveRawRecordId,
+          externalRecordId: "raw-small-receive",
+          occurredAt: receivedAt,
+          payload: receivePayload,
+        }),
+      })
+    )
+
+    expect(result.providerTransfers).toEqual([
+      expect.objectContaining({
+        externalId: "tx-small-receive:principal",
+        direction: "inbound",
+        amount: expect.stringContaining("0.00005000"),
+      }),
+    ])
+  })
+
   it("carves a same-currency network fee out of an internal-transfer disposal leg", async () => {
     const acquisitionRawRecordId = "00000000-0000-0000-0000-000000000727"
     const withdrawalRawRecordId = "00000000-0000-0000-0000-000000000728"
