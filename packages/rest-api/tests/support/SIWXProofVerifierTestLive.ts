@@ -1,3 +1,5 @@
+import { nextTestUuid } from "./TestUuid.ts"
+import * as DateTime from "effect/DateTime"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import { parseCryptoAddress } from "@my/core/source"
@@ -30,7 +32,7 @@ export const makeTestSiwxProof = ({
   walletAddress,
   domain = "api.taxmaxi.com",
   uri = "https://api.taxmaxi.com/v1/anon/session",
-  nonce = crypto.randomUUID(),
+  nonce = nextTestUuid(),
   expirationTime = "2099-01-01T00:00:00.000Z",
 }: {
   readonly chainType: "evm" | "solana" | "bitcoin"
@@ -48,7 +50,7 @@ export const makeTestSiwxProof = ({
     chainId: chainIdForTestChain(chainType),
     type: typeForTestChain(chainType),
     nonce: nonce ?? "",
-    issuedAt: new Date().toISOString(),
+    issuedAt: DateTime.formatIso(DateTime.nowUnsafe()),
     expirationTime,
     signature: "test-signature",
   })
@@ -95,7 +97,8 @@ export const SIWXProofVerifierTestLive = Layer.succeed(SIWXProofVerifier, {
 
       if (
         message.expirationTime !== undefined &&
-        new Date(message.expirationTime).getTime() <= Date.now()
+        DateTime.toDateUtc(DateTime.makeUnsafe(message.expirationTime)).getTime() <=
+          DateTime.toEpochMillis(yield* DateTime.now)
       ) {
         return yield* new SIWXProofVerificationError({
           reason: "expired_proof",

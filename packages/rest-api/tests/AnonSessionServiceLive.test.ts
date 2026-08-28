@@ -1,5 +1,5 @@
 import { Config, ConfigProvider, Effect } from "effect"
-import { describe, expect, it } from "vitest"
+import { describe, expect, it } from "@effect/vitest"
 import { AnonSessionServiceLive } from "../src/layers/AnonSessionServiceLive.ts"
 import { AnonSessionService } from "../src/services/AnonSessionService.ts"
 
@@ -18,42 +18,44 @@ const loadAnonSessionService = (secret: string) =>
   )
 
 describe("AnonSessionServiceLive", () => {
-  it("rejects blank and low-entropy anon session secrets", async () => {
-    const invalidSecrets = [
-      "",
-      "   ",
-      "<generated-secret>",
-      "short-secret",
-      "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-    ]
+  it.effect("rejects blank and low-entropy anon session secrets", () =>
+    Effect.gen(function* () {
+      const invalidSecrets = [
+        "",
+        "   ",
+        "<generated-secret>",
+        "short-secret",
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      ]
 
-    for (const secret of invalidSecrets) {
-      const result = await loadAnonSessionService(secret)
+      for (const secret of invalidSecrets) {
+        const result = yield* Effect.promise(() => loadAnonSessionService(secret))
 
-      expect(result._tag).toBe("Failure")
-      if (result._tag === "Failure") {
-        expect(result.failure).toBeInstanceOf(Config.ConfigError)
+        expect(result._tag).toBe("Failure")
+        if (result._tag === "Failure") {
+          expect(result.failure).toBeInstanceOf(Config.ConfigError)
+        }
       }
-    }
-  })
+    })
+  )
 
-  it("creates and verifies session tokens when the anon session secret is valid", async () => {
-    const result = await loadAnonSessionService(VALID_ANON_SESSION_SECRET)
+  it.effect("creates and verifies session tokens when the anon session secret is valid", () =>
+    Effect.gen(function* () {
+      const result = yield* Effect.promise(() => loadAnonSessionService(VALID_ANON_SESSION_SECRET))
 
-    expect(result._tag).toBe("Success")
-    if (result._tag === "Success") {
-      const token = await Effect.runPromise(
-        result.success.createSessionToken({
+      expect(result._tag).toBe("Success")
+      if (result._tag === "Success") {
+        const token = yield* result.success.createSessionToken({
           payerChainType: "solana",
           payerWalletAddress: "test-payer-wallet",
         })
-      )
-      const subject = await Effect.runPromise(result.success.verifySessionToken(token))
+        const subject = yield* result.success.verifySessionToken(token)
 
-      expect(subject).toStrictEqual({
-        payerChainType: "solana",
-        payerWalletAddress: "test-payer-wallet",
-      })
-    }
-  })
+        expect(subject).toStrictEqual({
+          payerChainType: "solana",
+          payerWalletAddress: "test-payer-wallet",
+        })
+      }
+    })
+  )
 })

@@ -1,6 +1,7 @@
 import { TextAttributes } from "@opentui/core"
 import { useKeyboard } from "@opentui/solid"
 import { createSignal, Match, onCleanup, Switch } from "solid-js"
+import { Effect, Fiber } from "effect"
 import type { CliSession } from "../../session.ts"
 import { completeCoinbaseConnect, startCoinbaseConnect } from "../controller.ts"
 import { theme } from "../theme.ts"
@@ -16,60 +17,78 @@ export function CoinbaseConnectScreen(props: {
   readonly onBack: () => void
 }) {
   const [state, setState] = createSignal<ConnectState>({ step: "starting" })
-  let abortController: AbortController | undefined
+  let connectFiber: Fiber.Fiber<void, never> | undefined
+  let connectGeneration = 0
   let screenActive = true
 
-  const isCurrentConnect = (controller: AbortController) =>
-    screenActive && abortController === controller && !controller.signal.aborted
+  const isCurrentConnect = (generation: number) => screenActive && connectGeneration === generation
 
-  const begin = async () => {
-    abortController?.abort()
-    const controller = new AbortController()
-    abortController = controller
+  const begin = () => {
+    if (connectFiber !== undefined) {
+      Effect.runFork(Fiber.interrupt(connectFiber))
+    }
+    const generation = ++connectGeneration
     setState({ step: "starting" })
-    const started = await startCoinbaseConnect({ signal: controller.signal }).catch(() => undefined)
-    if (!isCurrentConnect(controller) || started === undefined) {
-      return
-    }
-    if (started._tag === "error") {
-      setState({ step: "error", message: started.message })
-      return
-    }
+    connectFiber = Effect.runFork(
+      Effect.gen(function* () {
+        const started = yield* Effect.tryPromise({
+          try: (signal) => startCoinbaseConnect({ signal }),
+          catch: () => undefined,
+        }).pipe(Effect.orElseSucceed(() => undefined))
+        if (!isCurrentConnect(generation) || started === undefined) {
+          return
+        }
+        if (started._tag === "error") {
+          setState({ step: "error", message: started.message })
+          return
+        }
 
-    setState({
-      step: "waiting",
-      url: started.authorizationUrl,
-      browserOpened: started.browserOpened,
-    })
-    const result = await completeCoinbaseConnect(
-      { apiUrl: started.apiUrl, oauthSessionId: started.oauthSessionId },
-      { signal: controller.signal }
-    ).catch(() => undefined)
+        setState({
+          step: "waiting",
+          url: started.authorizationUrl,
+          browserOpened: started.browserOpened,
+        })
+        const result = yield* Effect.tryPromise({
+          try: (signal) =>
+            completeCoinbaseConnect(
+              { apiUrl: started.apiUrl, oauthSessionId: started.oauthSessionId },
+              { signal }
+            ),
+          catch: () => undefined,
+        }).pipe(Effect.orElseSucceed(() => undefined))
 
-    if (!isCurrentConnect(controller) || result === undefined) {
-      return
-    }
-    if (result._tag === "connected") {
-      props.onConnected(result.session)
-      return
-    }
-    setState({ step: "error", message: result.message })
+        if (!isCurrentConnect(generation) || result === undefined) {
+          return
+        }
+        if (result._tag === "connected") {
+          props.onConnected(result.session)
+          return
+        }
+        setState({ step: "error", message: result.message })
+      })
+    )
   }
-  void begin()
+  begin()
   onCleanup(() => {
     screenActive = false
-    abortController?.abort()
+    connectGeneration++
+    if (connectFiber !== undefined) {
+      Effect.runFork(Fiber.interrupt(connectFiber))
+    }
   })
 
   useKeyboard((evt) => {
     if (evt.name === "escape") {
       screenActive = false
-      abortController?.abort()
+      connectGeneration++
+      if (connectFiber !== undefined) {
+        Effect.runFork(Fiber.interrupt(connectFiber))
+      }
       props.onBack()
       return
     }
     if (evt.name === "r" && state().step === "error") {
-      void begin()
+      begin()
     }
   })
 

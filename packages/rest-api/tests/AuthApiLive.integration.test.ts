@@ -1,3 +1,4 @@
+import { nextTestUuid } from "./support/TestUuid.ts"
 import { Etag, HttpRouter } from "effect/unstable/http"
 import { NodeHttpPlatform, NodeServices } from "@effect/platform-node"
 import {
@@ -14,6 +15,7 @@ import * as Context from "effect/Context"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import * as Redacted from "effect/Redacted"
+import * as Schema from "effect/Schema"
 import type * as Scope from "effect/Scope"
 import { beforeEach, describe, expect, it } from "@effect/vitest"
 import {
@@ -317,26 +319,29 @@ const postJson = ({
   readonly payload: unknown
   readonly cookie?: string
 }) =>
-  Effect.tryPromise({
-    try: () => {
-      const headers = new Headers({
-        "content-type": "application/json",
-      })
-
-      if (cookie !== undefined) {
-        headers.set("cookie", cookie)
-      }
-
-      return handler(
-        new Request(`http://taxmaxi.test${path}`, {
-          method: "POST",
-          headers,
-          body: JSON.stringify(payload),
+  Effect.gen(function* () {
+    const body = yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown))(payload)
+    return yield* Effect.tryPromise({
+      try: () => {
+        const headers = new Headers({
+          "content-type": "application/json",
         })
-      )
-    },
-    catch: (cause) => String(cause),
-  }).pipe(Effect.orDie)
+
+        if (cookie !== undefined) {
+          headers.set("cookie", cookie)
+        }
+
+        return handler(
+          new Request(`http://taxmaxi.test${path}`, {
+            method: "POST",
+            headers,
+            body,
+          })
+        )
+      },
+      catch: (cause) => String(cause),
+    }).pipe(Effect.orDie)
+  })
 
 const postRequest = ({
   handler,
@@ -585,7 +590,7 @@ describe("AuthApiLive integration", () => {
       Effect.gen(function* () {
         const { handler, sentVerificationCodes } = yield* makeAuthHandlerScoped
 
-        const email = `owner-${crypto.randomUUID()}@taxmaxi.test`
+        const email = `owner-${nextTestUuid()}@taxmaxi.test`
         const password = "password123"
 
         const registerResponse = yield* postJson({
@@ -733,7 +738,7 @@ describe("AuthApiLive integration", () => {
       Effect.gen(function* () {
         const { handler, sentVerificationCodes } = yield* makeAuthHandlerScoped
 
-        const email = `pending-${crypto.randomUUID()}@taxmaxi.test`
+        const email = `pending-${nextTestUuid()}@taxmaxi.test`
         const password = "password123"
 
         const registerResponse = yield* postJson({

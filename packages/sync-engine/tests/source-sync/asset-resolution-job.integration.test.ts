@@ -1,10 +1,11 @@
+import * as DateTime from "effect/DateTime"
 import { SOLANA_USDC_MINT } from "@my/core/assets"
 import { SourceSyncServiceLive, TransferReconciliationServiceLive } from "@my/sync-engine/layers"
 import { SourceSyncService } from "@my/sync-engine/services"
 import { and, eq } from "drizzle-orm"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
-import { beforeEach, describe, expect, it } from "vitest"
+import { beforeEach, describe, expect, it } from "@effect/vitest"
 import { AssetRepositoryLive } from "../../../persistence/src/layers/AssetRepositoryLive.ts"
 import { AssetResolutionJobRepositoryLive } from "../../../persistence/src/layers/AssetResolutionJobRepositoryLive.ts"
 import { ProviderAssetRepositoryLive } from "../../../persistence/src/layers/ProviderAssetRepositoryLive.ts"
@@ -76,7 +77,7 @@ const makeCoinbaseRecord = ({
 const accountRecord = makeCoinbaseRecord({
   recordType: "coinbase_account",
   externalRecordId: "coinbase-account-1",
-  occurredAt: new Date("2025-01-01T00:00:00.000Z"),
+  occurredAt: DateTime.toDateUtc(DateTime.makeUnsafe("2025-01-01T00:00:00.000Z")),
   payload: {
     id: "coinbase-account-1",
     created_at: "2025-01-01T00:00:00.000Z",
@@ -86,7 +87,7 @@ const accountRecord = makeCoinbaseRecord({
 
 const btcBuyRecord = makeCoinbaseRecord({
   externalRecordId: "tx-btc-buy-1",
-  occurredAt: new Date("2025-01-01T10:00:00.000Z"),
+  occurredAt: DateTime.toDateUtc(DateTime.makeUnsafe("2025-01-01T10:00:00.000Z")),
   payload: {
     id: "tx-btc-buy-1",
     type: "buy",
@@ -101,7 +102,7 @@ const btcBuyRecord = makeCoinbaseRecord({
 
 const hypeBuyRecord = makeCoinbaseRecord({
   externalRecordId: "tx-hype-buy-1",
-  occurredAt: new Date("2025-05-01T10:00:00.000Z"),
+  occurredAt: DateTime.toDateUtc(DateTime.makeUnsafe("2025-05-01T10:00:00.000Z")),
   payload: {
     id: "tx-hype-buy-1",
     type: "buy",
@@ -187,8 +188,8 @@ const CoinbaseSyncClientTestLive = Layer.succeed(CoinbaseSyncClient, {
         })),
       nextCursor: null,
     }),
-  fetchFiatCurrencies: Effect.succeed(activeFiatCurrencies),
-  fetchCryptoCurrencies: Effect.succeed(activeCryptoCurrencies),
+  fetchFiatCurrencies: Effect.sync(() => activeFiatCurrencies),
+  fetchCryptoCurrencies: Effect.sync(() => activeCryptoCurrencies),
 })
 
 const CoinbaseReferenceMappingWithDepsLive = CoinbaseReferenceMappingServiceLive.pipe(
@@ -300,7 +301,7 @@ const seedSecondCoinbaseSource = () =>
         providerAccountId: "coinbase-account-2",
         accessToken: "test-access-token-2",
         refreshToken: "test-refresh-token-2",
-        expiresAt: new Date(Date.now() + 60 * 60 * 1000),
+        expiresAt: DateTime.toDateUtc(DateTime.addDuration(yield* DateTime.now, "1 hour")),
         scopes: "wallet:accounts:read wallet:transactions:read",
       })
       .returning({ id: schema.cexAccount.id })
@@ -316,8 +317,8 @@ const seedSecondCoinbaseSource = () =>
       sourceableType: "cex",
       cexAccountId: createdAccount.id,
       addressId: null,
-      createdAt: new Date("2025-01-01T00:00:00.000Z"),
-      updatedAt: new Date("2025-01-01T00:00:00.000Z"),
+      createdAt: DateTime.toDateUtc(DateTime.makeUnsafe("2025-01-01T00:00:00.000Z")),
+      updatedAt: DateTime.toDateUtc(DateTime.makeUnsafe("2025-01-01T00:00:00.000Z")),
     })
   }).pipe(Effect.provide(TestPgClientLive))
 
@@ -468,233 +469,249 @@ const fetchKnownBtcState = () =>
 await Effect.runPromise(context.recreateTestDatabase())
 
 describe("asset resolution job scheduling", () => {
-  beforeEach(async () => {
-    activeSyncRecords = [accountRecord, hypeBuyRecord]
-    activeFiatCurrencies = defaultFiatCurrencies
-    activeCryptoCurrencies = [hypeCryptoCurrency]
-    researchCallCount = 0
-    await Effect.runPromise(context.recreateTestDatabase())
-  })
-
-  it("stores an unknown observation and one durable job without delaying source sync", async () => {
-    await Effect.runPromise(seedFirstCoinbaseSource())
-
-    const summary = await Effect.runPromise(runSync({ sourceId: firstSourceId }))
-    const job = await Effect.runPromise(
-      fetchJobDetails({ sourceId: firstSourceId, jobId: summary.jobId })
+  beforeEach(() =>
+    Effect.runPromise(
+      Effect.gen(function* () {
+        activeSyncRecords = [accountRecord, hypeBuyRecord]
+        activeFiatCurrencies = defaultFiatCurrencies
+        activeCryptoCurrencies = [hypeCryptoCurrency]
+        researchCallCount = 0
+        yield* context.recreateTestDatabase()
+      })
     )
-    const state = await Effect.runPromise(fetchUnknownObservationState())
+  )
 
-    expect(job.status).toBe("completed")
-    expect(state.rawRows).toEqual([
-      expect.objectContaining({
-        sourceId: firstSourceId,
-        externalRecordId: "tx-hype-buy-1",
-        normalizationError: null,
-      }),
-    ])
-    expect(state.rawRows[0]?.normalizedAt).not.toBeNull()
-    expect(state.providerAsset).toMatchObject({
-      providerAssetId: "hype-provider-asset",
-      currencyCode: "HYPE",
-      evidenceRevision: 1,
-      mappingStatus: "pending_review",
-      canonicalAssetId: null,
+  it.effect("stores an unknown observation and one durable job without delaying source sync", () =>
+    Effect.gen(function* () {
+      yield* seedFirstCoinbaseSource()
+
+      const summary = yield* runSync({ sourceId: firstSourceId })
+      const job = yield* fetchJobDetails({ sourceId: firstSourceId, jobId: summary.jobId })
+      const state = yield* fetchUnknownObservationState()
+
+      expect(job.status).toBe("completed")
+      expect(state.rawRows).toEqual([
+        expect.objectContaining({
+          sourceId: firstSourceId,
+          externalRecordId: "tx-hype-buy-1",
+          normalizationError: null,
+        }),
+      ])
+      expect(state.rawRows[0]?.normalizedAt).not.toBeNull()
+      expect(state.providerAsset).toMatchObject({
+        providerAssetId: "hype-provider-asset",
+        currencyCode: "HYPE",
+        evidenceRevision: 1,
+        mappingStatus: "pending_review",
+        canonicalAssetId: null,
+      })
+      expect(state.resolutionJobs).toEqual([
+        {
+          id: expect.any(String),
+          providerAssetRowId: state.providerAsset?.id,
+          evidenceRevision: 1,
+          status: "pending",
+        },
+      ])
     })
-    expect(state.resolutionJobs).toEqual([
-      {
-        id: expect.any(String),
+  )
+
+  it.effect("keeps one job when two sources observe the same provider identity", () =>
+    Effect.gen(function* () {
+      yield* seedFirstCoinbaseSource()
+      yield* seedSecondCoinbaseSource()
+
+      const firstSummary = yield* runSync({ sourceId: firstSourceId })
+      const secondSummary = yield* runSync({ sourceId: secondSourceId })
+      const firstJob = yield* fetchJobDetails({
+        sourceId: firstSourceId,
+        jobId: firstSummary.jobId,
+      })
+      const secondJob = yield* fetchJobDetails({
+        sourceId: secondSourceId,
+        jobId: secondSummary.jobId,
+      })
+      const state = yield* fetchUnknownObservationState()
+
+      expect(firstJob.status).toBe("completed")
+      expect(secondJob.status).toBe("completed")
+      expect(state.rawRows).toHaveLength(2)
+      expect(state.resolutionJobs).toHaveLength(1)
+      expect(state.resolutionJobs[0]).toMatchObject({
         providerAssetRowId: state.providerAsset?.id,
         evidenceRevision: 1,
         status: "pending",
-      },
-    ])
-  })
-
-  it("keeps one job when two sources observe the same provider identity", async () => {
-    await Effect.runPromise(seedFirstCoinbaseSource())
-    await Effect.runPromise(seedSecondCoinbaseSource())
-
-    const firstSummary = await Effect.runPromise(runSync({ sourceId: firstSourceId }))
-    const secondSummary = await Effect.runPromise(runSync({ sourceId: secondSourceId }))
-    const firstJob = await Effect.runPromise(
-      fetchJobDetails({ sourceId: firstSourceId, jobId: firstSummary.jobId })
-    )
-    const secondJob = await Effect.runPromise(
-      fetchJobDetails({ sourceId: secondSourceId, jobId: secondSummary.jobId })
-    )
-    const state = await Effect.runPromise(fetchUnknownObservationState())
-
-    expect(firstJob.status).toBe("completed")
-    expect(secondJob.status).toBe("completed")
-    expect(state.rawRows).toHaveLength(2)
-    expect(state.resolutionJobs).toHaveLength(1)
-    expect(state.resolutionJobs[0]).toMatchObject({
-      providerAssetRowId: state.providerAsset?.id,
-      evidenceRevision: 1,
-      status: "pending",
+      })
     })
-  })
+  )
 
-  it("keeps one job when two different users observe the same provider identity", async () => {
-    await Effect.runPromise(seedFirstCoinbaseSource())
-    await Effect.runPromise(seedSecondUserCoinbaseSource())
+  it.effect("keeps one job when two different users observe the same provider identity", () =>
+    Effect.gen(function* () {
+      yield* seedFirstCoinbaseSource()
+      yield* seedSecondUserCoinbaseSource()
 
-    const firstSummary = await Effect.runPromise(runSync({ sourceId: firstSourceId }))
-    const secondSummary = await Effect.runPromise(
-      runSync({ sourceId: secondUserSourceId, ownerPrincipalId: secondUserPrincipalId })
-    )
-    const firstJob = await Effect.runPromise(
-      fetchJobDetails({ sourceId: firstSourceId, jobId: firstSummary.jobId })
-    )
-    const secondJob = await Effect.runPromise(
-      fetchJobDetails({
+      const firstSummary = yield* runSync({ sourceId: firstSourceId })
+      const secondSummary = yield* runSync({
+        sourceId: secondUserSourceId,
+        ownerPrincipalId: secondUserPrincipalId,
+      })
+      const firstJob = yield* fetchJobDetails({
+        sourceId: firstSourceId,
+        jobId: firstSummary.jobId,
+      })
+      const secondJob = yield* fetchJobDetails({
         sourceId: secondUserSourceId,
         jobId: secondSummary.jobId,
         ownerPrincipalId: secondUserPrincipalId,
       })
-    )
-    const state = await Effect.runPromise(fetchUnknownObservationState())
+      const state = yield* fetchUnknownObservationState()
 
-    expect(firstJob.status).toBe("completed")
-    expect(secondJob.status).toBe("completed")
-    expect(state.rawRows).toHaveLength(2)
-    expect(state.resolutionJobs).toHaveLength(1)
-    expect(state.resolutionJobs[0]).toMatchObject({
-      providerAssetRowId: state.providerAsset?.id,
-      evidenceRevision: 1,
-      status: "pending",
-    })
-  })
-
-  it("treats a second schedule for the same observation and evidence revision as a no-op", async () => {
-    await Effect.runPromise(seedFirstCoinbaseSource())
-
-    const summary = await Effect.runPromise(runSync({ sourceId: firstSourceId }))
-    const afterFirstSync = await Effect.runPromise(fetchUnknownObservationState())
-    const providerAssetRowId = afterFirstSync.providerAsset?.id
-    if (providerAssetRowId === undefined) {
-      expect.fail("Expected the unknown HYPE observation to be stored")
-    }
-
-    const secondSchedule = await Effect.runPromise(
-      context.runWithLayer({
-        effect: Effect.flatMap(AssetResolutionJobRepository, (repository) =>
-          repository.scheduleUnresolvedResolutionJob({ providerAssetRowId })
-        ),
-        layer: AssetResolutionJobRepositoryLive,
+      expect(firstJob.status).toBe("completed")
+      expect(secondJob.status).toBe("completed")
+      expect(state.rawRows).toHaveLength(2)
+      expect(state.resolutionJobs).toHaveLength(1)
+      expect(state.resolutionJobs[0]).toMatchObject({
+        providerAssetRowId: state.providerAsset?.id,
+        evidenceRevision: 1,
+        status: "pending",
       })
-    )
-    const afterSecondSchedule = await Effect.runPromise(fetchUnknownObservationState())
-    const job = await Effect.runPromise(
-      fetchJobDetails({ sourceId: firstSourceId, jobId: summary.jobId })
-    )
-
-    expect(job.status).toBe("completed")
-    expect(secondSchedule).toEqual({
-      created: false,
-      providerAssetRowId,
-      evidenceRevision: 1,
     })
-    expect(afterSecondSchedule.resolutionJobs.map((resolutionJob) => resolutionJob.id)).toEqual(
-      afterFirstSync.resolutionJobs.map((resolutionJob) => resolutionJob.id)
-    )
-  })
+  )
 
-  it("keeps one job when the same observation is synced again with unchanged evidence", async () => {
-    await Effect.runPromise(seedFirstCoinbaseSource())
-
-    await Effect.runPromise(runSync({ sourceId: firstSourceId }))
-    const afterFirstSync = await Effect.runPromise(fetchUnknownObservationState())
-    await Effect.runPromise(runSync({ sourceId: firstSourceId }))
-    const afterSecondSync = await Effect.runPromise(fetchUnknownObservationState())
-
-    expect(afterFirstSync.providerAsset).toMatchObject({ evidenceRevision: 1 })
-    expect(afterSecondSync.providerAsset).toMatchObject({ evidenceRevision: 1 })
-    expect(afterSecondSync.resolutionJobs).toEqual(afterFirstSync.resolutionJobs)
-  })
-
-  it("schedules a new job when observation evidence changes to a new revision", async () => {
-    await Effect.runPromise(seedFirstCoinbaseSource())
-
-    await Effect.runPromise(runSync({ sourceId: firstSourceId }))
-    const afterFirstSync = await Effect.runPromise(fetchUnknownObservationState())
-
-    activeCryptoCurrencies = [
-      {
-        ...hypeCryptoCurrency,
-        exponent: 6,
-        payload: {
-          ...hypeCryptoCurrency.payload,
-          exponent: 6,
-        },
-      },
-    ]
-    await Effect.runPromise(runSync({ sourceId: firstSourceId }))
-    const afterChangedEvidence = await Effect.runPromise(fetchUnknownObservationState())
-
-    expect(afterFirstSync.providerAsset).toMatchObject({ evidenceRevision: 1 })
-    expect(afterChangedEvidence.providerAsset).toMatchObject({
-      providerAssetId: "hype-provider-asset",
-      evidenceRevision: 2,
-      mappingStatus: "pending_review",
-    })
-    expect(afterChangedEvidence.resolutionJobs).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          providerAssetRowId: afterChangedEvidence.providerAsset?.id,
-          evidenceRevision: 1,
-          status: "pending",
-        }),
-        expect.objectContaining({
-          providerAssetRowId: afterChangedEvidence.providerAsset?.id,
-          evidenceRevision: 2,
-          status: "pending",
-        }),
-      ])
-    )
-    expect(afterChangedEvidence.resolutionJobs).toHaveLength(2)
-  })
-
-  it("resolves a known local mapping during sync without external research or a resolution job", async () => {
-    activeSyncRecords = [accountRecord, btcBuyRecord]
-    activeCryptoCurrencies = [btcCryptoCurrency]
-    await Effect.runPromise(seedFirstCoinbaseSource())
-
-    const summary = await Effect.runPromise(runSync({ sourceId: firstSourceId }))
-    const state = await Effect.runPromise(fetchKnownBtcState())
-    const syncJob = await Effect.runPromise(
+  it.effect(
+    "treats a second schedule for the same observation and evidence revision as a no-op",
+    () =>
       Effect.gen(function* () {
-        const db = yield* drizzle
-        const [row] = yield* db
-          .select({
-            status: schema.processingJobs.status,
-            mode: schema.processingJobs.mode,
-          })
-          .from(schema.processingJobs)
-          .where(eq(schema.processingJobs.id, summary.jobId))
-          .limit(1)
-        return row ?? null
-      }).pipe(Effect.provide(TestPgClientLive))
-    )
+        yield* seedFirstCoinbaseSource()
 
-    expect(syncJob).toMatchObject({
-      status: "completed",
-      mode: "sync",
+        const summary = yield* runSync({ sourceId: firstSourceId })
+        const afterFirstSync = yield* fetchUnknownObservationState()
+        const providerAssetRowId = afterFirstSync.providerAsset?.id
+        if (providerAssetRowId === undefined) {
+          expect.fail("Expected the unknown HYPE observation to be stored")
+        }
+
+        const secondSchedule = yield* context.runWithLayer({
+          effect: Effect.flatMap(AssetResolutionJobRepository, (repository) =>
+            repository.scheduleUnresolvedResolutionJob({ providerAssetRowId })
+          ),
+          layer: AssetResolutionJobRepositoryLive,
+        })
+        const afterSecondSchedule = yield* fetchUnknownObservationState()
+        const job = yield* fetchJobDetails({ sourceId: firstSourceId, jobId: summary.jobId })
+
+        expect(job.status).toBe("completed")
+        expect(secondSchedule).toEqual({
+          created: false,
+          providerAssetRowId,
+          evidenceRevision: 1,
+        })
+        expect(afterSecondSchedule.resolutionJobs.map((resolutionJob) => resolutionJob.id)).toEqual(
+          afterFirstSync.resolutionJobs.map((resolutionJob) => resolutionJob.id)
+        )
+      })
+  )
+
+  it.effect("keeps one job when the same observation is synced again with unchanged evidence", () =>
+    Effect.gen(function* () {
+      yield* seedFirstCoinbaseSource()
+
+      yield* runSync({ sourceId: firstSourceId })
+      const afterFirstSync = yield* fetchUnknownObservationState()
+      yield* runSync({ sourceId: firstSourceId })
+      const afterSecondSync = yield* fetchUnknownObservationState()
+
+      expect(afterFirstSync.providerAsset).toMatchObject({ evidenceRevision: 1 })
+      expect(afterSecondSync.providerAsset).toMatchObject({ evidenceRevision: 1 })
+      expect(afterSecondSync.resolutionJobs).toEqual(afterFirstSync.resolutionJobs)
     })
-    expect(state.mapping).toMatchObject({
-      mappingStatus: "approved",
-      canonicalAssetId: BTC_ASSET_ID,
+  )
+
+  it.effect("schedules a new job when observation evidence changes to a new revision", () =>
+    Effect.gen(function* () {
+      yield* seedFirstCoinbaseSource()
+
+      yield* runSync({ sourceId: firstSourceId })
+      const afterFirstSync = yield* fetchUnknownObservationState()
+
+      activeCryptoCurrencies = [
+        {
+          ...hypeCryptoCurrency,
+          exponent: 6,
+          payload: {
+            ...hypeCryptoCurrency.payload,
+            exponent: 6,
+          },
+        },
+      ]
+      yield* runSync({ sourceId: firstSourceId })
+      const afterChangedEvidence = yield* fetchUnknownObservationState()
+
+      expect(afterFirstSync.providerAsset).toMatchObject({ evidenceRevision: 1 })
+      expect(afterChangedEvidence.providerAsset).toMatchObject({
+        providerAssetId: "hype-provider-asset",
+        evidenceRevision: 2,
+        mappingStatus: "pending_review",
+      })
+      expect(afterChangedEvidence.resolutionJobs).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            providerAssetRowId: afterChangedEvidence.providerAsset?.id,
+            evidenceRevision: 1,
+            status: "pending",
+          }),
+          expect.objectContaining({
+            providerAssetRowId: afterChangedEvidence.providerAsset?.id,
+            evidenceRevision: 2,
+            status: "pending",
+          }),
+        ])
+      )
+      expect(afterChangedEvidence.resolutionJobs).toHaveLength(2)
     })
-    expect(state.resolutionJobs).toEqual([])
-    expect(researchCallCount).toBe(0)
-  })
+  )
 
-  it("resolves an already-known Solana mapping without an external research call", async () => {
-    await Effect.runPromise(seedKnownSolanaUsdc())
+  it.effect(
+    "resolves a known local mapping during sync without external research or a resolution job",
+    () =>
+      Effect.gen(function* () {
+        activeSyncRecords = [accountRecord, btcBuyRecord]
+        activeCryptoCurrencies = [btcCryptoCurrency]
+        yield* seedFirstCoinbaseSource()
 
-    const result = await Effect.runPromise(
-      context.runWithLayer({
+        const summary = yield* runSync({ sourceId: firstSourceId })
+        const state = yield* fetchKnownBtcState()
+        const syncJob = yield* Effect.gen(function* () {
+          const db = yield* drizzle
+          const [row] = yield* db
+            .select({
+              status: schema.processingJobs.status,
+              mode: schema.processingJobs.mode,
+            })
+            .from(schema.processingJobs)
+            .where(eq(schema.processingJobs.id, summary.jobId))
+            .limit(1)
+          return row ?? null
+        }).pipe(Effect.provide(TestPgClientLive))
+
+        expect(syncJob).toMatchObject({
+          status: "completed",
+          mode: "sync",
+        })
+        expect(state.mapping).toMatchObject({
+          mappingStatus: "approved",
+          canonicalAssetId: BTC_ASSET_ID,
+        })
+        expect(state.resolutionJobs).toEqual([])
+        expect(researchCallCount).toBe(0)
+      })
+  )
+
+  it.effect("resolves an already-known Solana mapping without an external research call", () =>
+    Effect.gen(function* () {
+      yield* seedKnownSolanaUsdc()
+
+      const result = yield* context.runWithLayer({
         effect: Effect.flatMap(HeliusSolanaAssetResolutionService, (service) =>
           Effect.gen(function* () {
             yield* service.ensureDefaultMappings
@@ -706,23 +723,21 @@ describe("asset resolution job scheduling", () => {
         ),
         layer: HeliusAssetResolutionTestLive,
       })
-    )
-    const jobs = await Effect.runPromise(
-      Effect.gen(function* () {
+      const jobs = yield* Effect.gen(function* () {
         const db = yield* drizzle
         return yield* db
           .select({ id: schema.assetResolutionJobs.id })
           .from(schema.assetResolutionJobs)
       }).pipe(Effect.provide(TestPgClientLive))
-    )
 
-    expect(result).toMatchObject({
-      kind: "canonical",
-      mappingStatus: "approved",
-      canonicalAssetId: USDC_ASSET_ID,
-      assetRepresentationId: USDC_REPRESENTATION_ID,
+      expect(result).toMatchObject({
+        kind: "canonical",
+        mappingStatus: "approved",
+        canonicalAssetId: USDC_ASSET_ID,
+        assetRepresentationId: USDC_REPRESENTATION_ID,
+      })
+      expect(jobs).toEqual([])
+      expect(researchCallCount).toBe(0)
     })
-    expect(jobs).toEqual([])
-    expect(researchCallCount).toBe(0)
-  })
+  )
 })

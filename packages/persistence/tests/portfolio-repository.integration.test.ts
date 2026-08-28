@@ -1,6 +1,7 @@
+import * as DateTime from "effect/DateTime"
 import * as Effect from "effect/Effect"
 import { eq } from "drizzle-orm"
-import { beforeEach, describe, expect, it } from "vitest"
+import { beforeEach, describe, expect, it } from "@effect/vitest"
 import { PortfolioRepositoryLive } from "../src/layers/PortfolioRepositoryLive.ts"
 import { drizzle } from "../src/layers/PgClientLive.ts"
 import { schema } from "../src/schema/index.ts"
@@ -27,111 +28,123 @@ const runRepository = <A, E>(effect: Effect.Effect<A, E, PortfolioRepository>) =
 await Effect.runPromise(context.recreateTestDatabase())
 
 describe("PortfolioRepositoryLive", () => {
-  beforeEach(async () => {
-    await Effect.runPromise(context.recreateTestDatabase())
-    const fixture = await runPg(seedSyncEngineRepositoryFixture())
-    await runPg(
-      seedSyncEngineAssets({
-        baseBlockchainId: fixture.baseBlockchainId,
-        bitcoinBlockchainId: fixture.bitcoinBlockchainId,
-      })
-    )
-  })
-
-  it("excludes spam representation lots while retaining chainless custody lots", async () => {
-    await runPg(
+  beforeEach(() =>
+    Effect.runPromise(
       Effect.gen(function* () {
-        const db = yield* drizzle
-        const timestamp = new Date("2025-05-01T10:00:00.000Z")
-
-        yield* db
-          .update(schema.assetRepresentations)
-          .set({ isSpam: true })
-          .where(eq(schema.assetRepresentations.id, TEST_BTC_REPRESENTATION_ID))
-
-        const legs = yield* db
-          .insert(schema.transactionLegs)
-          .values([
-            {
-              sourceId: TEST_SOURCE_ID,
-              externalId: "portfolio-spam-representation-leg",
-              timestamp,
-              principalId: TEST_PRINCIPAL_ID,
-              assetId: TEST_BTC_ASSET_ID,
-              assetRepresentationId: TEST_BTC_REPRESENTATION_ID,
-              amount: "2",
-              kind: "acquisition" as const,
-              provenance: "deterministic" as const,
-              fiatAmount: "20",
-              fiatCurrency: "EUR",
-            },
-            {
-              sourceId: TEST_SOURCE_ID,
-              externalId: "portfolio-chainless-leg",
-              timestamp,
-              principalId: TEST_PRINCIPAL_ID,
-              assetId: TEST_BTC_ASSET_ID,
-              assetRepresentationId: null,
-              amount: "3",
-              kind: "acquisition" as const,
-              provenance: "deterministic" as const,
-              fiatAmount: "30",
-              fiatCurrency: "EUR",
-            },
-          ])
-          .returning({ id: schema.transactionLegs.id })
-
-        const spamLeg = legs[0]
-        const chainlessLeg = legs[1]
-
-        if (spamLeg === undefined || chainlessLeg === undefined) {
-          return yield* Effect.die("Failed to create portfolio leg fixtures")
-        }
-
-        yield* db.insert(schema.fifoLots).values([
-          {
-            principalId: TEST_PRINCIPAL_ID,
-            sourceId: TEST_SOURCE_ID,
-            assetId: TEST_BTC_ASSET_ID,
-            assetRepresentationId: TEST_BTC_REPRESENTATION_ID,
-            acquiredAt: timestamp,
-            originalAmount: "2",
-            remainingAmount: "2",
-            costBasisPerToken: "10",
-            costBasisCurrency: "EUR",
-            sourceLegId: spamLeg.id,
-          },
-          {
-            principalId: TEST_PRINCIPAL_ID,
-            sourceId: TEST_SOURCE_ID,
-            assetId: TEST_BTC_ASSET_ID,
-            assetRepresentationId: null,
-            acquiredAt: timestamp,
-            originalAmount: "3",
-            remainingAmount: "3",
-            costBasisPerToken: "10",
-            costBasisCurrency: "EUR",
-            sourceLegId: chainlessLeg.id,
-          },
-        ])
+        yield* context.recreateTestDatabase()
+        const fixture = yield* Effect.promise(() => runPg(seedSyncEngineRepositoryFixture()))
+        yield* Effect.promise(() =>
+          runPg(
+            seedSyncEngineAssets({
+              baseBlockchainId: fixture.baseBlockchainId,
+              bitcoinBlockchainId: fixture.bitcoinBlockchainId,
+            })
+          )
+        )
       })
     )
+  )
 
-    const positions = await runRepository(
-      Effect.flatMap(PortfolioRepository, (repository) =>
-        repository.listAssetPositions({
-          principalId: TEST_PRINCIPAL_ID,
-          sourceId: null,
-        })
+  it.effect("excludes spam representation lots while retaining chainless custody lots", () =>
+    Effect.gen(function* () {
+      yield* Effect.promise(() =>
+        runPg(
+          Effect.gen(function* () {
+            const db = yield* drizzle
+            const timestamp = DateTime.toDateUtc(DateTime.makeUnsafe("2025-05-01T10:00:00.000Z"))
+
+            yield* db
+              .update(schema.assetRepresentations)
+              .set({ isSpam: true })
+              .where(eq(schema.assetRepresentations.id, TEST_BTC_REPRESENTATION_ID))
+
+            const legs = yield* db
+              .insert(schema.transactionLegs)
+              .values([
+                {
+                  sourceId: TEST_SOURCE_ID,
+                  externalId: "portfolio-spam-representation-leg",
+                  timestamp,
+                  principalId: TEST_PRINCIPAL_ID,
+                  assetId: TEST_BTC_ASSET_ID,
+                  assetRepresentationId: TEST_BTC_REPRESENTATION_ID,
+                  amount: "2",
+                  kind: "acquisition" as const,
+                  provenance: "deterministic" as const,
+                  fiatAmount: "20",
+                  fiatCurrency: "EUR",
+                },
+                {
+                  sourceId: TEST_SOURCE_ID,
+                  externalId: "portfolio-chainless-leg",
+                  timestamp,
+                  principalId: TEST_PRINCIPAL_ID,
+                  assetId: TEST_BTC_ASSET_ID,
+                  assetRepresentationId: null,
+                  amount: "3",
+                  kind: "acquisition" as const,
+                  provenance: "deterministic" as const,
+                  fiatAmount: "30",
+                  fiatCurrency: "EUR",
+                },
+              ])
+              .returning({ id: schema.transactionLegs.id })
+
+            const spamLeg = legs[0]
+            const chainlessLeg = legs[1]
+
+            if (spamLeg === undefined || chainlessLeg === undefined) {
+              return yield* Effect.die("Failed to create portfolio leg fixtures")
+            }
+
+            yield* db.insert(schema.fifoLots).values([
+              {
+                principalId: TEST_PRINCIPAL_ID,
+                sourceId: TEST_SOURCE_ID,
+                assetId: TEST_BTC_ASSET_ID,
+                assetRepresentationId: TEST_BTC_REPRESENTATION_ID,
+                acquiredAt: timestamp,
+                originalAmount: "2",
+                remainingAmount: "2",
+                costBasisPerToken: "10",
+                costBasisCurrency: "EUR",
+                sourceLegId: spamLeg.id,
+              },
+              {
+                principalId: TEST_PRINCIPAL_ID,
+                sourceId: TEST_SOURCE_ID,
+                assetId: TEST_BTC_ASSET_ID,
+                assetRepresentationId: null,
+                acquiredAt: timestamp,
+                originalAmount: "3",
+                remainingAmount: "3",
+                costBasisPerToken: "10",
+                costBasisCurrency: "EUR",
+                sourceLegId: chainlessLeg.id,
+              },
+            ])
+          })
+        )
       )
-    )
 
-    expect(positions).toEqual([
-      expect.objectContaining({
-        assetId: TEST_BTC_ASSET_ID,
-        amount: "3",
-        costBasis: "30",
-      }),
-    ])
-  })
+      const positions = yield* Effect.promise(() =>
+        runRepository(
+          Effect.flatMap(PortfolioRepository, (repository) =>
+            repository.listAssetPositions({
+              principalId: TEST_PRINCIPAL_ID,
+              sourceId: null,
+            })
+          )
+        )
+      )
+
+      expect(positions).toEqual([
+        expect.objectContaining({
+          assetId: TEST_BTC_ASSET_ID,
+          amount: "3",
+          costBasis: "30",
+        }),
+      ])
+    })
+  )
 })

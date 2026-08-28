@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from "vitest"
+import { beforeEach, describe, expect, it } from "@effect/vitest"
 import * as Effect from "effect/Effect"
 import * as Option from "effect/Option"
 import {
@@ -44,145 +44,181 @@ const seedUser = ({ userId, email }: { readonly userId: AuthUserId; readonly ema
   })
 
 describe("EmailVerificationRequestRepositoryLive", () => {
-  beforeEach(async () => {
-    await Effect.runPromise(context.recreateTestDatabase())
-    await context.runPg(
-      Effect.all([
-        seedUser({
-          userId: TEST_FIRST_USER_ID,
-          email: Email.make("verification-one@example.com"),
-        }),
-        seedUser({
-          userId: TEST_SECOND_USER_ID,
-          email: Email.make("verification-two@example.com"),
-        }),
-      ])
+  beforeEach(() =>
+    Effect.runPromise(
+      Effect.gen(function* () {
+        yield* context.recreateTestDatabase()
+        yield* Effect.promise(() =>
+          context.runPg(
+            Effect.all([
+              seedUser({
+                userId: TEST_FIRST_USER_ID,
+                email: Email.make("verification-one@example.com"),
+              }),
+              seedUser({
+                userId: TEST_SECOND_USER_ID,
+                email: Email.make("verification-two@example.com"),
+              }),
+            ])
+          )
+        )
+      })
     )
-  })
+  )
 
-  it("creates, loads, replaces, and consumes verification requests", async () => {
-    const firstRequestId = EmailVerificationRequestId.make("00000000-4000-4000-8000-000000000711")
-    const replacementRequestId = EmailVerificationRequestId.make(
-      "00000000-4000-4000-8000-000000000712"
-    )
-
-    const firstCreated = await runRepository(
-      Effect.flatMap(EmailVerificationRequestRepository, (repository) =>
-        repository.create({
-          id: firstRequestId,
-          userId: TEST_FIRST_USER_ID,
-          email: Email.make("verification-one@example.com"),
-          code: EmailVerificationCode.make("FIRST001"),
-          expiresAt: Timestamp.addMinutes(Timestamp.now(), 10),
-        })
+  it.effect("creates, loads, replaces, and consumes verification requests", () =>
+    Effect.gen(function* () {
+      const firstRequestId = EmailVerificationRequestId.make("00000000-4000-4000-8000-000000000711")
+      const replacementRequestId = EmailVerificationRequestId.make(
+        "00000000-4000-4000-8000-000000000712"
       )
-    )
 
-    expect(firstCreated.id).toBe(firstRequestId)
-
-    const loadedById = await runRepository(
-      Effect.flatMap(EmailVerificationRequestRepository, (repository) =>
-        repository.findById(firstRequestId)
+      const firstCreated = yield* Effect.promise(() =>
+        runRepository(
+          Effect.flatMap(EmailVerificationRequestRepository, (repository) =>
+            repository.create({
+              id: firstRequestId,
+              userId: TEST_FIRST_USER_ID,
+              email: Email.make("verification-one@example.com"),
+              code: EmailVerificationCode.make("FIRST001"),
+              expiresAt: Timestamp.addMinutes(Timestamp.now(), 10),
+            })
+          )
+        )
       )
-    )
-    expect(Option.isSome(loadedById)).toBe(true)
-    if (Option.isSome(loadedById)) {
-      expect(loadedById.value.code).toBe(EmailVerificationCode.make("FIRST001"))
-    }
 
-    await runRepository(
-      Effect.flatMap(EmailVerificationRequestRepository, (repository) =>
-        repository.create({
-          id: replacementRequestId,
-          userId: TEST_FIRST_USER_ID,
-          email: Email.make("verification-one@example.com"),
-          code: EmailVerificationCode.make("SECOND01"),
-          expiresAt: Timestamp.addMinutes(Timestamp.now(), 10),
-        })
+      expect(firstCreated.id).toBe(firstRequestId)
+
+      const loadedById = yield* Effect.promise(() =>
+        runRepository(
+          Effect.flatMap(EmailVerificationRequestRepository, (repository) =>
+            repository.findById(firstRequestId)
+          )
+        )
       )
-    )
+      expect(Option.isSome(loadedById)).toBe(true)
+      if (Option.isSome(loadedById)) {
+        expect(loadedById.value.code).toBe(EmailVerificationCode.make("FIRST001"))
+      }
 
-    const replacedRequest = await runRepository(
-      Effect.flatMap(EmailVerificationRequestRepository, (repository) =>
-        repository.findById(firstRequestId)
+      yield* Effect.promise(() =>
+        runRepository(
+          Effect.flatMap(EmailVerificationRequestRepository, (repository) =>
+            repository.create({
+              id: replacementRequestId,
+              userId: TEST_FIRST_USER_ID,
+              email: Email.make("verification-one@example.com"),
+              code: EmailVerificationCode.make("SECOND01"),
+              expiresAt: Timestamp.addMinutes(Timestamp.now(), 10),
+            })
+          )
+        )
       )
-    )
-    expect(Option.isNone(replacedRequest)).toBe(true)
 
-    const latestRequest = await runRepository(
-      Effect.flatMap(EmailVerificationRequestRepository, (repository) =>
-        repository.findByUserId(TEST_FIRST_USER_ID)
+      const replacedRequest = yield* Effect.promise(() =>
+        runRepository(
+          Effect.flatMap(EmailVerificationRequestRepository, (repository) =>
+            repository.findById(firstRequestId)
+          )
+        )
       )
-    )
-    expect(Option.isSome(latestRequest)).toBe(true)
-    if (Option.isSome(latestRequest)) {
-      expect(latestRequest.value.id).toBe(replacementRequestId)
-      expect(latestRequest.value.code).toBe(EmailVerificationCode.make("SECOND01"))
-    }
+      expect(Option.isNone(replacedRequest)).toBe(true)
 
-    const consumedRequest = await runRepository(
-      Effect.flatMap(EmailVerificationRequestRepository, (repository) =>
-        repository.consume(replacementRequestId)
+      const latestRequest = yield* Effect.promise(() =>
+        runRepository(
+          Effect.flatMap(EmailVerificationRequestRepository, (repository) =>
+            repository.findByUserId(TEST_FIRST_USER_ID)
+          )
+        )
       )
-    )
-    expect(Option.isSome(consumedRequest)).toBe(true)
-    if (Option.isSome(consumedRequest)) {
-      expect(consumedRequest.value.id).toBe(replacementRequestId)
-    }
+      expect(Option.isSome(latestRequest)).toBe(true)
+      if (Option.isSome(latestRequest)) {
+        expect(latestRequest.value.id).toBe(replacementRequestId)
+        expect(latestRequest.value.code).toBe(EmailVerificationCode.make("SECOND01"))
+      }
 
-    const missingAfterConsume = await runRepository(
-      Effect.flatMap(EmailVerificationRequestRepository, (repository) =>
-        repository.findById(replacementRequestId)
+      const consumedRequest = yield* Effect.promise(() =>
+        runRepository(
+          Effect.flatMap(EmailVerificationRequestRepository, (repository) =>
+            repository.consume(replacementRequestId)
+          )
+        )
       )
-    )
-    expect(Option.isNone(missingAfterConsume)).toBe(true)
-  })
+      expect(Option.isSome(consumedRequest)).toBe(true)
+      if (Option.isSome(consumedRequest)) {
+        expect(consumedRequest.value.id).toBe(replacementRequestId)
+      }
 
-  it("deletes expired verification requests without removing active ones", async () => {
-    const expiredRequestId = EmailVerificationRequestId.make("00000000-4000-4000-8000-000000000721")
-    const activeRequestId = EmailVerificationRequestId.make("00000000-4000-4000-8000-000000000722")
-    const now = Timestamp.now()
-
-    await runRepository(
-      Effect.flatMap(EmailVerificationRequestRepository, (repository) =>
-        Effect.all([
-          repository.create({
-            id: expiredRequestId,
-            userId: TEST_FIRST_USER_ID,
-            email: Email.make("verification-one@example.com"),
-            code: EmailVerificationCode.make("EXPIRE01"),
-            expiresAt: Timestamp.addMinutes(now, -1),
-          }),
-          repository.create({
-            id: activeRequestId,
-            userId: TEST_SECOND_USER_ID,
-            email: Email.make("verification-two@example.com"),
-            code: EmailVerificationCode.make("ACTIVE01"),
-            expiresAt: Timestamp.addMinutes(now, 5),
-          }),
-        ])
+      const missingAfterConsume = yield* Effect.promise(() =>
+        runRepository(
+          Effect.flatMap(EmailVerificationRequestRepository, (repository) =>
+            repository.findById(replacementRequestId)
+          )
+        )
       )
-    )
+      expect(Option.isNone(missingAfterConsume)).toBe(true)
+    })
+  )
 
-    const deletedCount = await runRepository(
-      Effect.flatMap(EmailVerificationRequestRepository, (repository) =>
-        repository.deleteExpired(now)
+  it.effect("deletes expired verification requests without removing active ones", () =>
+    Effect.gen(function* () {
+      const expiredRequestId = EmailVerificationRequestId.make(
+        "00000000-4000-4000-8000-000000000721"
       )
-    )
-    expect(deletedCount).toBe(1)
+      const activeRequestId = EmailVerificationRequestId.make(
+        "00000000-4000-4000-8000-000000000722"
+      )
+      const now = Timestamp.now()
 
-    const expiredRequest = await runRepository(
-      Effect.flatMap(EmailVerificationRequestRepository, (repository) =>
-        repository.findById(expiredRequestId)
+      yield* Effect.promise(() =>
+        runRepository(
+          Effect.flatMap(EmailVerificationRequestRepository, (repository) =>
+            Effect.all([
+              repository.create({
+                id: expiredRequestId,
+                userId: TEST_FIRST_USER_ID,
+                email: Email.make("verification-one@example.com"),
+                code: EmailVerificationCode.make("EXPIRE01"),
+                expiresAt: Timestamp.addMinutes(now, -1),
+              }),
+              repository.create({
+                id: activeRequestId,
+                userId: TEST_SECOND_USER_ID,
+                email: Email.make("verification-two@example.com"),
+                code: EmailVerificationCode.make("ACTIVE01"),
+                expiresAt: Timestamp.addMinutes(now, 5),
+              }),
+            ])
+          )
+        )
       )
-    )
-    const activeRequest = await runRepository(
-      Effect.flatMap(EmailVerificationRequestRepository, (repository) =>
-        repository.findById(activeRequestId)
-      )
-    )
 
-    expect(Option.isNone(expiredRequest)).toBe(true)
-    expect(Option.isSome(activeRequest)).toBe(true)
-  })
+      const deletedCount = yield* Effect.promise(() =>
+        runRepository(
+          Effect.flatMap(EmailVerificationRequestRepository, (repository) =>
+            repository.deleteExpired(now)
+          )
+        )
+      )
+      expect(deletedCount).toBe(1)
+
+      const expiredRequest = yield* Effect.promise(() =>
+        runRepository(
+          Effect.flatMap(EmailVerificationRequestRepository, (repository) =>
+            repository.findById(expiredRequestId)
+          )
+        )
+      )
+      const activeRequest = yield* Effect.promise(() =>
+        runRepository(
+          Effect.flatMap(EmailVerificationRequestRepository, (repository) =>
+            repository.findById(activeRequestId)
+          )
+        )
+      )
+
+      expect(Option.isNone(expiredRequest)).toBe(true)
+      expect(Option.isSome(activeRequest)).toBe(true)
+    })
+  )
 })

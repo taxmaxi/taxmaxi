@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest"
+import { describe, expect, it } from "@effect/vitest"
 import * as Chunk from "effect/Chunk"
 import * as Effect from "effect/Effect"
 import * as Result from "effect/Result"
@@ -342,39 +342,49 @@ const makeIdentityRepo = (state: HarnessState): IdentityRepositoryService => {
   }
 }
 
-const makePrincipalRepository = (state: HarnessState): PrincipalRepositoryService => ({
-  findUserPrincipal: (userId) =>
-    Effect.succeed(
-      Option.fromNullishOr(
-        Array.from(state.principals.values()).find((principal) => principal.userId === userId)
-      )
-    ),
-  createUserPrincipal: (userId) => {
-    const existing = Array.from(state.principals.values()).find(
-      (principal) => principal.userId === userId
+const makePrincipalRepository = (state: HarnessState): PrincipalRepositoryService => {
+  let principalSequence = 0
+  const nextPrincipalId = () => {
+    principalSequence += 1
+    return PrincipalId.make(
+      `00000000-0000-4000-8000-${principalSequence.toString().padStart(12, "0")}`
     )
-    if (existing !== undefined) {
-      return Effect.succeed(existing)
-    }
+  }
 
-    const principal = Principal.make({
-      id: PrincipalId.make(crypto.randomUUID()),
-      kind: "user",
-      userId,
-    })
-    state.principals.set(principal.id, principal)
-    return Effect.succeed(principal)
-  },
-  createAnonymousWalletPrincipal: Effect.suspend(() => {
-    const principal = Principal.make({
-      id: PrincipalId.make(crypto.randomUUID()),
-      kind: "anonymous_wallet",
-      userId: null,
-    })
-    state.principals.set(principal.id, principal)
-    return Effect.succeed(principal)
-  }),
-})
+  return {
+    findUserPrincipal: (userId) =>
+      Effect.succeed(
+        Option.fromNullishOr(
+          Array.from(state.principals.values()).find((principal) => principal.userId === userId)
+        )
+      ),
+    createUserPrincipal: (userId) => {
+      const existing = Array.from(state.principals.values()).find(
+        (principal) => principal.userId === userId
+      )
+      if (existing !== undefined) {
+        return Effect.succeed(existing)
+      }
+
+      const principal = Principal.make({
+        id: nextPrincipalId(),
+        kind: "user",
+        userId,
+      })
+      state.principals.set(principal.id, principal)
+      return Effect.succeed(principal)
+    },
+    createAnonymousWalletPrincipal: Effect.suspend(() => {
+      const principal = Principal.make({
+        id: nextPrincipalId(),
+        kind: "anonymous_wallet",
+        userId: null,
+      })
+      state.principals.set(principal.id, principal)
+      return Effect.succeed(principal)
+    }),
+  }
+}
 
 const makeSessionRepo = (): SessionRepositoryService => {
   const sessions = new Map<string, Session>()
@@ -578,364 +588,490 @@ const makeHarness = (providers: ReadonlyArray<AuthProvider>): Harness => {
 }
 
 describe("AuthServiceLive OAuth orchestration", () => {
-  it("authorize -> callback creates user and session", async () => {
-    const harness = makeHarness([makeGoogleProvider()])
+  it.effect("authorize -> callback creates user and session", () =>
+    Effect.gen(function* () {
+      const harness = makeHarness([makeGoogleProvider()])
 
-    const started = await harness.runWithAuth((auth) => auth.startOAuthLogin("google"))
-    const authorizationUrl = new URL(started.authorizationUrl)
-    expect(authorizationUrl.searchParams.get("state")).toBe(started.state)
-    expect(authorizationUrl.searchParams.get("redirect_uri")).toBe(
-      "http://localhost:3000/auth/callback/google"
-    )
-
-    const login = await harness.runWithAuth((auth) =>
-      auth.completeOAuthLogin("google", "alice", started.state)
-    )
-
-    expect(login.user.email).toBe(Email.make("alice@example.com"))
-    expect(login.user.emailVerified).toBe(true)
-    expect(login.session.id.startsWith("sess_")).toBe(true)
-    expect(harness.state.users.size).toBe(1)
-    expect(harness.state.principals.size).toBe(1)
-    expect(Array.from(harness.state.principals.values())[0]?.userId).toBe(login.user.id)
-    const createdGoogleIdentities = Array.from(harness.state.identities.values()).filter(
-      (identity) => identity.provider === "google"
-    )
-    expect(createdGoogleIdentities.length).toBe(1)
-    expect(createdGoogleIdentities[0]?.userId).toBe(login.user.id)
-
-    const reusedState = await harness.runWithAuthEither((auth) =>
-      auth.completeOAuthLogin("google", "alice", started.state)
-    )
-
-    expect(Result.isFailure(reusedState)).toBe(true)
-    if (Result.isFailure(reusedState)) {
-      expect(reusedState.failure._tag).toBe("OAuthStateError")
-    }
-  })
-
-  it("refreshes provider metadata when an OAuth identity returns", async () => {
-    const harness = makeHarness([makeRefreshingGoogleProvider()])
-
-    const firstLogin = await harness.runWithAuth((auth) => auth.startOAuthLogin("google"))
-    await harness.runWithAuth((auth) =>
-      auth.completeOAuthLogin("google", "old-profile", firstLogin.state)
-    )
-
-    const returningLogin = await harness.runWithAuth((auth) => auth.startOAuthLogin("google"))
-    await harness.runWithAuth((auth) =>
-      auth.completeOAuthLogin("google", "fresh-profile", returningLogin.state)
-    )
-
-    const identities = Array.from(harness.state.identities.values())
-    expect(identities).toHaveLength(1)
-    expect(identities[0]?.providerData).toEqual(
-      Option.some(
-        ProviderData.make({
-          profile: { email: "fresh-profile@example.com" },
-        })
+      const started = yield* Effect.promise(() =>
+        harness.runWithAuth((auth) => auth.startOAuthLogin("google"))
       )
-    )
-  })
+      const authorizationUrl = new URL(started.authorizationUrl)
+      expect(authorizationUrl.searchParams.get("state")).toBe(started.state)
+      expect(authorizationUrl.searchParams.get("redirect_uri")).toBe(
+        "http://localhost:3000/auth/callback/google"
+      )
 
-  it("link -> callback links identity and does not create a new user", async () => {
-    const harness = makeHarness([makeGoogleProvider()])
+      const login = yield* Effect.promise(() =>
+        harness.runWithAuth((auth) => auth.completeOAuthLogin("google", "alice", started.state))
+      )
 
-    const user = await harness.runWithAuth((auth) =>
-      auth.register(Email.make("owner@example.com"), "password123", "Owner")
-    )
+      expect(login.user.email).toBe(Email.make("alice@example.com"))
+      expect(login.user.emailVerified).toBe(true)
+      expect(login.session.id.startsWith("sess_")).toBe(true)
+      expect(harness.state.users.size).toBe(1)
+      expect(harness.state.principals.size).toBe(1)
+      expect(Array.from(harness.state.principals.values())[0]?.userId).toBe(login.user.id)
+      const createdGoogleIdentities = Array.from(harness.state.identities.values()).filter(
+        (identity) => identity.provider === "google"
+      )
+      expect(createdGoogleIdentities.length).toBe(1)
+      expect(createdGoogleIdentities[0]?.userId).toBe(login.user.id)
 
-    const started = await harness.runWithAuth((auth) => auth.startLink(user.id, "google"))
-    await harness.runWithAuth((auth) =>
-      auth.completeLink(user.id, "google", "owner-google", started.state)
-    )
+      const reusedState = yield* Effect.promise(() =>
+        harness.runWithAuthEither((auth) =>
+          auth.completeOAuthLogin("google", "alice", started.state)
+        )
+      )
 
-    expect(harness.state.users.size).toBe(1)
-    expect(harness.state.principals.size).toBe(1)
-    const linkedIdentityCount = Array.from(harness.state.identities.values()).filter(
-      (identity) => identity.userId === user.id && identity.provider === "google"
-    ).length
-    expect(linkedIdentityCount).toBe(1)
-  })
+      expect(Result.isFailure(reusedState)).toBe(true)
+      if (Result.isFailure(reusedState)) {
+        expect(reusedState.failure._tag).toBe("OAuthStateError")
+      }
+    })
+  )
 
-  it("register preserves an explicitly provided display name", async () => {
-    const harness = makeHarness([])
+  it.effect("refreshes provider metadata when an OAuth identity returns", () =>
+    Effect.gen(function* () {
+      const harness = makeHarness([makeRefreshingGoogleProvider()])
 
-    const user = await harness.runWithAuth((auth) =>
-      auth.register(Email.make("max.mustermann@example.com"), "password123", "Provided Name")
-    )
+      const firstLogin = yield* Effect.promise(() =>
+        harness.runWithAuth((auth) => auth.startOAuthLogin("google"))
+      )
+      yield* Effect.promise(() =>
+        harness.runWithAuth((auth) =>
+          auth.completeOAuthLogin("google", "old-profile", firstLogin.state)
+        )
+      )
 
-    expect(user.displayName).toBe("Provided Name")
-    expect(user.emailVerified).toBe(false)
-    expect(harness.state.principals.size).toBe(1)
-    expect(Array.from(harness.state.principals.values())[0]?.userId).toBe(user.id)
-  })
+      const returningLogin = yield* Effect.promise(() =>
+        harness.runWithAuth((auth) => auth.startOAuthLogin("google"))
+      )
+      yield* Effect.promise(() =>
+        harness.runWithAuth((auth) =>
+          auth.completeOAuthLogin("google", "fresh-profile", returningLogin.state)
+        )
+      )
 
-  it("register infers the display name from the email local part when none is provided", async () => {
-    const harness = makeHarness([])
+      const identities = Array.from(harness.state.identities.values())
+      expect(identities).toHaveLength(1)
+      expect(identities[0]?.providerData).toEqual(
+        Option.some(
+          ProviderData.make({
+            profile: { email: "fresh-profile@example.com" },
+          })
+        )
+      )
+    })
+  )
 
-    const user = await harness.runWithAuth((auth) =>
-      auth.register(Email.make("max.mustermann@example.com"), "password123")
-    )
+  it.effect("link -> callback links identity and does not create a new user", () =>
+    Effect.gen(function* () {
+      const harness = makeHarness([makeGoogleProvider()])
 
-    expect(user.displayName).toBe("max.mustermann")
-    expect(user.emailVerified).toBe(false)
-  })
+      const user = yield* Effect.promise(() =>
+        harness.runWithAuth((auth) =>
+          auth.register(Email.make("owner@example.com"), "password123", "Owner")
+        )
+      )
 
-  it("startEmailVerification reuses the latest active verification request", async () => {
-    const harness = makeHarness([])
+      const started = yield* Effect.promise(() =>
+        harness.runWithAuth((auth) => auth.startLink(user.id, "google"))
+      )
+      yield* Effect.promise(() =>
+        harness.runWithAuth((auth) =>
+          auth.completeLink(user.id, "google", "owner-google", started.state)
+        )
+      )
 
-    const user = await harness.runWithAuth((auth) =>
-      auth.register(Email.make("owner@example.com"), "password123", "Owner")
-    )
+      expect(harness.state.users.size).toBe(1)
+      expect(harness.state.principals.size).toBe(1)
+      const linkedIdentityCount = Array.from(harness.state.identities.values()).filter(
+        (identity) => identity.userId === user.id && identity.provider === "google"
+      ).length
+      expect(linkedIdentityCount).toBe(1)
+    })
+  )
 
-    const firstRequest = await harness.runWithAuth((auth) => auth.startEmailVerification(user))
-    const secondRequest = await harness.runWithAuth((auth) => auth.startEmailVerification(user))
+  it.effect("register preserves an explicitly provided display name", () =>
+    Effect.gen(function* () {
+      const harness = makeHarness([])
 
-    expect(firstRequest.id).toBe(secondRequest.id)
-    expect(firstRequest.code).toBe(secondRequest.code)
-    expect(harness.state.verificationRequests.size).toBe(1)
-  })
+      const user = yield* Effect.promise(() =>
+        harness.runWithAuth((auth) =>
+          auth.register(Email.make("max.mustermann@example.com"), "password123", "Provided Name")
+        )
+      )
 
-  it("resendEmailVerification replaces the active request with a fresh code", async () => {
-    const harness = makeHarness([])
+      expect(user.displayName).toBe("Provided Name")
+      expect(user.emailVerified).toBe(false)
+      expect(harness.state.principals.size).toBe(1)
+      expect(Array.from(harness.state.principals.values())[0]?.userId).toBe(user.id)
+    })
+  )
 
-    const user = await harness.runWithAuth((auth) =>
-      auth.register(Email.make("owner@example.com"), "password123", "Owner")
-    )
+  it.effect(
+    "register infers the display name from the email local part when none is provided",
+    () =>
+      Effect.gen(function* () {
+        const harness = makeHarness([])
 
-    const originalRequest = await harness.runWithAuth((auth) => auth.startEmailVerification(user))
-    const refreshedRequest = await harness.runWithAuth((auth) =>
-      auth.resendEmailVerification(originalRequest.id)
-    )
+        const user = yield* Effect.promise(() =>
+          harness.runWithAuth((auth) =>
+            auth.register(Email.make("max.mustermann@example.com"), "password123")
+          )
+        )
 
-    expect(refreshedRequest.id).not.toBe(originalRequest.id)
-    expect(refreshedRequest.code).not.toBe(originalRequest.code)
-    expect(harness.state.verificationRequests.has(originalRequest.id)).toBe(false)
-    expect(harness.state.verificationRequests.has(refreshedRequest.id)).toBe(true)
-  })
-
-  it("verifyEmail marks the user verified, consumes the request, and creates a session", async () => {
-    const harness = makeHarness([])
-
-    const user = await harness.runWithAuth((auth) =>
-      auth.register(Email.make("owner@example.com"), "password123", "Owner")
-    )
-
-    const verificationRequest = await harness.runWithAuth((auth) =>
-      auth.startEmailVerification(user)
-    )
-
-    const verified = await harness.runWithAuth((auth) =>
-      auth.verifyEmail(verificationRequest.id, verificationRequest.code)
-    )
-
-    expect(verified.user.emailVerified).toBe(true)
-    expect(harness.state.users.get(user.id)?.emailVerified).toBe(true)
-    expect(harness.state.verificationRequests.size).toBe(0)
-    expect(verified.session.id.startsWith("sess_")).toBe(true)
-  })
-
-  it("verifyEmail rejects an incorrect verification code", async () => {
-    const harness = makeHarness([])
-
-    const user = await harness.runWithAuth((auth) =>
-      auth.register(Email.make("owner@example.com"), "password123", "Owner")
-    )
-
-    const verificationRequest = await harness.runWithAuth((auth) =>
-      auth.startEmailVerification(user)
-    )
-
-    const result = await harness.runWithAuthEither((auth) =>
-      auth.verifyEmail(verificationRequest.id, "ZZZZZZZZ")
-    )
-
-    expect(Result.isFailure(result)).toBe(true)
-    if (Result.isFailure(result)) {
-      expect(result.failure).toBeInstanceOf(EmailVerificationCodeMismatchError)
-    }
-    expect(harness.state.verificationRequests.has(verificationRequest.id)).toBe(true)
-  })
-
-  it("verifyEmail rejects an expired verification request", async () => {
-    const harness = makeHarness([])
-
-    const user = await harness.runWithAuth((auth) =>
-      auth.register(Email.make("owner@example.com"), "password123", "Owner")
-    )
-
-    const verificationRequest = await harness.runWithAuth((auth) =>
-      auth.startEmailVerification(user)
-    )
-
-    harness.state.verificationRequests.set(
-      verificationRequest.id,
-      EmailVerificationRequest.make({
-        ...verificationRequest,
-        expiresAt: Timestamp.Timestamp.make({ epochMillis: 0 }),
+        expect(user.displayName).toBe("max.mustermann")
+        expect(user.emailVerified).toBe(false)
       })
-    )
+  )
 
-    const result = await harness.runWithAuthEither((auth) =>
-      auth.verifyEmail(verificationRequest.id, verificationRequest.code)
-    )
+  it.effect("startEmailVerification reuses the latest active verification request", () =>
+    Effect.gen(function* () {
+      const harness = makeHarness([])
 
-    expect(Result.isFailure(result)).toBe(true)
-    if (Result.isFailure(result)) {
-      expect(result.failure).toBeInstanceOf(EmailVerificationRequestExpiredError)
-    }
-    expect(harness.state.verificationRequests.has(verificationRequest.id)).toBe(false)
-  })
-
-  it("resendEmailVerification rejects a missing request id", async () => {
-    const harness = makeHarness([])
-
-    const result = await harness.runWithAuthEither((auth) =>
-      auth.resendEmailVerification(
-        EmailVerificationRequestId.make("00000000-4000-4000-8000-000000000999")
+      const user = yield* Effect.promise(() =>
+        harness.runWithAuth((auth) =>
+          auth.register(Email.make("owner@example.com"), "password123", "Owner")
+        )
       )
-    )
 
-    expect(Result.isFailure(result)).toBe(true)
-    if (Result.isFailure(result)) {
-      expect(result.failure).toBeInstanceOf(EmailVerificationRequestNotFoundError)
-    }
-  })
+      const firstRequest = yield* Effect.promise(() =>
+        harness.runWithAuth((auth) => auth.startEmailVerification(user))
+      )
+      const secondRequest = yield* Effect.promise(() =>
+        harness.runWithAuth((auth) => auth.startEmailVerification(user))
+      )
 
-  it("rejects local login when the email is still unverified", async () => {
-    const harness = makeHarness([makeLocalProvider({ emailVerified: false })])
+      expect(firstRequest.id).toBe(secondRequest.id)
+      expect(firstRequest.code).toBe(secondRequest.code)
+      expect(harness.state.verificationRequests.size).toBe(1)
+    })
+  )
 
-    await harness.runWithAuth((auth) =>
-      auth.register(Email.make("owner@example.com"), "password123", "Owner")
-    )
+  it.effect("resendEmailVerification replaces the active request with a fresh code", () =>
+    Effect.gen(function* () {
+      const harness = makeHarness([])
 
-    const result = await harness.runWithAuthEither((auth) =>
-      auth.login(
-        "local",
-        LocalAuthRequest.make({
-          email: Email.make("owner@example.com"),
-          password: Redacted.make("password123"),
+      const user = yield* Effect.promise(() =>
+        harness.runWithAuth((auth) =>
+          auth.register(Email.make("owner@example.com"), "password123", "Owner")
+        )
+      )
+
+      const originalRequest = yield* Effect.promise(() =>
+        harness.runWithAuth((auth) => auth.startEmailVerification(user))
+      )
+      const refreshedRequest = yield* Effect.promise(() =>
+        harness.runWithAuth((auth) => auth.resendEmailVerification(originalRequest.id))
+      )
+
+      expect(refreshedRequest.id).not.toBe(originalRequest.id)
+      expect(refreshedRequest.code).not.toBe(originalRequest.code)
+      expect(harness.state.verificationRequests.has(originalRequest.id)).toBe(false)
+      expect(harness.state.verificationRequests.has(refreshedRequest.id)).toBe(true)
+    })
+  )
+
+  it.effect(
+    "verifyEmail marks the user verified, consumes the request, and creates a session",
+    () =>
+      Effect.gen(function* () {
+        const harness = makeHarness([])
+
+        const user = yield* Effect.promise(() =>
+          harness.runWithAuth((auth) =>
+            auth.register(Email.make("owner@example.com"), "password123", "Owner")
+          )
+        )
+
+        const verificationRequest = yield* Effect.promise(() =>
+          harness.runWithAuth((auth) => auth.startEmailVerification(user))
+        )
+
+        const verified = yield* Effect.promise(() =>
+          harness.runWithAuth((auth) =>
+            auth.verifyEmail(verificationRequest.id, verificationRequest.code)
+          )
+        )
+
+        expect(verified.user.emailVerified).toBe(true)
+        expect(harness.state.users.get(user.id)?.emailVerified).toBe(true)
+        expect(harness.state.verificationRequests.size).toBe(0)
+        expect(verified.session.id.startsWith("sess_")).toBe(true)
+      })
+  )
+
+  it.effect("verifyEmail rejects an incorrect verification code", () =>
+    Effect.gen(function* () {
+      const harness = makeHarness([])
+
+      const user = yield* Effect.promise(() =>
+        harness.runWithAuth((auth) =>
+          auth.register(Email.make("owner@example.com"), "password123", "Owner")
+        )
+      )
+
+      const verificationRequest = yield* Effect.promise(() =>
+        harness.runWithAuth((auth) => auth.startEmailVerification(user))
+      )
+
+      const result = yield* Effect.promise(() =>
+        harness.runWithAuthEither((auth) => auth.verifyEmail(verificationRequest.id, "ZZZZZZZZ"))
+      )
+
+      expect(Result.isFailure(result)).toBe(true)
+      if (Result.isFailure(result)) {
+        expect(result.failure).toBeInstanceOf(EmailVerificationCodeMismatchError)
+      }
+      expect(harness.state.verificationRequests.has(verificationRequest.id)).toBe(true)
+    })
+  )
+
+  it.effect("verifyEmail rejects an expired verification request", () =>
+    Effect.gen(function* () {
+      const harness = makeHarness([])
+
+      const user = yield* Effect.promise(() =>
+        harness.runWithAuth((auth) =>
+          auth.register(Email.make("owner@example.com"), "password123", "Owner")
+        )
+      )
+
+      const verificationRequest = yield* Effect.promise(() =>
+        harness.runWithAuth((auth) => auth.startEmailVerification(user))
+      )
+
+      harness.state.verificationRequests.set(
+        verificationRequest.id,
+        EmailVerificationRequest.make({
+          ...verificationRequest,
+          expiresAt: Timestamp.Timestamp.make({ epochMillis: 0 }),
         })
       )
-    )
 
-    expect(Result.isFailure(result)).toBe(true)
-    if (Result.isFailure(result)) {
-      expect(result.failure._tag).toBe("UnverifiedEmailError")
-    }
-  })
+      const result = yield* Effect.promise(() =>
+        harness.runWithAuthEither((auth) =>
+          auth.verifyEmail(verificationRequest.id, verificationRequest.code)
+        )
+      )
 
-  it("fails callback when state is invalid", async () => {
-    const harness = makeHarness([makeGoogleProvider()])
+      expect(Result.isFailure(result)).toBe(true)
+      if (Result.isFailure(result)) {
+        expect(result.failure).toBeInstanceOf(EmailVerificationRequestExpiredError)
+      }
+      expect(harness.state.verificationRequests.has(verificationRequest.id)).toBe(false)
+    })
+  )
 
-    const result = await harness.runWithAuthEither((auth) =>
-      auth.completeOAuthLogin("google", "alice", "missing-state")
-    )
+  it.effect("resendEmailVerification rejects a missing request id", () =>
+    Effect.gen(function* () {
+      const harness = makeHarness([])
 
-    expect(Result.isFailure(result)).toBe(true)
-    if (Result.isFailure(result)) {
-      expect(result.failure._tag).toBe("OAuthStateError")
-    }
-  })
+      const result = yield* Effect.promise(() =>
+        harness.runWithAuthEither((auth) =>
+          auth.resendEmailVerification(
+            EmailVerificationRequestId.make("00000000-4000-4000-8000-000000000999")
+          )
+        )
+      )
 
-  it("fails callback when oauth state intent does not match callback flow", async () => {
-    const harness = makeHarness([makeGoogleProvider()])
+      expect(Result.isFailure(result)).toBe(true)
+      if (Result.isFailure(result)) {
+        expect(result.failure).toBeInstanceOf(EmailVerificationRequestNotFoundError)
+      }
+    })
+  )
 
-    const user = await harness.runWithAuth((auth) =>
-      auth.register(Email.make("owner@example.com"), "password123", "Owner")
-    )
+  it.effect("rejects local login when the email is still unverified", () =>
+    Effect.gen(function* () {
+      const harness = makeHarness([makeLocalProvider({ emailVerified: false })])
 
-    const loginState = await harness.runWithAuth((auth) => auth.startOAuthLogin("google"))
-    const linkWithLoginState = await harness.runWithAuthEither((auth) =>
-      auth.completeLink(user.id, "google", "owner-google", loginState.state)
-    )
+      yield* Effect.promise(() =>
+        harness.runWithAuth((auth) =>
+          auth.register(Email.make("owner@example.com"), "password123", "Owner")
+        )
+      )
 
-    expect(Result.isFailure(linkWithLoginState)).toBe(true)
-    if (Result.isFailure(linkWithLoginState)) {
-      expect(linkWithLoginState.failure._tag).toBe("OAuthStateError")
-    }
+      const result = yield* Effect.promise(() =>
+        harness.runWithAuthEither((auth) =>
+          auth.login(
+            "local",
+            LocalAuthRequest.make({
+              email: Email.make("owner@example.com"),
+              password: Redacted.make("password123"),
+            })
+          )
+        )
+      )
 
-    const linkState = await harness.runWithAuth((auth) => auth.startLink(user.id, "google"))
-    const loginWithLinkState = await harness.runWithAuthEither((auth) =>
-      auth.completeOAuthLogin("google", "owner-google", linkState.state)
-    )
+      expect(Result.isFailure(result)).toBe(true)
+      if (Result.isFailure(result)) {
+        expect(result.failure._tag).toBe("UnverifiedEmailError")
+      }
+    })
+  )
 
-    expect(Result.isFailure(loginWithLinkState)).toBe(true)
-    if (Result.isFailure(loginWithLinkState)) {
-      expect(loginWithLinkState.failure._tag).toBe("OAuthStateError")
-    }
-  })
+  it.effect("fails callback when state is invalid", () =>
+    Effect.gen(function* () {
+      const harness = makeHarness([makeGoogleProvider()])
 
-  it("fails link callback when state belongs to a different user", async () => {
-    const harness = makeHarness([makeGoogleProvider()])
+      const result = yield* Effect.promise(() =>
+        harness.runWithAuthEither((auth) =>
+          auth.completeOAuthLogin("google", "alice", "missing-state")
+        )
+      )
 
-    const firstUser = await harness.runWithAuth((auth) =>
-      auth.register(Email.make("first@example.com"), "password123", "First")
-    )
-    const secondUser = await harness.runWithAuth((auth) =>
-      auth.register(Email.make("second@example.com"), "password123", "Second")
-    )
+      expect(Result.isFailure(result)).toBe(true)
+      if (Result.isFailure(result)) {
+        expect(result.failure._tag).toBe("OAuthStateError")
+      }
+    })
+  )
 
-    const started = await harness.runWithAuth((auth) => auth.startLink(firstUser.id, "google"))
-    const result = await harness.runWithAuthEither((auth) =>
-      auth.completeLink(secondUser.id, "google", "shared-google", started.state)
-    )
+  it.effect("fails callback when oauth state intent does not match callback flow", () =>
+    Effect.gen(function* () {
+      const harness = makeHarness([makeGoogleProvider()])
 
-    expect(Result.isFailure(result)).toBe(true)
-    if (Result.isFailure(result)) {
-      expect(result.failure._tag).toBe("OAuthStateError")
-    }
-  })
+      const user = yield* Effect.promise(() =>
+        harness.runWithAuth((auth) =>
+          auth.register(Email.make("owner@example.com"), "password123", "Owner")
+        )
+      )
 
-  it("returns ProviderNotEnabledError when provider is disabled", async () => {
-    const harness = makeHarness([])
+      const loginState = yield* Effect.promise(() =>
+        harness.runWithAuth((auth) => auth.startOAuthLogin("google"))
+      )
+      const linkWithLoginState = yield* Effect.promise(() =>
+        harness.runWithAuthEither((auth) =>
+          auth.completeLink(user.id, "google", "owner-google", loginState.state)
+        )
+      )
 
-    const result = await harness.runWithAuthEither((auth) => auth.startOAuthLogin("google"))
+      expect(Result.isFailure(linkWithLoginState)).toBe(true)
+      if (Result.isFailure(linkWithLoginState)) {
+        expect(linkWithLoginState.failure._tag).toBe("OAuthStateError")
+      }
 
-    expect(Result.isFailure(result)).toBe(true)
-    if (Result.isFailure(result)) {
-      expect(result.failure._tag).toBe("ProviderNotEnabledError")
-    }
-  })
+      const linkState = yield* Effect.promise(() =>
+        harness.runWithAuth((auth) => auth.startLink(user.id, "google"))
+      )
+      const loginWithLinkState = yield* Effect.promise(() =>
+        harness.runWithAuthEither((auth) =>
+          auth.completeOAuthLogin("google", "owner-google", linkState.state)
+        )
+      )
 
-  it("fails callback when oauth state provider does not match callback provider", async () => {
-    const harness = makeHarness([makeGoogleProvider(), makeCoinbaseProvider()])
+      expect(Result.isFailure(loginWithLinkState)).toBe(true)
+      if (Result.isFailure(loginWithLinkState)) {
+        expect(loginWithLinkState.failure._tag).toBe("OAuthStateError")
+      }
+    })
+  )
 
-    const started = await harness.runWithAuth((auth) => auth.startOAuthLogin("google"))
-    const result = await harness.runWithAuthEither((auth) =>
-      auth.completeOAuthLogin("coinbase", "alice", started.state)
-    )
+  it.effect("fails link callback when state belongs to a different user", () =>
+    Effect.gen(function* () {
+      const harness = makeHarness([makeGoogleProvider()])
 
-    expect(Result.isFailure(result)).toBe(true)
-    if (Result.isFailure(result)) {
-      expect(result.failure._tag).toBe("OAuthStateError")
-    }
-  })
+      const firstUser = yield* Effect.promise(() =>
+        harness.runWithAuth((auth) =>
+          auth.register(Email.make("first@example.com"), "password123", "First")
+        )
+      )
+      const secondUser = yield* Effect.promise(() =>
+        harness.runWithAuth((auth) =>
+          auth.register(Email.make("second@example.com"), "password123", "Second")
+        )
+      )
 
-  it("returns IdentityAlreadyLinkedError when identity is already linked", async () => {
-    const harness = makeHarness([makeGoogleProvider()])
+      const started = yield* Effect.promise(() =>
+        harness.runWithAuth((auth) => auth.startLink(firstUser.id, "google"))
+      )
+      const result = yield* Effect.promise(() =>
+        harness.runWithAuthEither((auth) =>
+          auth.completeLink(secondUser.id, "google", "shared-google", started.state)
+        )
+      )
 
-    const firstUser = await harness.runWithAuth((auth) =>
-      auth.register(Email.make("first@example.com"), "password123", "First")
-    )
-    const secondUser = await harness.runWithAuth((auth) =>
-      auth.register(Email.make("second@example.com"), "password123", "Second")
-    )
+      expect(Result.isFailure(result)).toBe(true)
+      if (Result.isFailure(result)) {
+        expect(result.failure._tag).toBe("OAuthStateError")
+      }
+    })
+  )
 
-    const firstLink = await harness.runWithAuth((auth) => auth.startLink(firstUser.id, "google"))
-    await harness.runWithAuth((auth) =>
-      auth.completeLink(firstUser.id, "google", "shared-google", firstLink.state)
-    )
+  it.effect("returns ProviderNotEnabledError when provider is disabled", () =>
+    Effect.gen(function* () {
+      const harness = makeHarness([])
 
-    const secondLink = await harness.runWithAuth((auth) => auth.startLink(secondUser.id, "google"))
-    const result = await harness.runWithAuthEither((auth) =>
-      auth.completeLink(secondUser.id, "google", "shared-google", secondLink.state)
-    )
+      const result = yield* Effect.promise(() =>
+        harness.runWithAuthEither((auth) => auth.startOAuthLogin("google"))
+      )
 
-    expect(Result.isFailure(result)).toBe(true)
-    if (Result.isFailure(result)) {
-      expect(result.failure._tag).toBe("IdentityAlreadyLinkedError")
-    }
-  })
+      expect(Result.isFailure(result)).toBe(true)
+      if (Result.isFailure(result)) {
+        expect(result.failure._tag).toBe("ProviderNotEnabledError")
+      }
+    })
+  )
+
+  it.effect("fails callback when oauth state provider does not match callback provider", () =>
+    Effect.gen(function* () {
+      const harness = makeHarness([makeGoogleProvider(), makeCoinbaseProvider()])
+
+      const started = yield* Effect.promise(() =>
+        harness.runWithAuth((auth) => auth.startOAuthLogin("google"))
+      )
+      const result = yield* Effect.promise(() =>
+        harness.runWithAuthEither((auth) =>
+          auth.completeOAuthLogin("coinbase", "alice", started.state)
+        )
+      )
+
+      expect(Result.isFailure(result)).toBe(true)
+      if (Result.isFailure(result)) {
+        expect(result.failure._tag).toBe("OAuthStateError")
+      }
+    })
+  )
+
+  it.effect("returns IdentityAlreadyLinkedError when identity is already linked", () =>
+    Effect.gen(function* () {
+      const harness = makeHarness([makeGoogleProvider()])
+
+      const firstUser = yield* Effect.promise(() =>
+        harness.runWithAuth((auth) =>
+          auth.register(Email.make("first@example.com"), "password123", "First")
+        )
+      )
+      const secondUser = yield* Effect.promise(() =>
+        harness.runWithAuth((auth) =>
+          auth.register(Email.make("second@example.com"), "password123", "Second")
+        )
+      )
+
+      const firstLink = yield* Effect.promise(() =>
+        harness.runWithAuth((auth) => auth.startLink(firstUser.id, "google"))
+      )
+      yield* Effect.promise(() =>
+        harness.runWithAuth((auth) =>
+          auth.completeLink(firstUser.id, "google", "shared-google", firstLink.state)
+        )
+      )
+
+      const secondLink = yield* Effect.promise(() =>
+        harness.runWithAuth((auth) => auth.startLink(secondUser.id, "google"))
+      )
+      const result = yield* Effect.promise(() =>
+        harness.runWithAuthEither((auth) =>
+          auth.completeLink(secondUser.id, "google", "shared-google", secondLink.state)
+        )
+      )
+
+      expect(Result.isFailure(result)).toBe(true)
+      if (Result.isFailure(result)) {
+        expect(result.failure._tag).toBe("IdentityAlreadyLinkedError")
+      }
+    })
+  )
 })

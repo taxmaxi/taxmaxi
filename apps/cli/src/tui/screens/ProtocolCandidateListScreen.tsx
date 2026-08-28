@@ -1,6 +1,7 @@
 import { TextAttributes, type MouseEvent } from "@opentui/core"
 import { useKeyboard, useRenderer, useTerminalDimensions } from "@opentui/solid"
 import { createEffect, createSignal, For, Match, Show, Switch } from "solid-js"
+import { Effect } from "effect"
 import type { ProtocolCandidateReview } from "taxmaxi"
 import type { CliSession } from "../../session.ts"
 import { fetchProtocolCandidates } from "../controller.ts"
@@ -174,31 +175,40 @@ export function ProtocolCandidateListScreen(props: {
   const [selected, setSelected] = createSignal(0)
   const viewport = createListViewport(props.initialViewState?.viewportOffset ?? 0)
   let restoredInitialView = false
-  const list = createPagedList<ProtocolCandidateReview>(async (cursor) => {
-    const result = await fetchProtocolCandidates(props.session, { cursor })
-    if (result._tag === "unauthorized") {
-      props.onSessionExpired()
-      return { _tag: "error", message: result.message }
-    }
-    if (result._tag === "blocked" || result._tag === "error") {
-      return { _tag: "error", message: result.message }
-    }
-    return {
-      _tag: "ok",
-      page: {
-        rows: result.data.candidates,
-        nextCursor: result.data.page.nextCursor,
-        hasMore: result.data.page.hasMore,
-      },
-    }
-  })
+  const list = createPagedList<ProtocolCandidateReview>((cursor) =>
+    Effect.runPromise(
+      Effect.gen(function* () {
+        const result = yield* Effect.promise(() =>
+          fetchProtocolCandidates(props.session, { cursor })
+        )
+        if (result._tag === "unauthorized") {
+          props.onSessionExpired()
+          return { _tag: "error", message: result.message } as const
+        }
+        if (result._tag === "blocked" || result._tag === "error") {
+          return { _tag: "error", message: result.message } as const
+        }
+        return {
+          _tag: "ok",
+          page: {
+            rows: result.data.candidates,
+            nextCursor: result.data.page.nextCursor,
+            hasMore: result.data.page.hasMore,
+          },
+        } as const
+      })
+    )
+  )
 
-  const refresh = async () => {
-    setSelected(0)
-    viewport.reset()
-    props.onViewStateChange({ selectedCandidateId: undefined, viewportOffset: 0 })
-    await list.reload()
-  }
+  const refresh = () =>
+    Effect.runPromise(
+      Effect.gen(function* () {
+        setSelected(0)
+        viewport.reset()
+        props.onViewStateChange({ selectedCandidateId: undefined, viewportOffset: 0 })
+        yield* Effect.promise(list.reload)
+      })
+    )
 
   const candidates = (): ReadonlyArray<ProtocolCandidateReview> => {
     const current = list.state()

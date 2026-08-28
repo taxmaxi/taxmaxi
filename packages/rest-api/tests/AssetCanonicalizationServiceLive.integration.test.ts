@@ -1,8 +1,10 @@
+import * as DateTime from "effect/DateTime"
 import * as Effect from "effect/Effect"
+import * as Fiber from "effect/Fiber"
 import * as Deferred from "effect/Deferred"
 import * as Layer from "effect/Layer"
 import * as Option from "effect/Option"
-import { beforeEach, describe, expect, it } from "vitest"
+import { beforeEach, describe, expect, it } from "@effect/vitest"
 import { AssetRepositoryLive } from "../../persistence/src/layers/AssetRepositoryLive.ts"
 import { AssetExceptionRepositoryLive } from "../../persistence/src/layers/AssetExceptionRepositoryLive.ts"
 import { drizzle } from "../../persistence/src/layers/PgClientLive.ts"
@@ -102,7 +104,7 @@ const seedChainlessPendingProviderAsset = ({
           name: providerType === "nft" ? "Artwork" : "Coin",
           exponent: providerType === "nft" ? 0 : 8,
           providerType,
-          retrievedAt: new Date("2026-08-16T08:00:00.000Z"),
+          retrievedAt: DateTime.toDateUtc(DateTime.makeUnsafe("2026-08-16T08:00:00.000Z")),
         })
         .returning({ id: schema.providerAssets.id })
       if (providerAsset === undefined) {
@@ -144,7 +146,7 @@ const seedObservedPendingProviderAsset = ({
           name: "Bitcoin",
           exponent: 18,
           providerType: "crypto",
-          retrievedAt: new Date("2026-08-16T09:00:00.000Z"),
+          retrievedAt: DateTime.toDateUtc(DateTime.makeUnsafe("2026-08-16T09:00:00.000Z")),
         })
         .returning({ id: schema.providerAssets.id })
       const [transaction] = yield* db
@@ -152,7 +154,7 @@ const seedObservedPendingProviderAsset = ({
         .values({
           sourceId: TEST_SOURCE_ID,
           externalId: `${providerAssetId}-transaction`,
-          timestamp: new Date("2026-08-16T09:00:00.000Z"),
+          timestamp: DateTime.toDateUtc(DateTime.makeUnsafe("2026-08-16T09:00:00.000Z")),
           principalId: TEST_PRINCIPAL_ID,
         })
         .returning({ id: schema.transactions.id })
@@ -174,7 +176,7 @@ const seedObservedPendingProviderAsset = ({
         transactionId: transaction.id,
         externalId: `${providerAssetId}-transfer`,
         providerAssetId: providerAsset.id,
-        timestamp: new Date("2026-08-16T09:00:00.000Z"),
+        timestamp: DateTime.toDateUtc(DateTime.makeUnsafe("2026-08-16T09:00:00.000Z")),
         direction: "outbound",
         processingMode: "accounting_and_evidence",
         fromAccountRef: "coinbase-account-1",
@@ -239,214 +241,253 @@ const makeTrackedServiceLayer = ({
 }
 
 describe("AssetCanonicalizationServiceLive", () => {
-  beforeEach(async () => {
-    await Effect.runPromise(context.recreateTestDatabase())
-    const fixture = await context.runPg(seedSyncEngineRepositoryFixture())
-    await context.runPg(seedSyncEngineAssets(fixture))
-  })
-
-  it("approves a chainless crypto provider asset only to a fungible target", async () => {
-    const providerAssetRowId = await seedChainlessPendingProviderAsset({
-      providerAssetId: "chainless-fungible-approval",
-      providerType: "crypto",
-    })
-
-    const result = await runService(
-      Effect.flatMap(AssetCanonicalizationService, (service) =>
-        service.approveProviderAssetMapping({
-          providerAssetRowId,
-          canonicalAssetId: TEST_BTC_ASSET_ID,
-          assetRepresentationId: null,
-          reviewerNotes: "Reviewed chainless fungible asset.",
-        })
-      )
-    )
-    const state = await context.runPg(
+  beforeEach(() =>
+    Effect.runPromise(
       Effect.gen(function* () {
-        const db = yield* drizzle
-        const [mapping] = yield* db
-          .select({ status: schema.providerAssetMappings.mappingStatus })
-          .from(schema.providerAssetMappings)
-          .where(eq(schema.providerAssetMappings.providerAssetRowId, providerAssetRowId))
-        const jobs = yield* db
-          .select({ mode: schema.processingJobs.mode, sourceId: schema.processingJobs.sourceId })
-          .from(schema.processingJobs)
-        const [currentConclusion] = yield* db
-          .select({
-            actor: schema.assetResolutionDecisions.actor,
-            assetId: schema.assetResolutionDecisions.assetId,
-            humanClaim: schema.assetResolutionDecisions.humanClaim,
-            outcome: schema.assetResolutionDecisions.outcome,
-            currentPolicyEvaluationId: schema.assetResolutionCurrentState.currentPolicyEvaluationId,
-          })
-          .from(schema.assetResolutionCurrentState)
-          .innerJoin(
-            schema.assetResolutionDecisions,
-            eq(
-              schema.assetResolutionDecisions.id,
-              schema.assetResolutionCurrentState.currentConclusionId
-            )
-          )
-          .where(eq(schema.assetResolutionCurrentState.providerAssetRowId, providerAssetRowId))
-        return { currentConclusion, jobs, mapping }
+        yield* context.recreateTestDatabase()
+        const fixture = yield* Effect.promise(() =>
+          context.runPg(seedSyncEngineRepositoryFixture())
+        )
+        yield* Effect.promise(() => context.runPg(seedSyncEngineAssets(fixture)))
       })
     )
+  )
 
-    expect(result.mapping).toMatchObject({
-      mappingStatus: "approved",
-      canonicalAssetId: TEST_BTC_ASSET_ID,
-      assetRepresentationId: null,
-    })
-    expect(state.mapping?.status).toBe("approved")
-    expect(state.currentConclusion).toEqual({
-      actor: "human:admin",
-      assetId: TEST_BTC_ASSET_ID,
-      humanClaim: {
-        _tag: "identity",
+  it.effect("approves a chainless crypto provider asset only to a fungible target", () =>
+    Effect.gen(function* () {
+      const providerAssetRowId = yield* Effect.promise(() =>
+        seedChainlessPendingProviderAsset({
+          providerAssetId: "chainless-fungible-approval",
+          providerType: "crypto",
+        })
+      )
+
+      const result = yield* Effect.promise(() =>
+        runService(
+          Effect.flatMap(AssetCanonicalizationService, (service) =>
+            service.approveProviderAssetMapping({
+              providerAssetRowId,
+              canonicalAssetId: TEST_BTC_ASSET_ID,
+              assetRepresentationId: null,
+              reviewerNotes: "Reviewed chainless fungible asset.",
+            })
+          )
+        )
+      )
+      const state = yield* Effect.promise(() =>
+        context.runPg(
+          Effect.gen(function* () {
+            const db = yield* drizzle
+            const [mapping] = yield* db
+              .select({ status: schema.providerAssetMappings.mappingStatus })
+              .from(schema.providerAssetMappings)
+              .where(eq(schema.providerAssetMappings.providerAssetRowId, providerAssetRowId))
+            const jobs = yield* db
+              .select({
+                mode: schema.processingJobs.mode,
+                sourceId: schema.processingJobs.sourceId,
+              })
+              .from(schema.processingJobs)
+            const [currentConclusion] = yield* db
+              .select({
+                actor: schema.assetResolutionDecisions.actor,
+                assetId: schema.assetResolutionDecisions.assetId,
+                humanClaim: schema.assetResolutionDecisions.humanClaim,
+                outcome: schema.assetResolutionDecisions.outcome,
+                currentPolicyEvaluationId:
+                  schema.assetResolutionCurrentState.currentPolicyEvaluationId,
+              })
+              .from(schema.assetResolutionCurrentState)
+              .innerJoin(
+                schema.assetResolutionDecisions,
+                eq(
+                  schema.assetResolutionDecisions.id,
+                  schema.assetResolutionCurrentState.currentConclusionId
+                )
+              )
+              .where(eq(schema.assetResolutionCurrentState.providerAssetRowId, providerAssetRowId))
+            return { currentConclusion, jobs, mapping }
+          })
+        )
+      )
+
+      expect(result.mapping).toMatchObject({
+        mappingStatus: "approved",
+        canonicalAssetId: TEST_BTC_ASSET_ID,
+        assetRepresentationId: null,
+      })
+      expect(state.mapping?.status).toBe("approved")
+      expect(state.currentConclusion).toEqual({
+        actor: "human:admin",
         assetId: TEST_BTC_ASSET_ID,
-        newAsset: null,
-        representation: null,
-      },
-      outcome: "attach",
-      currentPolicyEvaluationId: null,
-    })
-    expect(state.jobs).toEqual([{ mode: "replay", sourceId: TEST_SOURCE_ID }])
-
-    const correction = await runExceptionRepository(
-      Effect.gen(function* () {
-        const repository = yield* AssetExceptionRepository
-        const found = yield* repository.findDetail({
-          _tag: "row_id",
-          providerAssetRowId,
-        })
-        if (Option.isNone(found)) {
-          return yield* Effect.die("Expected approved provider asset detail")
-        }
-        const approvedDetail = found.value
-        const input = {
-          providerAssetRowId,
-          claim: { _tag: "exclusion" as const, reason: "confirmed_spam" as const },
-          evidenceRevision: approvedDetail.evidenceRevision,
-          currentConclusionRevision: approvedDetail.currentConclusionRevision,
-          currentPolicyEvaluationRevision: approvedDetail.currentPolicyEvaluationRevision,
-          evidenceSnapshotIds: approvedDetail.evidence.map(({ id }) => id),
-          rationale: null,
-        }
-        const preview = yield* repository.previewDecision(input)
-        if (preview._tag !== "ready") {
-          return yield* Effect.die("Expected approved mapping correction preview")
-        }
-        const submitted = yield* repository.submitDecision({
-          actorId: TEST_USER_ID,
-          input: {
-            ...input,
-            expectedResultingAssetId: preview.preview.resultingAssetId,
-            expectedAssetOutcome: preview.preview.assetOutcome,
-            expectedRepresentationOutcome: preview.preview.representationOutcome,
-          },
-        })
-        return { approvedDetail, preview, submitted }
+        humanClaim: {
+          _tag: "identity",
+          assetId: TEST_BTC_ASSET_ID,
+          newAsset: null,
+          representation: null,
+        },
+        outcome: "attach",
+        currentPolicyEvaluationId: null,
       })
-    )
+      expect(state.jobs).toEqual([{ mode: "replay", sourceId: TEST_SOURCE_ID }])
 
-    expect(correction.approvedDetail.evidence).toEqual([
-      expect.objectContaining({
-        authority: "human_admin",
-        claimKind: "canonical_asset_selection",
-      }),
-    ])
-    expect(correction.preview).toMatchObject({
-      _tag: "ready",
-      preview: { decisionAction: "reversal" },
-    })
-    expect(correction.submitted).toMatchObject({
-      _tag: "accepted",
-      detail: { currentConclusion: { outcome: "excluded" } },
-    })
-  })
-
-  it("keeps the automatic policy evaluation separate from a manual approval conclusion", async () => {
-    const providerAssetRowId = await seedChainlessPendingProviderAsset({
-      providerAssetId: "manual-approval-policy-separation",
-      providerType: "crypto",
-    })
-    const policyEvaluationId = await context.runPg(
-      Effect.gen(function* () {
-        const db = yield* drizzle
-        const [policyEvaluation] = yield* db
-          .insert(schema.assetResolutionDecisions)
-          .values({
-            providerAssetRowId,
-            evidenceRevision: 1,
-            policyRevision: "manual-approval-policy-separation.1",
-            outcome: "pending",
-            reason: "display_collision",
-            actor: "system:asset-resolution-policy",
+      const correction = yield* Effect.promise(() =>
+        runExceptionRepository(
+          Effect.gen(function* () {
+            const repository = yield* AssetExceptionRepository
+            const found = yield* repository.findDetail({
+              _tag: "row_id",
+              providerAssetRowId,
+            })
+            if (Option.isNone(found)) {
+              return yield* Effect.die("Expected approved provider asset detail")
+            }
+            const approvedDetail = found.value
+            const input = {
+              providerAssetRowId,
+              claim: { _tag: "exclusion" as const, reason: "confirmed_spam" as const },
+              evidenceRevision: approvedDetail.evidenceRevision,
+              currentConclusionRevision: approvedDetail.currentConclusionRevision,
+              currentPolicyEvaluationRevision: approvedDetail.currentPolicyEvaluationRevision,
+              evidenceSnapshotIds: approvedDetail.evidence.map(({ id }) => id),
+              rationale: null,
+            }
+            const preview = yield* repository.previewDecision(input)
+            if (preview._tag !== "ready") {
+              return yield* Effect.die("Expected approved mapping correction preview")
+            }
+            const submitted = yield* repository.submitDecision({
+              actorId: TEST_USER_ID,
+              input: {
+                ...input,
+                expectedResultingAssetId: preview.preview.resultingAssetId,
+                expectedAssetOutcome: preview.preview.assetOutcome,
+                expectedRepresentationOutcome: preview.preview.representationOutcome,
+              },
+            })
+            return { approvedDetail, preview, submitted }
           })
-          .returning({ id: schema.assetResolutionDecisions.id })
-        if (policyEvaluation === undefined) {
-          return yield* Effect.die("Failed to seed policy evaluation")
-        }
-        yield* db.insert(schema.assetResolutionCurrentState).values({
-          providerAssetRowId,
-          currentConclusionId: null,
-          currentPolicyEvaluationId: policyEvaluation.id,
-        })
-        return policyEvaluation.id
-      })
-    )
-
-    await runService(
-      Effect.flatMap(AssetCanonicalizationService, (service) =>
-        service.approveProviderAssetMapping({
-          providerAssetRowId,
-          canonicalAssetId: TEST_BTC_ASSET_ID,
-          assetRepresentationId: null,
-          reviewerNotes: "Approve while preserving policy review state.",
-        })
+        )
       )
-    )
 
-    const state = await context.runPg(
+      expect(correction.approvedDetail.evidence).toEqual([
+        expect.objectContaining({
+          authority: "human_admin",
+          claimKind: "canonical_asset_selection",
+        }),
+      ])
+      expect(correction.preview).toMatchObject({
+        _tag: "ready",
+        preview: { decisionAction: "reversal" },
+      })
+      expect(correction.submitted).toMatchObject({
+        _tag: "accepted",
+        detail: { currentConclusion: { outcome: "excluded" } },
+      })
+    })
+  )
+
+  it.effect(
+    "keeps the automatic policy evaluation separate from a manual approval conclusion",
+    () =>
       Effect.gen(function* () {
-        const db = yield* drizzle
-        const [currentState] = yield* db
-          .select({
-            currentConclusionId: schema.assetResolutionCurrentState.currentConclusionId,
-            currentPolicyEvaluationId: schema.assetResolutionCurrentState.currentPolicyEvaluationId,
+        const providerAssetRowId = yield* Effect.promise(() =>
+          seedChainlessPendingProviderAsset({
+            providerAssetId: "manual-approval-policy-separation",
+            providerType: "crypto",
           })
-          .from(schema.assetResolutionCurrentState)
-          .where(eq(schema.assetResolutionCurrentState.providerAssetRowId, providerAssetRowId))
-        const [currentConclusion] = yield* db
-          .select({ humanClaim: schema.assetResolutionDecisions.humanClaim })
-          .from(schema.assetResolutionDecisions)
-          .where(
-            eq(
-              schema.assetResolutionDecisions.id,
-              currentState?.currentConclusionId ?? "00000000-0000-0000-0000-000000000000"
+        )
+        const policyEvaluationId = yield* Effect.promise(() =>
+          context.runPg(
+            Effect.gen(function* () {
+              const db = yield* drizzle
+              const [policyEvaluation] = yield* db
+                .insert(schema.assetResolutionDecisions)
+                .values({
+                  providerAssetRowId,
+                  evidenceRevision: 1,
+                  policyRevision: "manual-approval-policy-separation.1",
+                  outcome: "pending",
+                  reason: "display_collision",
+                  actor: "system:asset-resolution-policy",
+                })
+                .returning({ id: schema.assetResolutionDecisions.id })
+              if (policyEvaluation === undefined) {
+                return yield* Effect.die("Failed to seed policy evaluation")
+              }
+              yield* db.insert(schema.assetResolutionCurrentState).values({
+                providerAssetRowId,
+                currentConclusionId: null,
+                currentPolicyEvaluationId: policyEvaluation.id,
+              })
+              return policyEvaluation.id
+            })
+          )
+        )
+
+        yield* Effect.promise(() =>
+          runService(
+            Effect.flatMap(AssetCanonicalizationService, (service) =>
+              service.approveProviderAssetMapping({
+                providerAssetRowId,
+                canonicalAssetId: TEST_BTC_ASSET_ID,
+                assetRepresentationId: null,
+                reviewerNotes: "Approve while preserving policy review state.",
+              })
             )
           )
-        return { currentConclusion, currentState }
+        )
+
+        const state = yield* Effect.promise(() =>
+          context.runPg(
+            Effect.gen(function* () {
+              const db = yield* drizzle
+              const [currentState] = yield* db
+                .select({
+                  currentConclusionId: schema.assetResolutionCurrentState.currentConclusionId,
+                  currentPolicyEvaluationId:
+                    schema.assetResolutionCurrentState.currentPolicyEvaluationId,
+                })
+                .from(schema.assetResolutionCurrentState)
+                .where(
+                  eq(schema.assetResolutionCurrentState.providerAssetRowId, providerAssetRowId)
+                )
+              const [currentConclusion] = yield* db
+                .select({ humanClaim: schema.assetResolutionDecisions.humanClaim })
+                .from(schema.assetResolutionDecisions)
+                .where(
+                  eq(
+                    schema.assetResolutionDecisions.id,
+                    currentState?.currentConclusionId ?? "00000000-0000-0000-0000-000000000000"
+                  )
+                )
+              return { currentConclusion, currentState }
+            })
+          )
+        )
+
+        expect(state.currentState?.currentPolicyEvaluationId).toBe(policyEvaluationId)
+        expect(state.currentState?.currentConclusionId).not.toBe(policyEvaluationId)
+        expect(state.currentConclusion?.humanClaim).toMatchObject({
+          _tag: "identity",
+          assetId: TEST_BTC_ASSET_ID,
+        })
       })
-    )
+  )
 
-    expect(state.currentState?.currentPolicyEvaluationId).toBe(policyEvaluationId)
-    expect(state.currentState?.currentConclusionId).not.toBe(policyEvaluationId)
-    expect(state.currentConclusion?.humanClaim).toMatchObject({
-      _tag: "identity",
-      assetId: TEST_BTC_ASSET_ID,
-    })
-  })
-
-  it("rolls back the human conclusion when mapping approval fails", async () => {
-    const providerAssetRowId = await seedChainlessPendingProviderAsset({
-      providerAssetId: "manual-approval-atomic-rollback",
-      providerType: "crypto",
-    })
-    await context.runPg(
-      Effect.gen(function* () {
-        const db = yield* drizzle
-        yield* db.execute(sql`
+  it.effect("rolls back the human conclusion when mapping approval fails", () =>
+    Effect.gen(function* () {
+      const providerAssetRowId = yield* Effect.promise(() =>
+        seedChainlessPendingProviderAsset({
+          providerAssetId: "manual-approval-atomic-rollback",
+          providerType: "crypto",
+        })
+      )
+      yield* Effect.promise(() =>
+        context.runPg(
+          Effect.gen(function* () {
+            const db = yield* drizzle
+            yield* db.execute(sql`
           create function reject_manual_mapping_approval() returns trigger
           language plpgsql as $trigger$
           begin
@@ -457,186 +498,221 @@ describe("AssetCanonicalizationServiceLive", () => {
           end
           $trigger$
         `)
-        yield* db.execute(sql`
+            yield* db.execute(sql`
           create trigger reject_manual_mapping_approval_before_update
           before update on provider_asset_mappings
           for each row execute function reject_manual_mapping_approval()
         `)
-      })
-    )
-
-    const result = await runService(
-      Effect.flatMap(AssetCanonicalizationService, (service) =>
-        service.approveProviderAssetMapping({
-          providerAssetRowId,
-          canonicalAssetId: TEST_BTC_ASSET_ID,
-          assetRepresentationId: null,
-          reviewerNotes: "This approval must roll back.",
-        })
-      ).pipe(Effect.result)
-    )
-    await context.runPg(
-      Effect.gen(function* () {
-        const db = yield* drizzle
-        yield* db.execute(
-          sql`drop trigger reject_manual_mapping_approval_before_update on provider_asset_mappings`
+          })
         )
-        yield* db.execute(sql`drop function reject_manual_mapping_approval()`)
-      })
-    )
-    const state = await context.runPg(
-      Effect.gen(function* () {
-        const db = yield* drizzle
-        const decisions = yield* db
-          .select({ id: schema.assetResolutionDecisions.id })
-          .from(schema.assetResolutionDecisions)
-          .where(eq(schema.assetResolutionDecisions.providerAssetRowId, providerAssetRowId))
-        const currentState = yield* db
-          .select({ providerAssetRowId: schema.assetResolutionCurrentState.providerAssetRowId })
-          .from(schema.assetResolutionCurrentState)
-          .where(eq(schema.assetResolutionCurrentState.providerAssetRowId, providerAssetRowId))
-        const [mapping] = yield* db
-          .select({ status: schema.providerAssetMappings.mappingStatus })
-          .from(schema.providerAssetMappings)
-          .where(eq(schema.providerAssetMappings.providerAssetRowId, providerAssetRowId))
-        const jobs = yield* db.select({ id: schema.processingJobs.id }).from(schema.processingJobs)
-        return { currentState, decisions, jobs, mapping }
-      })
-    )
+      )
 
-    expect(result._tag).toBe("Failure")
-    expect(state.decisions).toEqual([])
-    expect(state.currentState).toEqual([])
-    expect(state.mapping?.status).toBe("pending_review")
-    expect(state.jobs).toEqual([])
-  })
+      const result = yield* Effect.promise(() =>
+        runService(
+          Effect.flatMap(AssetCanonicalizationService, (service) =>
+            service.approveProviderAssetMapping({
+              providerAssetRowId,
+              canonicalAssetId: TEST_BTC_ASSET_ID,
+              assetRepresentationId: null,
+              reviewerNotes: "This approval must roll back.",
+            })
+          ).pipe(Effect.result)
+        )
+      )
+      yield* Effect.promise(() =>
+        context.runPg(
+          Effect.gen(function* () {
+            const db = yield* drizzle
+            yield* db.execute(
+              sql`drop trigger reject_manual_mapping_approval_before_update on provider_asset_mappings`
+            )
+            yield* db.execute(sql`drop function reject_manual_mapping_approval()`)
+          })
+        )
+      )
+      const state = yield* Effect.promise(() =>
+        context.runPg(
+          Effect.gen(function* () {
+            const db = yield* drizzle
+            const decisions = yield* db
+              .select({ id: schema.assetResolutionDecisions.id })
+              .from(schema.assetResolutionDecisions)
+              .where(eq(schema.assetResolutionDecisions.providerAssetRowId, providerAssetRowId))
+            const currentState = yield* db
+              .select({
+                providerAssetRowId: schema.assetResolutionCurrentState.providerAssetRowId,
+              })
+              .from(schema.assetResolutionCurrentState)
+              .where(eq(schema.assetResolutionCurrentState.providerAssetRowId, providerAssetRowId))
+            const [mapping] = yield* db
+              .select({ status: schema.providerAssetMappings.mappingStatus })
+              .from(schema.providerAssetMappings)
+              .where(eq(schema.providerAssetMappings.providerAssetRowId, providerAssetRowId))
+            const jobs = yield* db
+              .select({ id: schema.processingJobs.id })
+              .from(schema.processingJobs)
+            return { currentState, decisions, jobs, mapping }
+          })
+        )
+      )
 
-  it("approves a chainless NFT provider asset to an NFT target", async () => {
-    const providerAssetRowId = await seedChainlessPendingProviderAsset({
-      providerAssetId: "chainless-nft-approval",
-      providerType: "nft",
+      expect(result._tag).toBe("Failure")
+      expect(state.decisions).toEqual([])
+      expect(state.currentState).toEqual([])
+      expect(state.mapping?.status).toBe("pending_review")
+      expect(state.jobs).toEqual([])
     })
-    const targetAssetId = await context.runPg(
-      Effect.gen(function* () {
-        const db = yield* drizzle
-        const [asset] = yield* db
-          .insert(schema.assets)
-          .values({ name: "Artwork", symbol: "ART", type: "nft" })
-          .returning({ id: schema.assets.id })
-        if (asset === undefined) {
-          return yield* Effect.die("Failed to seed NFT target")
-        }
-        return asset.id
-      })
-    )
+  )
 
-    const result = await runService(
-      Effect.flatMap(AssetCanonicalizationService, (service) =>
-        service.approveProviderAssetMapping({
-          providerAssetRowId,
-          canonicalAssetId: targetAssetId,
-          assetRepresentationId: null,
-          reviewerNotes: "Reviewed chainless NFT asset.",
+  it.effect("approves a chainless NFT provider asset to an NFT target", () =>
+    Effect.gen(function* () {
+      const providerAssetRowId = yield* Effect.promise(() =>
+        seedChainlessPendingProviderAsset({
+          providerAssetId: "chainless-nft-approval",
+          providerType: "nft",
         })
       )
-    )
-    const state = await context.runPg(
-      Effect.gen(function* () {
-        const db = yield* drizzle
-        const [mapping] = yield* db
-          .select({ status: schema.providerAssetMappings.mappingStatus })
-          .from(schema.providerAssetMappings)
-          .where(eq(schema.providerAssetMappings.providerAssetRowId, providerAssetRowId))
-        const jobs = yield* db
-          .select({ mode: schema.processingJobs.mode, sourceId: schema.processingJobs.sourceId })
-          .from(schema.processingJobs)
-        return { jobs, mapping }
-      })
-    )
-
-    expect(result.mapping).toMatchObject({
-      mappingStatus: "approved",
-      canonicalAssetId: targetAssetId,
-      assetRepresentationId: null,
-    })
-    expect(state.mapping?.status).toBe("approved")
-    expect(state.jobs).toEqual([{ mode: "replay", sourceId: TEST_SOURCE_ID }])
-  })
-
-  it("routes excluded mappings through the revision-bound review flow", async () => {
-    const providerAssetRowId = await seedObservedPendingProviderAsset({
-      providerAssetId: "manual-exclusion-reversal",
-    })
-    await context.runPg(
-      Effect.gen(function* () {
-        const db = yield* drizzle
-        const [bitcoinRepresentation] = yield* db
-          .select({
-            blockchainId: schema.assetRepresentations.blockchainId,
-            contractAddress: schema.assetRepresentations.contractAddress,
-            decimals: schema.assetRepresentations.decimals,
-            type: schema.assetRepresentations.type,
+      const targetAssetId = yield* Effect.promise(() =>
+        context.runPg(
+          Effect.gen(function* () {
+            const db = yield* drizzle
+            const [asset] = yield* db
+              .insert(schema.assets)
+              .values({ name: "Artwork", symbol: "ART", type: "nft" })
+              .returning({ id: schema.assets.id })
+            if (asset === undefined) {
+              return yield* Effect.die("Failed to seed NFT target")
+            }
+            return asset.id
           })
-          .from(schema.assetRepresentations)
-          .where(eq(schema.assetRepresentations.id, TEST_BTC_REPRESENTATION_ID))
-        if (bitcoinRepresentation === undefined) {
-          return yield* Effect.die("Missing Bitcoin representation fixture")
-        }
-        yield* db
-          .update(schema.providerTransfers)
-          .set({
-            observedBlockchainId: bitcoinRepresentation.blockchainId,
-            observedRepresentationType: bitcoinRepresentation.type,
-            observedContractAddress: bitcoinRepresentation.contractAddress,
-            observedDecimals: bitcoinRepresentation.decimals,
-          })
-          .where(eq(schema.providerTransfers.providerAssetId, providerAssetRowId))
-      })
-    )
-    await markProviderAssetExcluded({ providerAssetRowId })
+        )
+      )
 
-    const approval = await runService(
-      Effect.flatMap(AssetCanonicalizationService, (service) =>
-        service.approveProviderAssetMapping({
-          providerAssetRowId,
-          canonicalAssetId: TEST_BTC_ASSET_ID,
-          assetRepresentationId: TEST_BTC_REPRESENTATION_ID,
-          reviewerNotes: "Human-reviewed exclusion reversal.",
+      const result = yield* Effect.promise(() =>
+        runService(
+          Effect.flatMap(AssetCanonicalizationService, (service) =>
+            service.approveProviderAssetMapping({
+              providerAssetRowId,
+              canonicalAssetId: targetAssetId,
+              assetRepresentationId: null,
+              reviewerNotes: "Reviewed chainless NFT asset.",
+            })
+          )
+        )
+      )
+      const state = yield* Effect.promise(() =>
+        context.runPg(
+          Effect.gen(function* () {
+            const db = yield* drizzle
+            const [mapping] = yield* db
+              .select({ status: schema.providerAssetMappings.mappingStatus })
+              .from(schema.providerAssetMappings)
+              .where(eq(schema.providerAssetMappings.providerAssetRowId, providerAssetRowId))
+            const jobs = yield* db
+              .select({
+                mode: schema.processingJobs.mode,
+                sourceId: schema.processingJobs.sourceId,
+              })
+              .from(schema.processingJobs)
+            return { jobs, mapping }
+          })
+        )
+      )
+
+      expect(result.mapping).toMatchObject({
+        mappingStatus: "approved",
+        canonicalAssetId: targetAssetId,
+        assetRepresentationId: null,
+      })
+      expect(state.mapping?.status).toBe("approved")
+      expect(state.jobs).toEqual([{ mode: "replay", sourceId: TEST_SOURCE_ID }])
+    })
+  )
+
+  it.effect("routes excluded mappings through the revision-bound review flow", () =>
+    Effect.gen(function* () {
+      const providerAssetRowId = yield* Effect.promise(() =>
+        seedObservedPendingProviderAsset({
+          providerAssetId: "manual-exclusion-reversal",
         })
-      ).pipe(Effect.result)
-    )
-    expect(approval).toMatchObject({
-      _tag: "Failure",
-      failure: {
-        _tag: "AssetCanonicalizationBadRequestError",
-        message:
-          "Excluded provider asset mappings must be changed through revision-bound exception review.",
-      },
-    })
-    const history = await context.runPg(
-      Effect.gen(function* () {
-        const db = yield* drizzle
-        return yield* db
-          .select({
-            actor: schema.assetResolutionDecisions.actor,
-            outcome: schema.assetResolutionDecisions.outcome,
-            supersedesDecisionId: schema.assetResolutionDecisions.supersedesDecisionId,
+      )
+      yield* Effect.promise(() =>
+        context.runPg(
+          Effect.gen(function* () {
+            const db = yield* drizzle
+            const [bitcoinRepresentation] = yield* db
+              .select({
+                blockchainId: schema.assetRepresentations.blockchainId,
+                contractAddress: schema.assetRepresentations.contractAddress,
+                decimals: schema.assetRepresentations.decimals,
+                type: schema.assetRepresentations.type,
+              })
+              .from(schema.assetRepresentations)
+              .where(eq(schema.assetRepresentations.id, TEST_BTC_REPRESENTATION_ID))
+            if (bitcoinRepresentation === undefined) {
+              return yield* Effect.die("Missing Bitcoin representation fixture")
+            }
+            yield* db
+              .update(schema.providerTransfers)
+              .set({
+                observedBlockchainId: bitcoinRepresentation.blockchainId,
+                observedRepresentationType: bitcoinRepresentation.type,
+                observedContractAddress: bitcoinRepresentation.contractAddress,
+                observedDecimals: bitcoinRepresentation.decimals,
+              })
+              .where(eq(schema.providerTransfers.providerAssetId, providerAssetRowId))
           })
-          .from(schema.assetResolutionDecisions)
-          .where(eq(schema.assetResolutionDecisions.providerAssetRowId, providerAssetRowId))
-          .orderBy(schema.assetResolutionDecisions.createdAt)
+        )
+      )
+      yield* Effect.promise(() => markProviderAssetExcluded({ providerAssetRowId }))
+
+      const approval = yield* Effect.promise(() =>
+        runService(
+          Effect.flatMap(AssetCanonicalizationService, (service) =>
+            service.approveProviderAssetMapping({
+              providerAssetRowId,
+              canonicalAssetId: TEST_BTC_ASSET_ID,
+              assetRepresentationId: TEST_BTC_REPRESENTATION_ID,
+              reviewerNotes: "Human-reviewed exclusion reversal.",
+            })
+          ).pipe(Effect.result)
+        )
+      )
+      expect(approval).toMatchObject({
+        _tag: "Failure",
+        failure: {
+          _tag: "AssetCanonicalizationBadRequestError",
+          message:
+            "Excluded provider asset mappings must be changed through revision-bound exception review.",
+        },
       })
-    )
+      const history = yield* Effect.promise(() =>
+        context.runPg(
+          Effect.gen(function* () {
+            const db = yield* drizzle
+            return yield* db
+              .select({
+                actor: schema.assetResolutionDecisions.actor,
+                outcome: schema.assetResolutionDecisions.outcome,
+                supersedesDecisionId: schema.assetResolutionDecisions.supersedesDecisionId,
+              })
+              .from(schema.assetResolutionDecisions)
+              .where(eq(schema.assetResolutionDecisions.providerAssetRowId, providerAssetRowId))
+              .orderBy(schema.assetResolutionDecisions.createdAt)
+          })
+        )
+      )
 
-    expect(history).toEqual([
-      expect.objectContaining({
-        outcome: "excluded",
-        supersedesDecisionId: null,
-      }),
-    ])
-  })
+      expect(history).toEqual([
+        expect.objectContaining({
+          outcome: "excluded",
+          supersedesDecisionId: null,
+        }),
+      ])
+    })
+  )
 
-  it.each([
+  it.effect.each([
     {
       providerType: "crypto",
       targetType: "nft" as const,
@@ -654,201 +730,227 @@ describe("AssetCanonicalizationServiceLive", () => {
     },
   ])(
     "rejects a chainless $providerType provider asset mapped to a $targetType target",
-    async ({ expectedMessage, providerType, targetType }) => {
-      const providerAssetRowId = await seedChainlessPendingProviderAsset({
-        providerAssetId: `chainless-${providerType}-mismatch`,
-        providerType,
-      })
-      const targetAssetId =
-        targetType === "fungible"
-          ? TEST_BTC_ASSET_ID
-          : await context.runPg(
-              Effect.gen(function* () {
-                const db = yield* drizzle
-                const [asset] = yield* db
-                  .insert(schema.assets)
-                  .values({ name: "Artwork", symbol: "ART", type: "nft" })
-                  .returning({ id: schema.assets.id })
-                if (asset === undefined) {
-                  return yield* Effect.die("Failed to seed NFT target")
-                }
-                return asset.id
-              })
-            )
-
-      const result = await runService(
-        Effect.flatMap(AssetCanonicalizationService, (service) =>
-          service.approveProviderAssetMapping({
-            providerAssetRowId,
-            canonicalAssetId: targetAssetId,
-            assetRepresentationId: null,
-            reviewerNotes: "Mismatched chainless type.",
+    ({ expectedMessage, providerType, targetType }) =>
+      Effect.gen(function* () {
+        const providerAssetRowId = yield* Effect.promise(() =>
+          seedChainlessPendingProviderAsset({
+            providerAssetId: `chainless-${providerType}-mismatch`,
+            providerType,
           })
-        ).pipe(Effect.result)
-      )
-      const state = await context.runPg(
-        Effect.gen(function* () {
-          const db = yield* drizzle
-          const [mapping] = yield* db
-            .select({ status: schema.providerAssetMappings.mappingStatus })
-            .from(schema.providerAssetMappings)
-            .where(eq(schema.providerAssetMappings.providerAssetRowId, providerAssetRowId))
-          const jobs = yield* db
-            .select({ id: schema.processingJobs.id })
-            .from(schema.processingJobs)
-          return { jobs, mapping }
-        })
-      )
+        )
+        const targetAssetId =
+          targetType === "fungible"
+            ? TEST_BTC_ASSET_ID
+            : yield* Effect.promise(() =>
+                context.runPg(
+                  Effect.gen(function* () {
+                    const db = yield* drizzle
+                    const [asset] = yield* db
+                      .insert(schema.assets)
+                      .values({ name: "Artwork", symbol: "ART", type: "nft" })
+                      .returning({ id: schema.assets.id })
+                    if (asset === undefined) {
+                      return yield* Effect.die("Failed to seed NFT target")
+                    }
+                    return asset.id
+                  })
+                )
+              )
 
-      expect(result._tag).toBe("Failure")
-      if (result._tag === "Failure") {
-        expect(result.failure).toMatchObject({
-          _tag: "AssetCanonicalizationBadRequestError",
-          message: expectedMessage,
-        })
-      }
-      expect(state.mapping?.status).toBe("pending_review")
-      expect(state.jobs).toHaveLength(0)
-    }
+        const result = yield* Effect.promise(() =>
+          runService(
+            Effect.flatMap(AssetCanonicalizationService, (service) =>
+              service.approveProviderAssetMapping({
+                providerAssetRowId,
+                canonicalAssetId: targetAssetId,
+                assetRepresentationId: null,
+                reviewerNotes: "Mismatched chainless type.",
+              })
+            ).pipe(Effect.result)
+          )
+        )
+        const state = yield* Effect.promise(() =>
+          context.runPg(
+            Effect.gen(function* () {
+              const db = yield* drizzle
+              const [mapping] = yield* db
+                .select({ status: schema.providerAssetMappings.mappingStatus })
+                .from(schema.providerAssetMappings)
+                .where(eq(schema.providerAssetMappings.providerAssetRowId, providerAssetRowId))
+              const jobs = yield* db
+                .select({ id: schema.processingJobs.id })
+                .from(schema.processingJobs)
+              return { jobs, mapping }
+            })
+          )
+        )
+
+        expect(result._tag).toBe("Failure")
+        if (result._tag === "Failure") {
+          expect(result.failure).toMatchObject({
+            _tag: "AssetCanonicalizationBadRequestError",
+            message: expectedMessage,
+          })
+        }
+        expect(state.mapping?.status).toBe("pending_review")
+        expect(state.jobs).toHaveLength(0)
+      })
   )
 
-  it("resolves CoinGecko evidence before entering the database transaction", async () => {
-    const providerAssetRowId = await seedObservedPendingProviderAsset({
-      providerAssetId: "coingecko-outside-transaction",
-    })
-    const searchStarted = await Effect.runPromise(Deferred.make<void>())
-    const releaseSearch = await Effect.runPromise(Deferred.make<void>())
-    const transactionEntered = await Effect.runPromise(Deferred.make<void>())
-    const coinGeckoClient = CoinGeckoClient.of({
-      searchCoins: () =>
-        Deferred.succeed(searchStarted, undefined).pipe(
-          Effect.andThen(Deferred.await(releaseSearch)),
-          Effect.as([{ id: "ethereum", name: "Bitcoin", symbol: "btc" }])
-        ),
-      getCoin: () =>
-        Effect.succeed({
-          id: "ethereum",
-          symbol: "eth",
-          name: "Ethereum",
-          asset_platform_id: null,
-          platforms: {},
-          detail_platforms: {},
-        }),
-      listMarkets: () => Effect.succeed([]),
-    })
-    const layer = makeTrackedServiceLayer({ coinGeckoClient, transactionEntered })
-    const canonicalization = Effect.runPromise(
-      context.runWithLayer({
-        effect: Effect.flatMap(AssetCanonicalizationService, (service) =>
-          service.canonicalizeProviderAssetFromCoinGecko({
-            providerAssetRowId,
-            reviewerNotes: "Resolve external evidence first.",
-          })
-        ),
-        layer,
-      })
-    )
-
-    await Effect.runPromise(Deferred.await(searchStarted))
-    expect(Option.isNone(await Effect.runPromise(Deferred.poll(transactionEntered)))).toBe(true)
-
-    await Effect.runPromise(Deferred.succeed(releaseSearch, undefined))
-    const result = await canonicalization
-
-    expect(result.providerAsset.mapping?.mappingStatus).toBe("approved")
-    expect(Option.isSome(await Effect.runPromise(Deferred.poll(transactionEntered)))).toBe(true)
-    const currentConclusion = await context.runPg(
-      Effect.gen(function* () {
-        const db = yield* drizzle
-        const [row] = yield* db
-          .select({
-            actor: schema.assetResolutionDecisions.actor,
-            assetId: schema.assetResolutionDecisions.assetId,
-            evidenceAuthority: schema.assetResolutionEvidence.authority,
-            evidenceClaimKind: schema.assetResolutionEvidence.claimKind,
-            humanClaim: schema.assetResolutionDecisions.humanClaim,
-            outcome: schema.assetResolutionDecisions.outcome,
-            currentPolicyEvaluationId: schema.assetResolutionCurrentState.currentPolicyEvaluationId,
-          })
-          .from(schema.assetResolutionCurrentState)
-          .innerJoin(
-            schema.assetResolutionDecisions,
-            eq(
-              schema.assetResolutionDecisions.id,
-              schema.assetResolutionCurrentState.currentConclusionId
-            )
-          )
-          .innerJoin(
-            schema.assetResolutionEvidence,
-            eq(schema.assetResolutionEvidence.decisionId, schema.assetResolutionDecisions.id)
-          )
-          .where(eq(schema.assetResolutionCurrentState.providerAssetRowId, providerAssetRowId))
-        return row
-      })
-    )
-    expect(currentConclusion).toMatchObject({
-      actor: "human:admin",
-      evidenceAuthority: "coingecko",
-      evidenceClaimKind: "canonical_asset_selection",
-      humanClaim: expect.objectContaining({ _tag: "identity" }),
-      outcome: "attach",
-      currentPolicyEvaluationId: null,
-    })
-  })
-
-  it("routes CoinGecko exclusion reversals through the revision-bound review flow", async () => {
-    const providerAssetRowId = await seedObservedPendingProviderAsset({
-      providerAssetId: "coingecko-exclusion-reversal",
-    })
-    await markProviderAssetExcluded({ providerAssetRowId })
-
-    const canonicalization = await runService(
-      Effect.flatMap(AssetCanonicalizationService, (service) =>
-        service.canonicalizeProviderAssetFromCoinGecko({
-          providerAssetRowId,
-          reviewerNotes: "Human-reviewed CoinGecko reversal.",
+  it.effect("resolves CoinGecko evidence before entering the database transaction", () =>
+    Effect.gen(function* () {
+      const providerAssetRowId = yield* Effect.promise(() =>
+        seedObservedPendingProviderAsset({
+          providerAssetId: "coingecko-outside-transaction",
         })
-      ).pipe(Effect.result)
-    )
-    expect(canonicalization).toMatchObject({
-      _tag: "Failure",
-      failure: {
-        _tag: "AssetCanonicalizationBadRequestError",
-        message:
-          "Excluded provider asset mappings must be changed through revision-bound exception review.",
-      },
-    })
-    const history = await context.runPg(
-      Effect.gen(function* () {
-        const db = yield* drizzle
-        return yield* db
-          .select({
-            actor: schema.assetResolutionDecisions.actor,
-            outcome: schema.assetResolutionDecisions.outcome,
-          })
-          .from(schema.assetResolutionDecisions)
-          .where(eq(schema.assetResolutionDecisions.providerAssetRowId, providerAssetRowId))
-          .orderBy(schema.assetResolutionDecisions.createdAt)
+      )
+      const searchStarted = yield* Deferred.make<void>()
+      const releaseSearch = yield* Deferred.make<void>()
+      const transactionEntered = yield* Deferred.make<void>()
+      const coinGeckoClient = CoinGeckoClient.of({
+        searchCoins: () =>
+          Deferred.succeed(searchStarted, undefined).pipe(
+            Effect.andThen(Deferred.await(releaseSearch)),
+            Effect.as([{ id: "ethereum", name: "Bitcoin", symbol: "btc" }])
+          ),
+        getCoin: () =>
+          Effect.succeed({
+            id: "ethereum",
+            symbol: "eth",
+            name: "Ethereum",
+            asset_platform_id: null,
+            platforms: {},
+            detail_platforms: {},
+          }),
+        listMarkets: () => Effect.succeed([]),
       })
-    )
-    expect(history).toEqual([expect.objectContaining({ outcome: "excluded" })])
-  })
+      const layer = makeTrackedServiceLayer({ coinGeckoClient, transactionEntered })
+      const canonicalization = yield* Effect.forkChild(
+        context.runWithLayer({
+          effect: Effect.flatMap(AssetCanonicalizationService, (service) =>
+            service.canonicalizeProviderAssetFromCoinGecko({
+              providerAssetRowId,
+              reviewerNotes: "Resolve external evidence first.",
+            })
+          ),
+          layer,
+        })
+      )
 
-  it("does not enter the database transaction when CoinGecko resolution fails", async () => {
-    const providerAssetRowId = await seedObservedPendingProviderAsset({
-      providerAssetId: "coingecko-failure-before-transaction",
+      yield* Deferred.await(searchStarted)
+      expect(Option.isNone(yield* Deferred.poll(transactionEntered))).toBe(true)
+
+      yield* Deferred.succeed(releaseSearch, undefined)
+      const result = yield* Fiber.join(canonicalization)
+
+      expect(result.providerAsset.mapping?.mappingStatus).toBe("approved")
+      expect(Option.isSome(yield* Deferred.poll(transactionEntered))).toBe(true)
+      const currentConclusion = yield* Effect.promise(() =>
+        context.runPg(
+          Effect.gen(function* () {
+            const db = yield* drizzle
+            const [row] = yield* db
+              .select({
+                actor: schema.assetResolutionDecisions.actor,
+                assetId: schema.assetResolutionDecisions.assetId,
+                evidenceAuthority: schema.assetResolutionEvidence.authority,
+                evidenceClaimKind: schema.assetResolutionEvidence.claimKind,
+                humanClaim: schema.assetResolutionDecisions.humanClaim,
+                outcome: schema.assetResolutionDecisions.outcome,
+                currentPolicyEvaluationId:
+                  schema.assetResolutionCurrentState.currentPolicyEvaluationId,
+              })
+              .from(schema.assetResolutionCurrentState)
+              .innerJoin(
+                schema.assetResolutionDecisions,
+                eq(
+                  schema.assetResolutionDecisions.id,
+                  schema.assetResolutionCurrentState.currentConclusionId
+                )
+              )
+              .innerJoin(
+                schema.assetResolutionEvidence,
+                eq(schema.assetResolutionEvidence.decisionId, schema.assetResolutionDecisions.id)
+              )
+              .where(eq(schema.assetResolutionCurrentState.providerAssetRowId, providerAssetRowId))
+            return row
+          })
+        )
+      )
+      expect(currentConclusion).toMatchObject({
+        actor: "human:admin",
+        evidenceAuthority: "coingecko",
+        evidenceClaimKind: "canonical_asset_selection",
+        humanClaim: expect.objectContaining({ _tag: "identity" }),
+        outcome: "attach",
+        currentPolicyEvaluationId: null,
+      })
     })
-    const transactionEntered = await Effect.runPromise(Deferred.make<void>())
-    const coinGeckoClient = CoinGeckoClient.of({
-      searchCoins: () =>
-        Effect.fail(new CoinGeckoClientError({ message: "CoinGecko unavailable" })),
-      getCoin: () => Effect.die("getCoin should not be called"),
-      listMarkets: () => Effect.succeed([]),
+  )
+
+  it.effect("routes CoinGecko exclusion reversals through the revision-bound review flow", () =>
+    Effect.gen(function* () {
+      const providerAssetRowId = yield* Effect.promise(() =>
+        seedObservedPendingProviderAsset({
+          providerAssetId: "coingecko-exclusion-reversal",
+        })
+      )
+      yield* Effect.promise(() => markProviderAssetExcluded({ providerAssetRowId }))
+
+      const canonicalization = yield* Effect.promise(() =>
+        runService(
+          Effect.flatMap(AssetCanonicalizationService, (service) =>
+            service.canonicalizeProviderAssetFromCoinGecko({
+              providerAssetRowId,
+              reviewerNotes: "Human-reviewed CoinGecko reversal.",
+            })
+          ).pipe(Effect.result)
+        )
+      )
+      expect(canonicalization).toMatchObject({
+        _tag: "Failure",
+        failure: {
+          _tag: "AssetCanonicalizationBadRequestError",
+          message:
+            "Excluded provider asset mappings must be changed through revision-bound exception review.",
+        },
+      })
+      const history = yield* Effect.promise(() =>
+        context.runPg(
+          Effect.gen(function* () {
+            const db = yield* drizzle
+            return yield* db
+              .select({
+                actor: schema.assetResolutionDecisions.actor,
+                outcome: schema.assetResolutionDecisions.outcome,
+              })
+              .from(schema.assetResolutionDecisions)
+              .where(eq(schema.assetResolutionDecisions.providerAssetRowId, providerAssetRowId))
+              .orderBy(schema.assetResolutionDecisions.createdAt)
+          })
+        )
+      )
+      expect(history).toEqual([expect.objectContaining({ outcome: "excluded" })])
     })
-    const layer = makeTrackedServiceLayer({ coinGeckoClient, transactionEntered })
-    const before = await countCanonicalRows()
-    const result = await Effect.runPromise(
-      context.runWithLayer({
+  )
+
+  it.effect("does not enter the database transaction when CoinGecko resolution fails", () =>
+    Effect.gen(function* () {
+      const providerAssetRowId = yield* Effect.promise(() =>
+        seedObservedPendingProviderAsset({
+          providerAssetId: "coingecko-failure-before-transaction",
+        })
+      )
+      const transactionEntered = yield* Deferred.make<void>()
+      const coinGeckoClient = CoinGeckoClient.of({
+        searchCoins: () =>
+          Effect.fail(new CoinGeckoClientError({ message: "CoinGecko unavailable" })),
+        getCoin: () => Effect.die("getCoin should not be called"),
+        listMarkets: () => Effect.succeed([]),
+      })
+      const layer = makeTrackedServiceLayer({ coinGeckoClient, transactionEntered })
+      const before = yield* Effect.promise(() => countCanonicalRows())
+      const result = yield* context.runWithLayer({
         effect: Effect.flatMap(AssetCanonicalizationService, (service) =>
           service.canonicalizeProviderAssetFromCoinGecko({
             providerAssetRowId,
@@ -857,28 +959,624 @@ describe("AssetCanonicalizationServiceLive", () => {
         ).pipe(Effect.result),
         layer,
       })
-    )
-    const after = await countCanonicalRows()
+      const after = yield* Effect.promise(() => countCanonicalRows())
 
-    expect(result._tag).toBe("Failure")
-    if (result._tag === "Failure") {
-      expect(result.failure).toMatchObject({
-        _tag: "AssetCanonicalizationProviderError",
-        message: "CoinGecko unavailable",
-      })
-    }
-    expect(after).toEqual(before)
-    expect(Option.isNone(await Effect.runPromise(Deferred.poll(transactionEntered)))).toBe(true)
-  })
+      expect(result._tag).toBe("Failure")
+      if (result._tag === "Failure") {
+        expect(result.failure).toMatchObject({
+          _tag: "AssetCanonicalizationProviderError",
+          message: "CoinGecko unavailable",
+        })
+      }
+      expect(after).toEqual(before)
+      expect(Option.isNone(yield* Deferred.poll(transactionEntered))).toBe(true)
+    })
+  )
 
-  it.each(["metadata", "observations"] as const)(
+  it.effect.each(["metadata", "observations"] as const)(
     "rejects CoinGecko approval when provider %s change during resolution",
-    async (changedEvidence) => {
-      const providerAssetRowId = await seedObservedPendingProviderAsset({
-        providerAssetId: `coingecko-stale-${changedEvidence}`,
+    (changedEvidence) =>
+      Effect.gen(function* () {
+        const providerAssetRowId = yield* Effect.promise(() =>
+          seedObservedPendingProviderAsset({
+            providerAssetId: `coingecko-stale-${changedEvidence}`,
+          })
+        )
+        const searchStarted = yield* Deferred.make<void>()
+        const releaseSearch = yield* Deferred.make<void>()
+        const coinGeckoClient = CoinGeckoClient.of({
+          searchCoins: () =>
+            Deferred.succeed(searchStarted, undefined).pipe(
+              Effect.andThen(Deferred.await(releaseSearch)),
+              Effect.as([{ id: "ethereum", name: "Bitcoin", symbol: "btc" }])
+            ),
+          getCoin: () =>
+            Effect.succeed({
+              id: "ethereum",
+              symbol: "eth",
+              name: "Ethereum",
+              asset_platform_id: null,
+              platforms: {},
+              detail_platforms: {},
+            }),
+          listMarkets: () => Effect.succeed([]),
+        })
+        const layer = AssetCanonicalizationServiceLive.pipe(
+          Layer.provide(RepositoryLayer),
+          Layer.provide(Layer.succeed(CoinGeckoClient, coinGeckoClient))
+        )
+        const before = yield* Effect.promise(() => countCanonicalRows())
+        const canonicalization = yield* Effect.forkChild(
+          context.runWithLayer({
+            effect: Effect.flatMap(AssetCanonicalizationService, (service) =>
+              service.canonicalizeProviderAssetFromCoinGecko({
+                providerAssetRowId,
+                reviewerNotes: "Reject stale provider evidence.",
+              })
+            ).pipe(Effect.result),
+            layer,
+          })
+        )
+
+        yield* Deferred.await(searchStarted)
+        yield* Effect.promise(() =>
+          context.runPg(
+            Effect.gen(function* () {
+              const db = yield* drizzle
+              if (changedEvidence === "metadata") {
+                yield* db
+                  .update(schema.providerAssets)
+                  .set({
+                    retrievedAt: DateTime.toDateUtc(
+                      DateTime.makeUnsafe("2026-08-16T10:00:00.000Z")
+                    ),
+                  })
+                  .where(eq(schema.providerAssets.id, providerAssetRowId))
+              } else {
+                yield* db
+                  .update(schema.providerTransfers)
+                  .set({ observedDecimals: 17 })
+                  .where(eq(schema.providerTransfers.providerAssetId, providerAssetRowId))
+              }
+            })
+          )
+        )
+        yield* Deferred.succeed(releaseSearch, undefined)
+        const result = yield* Fiber.join(canonicalization)
+        const after = yield* Effect.promise(() => countCanonicalRows())
+        const state = yield* Effect.promise(() =>
+          context.runPg(
+            Effect.gen(function* () {
+              const db = yield* drizzle
+              const [mapping] = yield* db
+                .select({ status: schema.providerAssetMappings.mappingStatus })
+                .from(schema.providerAssetMappings)
+                .where(eq(schema.providerAssetMappings.providerAssetRowId, providerAssetRowId))
+              const jobs = yield* db
+                .select({ id: schema.processingJobs.id })
+                .from(schema.processingJobs)
+              return { jobs, mapping }
+            })
+          )
+        )
+
+        expect(result._tag).toBe("Failure")
+        if (result._tag === "Failure") {
+          expect(result.failure).toMatchObject({
+            _tag: "AssetCanonicalizationInternalError",
+            message: "Provider asset evidence changed before canonical approval.",
+          })
+        }
+        expect(after).toEqual(before)
+        expect(state.mapping?.status).toBe("pending_review")
+        expect(state.jobs).toHaveLength(0)
       })
-      const searchStarted = await Effect.runPromise(Deferred.make<void>())
-      const releaseSearch = await Effect.runPromise(Deferred.make<void>())
+  )
+
+  it.effect("blocks a chainless pending asset before CoinGecko can create canonical rows", () =>
+    Effect.gen(function* () {
+      const providerAssetRowId = yield* Effect.promise(() =>
+        context.runPg(
+          Effect.gen(function* () {
+            const db = yield* drizzle
+            const [providerAsset] = yield* db
+              .insert(schema.providerAssets)
+              .values({
+                provider: "coinbase",
+                providerAssetId: "btc-chainless-pending",
+                currencyCode: "BTC",
+                name: "Bitcoin",
+                exponent: 8,
+                providerType: "crypto",
+                retrievedAt: DateTime.toDateUtc(DateTime.makeUnsafe("2026-08-15T10:00:00.000Z")),
+              })
+              .returning({ id: schema.providerAssets.id })
+            if (providerAsset === undefined) {
+              return yield* Effect.die("Failed to seed chainless provider asset")
+            }
+            yield* db.insert(schema.providerAssetMappings).values({
+              providerAssetRowId: providerAsset.id,
+              mappingKind: "asset",
+              mappingStatus: "pending_review",
+            })
+            return providerAsset.id
+          })
+        )
+      )
+      const before = yield* Effect.promise(() => countCanonicalRows())
+      const result = yield* Effect.promise(() =>
+        runService(
+          Effect.flatMap(AssetCanonicalizationService, (service) =>
+            service.canonicalizeProviderAssetFromCoinGecko({
+              providerAssetRowId,
+              reviewerNotes: "Symbol and name only.",
+            })
+          ).pipe(Effect.result)
+        )
+      )
+      const after = yield* Effect.promise(() => countCanonicalRows())
+
+      expect(result._tag).toBe("Failure")
+      if (result._tag === "Failure") {
+        expect(result.failure).toMatchObject({
+          _tag: "AssetCanonicalizationBadRequestError",
+          message:
+            "Provider assets without exact on-chain identity require a reviewed canonical target.",
+        })
+      }
+      expect(after).toEqual(before)
+    })
+  )
+
+  it.live("reports a concurrent manual rejection as a decision conflict", () =>
+    Effect.gen(function* () {
+      const fixture = yield* Effect.promise(() =>
+        context.runPg(
+          Effect.gen(function* () {
+            const db = yield* drizzle
+            const [bitcoinRepresentation] = yield* db
+              .select({
+                id: schema.assetRepresentations.id,
+                blockchainId: schema.assetRepresentations.blockchainId,
+              })
+              .from(schema.assetRepresentations)
+              .where(
+                and(
+                  eq(schema.assetRepresentations.assetId, TEST_BTC_ASSET_ID),
+                  eq(schema.assetRepresentations.type, "token")
+                )
+              )
+            const [providerAsset] = yield* db
+              .insert(schema.providerAssets)
+              .values({
+                provider: "coinbase",
+                providerAssetId: "btc-concurrent-rejection",
+                currencyCode: "BTC",
+                name: "Bitcoin",
+                exponent: 8,
+                providerType: "crypto",
+                retrievedAt: DateTime.toDateUtc(DateTime.makeUnsafe("2026-08-15T10:30:00.000Z")),
+              })
+              .returning({ id: schema.providerAssets.id })
+            const [transaction] = yield* db
+              .insert(schema.transactions)
+              .values({
+                sourceId: TEST_SOURCE_ID,
+                externalId: "btc-concurrent-rejection-transaction",
+                timestamp: DateTime.toDateUtc(DateTime.makeUnsafe("2026-08-15T10:30:00.000Z")),
+                principalId: TEST_PRINCIPAL_ID,
+              })
+              .returning({ id: schema.transactions.id })
+            if (
+              bitcoinRepresentation === undefined ||
+              providerAsset === undefined ||
+              transaction === undefined
+            ) {
+              return yield* Effect.die("Failed to seed concurrent rejection fixture")
+            }
+            yield* db.insert(schema.providerAssetMappings).values({
+              providerAssetRowId: providerAsset.id,
+              mappingKind: "asset",
+              mappingStatus: "pending_review",
+            })
+            yield* db.insert(schema.providerTransfers).values({
+              sourceId: TEST_SOURCE_ID,
+              transactionId: transaction.id,
+              externalId: "btc-concurrent-rejection-transfer",
+              providerAssetId: providerAsset.id,
+              timestamp: DateTime.toDateUtc(DateTime.makeUnsafe("2026-08-15T10:30:00.000Z")),
+              direction: "outbound",
+              processingMode: "accounting_and_evidence",
+              fromAccountRef: "coinbase-account-1",
+              toAddress: "bc1qconcurrentrejection00000000000000000000",
+              amount: "0.1",
+              observedBlockchainId: bitcoinRepresentation.blockchainId,
+              observedRepresentationType: "token",
+              observedContractAddress: "sync-engine-btc-fixture",
+              observedDecimals: 8,
+              metadata: {},
+            })
+            return {
+              assetRepresentationId: bitcoinRepresentation.id,
+              providerAssetRowId: providerAsset.id,
+            }
+          })
+        )
+      )
+      const lockAcquired = yield* Deferred.make<void>()
+      const releaseLock = yield* Deferred.make<void>()
+      const lockProviderAsset = context.runPg(
+        Effect.gen(function* () {
+          const db = yield* drizzle
+          yield* db.transaction((tx) =>
+            Effect.gen(function* () {
+              yield* tx
+                .select({ id: schema.providerAssets.id })
+                .from(schema.providerAssets)
+                .where(eq(schema.providerAssets.id, fixture.providerAssetRowId))
+                .for("no key update")
+              yield* Deferred.succeed(lockAcquired, undefined)
+              yield* Deferred.await(releaseLock)
+            })
+          )
+        })
+      )
+      yield* Deferred.await(lockAcquired)
+      const approval = runService(
+        Effect.flatMap(AssetCanonicalizationService, (service) =>
+          service.approveProviderAssetMapping({
+            providerAssetRowId: fixture.providerAssetRowId,
+            canonicalAssetId: TEST_BTC_ASSET_ID,
+            assetRepresentationId: fixture.assetRepresentationId,
+            reviewerNotes: "Concurrent rejection test.",
+          })
+        ).pipe(Effect.result)
+      )
+      const earlyOutcome = yield* Effect.race(
+        Effect.promise(() => approval.then(() => "completed" as const)),
+        Effect.sleep("50 millis").pipe(Effect.as("blocked" as const))
+      )
+      yield* Effect.promise(() =>
+        context.runPg(
+          Effect.gen(function* () {
+            const db = yield* drizzle
+            yield* db
+              .update(schema.providerAssetMappings)
+              .set({ mappingStatus: "rejected" })
+              .where(
+                eq(schema.providerAssetMappings.providerAssetRowId, fixture.providerAssetRowId)
+              )
+          })
+        )
+      )
+      yield* Deferred.succeed(releaseLock, undefined)
+      const [result] = yield* Effect.promise(() => Promise.all([approval, lockProviderAsset]))
+
+      expect(earlyOutcome).toBe("blocked")
+      expect(result._tag).toBe("Failure")
+      if (result._tag === "Failure") {
+        expect(result.failure._tag).toBe("AssetCanonicalizationBadRequestError")
+        expect(result.failure.message).toBe(
+          "Provider asset mapping cannot be approved from its current state."
+        )
+      }
+    })
+  )
+
+  it.live("revalidates the canonical representation after a concurrent target update", () =>
+    Effect.gen(function* () {
+      const fixture = yield* Effect.promise(() =>
+        context.runPg(
+          Effect.gen(function* () {
+            const db = yield* drizzle
+            const [bitcoinRepresentation] = yield* db
+              .select({
+                id: schema.assetRepresentations.id,
+                blockchainId: schema.assetRepresentations.blockchainId,
+              })
+              .from(schema.assetRepresentations)
+              .where(eq(schema.assetRepresentations.id, TEST_BTC_REPRESENTATION_ID))
+            const [providerAsset] = yield* db
+              .insert(schema.providerAssets)
+              .values({
+                provider: "coinbase",
+                providerAssetId: "btc-concurrent-target-update",
+                currencyCode: "BTC",
+                name: "Bitcoin",
+                exponent: 8,
+                providerType: "crypto",
+                retrievedAt: DateTime.toDateUtc(DateTime.makeUnsafe("2026-08-16T11:00:00.000Z")),
+              })
+              .returning({ id: schema.providerAssets.id })
+            const [transaction] = yield* db
+              .insert(schema.transactions)
+              .values({
+                sourceId: TEST_SOURCE_ID,
+                externalId: "btc-concurrent-target-update-transaction",
+                timestamp: DateTime.toDateUtc(DateTime.makeUnsafe("2026-08-16T11:00:00.000Z")),
+                principalId: TEST_PRINCIPAL_ID,
+              })
+              .returning({ id: schema.transactions.id })
+            if (
+              bitcoinRepresentation === undefined ||
+              providerAsset === undefined ||
+              transaction === undefined
+            ) {
+              return yield* Effect.die("Failed to seed concurrent target update fixture")
+            }
+
+            yield* db.insert(schema.providerAssetMappings).values({
+              providerAssetRowId: providerAsset.id,
+              mappingKind: "asset",
+              mappingStatus: "pending_review",
+            })
+            yield* db.insert(schema.providerTransfers).values({
+              sourceId: TEST_SOURCE_ID,
+              transactionId: transaction.id,
+              externalId: "btc-concurrent-target-update-transfer",
+              providerAssetId: providerAsset.id,
+              timestamp: DateTime.toDateUtc(DateTime.makeUnsafe("2026-08-16T11:00:00.000Z")),
+              direction: "outbound",
+              processingMode: "accounting_and_evidence",
+              fromAccountRef: "coinbase-account-1",
+              toAddress: "bc1qconcurrenttargetupdate000000000000000000",
+              amount: "0.1",
+              observedBlockchainId: bitcoinRepresentation.blockchainId,
+              observedRepresentationType: "token",
+              observedContractAddress: "sync-engine-btc-fixture",
+              observedDecimals: 8,
+              metadata: {},
+            })
+
+            return { providerAssetRowId: providerAsset.id }
+          })
+        )
+      )
+      const targetUpdated = yield* Deferred.make<void>()
+      const releaseTargetUpdate = yield* Deferred.make<void>()
+      const concurrentTargetUpdate = context.runPg(
+        Effect.gen(function* () {
+          const db = yield* drizzle
+          yield* db.transaction((tx) =>
+            Effect.gen(function* () {
+              yield* tx
+                .update(schema.assetRepresentations)
+                .set({ decimals: 7 })
+                .where(eq(schema.assetRepresentations.id, TEST_BTC_REPRESENTATION_ID))
+              yield* Deferred.succeed(targetUpdated, undefined)
+              yield* Deferred.await(releaseTargetUpdate)
+            })
+          )
+        })
+      )
+      yield* Deferred.await(targetUpdated)
+
+      const approval = runService(
+        Effect.flatMap(AssetCanonicalizationService, (service) =>
+          service.approveProviderAssetMapping({
+            providerAssetRowId: fixture.providerAssetRowId,
+            canonicalAssetId: TEST_BTC_ASSET_ID,
+            assetRepresentationId: TEST_BTC_REPRESENTATION_ID,
+            reviewerNotes: "Reject a stale canonical representation.",
+          })
+        ).pipe(Effect.result)
+      )
+      const earlyOutcome = yield* Effect.race(
+        Effect.promise(() => approval.then(() => "completed" as const)),
+        Effect.sleep("50 millis").pipe(Effect.as("blocked" as const))
+      )
+      yield* Deferred.succeed(releaseTargetUpdate, undefined)
+      const [result] = yield* Effect.promise(() => Promise.all([approval, concurrentTargetUpdate]))
+      const state = yield* Effect.promise(() =>
+        context.runPg(
+          Effect.gen(function* () {
+            const db = yield* drizzle
+            const [mapping] = yield* db
+              .select({ status: schema.providerAssetMappings.mappingStatus })
+              .from(schema.providerAssetMappings)
+              .where(
+                eq(schema.providerAssetMappings.providerAssetRowId, fixture.providerAssetRowId)
+              )
+            const jobs = yield* db
+              .select({ id: schema.processingJobs.id })
+              .from(schema.processingJobs)
+            return { jobs, mapping }
+          })
+        )
+      )
+
+      expect(earlyOutcome).toBe("blocked")
+      expect(result._tag).toBe("Failure")
+      if (result._tag === "Failure") {
+        expect(result.failure).toMatchObject({
+          _tag: "AssetCanonicalizationBadRequestError",
+          message: "Selected representation does not match the observed on-chain identity.",
+        })
+      }
+      expect(state.mapping?.status).toBe("pending_review")
+      expect(state.jobs).toHaveLength(0)
+    })
+  )
+
+  it.effect("rejects an approved CoinGecko target conflict before canonical writes", () =>
+    Effect.gen(function* () {
+      const fixture = yield* Effect.promise(() =>
+        context.runPg(
+          Effect.gen(function* () {
+            const db = yield* drizzle
+            const [bitcoinRepresentation] = yield* db
+              .select({
+                id: schema.assetRepresentations.id,
+                blockchainId: schema.assetRepresentations.blockchainId,
+              })
+              .from(schema.assetRepresentations)
+              .where(eq(schema.assetRepresentations.assetId, TEST_BTC_ASSET_ID))
+            const [providerAsset] = yield* db
+              .insert(schema.providerAssets)
+              .values({
+                provider: "coinbase",
+                providerAssetId: "btc-approved-conflict",
+                currencyCode: "BTC",
+                name: "Bitcoin",
+                exponent: 8,
+                providerType: "crypto",
+                retrievedAt: DateTime.toDateUtc(DateTime.makeUnsafe("2026-08-15T11:00:00.000Z")),
+              })
+              .returning({ id: schema.providerAssets.id })
+            const [transaction] = yield* db
+              .insert(schema.transactions)
+              .values({
+                sourceId: TEST_SOURCE_ID,
+                externalId: "btc-approved-conflict-transaction",
+                timestamp: DateTime.toDateUtc(DateTime.makeUnsafe("2026-08-15T12:00:00.000Z")),
+                principalId: TEST_PRINCIPAL_ID,
+              })
+              .returning({ id: schema.transactions.id })
+            if (
+              bitcoinRepresentation === undefined ||
+              providerAsset === undefined ||
+              transaction === undefined
+            ) {
+              return yield* Effect.die("Failed to seed approved conflict fixture")
+            }
+            yield* db.insert(schema.providerAssetMappings).values({
+              providerAssetRowId: providerAsset.id,
+              mappingKind: "asset",
+              canonicalAssetId: TEST_BTC_ASSET_ID,
+              assetRepresentationId: bitcoinRepresentation.id,
+              mappingStatus: "approved",
+            })
+            yield* db.insert(schema.providerTransfers).values({
+              sourceId: TEST_SOURCE_ID,
+              transactionId: transaction.id,
+              externalId: "btc-approved-conflict-transfer",
+              providerAssetId: providerAsset.id,
+              timestamp: DateTime.toDateUtc(DateTime.makeUnsafe("2026-08-15T12:00:00.000Z")),
+              direction: "outbound",
+              processingMode: "accounting_and_evidence",
+              fromAccountRef: "coinbase-account-1",
+              toAddress: "bc1qcoingeckoconflict0000000000000000000000",
+              amount: "0.1",
+              observedBlockchainId: bitcoinRepresentation.blockchainId,
+              observedRepresentationType: "native",
+              observedDecimals: 8,
+              metadata: {},
+            })
+            return { providerAssetRowId: providerAsset.id }
+          })
+        )
+      )
+      const before = yield* Effect.promise(() => countCanonicalRows())
+      const result = yield* Effect.promise(() =>
+        runService(
+          Effect.flatMap(AssetCanonicalizationService, (service) =>
+            service.canonicalizeProviderAssetFromCoinGecko({
+              providerAssetRowId: fixture.providerAssetRowId,
+              reviewerNotes: "Conflicting CoinGecko target.",
+            })
+          ).pipe(Effect.result)
+        )
+      )
+      const after = yield* Effect.promise(() => countCanonicalRows())
+      const mapping = yield* Effect.promise(() =>
+        context.runPg(
+          Effect.gen(function* () {
+            const db = yield* drizzle
+            const [row] = yield* db
+              .select({ canonicalAssetId: schema.providerAssetMappings.canonicalAssetId })
+              .from(schema.providerAssetMappings)
+              .where(
+                eq(schema.providerAssetMappings.providerAssetRowId, fixture.providerAssetRowId)
+              )
+            return row
+          })
+        )
+      )
+
+      expect(result._tag).toBe("Failure")
+      if (result._tag === "Failure") {
+        expect(result.failure).toMatchObject({
+          _tag: "AssetCanonicalizationBadRequestError",
+          message: "Provider asset mapping is already approved for a different target.",
+        })
+      }
+      expect(after).toEqual(before)
+      expect(mapping?.canonicalAssetId).toBe(TEST_BTC_ASSET_ID)
+    })
+  )
+
+  it.effect("rejects a concurrent CoinGecko winner before canonical writes", () =>
+    Effect.gen(function* () {
+      const fixture = yield* Effect.promise(() =>
+        context.runPg(
+          Effect.gen(function* () {
+            const db = yield* drizzle
+            const [bitcoinRepresentation] = yield* db
+              .select({
+                id: schema.assetRepresentations.id,
+                blockchainId: schema.assetRepresentations.blockchainId,
+              })
+              .from(schema.assetRepresentations)
+              .where(eq(schema.assetRepresentations.assetId, TEST_BTC_ASSET_ID))
+            const [providerAsset] = yield* db
+              .insert(schema.providerAssets)
+              .values({
+                provider: "coinbase",
+                providerAssetId: "btc-concurrent-conflict",
+                currencyCode: "BTC",
+                name: "Bitcoin",
+                exponent: 18,
+                providerType: "crypto",
+                retrievedAt: DateTime.toDateUtc(DateTime.makeUnsafe("2026-08-15T13:00:00.000Z")),
+              })
+              .returning({ id: schema.providerAssets.id })
+            const [transaction] = yield* db
+              .insert(schema.transactions)
+              .values({
+                sourceId: TEST_SOURCE_ID,
+                externalId: "btc-concurrent-conflict-transaction",
+                timestamp: DateTime.toDateUtc(DateTime.makeUnsafe("2026-08-15T13:00:00.000Z")),
+                principalId: TEST_PRINCIPAL_ID,
+              })
+              .returning({ id: schema.transactions.id })
+            if (
+              bitcoinRepresentation === undefined ||
+              providerAsset === undefined ||
+              transaction === undefined
+            ) {
+              return yield* Effect.die("Failed to seed concurrent conflict fixture")
+            }
+            yield* db.insert(schema.providerAssetMappings).values({
+              providerAssetRowId: providerAsset.id,
+              mappingKind: "asset",
+              mappingStatus: "pending_review",
+            })
+            yield* db.insert(schema.providerTransfers).values({
+              sourceId: TEST_SOURCE_ID,
+              transactionId: transaction.id,
+              externalId: "btc-concurrent-conflict-transfer",
+              providerAssetId: providerAsset.id,
+              timestamp: DateTime.toDateUtc(DateTime.makeUnsafe("2026-08-15T13:00:00.000Z")),
+              direction: "outbound",
+              processingMode: "accounting_and_evidence",
+              fromAccountRef: "coinbase-account-1",
+              toAddress: "0x1111111111111111111111111111111111111111",
+              amount: "0.1",
+              observedBlockchainId: bitcoinRepresentation.blockchainId,
+              observedRepresentationType: "native",
+              observedDecimals: 8,
+              metadata: {},
+            })
+            return {
+              bitcoinRepresentationId: bitcoinRepresentation.id,
+              providerAssetRowId: providerAsset.id,
+            }
+          })
+        )
+      )
+      const before = yield* Effect.promise(() => countCanonicalRows())
+      const searchStarted = yield* Deferred.make<void>()
+      const releaseSearch = yield* Deferred.make<void>()
       const coinGeckoClient = CoinGeckoClient.of({
         searchCoins: () =>
           Deferred.succeed(searchStarted, undefined).pipe(
@@ -900,602 +1598,63 @@ describe("AssetCanonicalizationServiceLive", () => {
         Layer.provide(RepositoryLayer),
         Layer.provide(Layer.succeed(CoinGeckoClient, coinGeckoClient))
       )
-      const before = await countCanonicalRows()
-      const canonicalization = Effect.runPromise(
+      const canonicalization = yield* Effect.forkChild(
         context.runWithLayer({
           effect: Effect.flatMap(AssetCanonicalizationService, (service) =>
             service.canonicalizeProviderAssetFromCoinGecko({
-              providerAssetRowId,
-              reviewerNotes: "Reject stale provider evidence.",
+              providerAssetRowId: fixture.providerAssetRowId,
+              reviewerNotes: "Losing concurrent target.",
             })
           ).pipe(Effect.result),
           layer,
         })
       )
 
-      await Effect.runPromise(Deferred.await(searchStarted))
-      await context.runPg(
-        Effect.gen(function* () {
-          const db = yield* drizzle
-          if (changedEvidence === "metadata") {
+      yield* Deferred.await(searchStarted)
+      yield* Effect.promise(() =>
+        context.runPg(
+          Effect.gen(function* () {
+            const db = yield* drizzle
             yield* db
-              .update(schema.providerAssets)
-              .set({ retrievedAt: new Date("2026-08-16T10:00:00.000Z") })
-              .where(eq(schema.providerAssets.id, providerAssetRowId))
-          } else {
-            yield* db
-              .update(schema.providerTransfers)
-              .set({ observedDecimals: 17 })
-              .where(eq(schema.providerTransfers.providerAssetId, providerAssetRowId))
-          }
-        })
+              .update(schema.providerAssetMappings)
+              .set({
+                canonicalAssetId: TEST_BTC_ASSET_ID,
+                assetRepresentationId: fixture.bitcoinRepresentationId,
+                mappingStatus: "approved",
+              })
+              .where(
+                eq(schema.providerAssetMappings.providerAssetRowId, fixture.providerAssetRowId)
+              )
+          })
+        )
       )
-      await Effect.runPromise(Deferred.succeed(releaseSearch, undefined))
-      const result = await canonicalization
-      const after = await countCanonicalRows()
-      const state = await context.runPg(
-        Effect.gen(function* () {
-          const db = yield* drizzle
-          const [mapping] = yield* db
-            .select({ status: schema.providerAssetMappings.mappingStatus })
-            .from(schema.providerAssetMappings)
-            .where(eq(schema.providerAssetMappings.providerAssetRowId, providerAssetRowId))
-          const jobs = yield* db
-            .select({ id: schema.processingJobs.id })
-            .from(schema.processingJobs)
-          return { jobs, mapping }
-        })
-      )
+      yield* Deferred.succeed(releaseSearch, undefined)
+      const result = yield* Fiber.join(canonicalization)
 
+      const after = yield* Effect.promise(() => countCanonicalRows())
+      const mapping = yield* Effect.promise(() =>
+        context.runPg(
+          Effect.gen(function* () {
+            const db = yield* drizzle
+            const [row] = yield* db
+              .select({ canonicalAssetId: schema.providerAssetMappings.canonicalAssetId })
+              .from(schema.providerAssetMappings)
+              .where(
+                eq(schema.providerAssetMappings.providerAssetRowId, fixture.providerAssetRowId)
+              )
+            return row
+          })
+        )
+      )
       expect(result._tag).toBe("Failure")
       if (result._tag === "Failure") {
         expect(result.failure).toMatchObject({
-          _tag: "AssetCanonicalizationInternalError",
-          message: "Provider asset evidence changed before canonical approval.",
+          _tag: "AssetCanonicalizationBadRequestError",
+          message: "Provider asset mapping is already approved for a different target.",
         })
       }
       expect(after).toEqual(before)
-      expect(state.mapping?.status).toBe("pending_review")
-      expect(state.jobs).toHaveLength(0)
-    }
-  )
-
-  it("blocks a chainless pending asset before CoinGecko can create canonical rows", async () => {
-    const providerAssetRowId = await context.runPg(
-      Effect.gen(function* () {
-        const db = yield* drizzle
-        const [providerAsset] = yield* db
-          .insert(schema.providerAssets)
-          .values({
-            provider: "coinbase",
-            providerAssetId: "btc-chainless-pending",
-            currencyCode: "BTC",
-            name: "Bitcoin",
-            exponent: 8,
-            providerType: "crypto",
-            retrievedAt: new Date("2026-08-15T10:00:00.000Z"),
-          })
-          .returning({ id: schema.providerAssets.id })
-        if (providerAsset === undefined) {
-          return yield* Effect.die("Failed to seed chainless provider asset")
-        }
-        yield* db.insert(schema.providerAssetMappings).values({
-          providerAssetRowId: providerAsset.id,
-          mappingKind: "asset",
-          mappingStatus: "pending_review",
-        })
-        return providerAsset.id
-      })
-    )
-    const before = await countCanonicalRows()
-    const result = await runService(
-      Effect.flatMap(AssetCanonicalizationService, (service) =>
-        service.canonicalizeProviderAssetFromCoinGecko({
-          providerAssetRowId,
-          reviewerNotes: "Symbol and name only.",
-        })
-      ).pipe(Effect.result)
-    )
-    const after = await countCanonicalRows()
-
-    expect(result._tag).toBe("Failure")
-    if (result._tag === "Failure") {
-      expect(result.failure).toMatchObject({
-        _tag: "AssetCanonicalizationBadRequestError",
-        message:
-          "Provider assets without exact on-chain identity require a reviewed canonical target.",
-      })
-    }
-    expect(after).toEqual(before)
-  })
-
-  it("reports a concurrent manual rejection as a decision conflict", async () => {
-    const fixture = await context.runPg(
-      Effect.gen(function* () {
-        const db = yield* drizzle
-        const [bitcoinRepresentation] = yield* db
-          .select({
-            id: schema.assetRepresentations.id,
-            blockchainId: schema.assetRepresentations.blockchainId,
-          })
-          .from(schema.assetRepresentations)
-          .where(
-            and(
-              eq(schema.assetRepresentations.assetId, TEST_BTC_ASSET_ID),
-              eq(schema.assetRepresentations.type, "token")
-            )
-          )
-        const [providerAsset] = yield* db
-          .insert(schema.providerAssets)
-          .values({
-            provider: "coinbase",
-            providerAssetId: "btc-concurrent-rejection",
-            currencyCode: "BTC",
-            name: "Bitcoin",
-            exponent: 8,
-            providerType: "crypto",
-            retrievedAt: new Date("2026-08-15T10:30:00.000Z"),
-          })
-          .returning({ id: schema.providerAssets.id })
-        const [transaction] = yield* db
-          .insert(schema.transactions)
-          .values({
-            sourceId: TEST_SOURCE_ID,
-            externalId: "btc-concurrent-rejection-transaction",
-            timestamp: new Date("2026-08-15T10:30:00.000Z"),
-            principalId: TEST_PRINCIPAL_ID,
-          })
-          .returning({ id: schema.transactions.id })
-        if (
-          bitcoinRepresentation === undefined ||
-          providerAsset === undefined ||
-          transaction === undefined
-        ) {
-          return yield* Effect.die("Failed to seed concurrent rejection fixture")
-        }
-        yield* db.insert(schema.providerAssetMappings).values({
-          providerAssetRowId: providerAsset.id,
-          mappingKind: "asset",
-          mappingStatus: "pending_review",
-        })
-        yield* db.insert(schema.providerTransfers).values({
-          sourceId: TEST_SOURCE_ID,
-          transactionId: transaction.id,
-          externalId: "btc-concurrent-rejection-transfer",
-          providerAssetId: providerAsset.id,
-          timestamp: new Date("2026-08-15T10:30:00.000Z"),
-          direction: "outbound",
-          processingMode: "accounting_and_evidence",
-          fromAccountRef: "coinbase-account-1",
-          toAddress: "bc1qconcurrentrejection00000000000000000000",
-          amount: "0.1",
-          observedBlockchainId: bitcoinRepresentation.blockchainId,
-          observedRepresentationType: "token",
-          observedContractAddress: "sync-engine-btc-fixture",
-          observedDecimals: 8,
-          metadata: {},
-        })
-        return {
-          assetRepresentationId: bitcoinRepresentation.id,
-          providerAssetRowId: providerAsset.id,
-        }
-      })
-    )
-    const lockAcquired = await Effect.runPromise(Deferred.make<void>())
-    const releaseLock = await Effect.runPromise(Deferred.make<void>())
-    const lockProviderAsset = context.runPg(
-      Effect.gen(function* () {
-        const db = yield* drizzle
-        yield* db.transaction((tx) =>
-          Effect.gen(function* () {
-            yield* tx
-              .select({ id: schema.providerAssets.id })
-              .from(schema.providerAssets)
-              .where(eq(schema.providerAssets.id, fixture.providerAssetRowId))
-              .for("no key update")
-            yield* Deferred.succeed(lockAcquired, undefined)
-            yield* Deferred.await(releaseLock)
-          })
-        )
-      })
-    )
-    await Effect.runPromise(Deferred.await(lockAcquired))
-    const approval = runService(
-      Effect.flatMap(AssetCanonicalizationService, (service) =>
-        service.approveProviderAssetMapping({
-          providerAssetRowId: fixture.providerAssetRowId,
-          canonicalAssetId: TEST_BTC_ASSET_ID,
-          assetRepresentationId: fixture.assetRepresentationId,
-          reviewerNotes: "Concurrent rejection test.",
-        })
-      ).pipe(Effect.result)
-    )
-    const earlyOutcome = await Promise.race([
-      approval.then(() => "completed" as const),
-      new Promise<"blocked">((resolve) => setTimeout(() => resolve("blocked"), 50)),
-    ])
-    await context.runPg(
-      Effect.gen(function* () {
-        const db = yield* drizzle
-        yield* db
-          .update(schema.providerAssetMappings)
-          .set({ mappingStatus: "rejected" })
-          .where(eq(schema.providerAssetMappings.providerAssetRowId, fixture.providerAssetRowId))
-      })
-    )
-    await Effect.runPromise(Deferred.succeed(releaseLock, undefined))
-    const [result] = await Promise.all([approval, lockProviderAsset])
-
-    expect(earlyOutcome).toBe("blocked")
-    expect(result._tag).toBe("Failure")
-    if (result._tag === "Failure") {
-      expect(result.failure._tag).toBe("AssetCanonicalizationBadRequestError")
-      expect(result.failure.message).toBe(
-        "Provider asset mapping cannot be approved from its current state."
-      )
-    }
-  })
-
-  it("revalidates the canonical representation after a concurrent target update", async () => {
-    const fixture = await context.runPg(
-      Effect.gen(function* () {
-        const db = yield* drizzle
-        const [bitcoinRepresentation] = yield* db
-          .select({
-            id: schema.assetRepresentations.id,
-            blockchainId: schema.assetRepresentations.blockchainId,
-          })
-          .from(schema.assetRepresentations)
-          .where(eq(schema.assetRepresentations.id, TEST_BTC_REPRESENTATION_ID))
-        const [providerAsset] = yield* db
-          .insert(schema.providerAssets)
-          .values({
-            provider: "coinbase",
-            providerAssetId: "btc-concurrent-target-update",
-            currencyCode: "BTC",
-            name: "Bitcoin",
-            exponent: 8,
-            providerType: "crypto",
-            retrievedAt: new Date("2026-08-16T11:00:00.000Z"),
-          })
-          .returning({ id: schema.providerAssets.id })
-        const [transaction] = yield* db
-          .insert(schema.transactions)
-          .values({
-            sourceId: TEST_SOURCE_ID,
-            externalId: "btc-concurrent-target-update-transaction",
-            timestamp: new Date("2026-08-16T11:00:00.000Z"),
-            principalId: TEST_PRINCIPAL_ID,
-          })
-          .returning({ id: schema.transactions.id })
-        if (
-          bitcoinRepresentation === undefined ||
-          providerAsset === undefined ||
-          transaction === undefined
-        ) {
-          return yield* Effect.die("Failed to seed concurrent target update fixture")
-        }
-
-        yield* db.insert(schema.providerAssetMappings).values({
-          providerAssetRowId: providerAsset.id,
-          mappingKind: "asset",
-          mappingStatus: "pending_review",
-        })
-        yield* db.insert(schema.providerTransfers).values({
-          sourceId: TEST_SOURCE_ID,
-          transactionId: transaction.id,
-          externalId: "btc-concurrent-target-update-transfer",
-          providerAssetId: providerAsset.id,
-          timestamp: new Date("2026-08-16T11:00:00.000Z"),
-          direction: "outbound",
-          processingMode: "accounting_and_evidence",
-          fromAccountRef: "coinbase-account-1",
-          toAddress: "bc1qconcurrenttargetupdate000000000000000000",
-          amount: "0.1",
-          observedBlockchainId: bitcoinRepresentation.blockchainId,
-          observedRepresentationType: "token",
-          observedContractAddress: "sync-engine-btc-fixture",
-          observedDecimals: 8,
-          metadata: {},
-        })
-
-        return { providerAssetRowId: providerAsset.id }
-      })
-    )
-    const targetUpdated = await Effect.runPromise(Deferred.make<void>())
-    const releaseTargetUpdate = await Effect.runPromise(Deferred.make<void>())
-    const concurrentTargetUpdate = context.runPg(
-      Effect.gen(function* () {
-        const db = yield* drizzle
-        yield* db.transaction((tx) =>
-          Effect.gen(function* () {
-            yield* tx
-              .update(schema.assetRepresentations)
-              .set({ decimals: 7 })
-              .where(eq(schema.assetRepresentations.id, TEST_BTC_REPRESENTATION_ID))
-            yield* Deferred.succeed(targetUpdated, undefined)
-            yield* Deferred.await(releaseTargetUpdate)
-          })
-        )
-      })
-    )
-    await Effect.runPromise(Deferred.await(targetUpdated))
-
-    const approval = runService(
-      Effect.flatMap(AssetCanonicalizationService, (service) =>
-        service.approveProviderAssetMapping({
-          providerAssetRowId: fixture.providerAssetRowId,
-          canonicalAssetId: TEST_BTC_ASSET_ID,
-          assetRepresentationId: TEST_BTC_REPRESENTATION_ID,
-          reviewerNotes: "Reject a stale canonical representation.",
-        })
-      ).pipe(Effect.result)
-    )
-    const earlyOutcome = await Promise.race([
-      approval.then(() => "completed" as const),
-      new Promise<"blocked">((resolve) => setTimeout(() => resolve("blocked"), 50)),
-    ])
-    await Effect.runPromise(Deferred.succeed(releaseTargetUpdate, undefined))
-    const [result] = await Promise.all([approval, concurrentTargetUpdate])
-    const state = await context.runPg(
-      Effect.gen(function* () {
-        const db = yield* drizzle
-        const [mapping] = yield* db
-          .select({ status: schema.providerAssetMappings.mappingStatus })
-          .from(schema.providerAssetMappings)
-          .where(eq(schema.providerAssetMappings.providerAssetRowId, fixture.providerAssetRowId))
-        const jobs = yield* db.select({ id: schema.processingJobs.id }).from(schema.processingJobs)
-        return { jobs, mapping }
-      })
-    )
-
-    expect(earlyOutcome).toBe("blocked")
-    expect(result._tag).toBe("Failure")
-    if (result._tag === "Failure") {
-      expect(result.failure).toMatchObject({
-        _tag: "AssetCanonicalizationBadRequestError",
-        message: "Selected representation does not match the observed on-chain identity.",
-      })
-    }
-    expect(state.mapping?.status).toBe("pending_review")
-    expect(state.jobs).toHaveLength(0)
-  })
-
-  it("rejects an approved CoinGecko target conflict before canonical writes", async () => {
-    const fixture = await context.runPg(
-      Effect.gen(function* () {
-        const db = yield* drizzle
-        const [bitcoinRepresentation] = yield* db
-          .select({
-            id: schema.assetRepresentations.id,
-            blockchainId: schema.assetRepresentations.blockchainId,
-          })
-          .from(schema.assetRepresentations)
-          .where(eq(schema.assetRepresentations.assetId, TEST_BTC_ASSET_ID))
-        const [providerAsset] = yield* db
-          .insert(schema.providerAssets)
-          .values({
-            provider: "coinbase",
-            providerAssetId: "btc-approved-conflict",
-            currencyCode: "BTC",
-            name: "Bitcoin",
-            exponent: 8,
-            providerType: "crypto",
-            retrievedAt: new Date("2026-08-15T11:00:00.000Z"),
-          })
-          .returning({ id: schema.providerAssets.id })
-        const [transaction] = yield* db
-          .insert(schema.transactions)
-          .values({
-            sourceId: TEST_SOURCE_ID,
-            externalId: "btc-approved-conflict-transaction",
-            timestamp: new Date("2026-08-15T12:00:00.000Z"),
-            principalId: TEST_PRINCIPAL_ID,
-          })
-          .returning({ id: schema.transactions.id })
-        if (
-          bitcoinRepresentation === undefined ||
-          providerAsset === undefined ||
-          transaction === undefined
-        ) {
-          return yield* Effect.die("Failed to seed approved conflict fixture")
-        }
-        yield* db.insert(schema.providerAssetMappings).values({
-          providerAssetRowId: providerAsset.id,
-          mappingKind: "asset",
-          canonicalAssetId: TEST_BTC_ASSET_ID,
-          assetRepresentationId: bitcoinRepresentation.id,
-          mappingStatus: "approved",
-        })
-        yield* db.insert(schema.providerTransfers).values({
-          sourceId: TEST_SOURCE_ID,
-          transactionId: transaction.id,
-          externalId: "btc-approved-conflict-transfer",
-          providerAssetId: providerAsset.id,
-          timestamp: new Date("2026-08-15T12:00:00.000Z"),
-          direction: "outbound",
-          processingMode: "accounting_and_evidence",
-          fromAccountRef: "coinbase-account-1",
-          toAddress: "bc1qcoingeckoconflict0000000000000000000000",
-          amount: "0.1",
-          observedBlockchainId: bitcoinRepresentation.blockchainId,
-          observedRepresentationType: "native",
-          observedDecimals: 8,
-          metadata: {},
-        })
-        return { providerAssetRowId: providerAsset.id }
-      })
-    )
-    const before = await countCanonicalRows()
-    const result = await runService(
-      Effect.flatMap(AssetCanonicalizationService, (service) =>
-        service.canonicalizeProviderAssetFromCoinGecko({
-          providerAssetRowId: fixture.providerAssetRowId,
-          reviewerNotes: "Conflicting CoinGecko target.",
-        })
-      ).pipe(Effect.result)
-    )
-    const after = await countCanonicalRows()
-    const mapping = await context.runPg(
-      Effect.gen(function* () {
-        const db = yield* drizzle
-        const [row] = yield* db
-          .select({ canonicalAssetId: schema.providerAssetMappings.canonicalAssetId })
-          .from(schema.providerAssetMappings)
-          .where(eq(schema.providerAssetMappings.providerAssetRowId, fixture.providerAssetRowId))
-        return row
-      })
-    )
-
-    expect(result._tag).toBe("Failure")
-    if (result._tag === "Failure") {
-      expect(result.failure).toMatchObject({
-        _tag: "AssetCanonicalizationBadRequestError",
-        message: "Provider asset mapping is already approved for a different target.",
-      })
-    }
-    expect(after).toEqual(before)
-    expect(mapping?.canonicalAssetId).toBe(TEST_BTC_ASSET_ID)
-  })
-
-  it("rejects a concurrent CoinGecko winner before canonical writes", async () => {
-    const fixture = await context.runPg(
-      Effect.gen(function* () {
-        const db = yield* drizzle
-        const [bitcoinRepresentation] = yield* db
-          .select({
-            id: schema.assetRepresentations.id,
-            blockchainId: schema.assetRepresentations.blockchainId,
-          })
-          .from(schema.assetRepresentations)
-          .where(eq(schema.assetRepresentations.assetId, TEST_BTC_ASSET_ID))
-        const [providerAsset] = yield* db
-          .insert(schema.providerAssets)
-          .values({
-            provider: "coinbase",
-            providerAssetId: "btc-concurrent-conflict",
-            currencyCode: "BTC",
-            name: "Bitcoin",
-            exponent: 18,
-            providerType: "crypto",
-            retrievedAt: new Date("2026-08-15T13:00:00.000Z"),
-          })
-          .returning({ id: schema.providerAssets.id })
-        const [transaction] = yield* db
-          .insert(schema.transactions)
-          .values({
-            sourceId: TEST_SOURCE_ID,
-            externalId: "btc-concurrent-conflict-transaction",
-            timestamp: new Date("2026-08-15T13:00:00.000Z"),
-            principalId: TEST_PRINCIPAL_ID,
-          })
-          .returning({ id: schema.transactions.id })
-        if (
-          bitcoinRepresentation === undefined ||
-          providerAsset === undefined ||
-          transaction === undefined
-        ) {
-          return yield* Effect.die("Failed to seed concurrent conflict fixture")
-        }
-        yield* db.insert(schema.providerAssetMappings).values({
-          providerAssetRowId: providerAsset.id,
-          mappingKind: "asset",
-          mappingStatus: "pending_review",
-        })
-        yield* db.insert(schema.providerTransfers).values({
-          sourceId: TEST_SOURCE_ID,
-          transactionId: transaction.id,
-          externalId: "btc-concurrent-conflict-transfer",
-          providerAssetId: providerAsset.id,
-          timestamp: new Date("2026-08-15T13:00:00.000Z"),
-          direction: "outbound",
-          processingMode: "accounting_and_evidence",
-          fromAccountRef: "coinbase-account-1",
-          toAddress: "0x1111111111111111111111111111111111111111",
-          amount: "0.1",
-          observedBlockchainId: bitcoinRepresentation.blockchainId,
-          observedRepresentationType: "native",
-          observedDecimals: 8,
-          metadata: {},
-        })
-        return {
-          bitcoinRepresentationId: bitcoinRepresentation.id,
-          providerAssetRowId: providerAsset.id,
-        }
-      })
-    )
-    const before = await countCanonicalRows()
-    const searchStarted = await Effect.runPromise(Deferred.make<void>())
-    const releaseSearch = await Effect.runPromise(Deferred.make<void>())
-    const coinGeckoClient = CoinGeckoClient.of({
-      searchCoins: () =>
-        Deferred.succeed(searchStarted, undefined).pipe(
-          Effect.andThen(Deferred.await(releaseSearch)),
-          Effect.as([{ id: "ethereum", name: "Bitcoin", symbol: "btc" }])
-        ),
-      getCoin: () =>
-        Effect.succeed({
-          id: "ethereum",
-          symbol: "eth",
-          name: "Ethereum",
-          asset_platform_id: null,
-          platforms: {},
-          detail_platforms: {},
-        }),
-      listMarkets: () => Effect.succeed([]),
+      expect(mapping?.canonicalAssetId).toBe(TEST_BTC_ASSET_ID)
     })
-    const layer = AssetCanonicalizationServiceLive.pipe(
-      Layer.provide(RepositoryLayer),
-      Layer.provide(Layer.succeed(CoinGeckoClient, coinGeckoClient))
-    )
-    const canonicalization = Effect.runPromise(
-      context.runWithLayer({
-        effect: Effect.flatMap(AssetCanonicalizationService, (service) =>
-          service.canonicalizeProviderAssetFromCoinGecko({
-            providerAssetRowId: fixture.providerAssetRowId,
-            reviewerNotes: "Losing concurrent target.",
-          })
-        ).pipe(Effect.result),
-        layer,
-      })
-    )
-
-    await Effect.runPromise(Deferred.await(searchStarted))
-    await context.runPg(
-      Effect.gen(function* () {
-        const db = yield* drizzle
-        yield* db
-          .update(schema.providerAssetMappings)
-          .set({
-            canonicalAssetId: TEST_BTC_ASSET_ID,
-            assetRepresentationId: fixture.bitcoinRepresentationId,
-            mappingStatus: "approved",
-          })
-          .where(eq(schema.providerAssetMappings.providerAssetRowId, fixture.providerAssetRowId))
-      })
-    )
-    await Effect.runPromise(Deferred.succeed(releaseSearch, undefined))
-    const result = await canonicalization
-
-    const after = await countCanonicalRows()
-    const mapping = await context.runPg(
-      Effect.gen(function* () {
-        const db = yield* drizzle
-        const [row] = yield* db
-          .select({ canonicalAssetId: schema.providerAssetMappings.canonicalAssetId })
-          .from(schema.providerAssetMappings)
-          .where(eq(schema.providerAssetMappings.providerAssetRowId, fixture.providerAssetRowId))
-        return row
-      })
-    )
-    expect(result._tag).toBe("Failure")
-    if (result._tag === "Failure") {
-      expect(result.failure).toMatchObject({
-        _tag: "AssetCanonicalizationBadRequestError",
-        message: "Provider asset mapping is already approved for a different target.",
-      })
-    }
-    expect(after).toEqual(before)
-    expect(mapping?.canonicalAssetId).toBe(TEST_BTC_ASSET_ID)
-  })
+  )
 })

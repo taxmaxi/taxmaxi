@@ -29,6 +29,7 @@
     "effect": "4.0.0-rc.109"
   },
   "devDependencies": {
+    "@effect/vitest": "4.0.0-rc.109",
     "@my/typescript-config": "workspace:*",
     "@types/node": "26.0.1",
     "typescript": "7.0.2"

@@ -1,6 +1,7 @@
+import * as DateTime from "effect/DateTime"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
-import { describe, expect, it } from "vitest"
+import { describe, expect, it } from "@effect/vitest"
 import {
   CoinbaseLegDerivationService,
   CoinbaseRecordNormalizer,
@@ -18,8 +19,8 @@ import {
   SourceRawRecordRepository,
 } from "@my/sync-engine/services"
 
-const watermark = new Date("2026-01-01T00:00:00.000Z")
-const olderThanWatermark = new Date("2025-12-31T23:59:59.000Z")
+const watermark = DateTime.toDateUtc(DateTime.makeUnsafe("2026-01-01T00:00:00.000Z"))
+const olderThanWatermark = DateTime.toDateUtc(DateTime.makeUnsafe("2025-12-31T23:59:59.000Z"))
 
 const runWithProvider = <A, E>(
   f: (provider: typeof CoinbaseSourceSyncProvider.Service) => Effect.Effect<A, E>
@@ -199,9 +200,9 @@ const runWithProvider = <A, E>(
   )
 
 describe("source sync resume boundary", () => {
-  it("keeps scanning equal-watermark Coinbase pages until the checkpoint boundary", async () => {
-    const firstBatch = await Effect.runPromise(
-      runWithProvider((provider) =>
+  it.effect("keeps scanning equal-watermark Coinbase pages until the checkpoint boundary", () =>
+    Effect.gen(function* () {
+      const firstBatch = yield* runWithProvider((provider) =>
         provider.fetchRawBatch({
           providerKey: "coinbase",
           sourceId: "source-1",
@@ -219,20 +220,18 @@ describe("source sync resume boundary", () => {
           pageSize: 100,
         })
       )
-    )
 
-    expect(firstBatch.records.map((record) => record.externalRecordId)).toEqual([
-      "late-at-watermark",
-    ])
-    expect(firstBatch.done).toBe(false)
-    expect(firstBatch.cursorPayload).toMatchObject({
-      transactionCursor: "cursor-2",
-      resumeBoundaryActive: true,
-      resumeCheckpointExternalId: "checkpoint-1",
-    })
+      expect(firstBatch.records.map((record) => record.externalRecordId)).toEqual([
+        "late-at-watermark",
+      ])
+      expect(firstBatch.done).toBe(false)
+      expect(firstBatch.cursorPayload).toMatchObject({
+        transactionCursor: "cursor-2",
+        resumeBoundaryActive: true,
+        resumeCheckpointExternalId: "checkpoint-1",
+      })
 
-    const secondBatch = await Effect.runPromise(
-      runWithProvider((provider) =>
+      const secondBatch = yield* runWithProvider((provider) =>
         provider.fetchRawBatch({
           providerKey: "coinbase",
           sourceId: "source-1",
@@ -243,15 +242,15 @@ describe("source sync resume boundary", () => {
           pageSize: 100,
         })
       )
-    )
 
-    expect(secondBatch.records).toHaveLength(0)
-    expect(secondBatch.done).toBe(true)
-    expect(secondBatch.cursorPayload).toMatchObject({
-      transactionAccountId: null,
-      transactionCursor: null,
-      resumeBoundaryActive: false,
-      resumeCheckpointExternalId: null,
+      expect(secondBatch.records).toHaveLength(0)
+      expect(secondBatch.done).toBe(true)
+      expect(secondBatch.cursorPayload).toMatchObject({
+        transactionAccountId: null,
+        transactionCursor: null,
+        resumeBoundaryActive: false,
+        resumeCheckpointExternalId: null,
+      })
     })
-  })
+  )
 })

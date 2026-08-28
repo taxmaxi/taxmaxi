@@ -26,6 +26,7 @@
     "ioredis": "5.10.1"
   },
   "devDependencies": {
+    "@effect/vitest": "4.0.0-rc.109",
     "@my/typescript-config": "workspace:*",
     "@types/node": "26.0.1",
     "dotenv-cli": "11.0.0",

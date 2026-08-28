@@ -7,6 +7,7 @@
 import { TextAttributes } from "@opentui/core"
 import { useTerminalDimensions } from "@opentui/solid"
 import { createSignal, Show } from "solid-js"
+import { Effect, Fiber } from "effect"
 import { theme } from "../theme.ts"
 
 const DEFAULT_DURATION_MS = 5000
@@ -45,16 +46,17 @@ export type ToastHandle = {
  */
 export function createToast(): ToastHandle {
   const [current, setCurrent] = createSignal<ToastOptions | undefined>(undefined)
-  let dismissHandle: ReturnType<typeof setTimeout> | undefined
+  let dismissFiber: Fiber.Fiber<void, never> | undefined
   const show = (options: ToastOptions) => {
     setCurrent(options)
-    if (dismissHandle !== undefined) {
-      clearTimeout(dismissHandle)
+    if (dismissFiber !== undefined) {
+      Effect.runFork(Fiber.interrupt(dismissFiber))
     }
-    dismissHandle = setTimeout(() => {
-      setCurrent(undefined)
-    }, options.durationMs ?? DEFAULT_DURATION_MS)
-    dismissHandle.unref()
+    dismissFiber = Effect.runFork(
+      Effect.sleep(options.durationMs ?? DEFAULT_DURATION_MS).pipe(
+        Effect.andThen(Effect.sync(() => setCurrent(undefined)))
+      )
+    )
   }
   return { current, show }
 }

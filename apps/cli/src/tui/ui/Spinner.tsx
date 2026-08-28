@@ -1,4 +1,5 @@
 import { createSignal, onCleanup, Show } from "solid-js"
+import { Effect, Fiber } from "effect"
 import { theme } from "../theme.ts"
 
 const FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
@@ -6,11 +7,15 @@ const FRAME_INTERVAL_MILLIS = 80
 
 export function Spinner(props: { readonly label?: string; readonly color?: string }) {
   const [frame, setFrame] = createSignal(0)
-  const timer = setInterval(
-    () => setFrame((current) => (current + 1) % FRAMES.length),
-    FRAME_INTERVAL_MILLIS
+  const timer = Effect.runFork(
+    Effect.sync(() => setFrame((current) => (current + 1) % FRAMES.length)).pipe(
+      Effect.delay(FRAME_INTERVAL_MILLIS),
+      Effect.forever
+    )
   )
-  onCleanup(() => clearInterval(timer))
+  onCleanup(() => {
+    Effect.runFork(Fiber.interrupt(timer))
+  })
 
   return (
     <box flexDirection="row" gap={1}>

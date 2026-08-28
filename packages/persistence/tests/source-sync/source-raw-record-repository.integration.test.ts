@@ -1,6 +1,7 @@
+import * as DateTime from "effect/DateTime"
 import { asc, eq } from "drizzle-orm"
 import * as Effect from "effect/Effect"
-import { beforeEach, describe, expect, it } from "vitest"
+import { beforeEach, describe, expect, it } from "@effect/vitest"
 import { drizzle } from "../../src/layers/PgClientLive.ts"
 import { SourceRawRecordRepositoryLive } from "../../src/layers/SourceRawRecordRepositoryLive.ts"
 import { schema } from "../../src/schema/index.ts"
@@ -30,7 +31,7 @@ const firstBatch = [
     externalRecordId: "coinbase-account-1",
     externalAccountId: "coinbase-account-1",
     externalParentId: null,
-    occurredAt: new Date("2025-01-01T00:00:00.000Z"),
+    occurredAt: DateTime.toDateUtc(DateTime.makeUnsafe("2025-01-01T00:00:00.000Z")),
     payload: { id: "coinbase-account-1" },
   }),
   ProviderRawRecord.make({
@@ -39,184 +40,216 @@ const firstBatch = [
     externalRecordId: "tx-1",
     externalAccountId: "coinbase-account-1",
     externalParentId: null,
-    occurredAt: new Date("2025-01-01T12:00:00.000Z"),
+    occurredAt: DateTime.toDateUtc(DateTime.makeUnsafe("2025-01-01T12:00:00.000Z")),
     payload: { id: "tx-1", amount: "1.0" },
   }),
 ] as const
 
 describe("SourceRawRecordRepositoryLive", () => {
-  beforeEach(async () => {
-    await Effect.runPromise(context.recreateTestDatabase())
-    await runPg(seedSyncEngineRepositoryFixture())
-  })
-
-  it("upserts raw batches idempotently and exposes replay candidates", async () => {
-    const firstWrite = await runRepository(
-      Effect.flatMap(SourceRawRecordRepository, (repository) =>
-        repository.upsertRawBatch({
-          sourceId: TEST_SOURCE_ID,
-          records: firstBatch,
-        })
-      )
-    )
-
-    expect(firstWrite.rawRecords).toHaveLength(2)
-    expect(firstWrite.checkpointExternalId).toBe("tx-1")
-    expect(firstWrite.checkpointRawRecordId).not.toBeNull()
-
-    const pendingIds = await runRepository(
-      Effect.flatMap(SourceRawRecordRepository, (repository) =>
-        repository.listPendingNormalizationRecordIds({ sourceId: TEST_SOURCE_ID })
-      )
-    )
-    const firstPendingBatch = await runRepository(
-      Effect.flatMap(SourceRawRecordRepository, (repository) =>
-        repository.listRawRecordsByIds({
-          sourceId: TEST_SOURCE_ID,
-          rawRecordIds: pendingIds.slice(0, 1),
-        })
-      )
-    )
-
-    expect(pendingIds).toHaveLength(2)
-    expect(firstPendingBatch.map((row) => row.id)).toEqual(pendingIds.slice(0, 1))
-
-    const secondWrite = await runRepository(
-      Effect.flatMap(SourceRawRecordRepository, (repository) =>
-        repository.upsertRawBatch({
-          sourceId: TEST_SOURCE_ID,
-          records: [
-            firstBatch[0],
-            ProviderRawRecord.make({
-              ...firstBatch[1],
-              payload: { id: "tx-1", amount: "2.0" },
-            }),
-          ],
-        })
-      )
-    )
-
-    expect(secondWrite.rawRecords).toHaveLength(2)
-
-    const transactionRow = secondWrite.rawRecords.find((row) => row.externalRecordId === "tx-1")
-    expect(transactionRow).toBeDefined()
-    if (transactionRow === undefined) {
-      return
-    }
-
-    await runRepository(
-      Effect.flatMap(SourceRawRecordRepository, (repository) =>
-        repository.markRawRecordFailed({
-          rawRecordId: transactionRow.id,
-          message: "Unknown provider currency: TAO",
-        })
-      )
-    )
-
-    const replayCandidates = await runRepository(
-      Effect.flatMap(SourceRawRecordRepository, (repository) =>
-        repository.listReplayCandidates({
-          sourceId: TEST_SOURCE_ID,
-        })
-      )
-    )
-
-    expect(replayCandidates.map((row) => row.externalRecordId)).toEqual(["tx-1"])
-
-    await runRepository(
-      Effect.flatMap(SourceRawRecordRepository, (repository) =>
-        repository.markRawRecordNormalized({
-          rawRecordId: transactionRow.id,
-        })
-      )
-    )
-
-    await runRepository(
-      Effect.flatMap(SourceRawRecordRepository, (repository) =>
-        repository.resetNormalizationStateForSource({
-          sourceId: TEST_SOURCE_ID,
-        })
-      )
-    )
-
-    const rows = await runPg(
+  beforeEach(() =>
+    Effect.runPromise(
       Effect.gen(function* () {
-        const db = yield* drizzle
-        return yield* db
-          .select()
-          .from(schema.sourceRecordsRaw)
-          .where(eq(schema.sourceRecordsRaw.sourceId, TEST_SOURCE_ID))
-          .orderBy(asc(schema.sourceRecordsRaw.occurredAt))
+        yield* context.recreateTestDatabase()
+        yield* Effect.promise(() => runPg(seedSyncEngineRepositoryFixture()))
       })
     )
+  )
 
-    expect(rows).toHaveLength(2)
-    expect(rows.every((row) => row.normalizedAt === null)).toBe(true)
-    expect(rows.every((row) => row.normalizationError === null)).toBe(true)
-  })
-
-  it("updates duplicate Solana signatures instead of inserting another raw row", async () => {
-    const signature = "solana-signature-1"
-    const firstWrite = await runRepository(
-      Effect.flatMap(SourceRawRecordRepository, (repository) =>
-        repository.upsertRawBatch({
-          sourceId: TEST_SOURCE_ID,
-          records: [
-            ProviderRawRecord.make({
-              providerKey: "helius-solana",
-              recordType: "solana_transaction_full",
-              externalRecordId: signature,
-              externalAccountId: "So11111111111111111111111111111111111111112",
-              externalParentId: null,
-              occurredAt: new Date("2025-01-01T00:00:00.000Z"),
-              payload: { transaction: { signatures: [signature] }, version: 1 },
-            }),
-          ],
-        })
+  it.effect("upserts raw batches idempotently and exposes replay candidates", () =>
+    Effect.gen(function* () {
+      const firstWrite = yield* Effect.promise(() =>
+        runRepository(
+          Effect.flatMap(SourceRawRecordRepository, (repository) =>
+            repository.upsertRawBatch({
+              sourceId: TEST_SOURCE_ID,
+              records: firstBatch,
+            })
+          )
+        )
       )
-    )
-    const secondWrite = await runRepository(
-      Effect.flatMap(SourceRawRecordRepository, (repository) =>
-        repository.upsertRawBatch({
-          sourceId: TEST_SOURCE_ID,
-          records: [
-            ProviderRawRecord.make({
-              providerKey: "helius-solana",
-              recordType: "solana_transaction_full",
-              externalRecordId: signature,
-              externalAccountId: "So11111111111111111111111111111111111111112",
-              externalParentId: null,
-              occurredAt: new Date("2025-01-01T00:01:00.000Z"),
-              payload: { transaction: { signatures: [signature] }, version: 2 },
-            }),
-          ],
-        })
+
+      expect(firstWrite.rawRecords).toHaveLength(2)
+      expect(firstWrite.checkpointExternalId).toBe("tx-1")
+      expect(firstWrite.checkpointRawRecordId).not.toBeNull()
+
+      const pendingIds = yield* Effect.promise(() =>
+        runRepository(
+          Effect.flatMap(SourceRawRecordRepository, (repository) =>
+            repository.listPendingNormalizationRecordIds({ sourceId: TEST_SOURCE_ID })
+          )
+        )
       )
-    )
+      const firstPendingBatch = yield* Effect.promise(() =>
+        runRepository(
+          Effect.flatMap(SourceRawRecordRepository, (repository) =>
+            repository.listRawRecordsByIds({
+              sourceId: TEST_SOURCE_ID,
+              rawRecordIds: pendingIds.slice(0, 1),
+            })
+          )
+        )
+      )
 
-    expect(firstWrite.rawRecords).toHaveLength(1)
-    expect(secondWrite.rawRecords).toHaveLength(1)
-    expect(secondWrite.rawRecords[0]?.id).toBe(firstWrite.rawRecords[0]?.id)
+      expect(pendingIds).toHaveLength(2)
+      expect(firstPendingBatch.map((row) => row.id)).toEqual(pendingIds.slice(0, 1))
 
-    const rows = await runPg(
-      Effect.gen(function* () {
-        const db = yield* drizzle
-        return yield* db
-          .select({
-            externalRecordId: schema.sourceRecordsRaw.externalRecordId,
-            occurredAt: schema.sourceRecordsRaw.occurredAt,
-            payload: schema.sourceRecordsRaw.payload,
+      const secondWrite = yield* Effect.promise(() =>
+        runRepository(
+          Effect.flatMap(SourceRawRecordRepository, (repository) =>
+            repository.upsertRawBatch({
+              sourceId: TEST_SOURCE_ID,
+              records: [
+                firstBatch[0],
+                ProviderRawRecord.make({
+                  ...firstBatch[1],
+                  payload: { id: "tx-1", amount: "2.0" },
+                }),
+              ],
+            })
+          )
+        )
+      )
+
+      expect(secondWrite.rawRecords).toHaveLength(2)
+
+      const transactionRow = secondWrite.rawRecords.find((row) => row.externalRecordId === "tx-1")
+      expect(transactionRow).toBeDefined()
+      if (transactionRow === undefined) {
+        return
+      }
+
+      yield* Effect.promise(() =>
+        runRepository(
+          Effect.flatMap(SourceRawRecordRepository, (repository) =>
+            repository.markRawRecordFailed({
+              rawRecordId: transactionRow.id,
+              message: "Unknown provider currency: TAO",
+            })
+          )
+        )
+      )
+
+      const replayCandidates = yield* Effect.promise(() =>
+        runRepository(
+          Effect.flatMap(SourceRawRecordRepository, (repository) =>
+            repository.listReplayCandidates({
+              sourceId: TEST_SOURCE_ID,
+            })
+          )
+        )
+      )
+
+      expect(replayCandidates.map((row) => row.externalRecordId)).toEqual(["tx-1"])
+
+      yield* Effect.promise(() =>
+        runRepository(
+          Effect.flatMap(SourceRawRecordRepository, (repository) =>
+            repository.markRawRecordNormalized({
+              rawRecordId: transactionRow.id,
+            })
+          )
+        )
+      )
+
+      yield* Effect.promise(() =>
+        runRepository(
+          Effect.flatMap(SourceRawRecordRepository, (repository) =>
+            repository.resetNormalizationStateForSource({
+              sourceId: TEST_SOURCE_ID,
+            })
+          )
+        )
+      )
+
+      const rows = yield* Effect.promise(() =>
+        runPg(
+          Effect.gen(function* () {
+            const db = yield* drizzle
+            return yield* db
+              .select()
+              .from(schema.sourceRecordsRaw)
+              .where(eq(schema.sourceRecordsRaw.sourceId, TEST_SOURCE_ID))
+              .orderBy(asc(schema.sourceRecordsRaw.occurredAt))
           })
-          .from(schema.sourceRecordsRaw)
-          .where(eq(schema.sourceRecordsRaw.sourceId, TEST_SOURCE_ID))
-      })
-    )
+        )
+      )
 
-    expect(rows).toHaveLength(1)
-    expect(rows[0]).toMatchObject({
-      externalRecordId: signature,
-      payload: { transaction: { signatures: [signature] }, version: 2 },
+      expect(rows).toHaveLength(2)
+      expect(rows.every((row) => row.normalizedAt === null)).toBe(true)
+      expect(rows.every((row) => row.normalizationError === null)).toBe(true)
     })
-    expect(rows[0]?.occurredAt.toISOString()).toBe("2025-01-01T00:01:00.000Z")
-  })
+  )
+
+  it.effect("updates duplicate Solana signatures instead of inserting another raw row", () =>
+    Effect.gen(function* () {
+      const signature = "solana-signature-1"
+      const firstWrite = yield* Effect.promise(() =>
+        runRepository(
+          Effect.flatMap(SourceRawRecordRepository, (repository) =>
+            repository.upsertRawBatch({
+              sourceId: TEST_SOURCE_ID,
+              records: [
+                ProviderRawRecord.make({
+                  providerKey: "helius-solana",
+                  recordType: "solana_transaction_full",
+                  externalRecordId: signature,
+                  externalAccountId: "So11111111111111111111111111111111111111112",
+                  externalParentId: null,
+                  occurredAt: DateTime.toDateUtc(DateTime.makeUnsafe("2025-01-01T00:00:00.000Z")),
+                  payload: { transaction: { signatures: [signature] }, version: 1 },
+                }),
+              ],
+            })
+          )
+        )
+      )
+      const secondWrite = yield* Effect.promise(() =>
+        runRepository(
+          Effect.flatMap(SourceRawRecordRepository, (repository) =>
+            repository.upsertRawBatch({
+              sourceId: TEST_SOURCE_ID,
+              records: [
+                ProviderRawRecord.make({
+                  providerKey: "helius-solana",
+                  recordType: "solana_transaction_full",
+                  externalRecordId: signature,
+                  externalAccountId: "So11111111111111111111111111111111111111112",
+                  externalParentId: null,
+                  occurredAt: DateTime.toDateUtc(DateTime.makeUnsafe("2025-01-01T00:01:00.000Z")),
+                  payload: { transaction: { signatures: [signature] }, version: 2 },
+                }),
+              ],
+            })
+          )
+        )
+      )
+
+      expect(firstWrite.rawRecords).toHaveLength(1)
+      expect(secondWrite.rawRecords).toHaveLength(1)
+      expect(secondWrite.rawRecords[0]?.id).toBe(firstWrite.rawRecords[0]?.id)
+
+      const rows = yield* Effect.promise(() =>
+        runPg(
+          Effect.gen(function* () {
+            const db = yield* drizzle
+            return yield* db
+              .select({
+                externalRecordId: schema.sourceRecordsRaw.externalRecordId,
+                occurredAt: schema.sourceRecordsRaw.occurredAt,
+                payload: schema.sourceRecordsRaw.payload,
+              })
+              .from(schema.sourceRecordsRaw)
+              .where(eq(schema.sourceRecordsRaw.sourceId, TEST_SOURCE_ID))
+          })
+        )
+      )
+
+      expect(rows).toHaveLength(1)
+      expect(rows[0]).toMatchObject({
+        externalRecordId: signature,
+        payload: { transaction: { signatures: [signature] }, version: 2 },
+      })
+      expect(rows[0]?.occurredAt.toISOString()).toBe("2025-01-01T00:01:00.000Z")
+    })
+  )
 })

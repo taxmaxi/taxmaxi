@@ -1,3 +1,5 @@
+import { nextTestUuid } from "./support/TestUuid.ts"
+import * as DateTime from "effect/DateTime"
 import { HttpApiClient } from "effect/unstable/httpapi"
 import { Headers, HttpClient, HttpClientRequest, HttpRouter } from "effect/unstable/http"
 import { NodeHttpServer } from "@effect/platform-node"
@@ -145,11 +147,11 @@ const seedProtocolCandidate = Effect.gen(function* () {
     return yield* Effect.die("Missing solana blockchain seed")
   }
 
-  const candidateId = crypto.randomUUID()
-  const rejectedCandidateId = crypto.randomUUID()
-  const observationId = crypto.randomUUID()
-  const olderObservationId = crypto.randomUUID()
-  const retrievedAt = new Date("2026-01-02T00:00:00.000Z")
+  const candidateId = nextTestUuid()
+  const rejectedCandidateId = nextTestUuid()
+  const observationId = nextTestUuid()
+  const olderObservationId = nextTestUuid()
+  const retrievedAt = DateTime.toDateUtc(DateTime.makeUnsafe("2026-01-02T00:00:00.000Z"))
 
   yield* db.insert(schema.protocolCandidates).values([
     {
@@ -181,8 +183,8 @@ const seedProtocolCandidate = Effect.gen(function* () {
       candidateId,
       onchainDataSource: "dune",
       onchainDataSourceObservationKey: "dune:jupiter:2026-01",
-      observedWindowStart: new Date("2026-01-01T00:00:00.000Z"),
-      observedWindowEnd: new Date("2026-01-02T00:00:00.000Z"),
+      observedWindowStart: DateTime.toDateUtc(DateTime.makeUnsafe("2026-01-01T00:00:00.000Z")),
+      observedWindowEnd: DateTime.toDateUtc(DateTime.makeUnsafe("2026-01-02T00:00:00.000Z")),
       interactionCount: "12",
       transactionCount: "7",
       uniqueActorCount: "5",
@@ -196,14 +198,14 @@ const seedProtocolCandidate = Effect.gen(function* () {
       candidateId,
       onchainDataSource: "dune",
       onchainDataSourceObservationKey: "dune:jupiter:2025-12",
-      observedWindowStart: new Date("2025-12-01T00:00:00.000Z"),
-      observedWindowEnd: new Date("2025-12-02T00:00:00.000Z"),
+      observedWindowStart: DateTime.toDateUtc(DateTime.makeUnsafe("2025-12-01T00:00:00.000Z")),
+      observedWindowEnd: DateTime.toDateUtc(DateTime.makeUnsafe("2025-12-02T00:00:00.000Z")),
       interactionCount: "3",
       transactionCount: "2",
       uniqueActorCount: "1",
       relatedSubjectIdentifiers: [],
       sampleTransactionHashes: ["olderSampleSignature"],
-      retrievedAt: new Date("2025-12-02T00:00:00.000Z"),
+      retrievedAt: DateTime.toDateUtc(DateTime.makeUnsafe("2025-12-02T00:00:00.000Z")),
       rawPayload: { project: "jupiter", chain: "solana", period: "older" },
     },
   ])
@@ -236,7 +238,7 @@ const seedOlderPendingProtocolCandidate = Effect.gen(function* () {
     return yield* Effect.die("Missing solana blockchain seed")
   }
 
-  const candidateId = crypto.randomUUID()
+  const candidateId = nextTestUuid()
   yield* db.insert(schema.protocolCandidates).values({
     id: candidateId,
     blockchainId: blockchain.id,
@@ -245,8 +247,8 @@ const seedOlderPendingProtocolCandidate = Effect.gen(function* () {
     protocolNameHint: "Older Protocol",
     categoryHint: "dex",
     mappingStatus: "pending_review",
-    firstSeenAt: new Date("2025-12-01T00:00:00.000Z"),
-    lastSeenAt: new Date("2025-12-01T00:00:00.000Z"),
+    firstSeenAt: DateTime.toDateUtc(DateTime.makeUnsafe("2025-12-01T00:00:00.000Z")),
+    lastSeenAt: DateTime.toDateUtc(DateTime.makeUnsafe("2025-12-01T00:00:00.000Z")),
   })
 
   return { candidateId }
@@ -255,14 +257,12 @@ const seedOlderPendingProtocolCandidate = Effect.gen(function* () {
 await Effect.runPromise(context.recreateTestDatabase())
 
 describe("AdminProtocolReviewApiLive", () => {
-  beforeEach(async () => {
-    await Effect.runPromise(context.recreateTestDatabase())
-  })
+  beforeEach(() => Effect.runPromise(Effect.asVoid(context.recreateTestDatabase())))
 
   it.effect("lists pending protocol candidates for admins", () =>
     Effect.gen(function* () {
       const { candidateId } = yield* seedProtocolCandidate
-      const client = yield* makeClient({ userId: crypto.randomUUID(), role: "admin" })
+      const client = yield* makeClient({ userId: nextTestUuid(), role: "admin" })
 
       const response = yield* client.adminProtocolReview.listProtocolCandidates({
         query: {},
@@ -282,7 +282,7 @@ describe("AdminProtocolReviewApiLive", () => {
   it.effect("returns candidate detail and TaxMaxi transaction types for admins", () =>
     Effect.gen(function* () {
       const { candidateId, observationId } = yield* seedProtocolCandidate
-      const client = yield* makeClient({ userId: crypto.randomUUID(), role: "admin" })
+      const client = yield* makeClient({ userId: nextTestUuid(), role: "admin" })
 
       const detail = yield* client.adminProtocolReview.getProtocolCandidate({
         params: { candidateId },
@@ -321,7 +321,7 @@ describe("AdminProtocolReviewApiLive", () => {
       const db = yield* drizzle
       const { candidateId } = yield* seedProtocolCandidate
       const { candidateId: olderCandidateId } = yield* seedOlderPendingProtocolCandidate
-      const client = yield* makeClient({ userId: crypto.randomUUID(), role: "admin" })
+      const client = yield* makeClient({ userId: nextTestUuid(), role: "admin" })
 
       const firstPage = yield* client.adminProtocolReview.listProtocolCandidates({
         query: {
@@ -338,7 +338,7 @@ describe("AdminProtocolReviewApiLive", () => {
 
       yield* db
         .update(schema.protocolCandidates)
-        .set({ lastSeenAt: new Date("2025-11-01T00:00:00.000Z") })
+        .set({ lastSeenAt: DateTime.toDateUtc(DateTime.makeUnsafe("2025-11-01T00:00:00.000Z")) })
         .where(eq(schema.protocolCandidates.id, candidateId))
 
       const secondPage = yield* client.adminProtocolReview.listProtocolCandidates({
@@ -360,7 +360,7 @@ describe("AdminProtocolReviewApiLive", () => {
     Effect.gen(function* () {
       const db = yield* drizzle
       const { candidateId, observationId, olderObservationId } = yield* seedProtocolCandidate
-      const client = yield* makeClient({ userId: crypto.randomUUID(), role: "admin" })
+      const client = yield* makeClient({ userId: nextTestUuid(), role: "admin" })
 
       const firstPage = yield* client.adminProtocolReview.getProtocolCandidate({
         params: { candidateId },
@@ -378,7 +378,7 @@ describe("AdminProtocolReviewApiLive", () => {
 
       yield* db
         .update(schema.protocolCandidateObservations)
-        .set({ retrievedAt: new Date("2025-11-01T00:00:00.000Z") })
+        .set({ retrievedAt: DateTime.toDateUtc(DateTime.makeUnsafe("2025-11-01T00:00:00.000Z")) })
         .where(eq(schema.protocolCandidateObservations.id, observationId))
 
       const secondPage = yield* client.adminProtocolReview.getProtocolCandidate({
@@ -402,7 +402,7 @@ describe("AdminProtocolReviewApiLive", () => {
   it.effect("rejects non-admin sessions", () =>
     Effect.gen(function* () {
       yield* seedProtocolCandidate
-      const client = yield* makeClient({ userId: crypto.randomUUID(), role: "user" })
+      const client = yield* makeClient({ userId: nextTestUuid(), role: "user" })
 
       const result = yield* client.adminProtocolReview
         .listProtocolCandidates({
@@ -420,7 +420,7 @@ describe("AdminProtocolReviewApiLive", () => {
   it.effect("preserves a valid non-admin session cookie after a forbidden response", () =>
     Effect.gen(function* () {
       const baseHttpClient = yield* HttpClient.HttpClient
-      const userId = crypto.randomUUID()
+      const userId = nextTestUuid()
       const response = yield* HttpClientRequest.get("/v1/admin/protocol-review/candidates").pipe(
         HttpClientRequest.setHeader("cookie", `taxmaxi_session=user_${userId}_user`),
         baseHttpClient.execute

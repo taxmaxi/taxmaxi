@@ -1,7 +1,8 @@
+import * as DateTime from "effect/DateTime"
 import { asc, eq, sql } from "drizzle-orm"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
-import { beforeEach, describe, expect, it } from "vitest"
+import { beforeEach, describe, expect, it } from "@effect/vitest"
 import { AssetRepositoryLive } from "../../src/layers/AssetRepositoryLive.ts"
 import { drizzle } from "../../src/layers/PgClientLive.ts"
 import { AssetResolutionJobRepositoryLive } from "../../src/layers/AssetResolutionJobRepositoryLive.ts"
@@ -373,613 +374,449 @@ describe("SourceNormalizationRepositoryLive", () => {
       resolvedTransactionType: APPROVED_MAPPING,
     }) as const
 
-  beforeEach(async () => {
-    await Effect.runPromise(context.recreateTestDatabase())
-    fixture = await runPg(seedSyncEngineRepositoryFixture())
-    await runPg(
-      seedSyncEngineAssets({
-        baseBlockchainId: fixture.baseBlockchainId,
-        bitcoinBlockchainId: fixture.bitcoinBlockchainId,
-      })
-    )
-    await runPg(
+  beforeEach(() =>
+    Effect.runPromise(
       Effect.gen(function* () {
-        const db = yield* drizzle
-        yield* db
-          .insert(schema.assets)
-          .values({
-            id: TEST_BTC_ASSET_ID,
-            name: "Bitcoin",
-            symbol: "BTC",
-            type: "fungible",
-          })
-          .onConflictDoNothing({ target: schema.assets.id })
-      })
-    )
-    await runPg(
-      seedRawRecord({
-        rawRecordId: TEST_RAW_RECORD_ID,
-        externalRecordId: "raw-acquire-1",
-        occurredAt: new Date("2025-01-01T10:00:00.000Z"),
-      })
-    )
-  })
-
-  it("keeps the canonical transaction ID stable after deletion and re-creation", async () => {
-    const transaction = {
-      sourceId: TEST_SOURCE_ID,
-      sourceRawRecordId: TEST_RAW_RECORD_ID,
-      externalId: null,
-      externalGroupId: "group-stable-rematerialization",
-      timestamp: new Date("2025-01-01T10:00:00.000Z"),
-      transactionType: "buy_fiat",
-      providerTransactionType: "buy",
-      providerStatus: "completed",
-      providerResourcePath:
-        "/v2/accounts/coinbase-account-1/transactions/tx-stable-rematerialization",
-      providerDescription: "Stable rematerialization fixture",
-      providerCreatedAt: new Date("2025-01-01T10:00:00.000Z"),
-      providerUpdatedAt: new Date("2025-01-01T10:00:00.000Z"),
-      metadata: { provider: "coinbase" },
-      providerFiatAmount: null,
-      providerFiatCurrency: null,
-      principalId: TEST_PRINCIPAL_ID,
-    } as const
-    const venueContext = {
-      venueType: "cex",
-      cexAccountId: fixture.cexAccountId,
-      externalAccountId: "coinbase-account-1",
-      externalOrderId: null,
-      externalFillId: null,
-      side: "buy",
-      instrument: "BTC-EUR",
-      fillPrice: "10000",
-      commissionAmount: null,
-      commissionCurrency: null,
-      metadata: { provider: "coinbase" },
-    } as const
-    const persist = (externalId: string | null) =>
-      runRepository(
-        Effect.flatMap(SourceNormalizationRepository, (repository) =>
-          repository.persistNormalizedArtifacts({
-            transaction: { ...transaction, externalId },
-            venueContext,
-            providerTransfers: [],
-            canonicalTransfers: [],
-            providerAssetRowIds: [],
-            legs: [],
-            transactionReview: null,
-            resolvedTransactionType: APPROVED_MAPPING,
-          })
-        )
-      )
-
-    const first = await persist(null)
-    const repeated = await persist(null)
-    expect(repeated.transaction.id).toBe(first.transaction.id)
-    const discovered = await persist("discovered-stable-external-id")
-    const corrected = await persist("corrected-stable-external-id")
-    expect(discovered.transaction.id).toBe(first.transaction.id)
-    expect(corrected.transaction.id).toBe(first.transaction.id)
-    await runPg(
-      Effect.gen(function* () {
-        const db = yield* drizzle
-        yield* db
-          .delete(schema.transactions)
-          .where(eq(schema.transactions.id, first.transaction.id))
-      })
-    )
-    const recreated = await persist("corrected-stable-external-id")
-
-    expect(recreated.transaction.id).toBe(first.transaction.id)
-  })
-
-  it("keeps transaction-level provider asset uses in step with each persist", async () => {
-    const timestamp = new Date("2025-01-01T10:00:00.000Z")
-    const [assetA, assetB] = await runPg(
-      Effect.gen(function* () {
-        const db = yield* drizzle
-        const rows = yield* db
-          .insert(schema.providerAssets)
-          .values([
-            {
-              provider: "coinbase",
-              providerAssetId: "tx-use-asset-a",
-              currencyCode: "TXA",
-              retrievedAt: timestamp,
-            },
-            {
-              provider: "coinbase",
-              providerAssetId: "tx-use-asset-b",
-              currencyCode: "TXB",
-              retrievedAt: timestamp,
-            },
-          ])
-          .returning({ id: schema.providerAssets.id })
-        if (rows.length !== 2) return yield* Effect.die("Failed to seed provider assets")
-        return rows
-      })
-    )
-    if (assetA === undefined || assetB === undefined) {
-      throw new Error("Failed to seed provider assets")
-    }
-
-    const persist = (providerAssetRowIds: ReadonlyArray<string>) =>
-      runRepository(
-        Effect.flatMap(SourceNormalizationRepository, (repository) =>
-          repository.persistNormalizedArtifacts({
-            transaction: {
-              sourceId: TEST_SOURCE_ID,
-              sourceRawRecordId: null,
-              externalId: "transaction-with-provider-asset-uses",
-              externalGroupId: null,
-              timestamp,
-              transactionType: "buy_fiat",
-              providerTransactionType: "buy",
-              providerStatus: "completed",
-              providerResourcePath: null,
-              providerDescription: "Transaction with provider asset uses",
-              providerCreatedAt: timestamp,
-              providerUpdatedAt: timestamp,
-              metadata: { provider: "test" },
-              providerFiatAmount: null,
-              providerFiatCurrency: null,
-              principalId: TEST_PRINCIPAL_ID,
-            },
-            venueContext: {
-              venueType: "cex",
-              cexAccountId: fixture.cexAccountId,
-              externalAccountId: "test-account",
-              externalOrderId: null,
-              externalFillId: null,
-              side: "buy",
-              instrument: "BTC-EUR",
-              fillPrice: "10000",
-              commissionAmount: null,
-              commissionCurrency: null,
-              metadata: { provider: "test" },
-            },
-            providerTransfers: [],
-            canonicalTransfers: [],
-            providerAssetRowIds,
-            legs: [],
-            transactionReview: null,
-            resolvedTransactionType: APPROVED_MAPPING,
-          })
-        )
-      )
-
-    const selectUses = (transactionId: string) =>
-      runPg(
-        Effect.gen(function* () {
-          const db = yield* drizzle
-          return yield* db
-            .select({
-              providerAssetRowId: schema.providerAssetTransactionUses.providerAssetRowId,
-              sourceId: schema.providerAssetTransactionUses.sourceId,
+        yield* context.recreateTestDatabase()
+        fixture = yield* Effect.promise(() => runPg(seedSyncEngineRepositoryFixture()))
+        yield* Effect.promise(() =>
+          runPg(
+            seedSyncEngineAssets({
+              baseBlockchainId: fixture.baseBlockchainId,
+              bitcoinBlockchainId: fixture.bitcoinBlockchainId,
             })
-            .from(schema.providerAssetTransactionUses)
-            .where(eq(schema.providerAssetTransactionUses.transactionId, transactionId))
-            .orderBy(asc(schema.providerAssetTransactionUses.providerAssetRowId))
-        })
-      )
-
-    const persisted = await persist([assetA.id, assetB.id, assetA.id])
-    expect(await selectUses(persisted.transaction.id)).toEqual(
-      [assetA.id, assetB.id]
-        .sort()
-        .map((providerAssetRowId) => ({ providerAssetRowId, sourceId: TEST_SOURCE_ID }))
-    )
-
-    // A replay can change the record's dependencies; stale rows must go.
-    await persist([assetB.id])
-    expect(await selectUses(persisted.transaction.id)).toEqual([
-      { providerAssetRowId: assetB.id, sourceId: TEST_SOURCE_ID },
-    ])
-
-    await persist([])
-    expect(await selectUses(persisted.transaction.id)).toEqual([])
-  })
-
-  it("keeps an external-only transaction ID stable after deletion and re-creation", async () => {
-    const timestamp = new Date("2025-01-01T10:00:00.000Z")
-    const persist = () =>
-      runRepository(
-        Effect.flatMap(SourceNormalizationRepository, (repository) =>
-          repository.persistNormalizedArtifacts({
-            transaction: {
-              sourceId: TEST_SOURCE_ID,
-              sourceRawRecordId: null,
-              externalId: "external-only-stable-transaction",
-              externalGroupId: null,
-              timestamp,
-              transactionType: "buy_fiat",
-              providerTransactionType: "buy",
-              providerStatus: "completed",
-              providerResourcePath: null,
-              providerDescription: "External-only stable transaction",
-              providerCreatedAt: timestamp,
-              providerUpdatedAt: timestamp,
-              metadata: { provider: "test" },
-              providerFiatAmount: null,
-              providerFiatCurrency: null,
-              principalId: TEST_PRINCIPAL_ID,
-            },
-            venueContext: {
-              venueType: "cex",
-              cexAccountId: fixture.cexAccountId,
-              externalAccountId: "test-account",
-              externalOrderId: null,
-              externalFillId: null,
-              side: "buy",
-              instrument: "BTC-EUR",
-              fillPrice: "10000",
-              commissionAmount: null,
-              commissionCurrency: null,
-              metadata: { provider: "test" },
-            },
-            providerTransfers: [],
-            canonicalTransfers: [],
-            providerAssetRowIds: [],
-            legs: [],
-            transactionReview: null,
-            resolvedTransactionType: APPROVED_MAPPING,
-          })
+          )
         )
-      )
-
-    const first = await persist()
-    await runPg(
-      Effect.gen(function* () {
-        const db = yield* drizzle
-        yield* db
-          .delete(schema.transactions)
-          .where(eq(schema.transactions.id, first.transaction.id))
-      })
-    )
-    const recreated = await persist()
-
-    expect(recreated.transaction.id).toBe(first.transaction.id)
-  })
-
-  it("reserves replay credits atomically before derived state can be reset", async () => {
-    const secondRawRecordId = "00000000-0000-0000-0000-000000000484"
-    await runPg(
-      Effect.gen(function* () {
-        const db = yield* drizzle
-        yield* db.delete(schema.creditLedger)
-        yield* db.insert(schema.creditLedger).values({
-          userId: fixture.userId,
-          delta: 1,
-          kind: "manual_adjustment",
-          reference: "test:single-replay-credit",
-          paymentReference: null,
-          expiresAt: null,
-        })
-        yield* seedRawRecord({
-          rawRecordId: secondRawRecordId,
-          externalRecordId: "raw-replay-credit-second",
-          occurredAt: new Date("2025-01-02T10:00:00.000Z"),
-        })
-      })
-    )
-
-    const replayCreditError = await runRepository(
-      Effect.flip(
-        Effect.flatMap(SourceNormalizationRepository, (repository) =>
-          repository.reserveReplayTransactionCredits({
-            reservationId: "replay-credit-atomicity",
-            transactions: [
-              {
-                sourceId: TEST_SOURCE_ID,
-                sourceRawRecordId: TEST_RAW_RECORD_ID,
-                externalId: "replay-credit-first",
-                principalId: TEST_PRINCIPAL_ID,
-              },
-              {
-                sourceId: TEST_SOURCE_ID,
-                sourceRawRecordId: secondRawRecordId,
-                externalId: "replay-credit-second",
-                principalId: TEST_PRINCIPAL_ID,
-              },
-            ],
-          })
+        yield* Effect.promise(() =>
+          runPg(
+            Effect.gen(function* () {
+              const db = yield* drizzle
+              yield* db
+                .insert(schema.assets)
+                .values({
+                  id: TEST_BTC_ASSET_ID,
+                  name: "Bitcoin",
+                  symbol: "BTC",
+                  type: "fungible",
+                })
+                .onConflictDoNothing({ target: schema.assets.id })
+            })
+          )
         )
-      )
-    )
-
-    expect(replayCreditError).toBeInstanceOf(SourceSyncCreditExhaustedError)
-    expect(replayCreditError).toMatchObject({ reasonCode: "no_usable_credits" })
-
-    const usage = await runPg(
-      Effect.gen(function* () {
-        const db = yield* drizzle
-        return yield* db
-          .select({ count: sql<number>`count(*)` })
-          .from(schema.creditLedger)
-          .where(eq(schema.creditLedger.kind, "transaction_usage"))
+        yield* Effect.promise(() =>
+          runPg(
+            seedRawRecord({
+              rawRecordId: TEST_RAW_RECORD_ID,
+              externalRecordId: "raw-acquire-1",
+              occurredAt: DateTime.toDateUtc(DateTime.makeUnsafe("2025-01-01T10:00:00.000Z")),
+            })
+          )
+        )
       })
     )
+  )
 
-    expect(Number(usage[0]?.count ?? 0)).toBe(0)
-  })
-
-  it("releases only the credits inserted by a failed replay reservation", async () => {
-    await runPg(
-      Effect.gen(function* () {
-        const db = yield* drizzle
-        yield* db.delete(schema.creditLedger)
-        yield* db.insert(schema.creditLedger).values({
-          userId: fixture.userId,
-          delta: 1,
-          kind: "manual_adjustment",
-          reference: "test:replay-credit-compensation",
-          paymentReference: null,
-          expiresAt: null,
-        })
-      })
-    )
-
-    const references = await runRepository(
-      Effect.flatMap(SourceNormalizationRepository, (repository) =>
-        repository.reserveReplayTransactionCredits({
-          reservationId: "replay-credit-compensation",
-          transactions: [
-            {
-              sourceId: TEST_SOURCE_ID,
-              sourceRawRecordId: TEST_RAW_RECORD_ID,
-              externalId: "replay-credit-compensation",
-              principalId: TEST_PRINCIPAL_ID,
-            },
-          ],
-        })
-      )
-    )
-
-    expect(references).toEqual([
-      {
-        reference: `transaction:${TEST_SOURCE_ID}:external:replay-credit-compensation`,
-        sourceRawRecordId: TEST_RAW_RECORD_ID,
-      },
-    ])
-
-    await runRepository(
-      Effect.flatMap(SourceNormalizationRepository, (repository) =>
-        repository.releaseReplayTransactionCredits({
-          reservationId: "replay-credit-compensation",
-          references: references.map(({ reference }) => reference),
-        })
-      )
-    )
-
-    const ledger = await runPg(
-      Effect.gen(function* () {
-        const db = yield* drizzle
-        return yield* db
-          .select({ kind: schema.creditLedger.kind, reference: schema.creditLedger.reference })
-          .from(schema.creditLedger)
-      })
-    )
-
-    expect(ledger).toEqual([
-      { kind: "manual_adjustment", reference: "test:replay-credit-compensation" },
-    ])
-  })
-
-  it("lets a successor adopt a replay reservation before stale cleanup runs", async () => {
-    const occurredAt = new Date("2025-01-01T10:00:00.000Z")
-    const transaction = {
-      sourceId: TEST_SOURCE_ID,
-      sourceRawRecordId: TEST_RAW_RECORD_ID,
-      externalId: "replay-credit-adoption",
-      externalGroupId: null,
-      timestamp: occurredAt,
-      transactionType: "buy_fiat",
-      providerTransactionType: "buy",
-      providerStatus: "completed",
-      providerResourcePath: null,
-      providerDescription: null,
-      providerCreatedAt: occurredAt,
-      providerUpdatedAt: occurredAt,
-      metadata: null,
-      providerFiatAmount: null,
-      providerFiatCurrency: null,
-      principalId: TEST_PRINCIPAL_ID,
-    } as const
-    await runPg(
-      Effect.gen(function* () {
-        const db = yield* drizzle
-        yield* db.delete(schema.creditLedger)
-        yield* db.insert(schema.creditLedger).values({
-          userId: fixture.userId,
-          delta: 1,
-          kind: "manual_adjustment",
-          reference: "test:replay-credit-adoption",
-          paymentReference: null,
-          expiresAt: null,
-        })
-      })
-    )
-
-    const first = await runRepository(
-      Effect.flatMap(SourceNormalizationRepository, (repository) =>
-        repository.reserveReplayTransactionCredits({
-          reservationId: "replay-owner-old",
-          transactions: [transaction],
-        })
-      )
-    )
-    const adopted = await runRepository(
-      Effect.flatMap(SourceNormalizationRepository, (repository) =>
-        repository.reserveReplayTransactionCredits({
-          reservationId: "replay-owner-successor",
-          transactions: [transaction],
-        })
-      )
-    )
-    const stalePersistence = await runRepository(
-      Effect.flatMap(SourceNormalizationRepository, (repository) =>
-        repository
-          .persistNormalizedArtifacts({
-            replayReservationId: "replay-owner-old",
-            transaction,
-            venueContext: {
-              venueType: "cex",
-              cexAccountId: fixture.cexAccountId,
-              externalAccountId: "coinbase-account-1",
-              externalOrderId: null,
-              externalFillId: null,
-              side: "buy",
-              instrument: "BTC-EUR",
-              fillPrice: "10000.00",
-              commissionAmount: null,
-              commissionCurrency: null,
-              metadata: null,
-            },
-            providerTransfers: [],
-            canonicalTransfers: [],
-            providerAssetRowIds: [],
-            legs: [],
-            transactionReview: null,
-            resolvedTransactionType: APPROVED_MAPPING,
-          })
-          .pipe(Effect.result)
-      )
-    )
-    await runRepository(
-      Effect.gen(function* () {
-        const repository = yield* SourceNormalizationRepository
-        yield* repository.releaseReplayTransactionCredits({
-          reservationId: "replay-owner-old",
-          references: first.map(({ reference }) => reference),
-        })
-        yield* repository.persistNormalizedArtifacts({
-          replayReservationId: "replay-owner-successor",
-          transaction,
-          venueContext: {
-            venueType: "cex",
-            cexAccountId: fixture.cexAccountId,
-            externalAccountId: "coinbase-account-1",
-            externalOrderId: null,
-            externalFillId: null,
-            side: "buy",
-            instrument: "BTC-EUR",
-            fillPrice: "10000.00",
-            commissionAmount: null,
-            commissionCurrency: null,
-            metadata: null,
-          },
-          providerTransfers: [],
-          canonicalTransfers: [],
-          providerAssetRowIds: [],
-          legs: [],
-          transactionReview: null,
-          resolvedTransactionType: APPROVED_MAPPING,
-        })
-        yield* repository.releaseReplayTransactionCredits({
-          reservationId: "replay-owner-successor",
-          references: first.map(({ reference }) => reference),
-        })
-      })
-    )
-
-    const usage = await runPg(
-      Effect.gen(function* () {
-        const db = yield* drizzle
-        return yield* db
-          .select({
-            reference: schema.creditLedger.reference,
-            replayReservationId: schema.creditLedger.replayReservationId,
-          })
-          .from(schema.creditLedger)
-          .where(eq(schema.creditLedger.kind, "transaction_usage"))
-      })
-    )
-
-    expect(stalePersistence._tag).toBe("Failure")
-    expect(adopted).toEqual(first)
-    expect(usage).toEqual([
-      {
-        reference: `transaction:${TEST_SOURCE_ID}:external:replay-credit-adoption`,
-        replayReservationId: null,
-      },
-    ])
-  })
-
-  it("releases an adopted replay reservation when the successor fails", async () => {
-    const transaction = {
-      sourceId: TEST_SOURCE_ID,
-      sourceRawRecordId: TEST_RAW_RECORD_ID,
-      externalId: "replay-credit-adoption-failure",
-      principalId: TEST_PRINCIPAL_ID,
-    }
-    await runPg(
-      Effect.gen(function* () {
-        const db = yield* drizzle
-        yield* db.delete(schema.creditLedger)
-        yield* db.insert(schema.creditLedger).values({
-          userId: fixture.userId,
-          delta: 1,
-          kind: "manual_adjustment",
-          reference: "test:replay-credit-adoption-failure",
-          paymentReference: null,
-          expiresAt: null,
-        })
-      })
-    )
-
-    const first = await runRepository(
-      Effect.flatMap(SourceNormalizationRepository, (repository) =>
-        repository.reserveReplayTransactionCredits({
-          reservationId: "replay-owner-old",
-          transactions: [transaction],
-        })
-      )
-    )
-    const adopted = await runRepository(
-      Effect.flatMap(SourceNormalizationRepository, (repository) =>
-        repository.reserveReplayTransactionCredits({
-          reservationId: "replay-owner-successor",
-          transactions: [transaction],
-        })
-      )
-    )
-
-    await runRepository(
-      Effect.gen(function* () {
-        const repository = yield* SourceNormalizationRepository
-        yield* repository.releaseReplayTransactionCredits({
-          reservationId: "replay-owner-old",
-          references: first.map(({ reference }) => reference),
-        })
-        yield* repository.releaseReplayTransactionCredits({
-          reservationId: "replay-owner-successor",
-          references: adopted.map(({ reference }) => reference),
-        })
-      })
-    )
-
-    const usage = await runPg(
-      Effect.gen(function* () {
-        const db = yield* drizzle
-        return yield* db
-          .select({ reference: schema.creditLedger.reference })
-          .from(schema.creditLedger)
-          .where(eq(schema.creditLedger.kind, "transaction_usage"))
-      })
-    )
-
-    expect(adopted).toEqual(first)
-    expect(usage).toEqual([])
-  })
-
-  it("consumes one credit for a registered user transaction across source replay", async () => {
-    const occurredAt = new Date("2025-01-01T10:00:00.000Z")
-    const artifacts = {
-      transaction: {
+  it.effect("keeps the canonical transaction ID stable after deletion and re-creation", () =>
+    Effect.gen(function* () {
+      const transaction = {
         sourceId: TEST_SOURCE_ID,
         sourceRawRecordId: TEST_RAW_RECORD_ID,
-        externalId: "transaction-with-credit",
+        externalId: null,
+        externalGroupId: "group-stable-rematerialization",
+        timestamp: DateTime.toDateUtc(DateTime.makeUnsafe("2025-01-01T10:00:00.000Z")),
+        transactionType: "buy_fiat",
+        providerTransactionType: "buy",
+        providerStatus: "completed",
+        providerResourcePath:
+          "/v2/accounts/coinbase-account-1/transactions/tx-stable-rematerialization",
+        providerDescription: "Stable rematerialization fixture",
+        providerCreatedAt: DateTime.toDateUtc(DateTime.makeUnsafe("2025-01-01T10:00:00.000Z")),
+        providerUpdatedAt: DateTime.toDateUtc(DateTime.makeUnsafe("2025-01-01T10:00:00.000Z")),
+        metadata: { provider: "coinbase" },
+        providerFiatAmount: null,
+        providerFiatCurrency: null,
+        principalId: TEST_PRINCIPAL_ID,
+      } as const
+      const venueContext = {
+        venueType: "cex",
+        cexAccountId: fixture.cexAccountId,
+        externalAccountId: "coinbase-account-1",
+        externalOrderId: null,
+        externalFillId: null,
+        side: "buy",
+        instrument: "BTC-EUR",
+        fillPrice: "10000",
+        commissionAmount: null,
+        commissionCurrency: null,
+        metadata: { provider: "coinbase" },
+      } as const
+      const persist = (externalId: string | null) =>
+        runRepository(
+          Effect.flatMap(SourceNormalizationRepository, (repository) =>
+            repository.persistNormalizedArtifacts({
+              transaction: { ...transaction, externalId },
+              venueContext,
+              providerTransfers: [],
+              canonicalTransfers: [],
+              providerAssetRowIds: [],
+              legs: [],
+              transactionReview: null,
+              resolvedTransactionType: APPROVED_MAPPING,
+            })
+          )
+        )
+
+      const first = yield* Effect.promise(() => persist(null))
+      const repeated = yield* Effect.promise(() => persist(null))
+      expect(repeated.transaction.id).toBe(first.transaction.id)
+      const discovered = yield* Effect.promise(() => persist("discovered-stable-external-id"))
+      const corrected = yield* Effect.promise(() => persist("corrected-stable-external-id"))
+      expect(discovered.transaction.id).toBe(first.transaction.id)
+      expect(corrected.transaction.id).toBe(first.transaction.id)
+      yield* Effect.promise(() =>
+        runPg(
+          Effect.gen(function* () {
+            const db = yield* drizzle
+            yield* db
+              .delete(schema.transactions)
+              .where(eq(schema.transactions.id, first.transaction.id))
+          })
+        )
+      )
+      const recreated = yield* Effect.promise(() => persist("corrected-stable-external-id"))
+
+      expect(recreated.transaction.id).toBe(first.transaction.id)
+    })
+  )
+
+  it.effect("keeps transaction-level provider asset uses in step with each persist", () =>
+    Effect.gen(function* () {
+      const timestamp = DateTime.toDateUtc(DateTime.makeUnsafe("2025-01-01T10:00:00.000Z"))
+      const [assetA, assetB] = yield* Effect.promise(() =>
+        runPg(
+          Effect.gen(function* () {
+            const db = yield* drizzle
+            const rows = yield* db
+              .insert(schema.providerAssets)
+              .values([
+                {
+                  provider: "coinbase",
+                  providerAssetId: "tx-use-asset-a",
+                  currencyCode: "TXA",
+                  retrievedAt: timestamp,
+                },
+                {
+                  provider: "coinbase",
+                  providerAssetId: "tx-use-asset-b",
+                  currencyCode: "TXB",
+                  retrievedAt: timestamp,
+                },
+              ])
+              .returning({ id: schema.providerAssets.id })
+            if (rows.length !== 2) return yield* Effect.die("Failed to seed provider assets")
+            return rows
+          })
+        )
+      )
+      if (assetA === undefined || assetB === undefined) {
+        throw new Error("Failed to seed provider assets")
+      }
+
+      const persist = (providerAssetRowIds: ReadonlyArray<string>) =>
+        runRepository(
+          Effect.flatMap(SourceNormalizationRepository, (repository) =>
+            repository.persistNormalizedArtifacts({
+              transaction: {
+                sourceId: TEST_SOURCE_ID,
+                sourceRawRecordId: null,
+                externalId: "transaction-with-provider-asset-uses",
+                externalGroupId: null,
+                timestamp,
+                transactionType: "buy_fiat",
+                providerTransactionType: "buy",
+                providerStatus: "completed",
+                providerResourcePath: null,
+                providerDescription: "Transaction with provider asset uses",
+                providerCreatedAt: timestamp,
+                providerUpdatedAt: timestamp,
+                metadata: { provider: "test" },
+                providerFiatAmount: null,
+                providerFiatCurrency: null,
+                principalId: TEST_PRINCIPAL_ID,
+              },
+              venueContext: {
+                venueType: "cex",
+                cexAccountId: fixture.cexAccountId,
+                externalAccountId: "test-account",
+                externalOrderId: null,
+                externalFillId: null,
+                side: "buy",
+                instrument: "BTC-EUR",
+                fillPrice: "10000",
+                commissionAmount: null,
+                commissionCurrency: null,
+                metadata: { provider: "test" },
+              },
+              providerTransfers: [],
+              canonicalTransfers: [],
+              providerAssetRowIds,
+              legs: [],
+              transactionReview: null,
+              resolvedTransactionType: APPROVED_MAPPING,
+            })
+          )
+        )
+
+      const selectUses = (transactionId: string) =>
+        runPg(
+          Effect.gen(function* () {
+            const db = yield* drizzle
+            return yield* db
+              .select({
+                providerAssetRowId: schema.providerAssetTransactionUses.providerAssetRowId,
+                sourceId: schema.providerAssetTransactionUses.sourceId,
+              })
+              .from(schema.providerAssetTransactionUses)
+              .where(eq(schema.providerAssetTransactionUses.transactionId, transactionId))
+              .orderBy(asc(schema.providerAssetTransactionUses.providerAssetRowId))
+          })
+        )
+
+      const persisted = yield* Effect.promise(() => persist([assetA.id, assetB.id, assetA.id]))
+      expect(yield* Effect.promise(() => selectUses(persisted.transaction.id))).toEqual(
+        [assetA.id, assetB.id]
+          .sort()
+          .map((providerAssetRowId) => ({ providerAssetRowId, sourceId: TEST_SOURCE_ID }))
+      )
+
+      // A replay can change the record's dependencies; stale rows must go.
+      yield* Effect.promise(() => persist([assetB.id]))
+      expect(yield* Effect.promise(() => selectUses(persisted.transaction.id))).toEqual([
+        { providerAssetRowId: assetB.id, sourceId: TEST_SOURCE_ID },
+      ])
+
+      yield* Effect.promise(() => persist([]))
+      expect(yield* Effect.promise(() => selectUses(persisted.transaction.id))).toEqual([])
+    })
+  )
+
+  it.effect("keeps an external-only transaction ID stable after deletion and re-creation", () =>
+    Effect.gen(function* () {
+      const timestamp = DateTime.toDateUtc(DateTime.makeUnsafe("2025-01-01T10:00:00.000Z"))
+      const persist = () =>
+        runRepository(
+          Effect.flatMap(SourceNormalizationRepository, (repository) =>
+            repository.persistNormalizedArtifacts({
+              transaction: {
+                sourceId: TEST_SOURCE_ID,
+                sourceRawRecordId: null,
+                externalId: "external-only-stable-transaction",
+                externalGroupId: null,
+                timestamp,
+                transactionType: "buy_fiat",
+                providerTransactionType: "buy",
+                providerStatus: "completed",
+                providerResourcePath: null,
+                providerDescription: "External-only stable transaction",
+                providerCreatedAt: timestamp,
+                providerUpdatedAt: timestamp,
+                metadata: { provider: "test" },
+                providerFiatAmount: null,
+                providerFiatCurrency: null,
+                principalId: TEST_PRINCIPAL_ID,
+              },
+              venueContext: {
+                venueType: "cex",
+                cexAccountId: fixture.cexAccountId,
+                externalAccountId: "test-account",
+                externalOrderId: null,
+                externalFillId: null,
+                side: "buy",
+                instrument: "BTC-EUR",
+                fillPrice: "10000",
+                commissionAmount: null,
+                commissionCurrency: null,
+                metadata: { provider: "test" },
+              },
+              providerTransfers: [],
+              canonicalTransfers: [],
+              providerAssetRowIds: [],
+              legs: [],
+              transactionReview: null,
+              resolvedTransactionType: APPROVED_MAPPING,
+            })
+          )
+        )
+
+      const first = yield* Effect.promise(() => persist())
+      yield* Effect.promise(() =>
+        runPg(
+          Effect.gen(function* () {
+            const db = yield* drizzle
+            yield* db
+              .delete(schema.transactions)
+              .where(eq(schema.transactions.id, first.transaction.id))
+          })
+        )
+      )
+      const recreated = yield* Effect.promise(() => persist())
+
+      expect(recreated.transaction.id).toBe(first.transaction.id)
+    })
+  )
+
+  it.effect("reserves replay credits atomically before derived state can be reset", () =>
+    Effect.gen(function* () {
+      const secondRawRecordId = "00000000-0000-0000-0000-000000000484"
+      yield* Effect.promise(() =>
+        runPg(
+          Effect.gen(function* () {
+            const db = yield* drizzle
+            yield* db.delete(schema.creditLedger)
+            yield* db.insert(schema.creditLedger).values({
+              userId: fixture.userId,
+              delta: 1,
+              kind: "manual_adjustment",
+              reference: "test:single-replay-credit",
+              paymentReference: null,
+              expiresAt: null,
+            })
+            yield* seedRawRecord({
+              rawRecordId: secondRawRecordId,
+              externalRecordId: "raw-replay-credit-second",
+              occurredAt: DateTime.toDateUtc(DateTime.makeUnsafe("2025-01-02T10:00:00.000Z")),
+            })
+          })
+        )
+      )
+
+      const replayCreditError = yield* Effect.promise(() =>
+        runRepository(
+          Effect.flip(
+            Effect.flatMap(SourceNormalizationRepository, (repository) =>
+              repository.reserveReplayTransactionCredits({
+                reservationId: "replay-credit-atomicity",
+                transactions: [
+                  {
+                    sourceId: TEST_SOURCE_ID,
+                    sourceRawRecordId: TEST_RAW_RECORD_ID,
+                    externalId: "replay-credit-first",
+                    principalId: TEST_PRINCIPAL_ID,
+                  },
+                  {
+                    sourceId: TEST_SOURCE_ID,
+                    sourceRawRecordId: secondRawRecordId,
+                    externalId: "replay-credit-second",
+                    principalId: TEST_PRINCIPAL_ID,
+                  },
+                ],
+              })
+            )
+          )
+        )
+      )
+
+      expect(replayCreditError).toBeInstanceOf(SourceSyncCreditExhaustedError)
+      expect(replayCreditError).toMatchObject({ reasonCode: "no_usable_credits" })
+
+      const usage = yield* Effect.promise(() =>
+        runPg(
+          Effect.gen(function* () {
+            const db = yield* drizzle
+            return yield* db
+              .select({ count: sql<number>`count(*)` })
+              .from(schema.creditLedger)
+              .where(eq(schema.creditLedger.kind, "transaction_usage"))
+          })
+        )
+      )
+
+      expect(Number(usage[0]?.count ?? 0)).toBe(0)
+    })
+  )
+
+  it.effect("releases only the credits inserted by a failed replay reservation", () =>
+    Effect.gen(function* () {
+      yield* Effect.promise(() =>
+        runPg(
+          Effect.gen(function* () {
+            const db = yield* drizzle
+            yield* db.delete(schema.creditLedger)
+            yield* db.insert(schema.creditLedger).values({
+              userId: fixture.userId,
+              delta: 1,
+              kind: "manual_adjustment",
+              reference: "test:replay-credit-compensation",
+              paymentReference: null,
+              expiresAt: null,
+            })
+          })
+        )
+      )
+
+      const references = yield* Effect.promise(() =>
+        runRepository(
+          Effect.flatMap(SourceNormalizationRepository, (repository) =>
+            repository.reserveReplayTransactionCredits({
+              reservationId: "replay-credit-compensation",
+              transactions: [
+                {
+                  sourceId: TEST_SOURCE_ID,
+                  sourceRawRecordId: TEST_RAW_RECORD_ID,
+                  externalId: "replay-credit-compensation",
+                  principalId: TEST_PRINCIPAL_ID,
+                },
+              ],
+            })
+          )
+        )
+      )
+
+      expect(references).toEqual([
+        {
+          reference: `transaction:${TEST_SOURCE_ID}:external:replay-credit-compensation`,
+          sourceRawRecordId: TEST_RAW_RECORD_ID,
+        },
+      ])
+
+      yield* Effect.promise(() =>
+        runRepository(
+          Effect.flatMap(SourceNormalizationRepository, (repository) =>
+            repository.releaseReplayTransactionCredits({
+              reservationId: "replay-credit-compensation",
+              references: references.map(({ reference }) => reference),
+            })
+          )
+        )
+      )
+
+      const ledger = yield* Effect.promise(() =>
+        runPg(
+          Effect.gen(function* () {
+            const db = yield* drizzle
+            return yield* db
+              .select({
+                kind: schema.creditLedger.kind,
+                reference: schema.creditLedger.reference,
+              })
+              .from(schema.creditLedger)
+          })
+        )
+      )
+
+      expect(ledger).toEqual([
+        { kind: "manual_adjustment", reference: "test:replay-credit-compensation" },
+      ])
+    })
+  )
+
+  it.effect("lets a successor adopt a replay reservation before stale cleanup runs", () =>
+    Effect.gen(function* () {
+      const occurredAt = DateTime.toDateUtc(DateTime.makeUnsafe("2025-01-01T10:00:00.000Z"))
+      const transaction = {
+        sourceId: TEST_SOURCE_ID,
+        sourceRawRecordId: TEST_RAW_RECORD_ID,
+        externalId: "replay-credit-adoption",
         externalGroupId: null,
         timestamp: occurredAt,
         transactionType: "buy_fiat",
@@ -993,327 +830,676 @@ describe("SourceNormalizationRepositoryLive", () => {
         providerFiatAmount: null,
         providerFiatCurrency: null,
         principalId: TEST_PRINCIPAL_ID,
-      },
-      venueContext: {
-        venueType: "cex" as const,
-        cexAccountId: fixture.cexAccountId,
-        externalAccountId: "coinbase-account-1",
-        externalOrderId: null,
-        externalFillId: null,
-        side: "buy" as const,
-        instrument: "BTC-EUR",
-        fillPrice: "10000.00",
-        commissionAmount: null,
-        commissionCurrency: null,
-        metadata: null,
-      },
-      providerTransfers: [],
-      canonicalTransfers: [],
-      providerAssetRowIds: [],
-      legs: [],
-      transactionReview: null,
-      resolvedTransactionType: APPROVED_MAPPING,
-    } as const
-
-    await runRepository(
-      Effect.flatMap(SourceNormalizationRepository, (repository) =>
-        repository.persistNormalizedArtifacts(artifacts)
-      )
-    )
-    await runPg(
-      Effect.gen(function* () {
-        const db = yield* drizzle
-        yield* db
-          .update(schema.sourceRecordsRaw)
-          .set({
-            importedAt: new Date("2025-01-03T00:00:00.000Z"),
-            updatedAt: new Date("2025-01-03T00:00:00.000Z"),
-          })
-          .where(eq(schema.sourceRecordsRaw.id, TEST_RAW_RECORD_ID))
-        yield* db
-          .delete(schema.transactions)
-          .where(eq(schema.transactions.externalId, "transaction-with-credit"))
-      })
-    )
-    await runRepository(
-      Effect.flatMap(SourceNormalizationRepository, (repository) =>
-        repository.persistNormalizedArtifacts(artifacts)
-      )
-    )
-
-    const usage = await runPg(
-      Effect.gen(function* () {
-        const db = yield* drizzle
-        return yield* db
-          .select({
-            count: sql<number>`count(*)`,
-            totalDelta: sql<number>`coalesce(sum(${schema.creditLedger.delta}), 0)`,
-          })
-          .from(schema.creditLedger)
-          .where(eq(schema.creditLedger.kind, "transaction_usage"))
-      })
-    )
-
-    expect(Number(usage[0]?.count ?? 0)).toBe(1)
-    expect(Number(usage[0]?.totalDelta ?? 0)).toBe(-1)
-  })
-
-  it("commits an earlier transaction and fails a typed credit-exhausted error once a registered user's balance runs out", async () => {
-    const occurredAt = new Date("2025-01-01T10:00:00.000Z")
-    const secondRawRecordId = "00000000-0000-0000-0000-000000000382"
-
-    await runPg(
-      Effect.gen(function* () {
-        const db = yield* drizzle
-        yield* db.delete(schema.creditLedger)
-        yield* db.insert(schema.creditLedger).values({
-          userId: fixture.userId,
-          delta: 1,
-          kind: "manual_adjustment",
-          reference: "test:single-usable-credit",
-          expiresAt: null,
-        })
-      })
-    )
-    await runPg(
-      seedRawRecord({
-        rawRecordId: secondRawRecordId,
-        externalRecordId: "raw-acquire-2",
-        occurredAt,
-      })
-    )
-
-    await runRepository(
-      Effect.flatMap(SourceNormalizationRepository, (repository) =>
-        repository.persistNormalizedArtifacts(
-          buildBuyArtifacts({
-            occurredAt,
-            externalId: "transaction-covered-by-credit",
-            sourceRawRecordId: TEST_RAW_RECORD_ID,
+      } as const
+      yield* Effect.promise(() =>
+        runPg(
+          Effect.gen(function* () {
+            const db = yield* drizzle
+            yield* db.delete(schema.creditLedger)
+            yield* db.insert(schema.creditLedger).values({
+              userId: fixture.userId,
+              delta: 1,
+              kind: "manual_adjustment",
+              reference: "test:replay-credit-adoption",
+              paymentReference: null,
+              expiresAt: null,
+            })
           })
         )
       )
-    )
 
-    const error = await runRepository(
-      Effect.flip(
-        Effect.flatMap(SourceNormalizationRepository, (repository) =>
-          repository.persistNormalizedArtifacts(
-            buildBuyArtifacts({
-              occurredAt,
-              externalId: "transaction-blocked-by-exhaustion",
-              sourceRawRecordId: secondRawRecordId,
+      const first = yield* Effect.promise(() =>
+        runRepository(
+          Effect.flatMap(SourceNormalizationRepository, (repository) =>
+            repository.reserveReplayTransactionCredits({
+              reservationId: "replay-owner-old",
+              transactions: [transaction],
             })
           )
         )
       )
-    )
-
-    expect(error).toBeInstanceOf(SourceSyncCreditExhaustedError)
-    expect(error).toMatchObject({
-      _tag: "SourceSyncCreditExhaustedError",
-      reasonCode: "no_usable_credits",
-      availableCredits: 0,
-    })
-
-    const persistedTransactions = await runPg(
-      Effect.gen(function* () {
-        const db = yield* drizzle
-        return yield* db
-          .select({ externalId: schema.transactions.externalId })
-          .from(schema.transactions)
-          .where(eq(schema.transactions.sourceId, TEST_SOURCE_ID))
-      })
-    )
-
-    expect(persistedTransactions.map((row) => row.externalId)).toEqual([
-      "transaction-covered-by-credit",
-    ])
-
-    const usage = await runPg(
-      Effect.gen(function* () {
-        const db = yield* drizzle
-        return yield* db
-          .select({
-            count: sql<number>`count(*)`,
-            totalDelta: sql<number>`coalesce(sum(${schema.creditLedger.delta}), 0)`,
+      const adopted = yield* Effect.promise(() =>
+        runRepository(
+          Effect.flatMap(SourceNormalizationRepository, (repository) =>
+            repository.reserveReplayTransactionCredits({
+              reservationId: "replay-owner-successor",
+              transactions: [transaction],
+            })
+          )
+        )
+      )
+      const stalePersistence = yield* Effect.promise(() =>
+        runRepository(
+          Effect.flatMap(SourceNormalizationRepository, (repository) =>
+            repository
+              .persistNormalizedArtifacts({
+                replayReservationId: "replay-owner-old",
+                transaction,
+                venueContext: {
+                  venueType: "cex",
+                  cexAccountId: fixture.cexAccountId,
+                  externalAccountId: "coinbase-account-1",
+                  externalOrderId: null,
+                  externalFillId: null,
+                  side: "buy",
+                  instrument: "BTC-EUR",
+                  fillPrice: "10000.00",
+                  commissionAmount: null,
+                  commissionCurrency: null,
+                  metadata: null,
+                },
+                providerTransfers: [],
+                canonicalTransfers: [],
+                providerAssetRowIds: [],
+                legs: [],
+                transactionReview: null,
+                resolvedTransactionType: APPROVED_MAPPING,
+              })
+              .pipe(Effect.result)
+          )
+        )
+      )
+      yield* Effect.promise(() =>
+        runRepository(
+          Effect.gen(function* () {
+            const repository = yield* SourceNormalizationRepository
+            yield* repository.releaseReplayTransactionCredits({
+              reservationId: "replay-owner-old",
+              references: first.map(({ reference }) => reference),
+            })
+            yield* repository.persistNormalizedArtifacts({
+              replayReservationId: "replay-owner-successor",
+              transaction,
+              venueContext: {
+                venueType: "cex",
+                cexAccountId: fixture.cexAccountId,
+                externalAccountId: "coinbase-account-1",
+                externalOrderId: null,
+                externalFillId: null,
+                side: "buy",
+                instrument: "BTC-EUR",
+                fillPrice: "10000.00",
+                commissionAmount: null,
+                commissionCurrency: null,
+                metadata: null,
+              },
+              providerTransfers: [],
+              canonicalTransfers: [],
+              providerAssetRowIds: [],
+              legs: [],
+              transactionReview: null,
+              resolvedTransactionType: APPROVED_MAPPING,
+            })
+            yield* repository.releaseReplayTransactionCredits({
+              reservationId: "replay-owner-successor",
+              references: first.map(({ reference }) => reference),
+            })
           })
-          .from(schema.creditLedger)
-          .where(eq(schema.creditLedger.kind, "transaction_usage"))
-      })
-    )
-
-    expect(Number(usage[0]?.count ?? 0)).toBe(1)
-    expect(Number(usage[0]?.totalDelta ?? 0)).toBe(-1)
-  })
-
-  it("continues after a credit top-up and never charges a covered transaction twice", async () => {
-    const occurredAt = new Date("2025-01-01T10:00:00.000Z")
-    const secondRawRecordId = "00000000-0000-0000-0000-000000000383"
-
-    await runPg(
-      Effect.gen(function* () {
-        const db = yield* drizzle
-        yield* db.delete(schema.creditLedger)
-        yield* db.insert(schema.creditLedger).values({
-          userId: fixture.userId,
-          delta: 1,
-          kind: "manual_adjustment",
-          reference: "test:continue-initial-credit",
-          expiresAt: null,
-        })
-      })
-    )
-    await runPg(
-      seedRawRecord({
-        rawRecordId: secondRawRecordId,
-        externalRecordId: "raw-continue-2",
-        occurredAt,
-      })
-    )
-
-    const coveredArtifacts = buildBuyArtifacts({
-      occurredAt,
-      externalId: "transaction-continue-covered",
-      sourceRawRecordId: TEST_RAW_RECORD_ID,
-    })
-    const pausedArtifacts = buildBuyArtifacts({
-      occurredAt,
-      externalId: "transaction-continue-paused",
-      sourceRawRecordId: secondRawRecordId,
-    })
-    const persist = (artifacts: ReturnType<typeof buildBuyArtifacts>) =>
-      runRepository(
-        Effect.flatMap(SourceNormalizationRepository, (repository) =>
-          repository.persistNormalizedArtifacts(artifacts)
         )
       )
 
-    await persist(coveredArtifacts)
-    const pauseError = await runRepository(
-      Effect.flip(
-        Effect.flatMap(SourceNormalizationRepository, (repository) =>
-          repository.persistNormalizedArtifacts(pausedArtifacts)
+      const usage = yield* Effect.promise(() =>
+        runPg(
+          Effect.gen(function* () {
+            const db = yield* drizzle
+            return yield* db
+              .select({
+                reference: schema.creditLedger.reference,
+                replayReservationId: schema.creditLedger.replayReservationId,
+              })
+              .from(schema.creditLedger)
+              .where(eq(schema.creditLedger.kind, "transaction_usage"))
+          })
         )
       )
-    )
-    expect(pauseError).toBeInstanceOf(SourceSyncCreditExhaustedError)
 
-    await runPg(
-      Effect.gen(function* () {
-        const db = yield* drizzle
-        yield* db.insert(schema.creditLedger).values({
-          userId: fixture.userId,
-          delta: 2,
-          kind: "manual_adjustment",
-          reference: "test:continue-top-up",
-          expiresAt: null,
-        })
-      })
-    )
+      expect(stalePersistence._tag).toBe("Failure")
+      expect(adopted).toEqual(first)
+      expect(usage).toEqual([
+        {
+          reference: `transaction:${TEST_SOURCE_ID}:external:replay-credit-adoption`,
+          replayReservationId: null,
+        },
+      ])
+    })
+  )
 
-    // The continue pass replays the paused transaction and may also revisit the
-    // covered one; neither may produce a second usage charge.
-    await persist(pausedArtifacts)
-    await persist(coveredArtifacts)
-    await persist(pausedArtifacts)
-
-    const persistedTransactions = await runPg(
-      Effect.gen(function* () {
-        const db = yield* drizzle
-        return yield* db
-          .select({ externalId: schema.transactions.externalId })
-          .from(schema.transactions)
-          .where(eq(schema.transactions.sourceId, TEST_SOURCE_ID))
-          .orderBy(asc(schema.transactions.externalId))
-      })
-    )
-    expect(persistedTransactions.map((row) => row.externalId)).toEqual([
-      "transaction-continue-covered",
-      "transaction-continue-paused",
-    ])
-
-    const usage = await runPg(
-      Effect.gen(function* () {
-        const db = yield* drizzle
-        return yield* db
-          .select({
-            reference: schema.creditLedger.reference,
-            delta: schema.creditLedger.delta,
+  it.effect("releases an adopted replay reservation when the successor fails", () =>
+    Effect.gen(function* () {
+      const transaction = {
+        sourceId: TEST_SOURCE_ID,
+        sourceRawRecordId: TEST_RAW_RECORD_ID,
+        externalId: "replay-credit-adoption-failure",
+        principalId: TEST_PRINCIPAL_ID,
+      }
+      yield* Effect.promise(() =>
+        runPg(
+          Effect.gen(function* () {
+            const db = yield* drizzle
+            yield* db.delete(schema.creditLedger)
+            yield* db.insert(schema.creditLedger).values({
+              userId: fixture.userId,
+              delta: 1,
+              kind: "manual_adjustment",
+              reference: "test:replay-credit-adoption-failure",
+              paymentReference: null,
+              expiresAt: null,
+            })
           })
-          .from(schema.creditLedger)
-          .where(eq(schema.creditLedger.kind, "transaction_usage"))
-          .orderBy(asc(schema.creditLedger.reference))
-      })
-    )
-    expect(usage).toHaveLength(2)
-    expect(usage.map((row) => Number(row.delta))).toEqual([-1, -1])
-    expect(new Set(usage.map((row) => row.reference)).size).toBe(2)
-  })
+        )
+      )
 
-  it("aggregates active credit entries by expiry before choosing a bucket", async () => {
-    const occurredAt = new Date("2025-01-01T10:00:00.000Z")
-    const depletedExpiry = new Date(Date.now() + 60 * 60 * 1_000)
-    const availableExpiry = new Date(Date.now() + 2 * 60 * 60 * 1_000)
+      const first = yield* Effect.promise(() =>
+        runRepository(
+          Effect.flatMap(SourceNormalizationRepository, (repository) =>
+            repository.reserveReplayTransactionCredits({
+              reservationId: "replay-owner-old",
+              transactions: [transaction],
+            })
+          )
+        )
+      )
+      const adopted = yield* Effect.promise(() =>
+        runRepository(
+          Effect.flatMap(SourceNormalizationRepository, (repository) =>
+            repository.reserveReplayTransactionCredits({
+              reservationId: "replay-owner-successor",
+              transactions: [transaction],
+            })
+          )
+        )
+      )
 
-    await runPg(
+      yield* Effect.promise(() =>
+        runRepository(
+          Effect.gen(function* () {
+            const repository = yield* SourceNormalizationRepository
+            yield* repository.releaseReplayTransactionCredits({
+              reservationId: "replay-owner-old",
+              references: first.map(({ reference }) => reference),
+            })
+            yield* repository.releaseReplayTransactionCredits({
+              reservationId: "replay-owner-successor",
+              references: adopted.map(({ reference }) => reference),
+            })
+          })
+        )
+      )
+
+      const usage = yield* Effect.promise(() =>
+        runPg(
+          Effect.gen(function* () {
+            const db = yield* drizzle
+            return yield* db
+              .select({ reference: schema.creditLedger.reference })
+              .from(schema.creditLedger)
+              .where(eq(schema.creditLedger.kind, "transaction_usage"))
+          })
+        )
+      )
+
+      expect(adopted).toEqual(first)
+      expect(usage).toEqual([])
+    })
+  )
+
+  it.effect("consumes one credit for a registered user transaction across source replay", () =>
+    Effect.gen(function* () {
+      const occurredAt = DateTime.toDateUtc(DateTime.makeUnsafe("2025-01-01T10:00:00.000Z"))
+      const artifacts = {
+        transaction: {
+          sourceId: TEST_SOURCE_ID,
+          sourceRawRecordId: TEST_RAW_RECORD_ID,
+          externalId: "transaction-with-credit",
+          externalGroupId: null,
+          timestamp: occurredAt,
+          transactionType: "buy_fiat",
+          providerTransactionType: "buy",
+          providerStatus: "completed",
+          providerResourcePath: null,
+          providerDescription: null,
+          providerCreatedAt: occurredAt,
+          providerUpdatedAt: occurredAt,
+          metadata: null,
+          providerFiatAmount: null,
+          providerFiatCurrency: null,
+          principalId: TEST_PRINCIPAL_ID,
+        },
+        venueContext: {
+          venueType: "cex" as const,
+          cexAccountId: fixture.cexAccountId,
+          externalAccountId: "coinbase-account-1",
+          externalOrderId: null,
+          externalFillId: null,
+          side: "buy" as const,
+          instrument: "BTC-EUR",
+          fillPrice: "10000.00",
+          commissionAmount: null,
+          commissionCurrency: null,
+          metadata: null,
+        },
+        providerTransfers: [],
+        canonicalTransfers: [],
+        providerAssetRowIds: [],
+        legs: [],
+        transactionReview: null,
+        resolvedTransactionType: APPROVED_MAPPING,
+      } as const
+
+      yield* Effect.promise(() =>
+        runRepository(
+          Effect.flatMap(SourceNormalizationRepository, (repository) =>
+            repository.persistNormalizedArtifacts(artifacts)
+          )
+        )
+      )
+      yield* Effect.promise(() =>
+        runPg(
+          Effect.gen(function* () {
+            const db = yield* drizzle
+            yield* db
+              .update(schema.sourceRecordsRaw)
+              .set({
+                importedAt: DateTime.toDateUtc(DateTime.makeUnsafe("2025-01-03T00:00:00.000Z")),
+                updatedAt: DateTime.toDateUtc(DateTime.makeUnsafe("2025-01-03T00:00:00.000Z")),
+              })
+              .where(eq(schema.sourceRecordsRaw.id, TEST_RAW_RECORD_ID))
+            yield* db
+              .delete(schema.transactions)
+              .where(eq(schema.transactions.externalId, "transaction-with-credit"))
+          })
+        )
+      )
+      yield* Effect.promise(() =>
+        runRepository(
+          Effect.flatMap(SourceNormalizationRepository, (repository) =>
+            repository.persistNormalizedArtifacts(artifacts)
+          )
+        )
+      )
+
+      const usage = yield* Effect.promise(() =>
+        runPg(
+          Effect.gen(function* () {
+            const db = yield* drizzle
+            return yield* db
+              .select({
+                count: sql<number>`count(*)`,
+                totalDelta: sql<number>`coalesce(sum(${schema.creditLedger.delta}), 0)`,
+              })
+              .from(schema.creditLedger)
+              .where(eq(schema.creditLedger.kind, "transaction_usage"))
+          })
+        )
+      )
+
+      expect(Number(usage[0]?.count ?? 0)).toBe(1)
+      expect(Number(usage[0]?.totalDelta ?? 0)).toBe(-1)
+    })
+  )
+
+  it.effect(
+    "commits an earlier transaction and fails a typed credit-exhausted error once a registered user's balance runs out",
+    () =>
       Effect.gen(function* () {
-        const db = yield* drizzle
-        yield* db.delete(schema.creditLedger)
-        yield* db.insert(schema.creditLedger).values([
-          {
-            userId: fixture.userId,
-            delta: 2,
-            kind: "manual_adjustment",
-            reference: "test:depleted-expiring-grant",
-            expiresAt: depletedExpiry,
-          },
-          {
-            userId: fixture.userId,
-            delta: -2,
-            kind: "transaction_usage",
-            reference: "test:depleted-expiring-usage",
-            expiresAt: depletedExpiry,
-          },
-          {
-            userId: fixture.userId,
-            delta: 1,
-            kind: "manual_adjustment",
-            reference: "test:available-expiring-grant:first",
-            expiresAt: availableExpiry,
-          },
-          {
-            userId: fixture.userId,
-            delta: 1,
-            kind: "manual_adjustment",
-            reference: "test:available-expiring-grant:second",
-            expiresAt: availableExpiry,
-          },
-          {
-            userId: fixture.userId,
-            delta: 100,
-            kind: "manual_adjustment",
-            reference: "test:expired-grant",
-            expiresAt: new Date(Date.now() - 60 * 60 * 1_000),
-          },
-          {
-            userId: fixture.userId,
-            delta: 2,
-            kind: "manual_adjustment",
-            reference: "test:permanent-grant",
-            expiresAt: null,
-          },
+        const occurredAt = DateTime.toDateUtc(DateTime.makeUnsafe("2025-01-01T10:00:00.000Z"))
+        const secondRawRecordId = "00000000-0000-0000-0000-000000000382"
+
+        yield* Effect.promise(() =>
+          runPg(
+            Effect.gen(function* () {
+              const db = yield* drizzle
+              yield* db.delete(schema.creditLedger)
+              yield* db.insert(schema.creditLedger).values({
+                userId: fixture.userId,
+                delta: 1,
+                kind: "manual_adjustment",
+                reference: "test:single-usable-credit",
+                expiresAt: null,
+              })
+            })
+          )
+        )
+        yield* Effect.promise(() =>
+          runPg(
+            seedRawRecord({
+              rawRecordId: secondRawRecordId,
+              externalRecordId: "raw-acquire-2",
+              occurredAt,
+            })
+          )
+        )
+
+        yield* Effect.promise(() =>
+          runRepository(
+            Effect.flatMap(SourceNormalizationRepository, (repository) =>
+              repository.persistNormalizedArtifacts(
+                buildBuyArtifacts({
+                  occurredAt,
+                  externalId: "transaction-covered-by-credit",
+                  sourceRawRecordId: TEST_RAW_RECORD_ID,
+                })
+              )
+            )
+          )
+        )
+
+        const error = yield* Effect.promise(() =>
+          runRepository(
+            Effect.flip(
+              Effect.flatMap(SourceNormalizationRepository, (repository) =>
+                repository.persistNormalizedArtifacts(
+                  buildBuyArtifacts({
+                    occurredAt,
+                    externalId: "transaction-blocked-by-exhaustion",
+                    sourceRawRecordId: secondRawRecordId,
+                  })
+                )
+              )
+            )
+          )
+        )
+
+        expect(error).toBeInstanceOf(SourceSyncCreditExhaustedError)
+        expect(error).toMatchObject({
+          _tag: "SourceSyncCreditExhaustedError",
+          reasonCode: "no_usable_credits",
+          availableCredits: 0,
+        })
+
+        const persistedTransactions = yield* Effect.promise(() =>
+          runPg(
+            Effect.gen(function* () {
+              const db = yield* drizzle
+              return yield* db
+                .select({ externalId: schema.transactions.externalId })
+                .from(schema.transactions)
+                .where(eq(schema.transactions.sourceId, TEST_SOURCE_ID))
+            })
+          )
+        )
+
+        expect(persistedTransactions.map((row) => row.externalId)).toEqual([
+          "transaction-covered-by-credit",
         ])
-      })
-    )
 
-    await runRepository(
-      Effect.flatMap(SourceNormalizationRepository, (repository) =>
-        repository.persistNormalizedArtifacts({
+        const usage = yield* Effect.promise(() =>
+          runPg(
+            Effect.gen(function* () {
+              const db = yield* drizzle
+              return yield* db
+                .select({
+                  count: sql<number>`count(*)`,
+                  totalDelta: sql<number>`coalesce(sum(${schema.creditLedger.delta}), 0)`,
+                })
+                .from(schema.creditLedger)
+                .where(eq(schema.creditLedger.kind, "transaction_usage"))
+            })
+          )
+        )
+
+        expect(Number(usage[0]?.count ?? 0)).toBe(1)
+        expect(Number(usage[0]?.totalDelta ?? 0)).toBe(-1)
+      })
+  )
+
+  it.effect("continues after a credit top-up and never charges a covered transaction twice", () =>
+    Effect.gen(function* () {
+      const occurredAt = DateTime.toDateUtc(DateTime.makeUnsafe("2025-01-01T10:00:00.000Z"))
+      const secondRawRecordId = "00000000-0000-0000-0000-000000000383"
+
+      yield* Effect.promise(() =>
+        runPg(
+          Effect.gen(function* () {
+            const db = yield* drizzle
+            yield* db.delete(schema.creditLedger)
+            yield* db.insert(schema.creditLedger).values({
+              userId: fixture.userId,
+              delta: 1,
+              kind: "manual_adjustment",
+              reference: "test:continue-initial-credit",
+              expiresAt: null,
+            })
+          })
+        )
+      )
+      yield* Effect.promise(() =>
+        runPg(
+          seedRawRecord({
+            rawRecordId: secondRawRecordId,
+            externalRecordId: "raw-continue-2",
+            occurredAt,
+          })
+        )
+      )
+
+      const coveredArtifacts = buildBuyArtifacts({
+        occurredAt,
+        externalId: "transaction-continue-covered",
+        sourceRawRecordId: TEST_RAW_RECORD_ID,
+      })
+      const pausedArtifacts = buildBuyArtifacts({
+        occurredAt,
+        externalId: "transaction-continue-paused",
+        sourceRawRecordId: secondRawRecordId,
+      })
+      const persist = (artifacts: ReturnType<typeof buildBuyArtifacts>) =>
+        runRepository(
+          Effect.flatMap(SourceNormalizationRepository, (repository) =>
+            repository.persistNormalizedArtifacts(artifacts)
+          )
+        )
+
+      yield* Effect.promise(() => persist(coveredArtifacts))
+      const pauseError = yield* Effect.promise(() =>
+        runRepository(
+          Effect.flip(
+            Effect.flatMap(SourceNormalizationRepository, (repository) =>
+              repository.persistNormalizedArtifacts(pausedArtifacts)
+            )
+          )
+        )
+      )
+      expect(pauseError).toBeInstanceOf(SourceSyncCreditExhaustedError)
+
+      yield* Effect.promise(() =>
+        runPg(
+          Effect.gen(function* () {
+            const db = yield* drizzle
+            yield* db.insert(schema.creditLedger).values({
+              userId: fixture.userId,
+              delta: 2,
+              kind: "manual_adjustment",
+              reference: "test:continue-top-up",
+              expiresAt: null,
+            })
+          })
+        )
+      )
+
+      // The continue pass replays the paused transaction and may also revisit the
+      // covered one; neither may produce a second usage charge.
+      yield* Effect.promise(() => persist(pausedArtifacts))
+      yield* Effect.promise(() => persist(coveredArtifacts))
+      yield* Effect.promise(() => persist(pausedArtifacts))
+
+      const persistedTransactions = yield* Effect.promise(() =>
+        runPg(
+          Effect.gen(function* () {
+            const db = yield* drizzle
+            return yield* db
+              .select({ externalId: schema.transactions.externalId })
+              .from(schema.transactions)
+              .where(eq(schema.transactions.sourceId, TEST_SOURCE_ID))
+              .orderBy(asc(schema.transactions.externalId))
+          })
+        )
+      )
+      expect(persistedTransactions.map((row) => row.externalId)).toEqual([
+        "transaction-continue-covered",
+        "transaction-continue-paused",
+      ])
+
+      const usage = yield* Effect.promise(() =>
+        runPg(
+          Effect.gen(function* () {
+            const db = yield* drizzle
+            return yield* db
+              .select({
+                reference: schema.creditLedger.reference,
+                delta: schema.creditLedger.delta,
+              })
+              .from(schema.creditLedger)
+              .where(eq(schema.creditLedger.kind, "transaction_usage"))
+              .orderBy(asc(schema.creditLedger.reference))
+          })
+        )
+      )
+      expect(usage).toHaveLength(2)
+      expect(usage.map((row) => Number(row.delta))).toEqual([-1, -1])
+      expect(new Set(usage.map((row) => row.reference)).size).toBe(2)
+    })
+  )
+
+  it.live("aggregates active credit entries by expiry before choosing a bucket", () =>
+    Effect.gen(function* () {
+      const occurredAt = DateTime.toDateUtc(DateTime.makeUnsafe("2025-01-01T10:00:00.000Z"))
+      const depletedExpiry = DateTime.toDateUtc(DateTime.addDuration(yield* DateTime.now, "1 hour"))
+      const availableExpiry = DateTime.toDateUtc(
+        DateTime.addDuration(yield* DateTime.now, "2 hours")
+      )
+
+      yield* Effect.promise(() =>
+        runPg(
+          Effect.gen(function* () {
+            const db = yield* drizzle
+            yield* db.delete(schema.creditLedger)
+            yield* db.insert(schema.creditLedger).values([
+              {
+                userId: fixture.userId,
+                delta: 2,
+                kind: "manual_adjustment",
+                reference: "test:depleted-expiring-grant",
+                expiresAt: depletedExpiry,
+              },
+              {
+                userId: fixture.userId,
+                delta: -2,
+                kind: "transaction_usage",
+                reference: "test:depleted-expiring-usage",
+                expiresAt: depletedExpiry,
+              },
+              {
+                userId: fixture.userId,
+                delta: 1,
+                kind: "manual_adjustment",
+                reference: "test:available-expiring-grant:first",
+                expiresAt: availableExpiry,
+              },
+              {
+                userId: fixture.userId,
+                delta: 1,
+                kind: "manual_adjustment",
+                reference: "test:available-expiring-grant:second",
+                expiresAt: availableExpiry,
+              },
+              {
+                userId: fixture.userId,
+                delta: 100,
+                kind: "manual_adjustment",
+                reference: "test:expired-grant",
+                expiresAt: DateTime.toDateUtc(
+                  DateTime.subtractDuration(yield* DateTime.now, "1 hour")
+                ),
+              },
+              {
+                userId: fixture.userId,
+                delta: 2,
+                kind: "manual_adjustment",
+                reference: "test:permanent-grant",
+                expiresAt: null,
+              },
+            ])
+          })
+        )
+      )
+
+      yield* Effect.promise(() =>
+        runRepository(
+          Effect.flatMap(SourceNormalizationRepository, (repository) =>
+            repository.persistNormalizedArtifacts({
+              transaction: {
+                sourceId: TEST_SOURCE_ID,
+                sourceRawRecordId: TEST_RAW_RECORD_ID,
+                externalId: "transaction-using-aggregated-credit-bucket",
+                externalGroupId: null,
+                timestamp: occurredAt,
+                transactionType: "buy_fiat",
+                providerTransactionType: "buy",
+                providerStatus: "completed",
+                providerResourcePath: null,
+                providerDescription: null,
+                providerCreatedAt: occurredAt,
+                providerUpdatedAt: occurredAt,
+                metadata: null,
+                providerFiatAmount: null,
+                providerFiatCurrency: null,
+                principalId: TEST_PRINCIPAL_ID,
+              },
+              venueContext: {
+                venueType: "cex",
+                cexAccountId: fixture.cexAccountId,
+                externalAccountId: "coinbase-account-1",
+                externalOrderId: null,
+                externalFillId: null,
+                side: "buy",
+                instrument: "BTC-EUR",
+                fillPrice: "10000.00",
+                commissionAmount: null,
+                commissionCurrency: null,
+                metadata: null,
+              },
+              providerTransfers: [],
+              canonicalTransfers: [],
+              providerAssetRowIds: [],
+              legs: [],
+              transactionReview: null,
+              resolvedTransactionType: APPROVED_MAPPING,
+            })
+          )
+        )
+      )
+
+      const usage = yield* Effect.promise(() =>
+        runPg(
+          Effect.gen(function* () {
+            const db = yield* drizzle
+            return yield* db
+              .select({ expiresAt: schema.creditLedger.expiresAt })
+              .from(schema.creditLedger)
+              .where(
+                eq(
+                  schema.creditLedger.reference,
+                  `transaction:${TEST_SOURCE_ID}:external:transaction-using-aggregated-credit-bucket`
+                )
+              )
+          })
+        )
+      )
+
+      expect(usage).toEqual([{ expiresAt: availableExpiry }])
+    })
+  )
+
+  it.effect("keeps a raw-record credit when replay later discovers external ids", () =>
+    Effect.gen(function* () {
+      const occurredAt = DateTime.toDateUtc(DateTime.makeUnsafe("2025-01-01T10:00:00.000Z"))
+      const artifacts = (externalId: string | null) =>
+        ({
           transaction: {
             sourceId: TEST_SOURCE_ID,
             sourceRawRecordId: TEST_RAW_RECORD_ID,
-            externalId: "transaction-using-aggregated-credit-bucket",
+            externalId,
             externalGroupId: null,
             timestamp: occurredAt,
             transactionType: "buy_fiat",
@@ -1329,7 +1515,7 @@ describe("SourceNormalizationRepositoryLive", () => {
             principalId: TEST_PRINCIPAL_ID,
           },
           venueContext: {
-            venueType: "cex",
+            venueType: "cex" as const,
             cexAccountId: fixture.cexAccountId,
             externalAccountId: "coinbase-account-1",
             externalOrderId: null,
@@ -1347,563 +1533,91 @@ describe("SourceNormalizationRepositoryLive", () => {
           legs: [],
           transactionReview: null,
           resolvedTransactionType: APPROVED_MAPPING,
-        })
-      )
-    )
+        }) as const
 
-    const usage = await runPg(
-      Effect.gen(function* () {
-        const db = yield* drizzle
-        return yield* db
-          .select({ expiresAt: schema.creditLedger.expiresAt })
-          .from(schema.creditLedger)
-          .where(
-            eq(
-              schema.creditLedger.reference,
-              `transaction:${TEST_SOURCE_ID}:external:transaction-using-aggregated-credit-bucket`
-            )
+      yield* Effect.promise(() =>
+        runRepository(
+          Effect.flatMap(SourceNormalizationRepository, (repository) =>
+            repository.persistNormalizedArtifacts(artifacts(null))
           )
-      })
-    )
+        )
+      )
+      const firstReservation = yield* Effect.promise(() =>
+        runRepository(
+          Effect.flatMap(SourceNormalizationRepository, (repository) =>
+            repository.reserveReplayTransactionCredits({
+              reservationId: "replay-discovers-external-a",
+              transactions: [artifacts("discovered-external-a").transaction],
+            })
+          )
+        )
+      )
+      yield* Effect.promise(() =>
+        runPg(
+          Effect.gen(function* () {
+            const db = yield* drizzle
+            yield* db
+              .delete(schema.transactions)
+              .where(eq(schema.transactions.sourceId, TEST_SOURCE_ID))
+          })
+        )
+      )
+      yield* Effect.promise(() =>
+        runRepository(
+          Effect.flatMap(SourceNormalizationRepository, (repository) =>
+            repository.persistNormalizedArtifacts(artifacts("discovered-external-a"))
+          )
+        )
+      )
+      const secondReservation = yield* Effect.promise(() =>
+        runRepository(
+          Effect.flatMap(SourceNormalizationRepository, (repository) =>
+            repository.reserveReplayTransactionCredits({
+              reservationId: "replay-discovers-external-b",
+              transactions: [artifacts("discovered-external-b").transaction],
+            })
+          )
+        )
+      )
 
-    expect(usage).toEqual([{ expiresAt: availableExpiry }])
-  })
+      const usage = yield* Effect.promise(() =>
+        runPg(
+          Effect.gen(function* () {
+            const db = yield* drizzle
+            return yield* db
+              .select({ reference: schema.creditLedger.reference })
+              .from(schema.creditLedger)
+              .where(eq(schema.creditLedger.kind, "transaction_usage"))
+          })
+        )
+      )
 
-  it("keeps a raw-record credit when replay later discovers external ids", async () => {
-    const occurredAt = new Date("2025-01-01T10:00:00.000Z")
-    const artifacts = (externalId: string | null) =>
-      ({
-        transaction: {
-          sourceId: TEST_SOURCE_ID,
-          sourceRawRecordId: TEST_RAW_RECORD_ID,
+      expect(firstReservation).toEqual([])
+      expect(secondReservation).toEqual([])
+      expect(usage).toEqual([
+        { reference: `transaction:${TEST_SOURCE_ID}:raw:${TEST_RAW_RECORD_ID}` },
+      ])
+    })
+  )
+
+  it.effect(
+    "migrates a corrected external credit identity and still deduplicates another raw row",
+    () =>
+      Effect.gen(function* () {
+        const secondRawRecordId = "00000000-0000-0000-0000-000000000485"
+        const occurredAt = DateTime.toDateUtc(DateTime.makeUnsafe("2025-01-01T10:00:00.000Z"))
+        const artifacts = ({
           externalId,
-          externalGroupId: null,
-          timestamp: occurredAt,
-          transactionType: "buy_fiat",
-          providerTransactionType: "buy",
-          providerStatus: "completed",
-          providerResourcePath: null,
-          providerDescription: null,
-          providerCreatedAt: occurredAt,
-          providerUpdatedAt: occurredAt,
-          metadata: null,
-          providerFiatAmount: null,
-          providerFiatCurrency: null,
-          principalId: TEST_PRINCIPAL_ID,
-        },
-        venueContext: {
-          venueType: "cex" as const,
-          cexAccountId: fixture.cexAccountId,
-          externalAccountId: "coinbase-account-1",
-          externalOrderId: null,
-          externalFillId: null,
-          side: "buy",
-          instrument: "BTC-EUR",
-          fillPrice: "10000.00",
-          commissionAmount: null,
-          commissionCurrency: null,
-          metadata: null,
-        },
-        providerTransfers: [],
-        canonicalTransfers: [],
-        providerAssetRowIds: [],
-        legs: [],
-        transactionReview: null,
-        resolvedTransactionType: APPROVED_MAPPING,
-      }) as const
-
-    await runRepository(
-      Effect.flatMap(SourceNormalizationRepository, (repository) =>
-        repository.persistNormalizedArtifacts(artifacts(null))
-      )
-    )
-    const firstReservation = await runRepository(
-      Effect.flatMap(SourceNormalizationRepository, (repository) =>
-        repository.reserveReplayTransactionCredits({
-          reservationId: "replay-discovers-external-a",
-          transactions: [artifacts("discovered-external-a").transaction],
-        })
-      )
-    )
-    await runPg(
-      Effect.gen(function* () {
-        const db = yield* drizzle
-        yield* db
-          .delete(schema.transactions)
-          .where(eq(schema.transactions.sourceId, TEST_SOURCE_ID))
-      })
-    )
-    await runRepository(
-      Effect.flatMap(SourceNormalizationRepository, (repository) =>
-        repository.persistNormalizedArtifacts(artifacts("discovered-external-a"))
-      )
-    )
-    const secondReservation = await runRepository(
-      Effect.flatMap(SourceNormalizationRepository, (repository) =>
-        repository.reserveReplayTransactionCredits({
-          reservationId: "replay-discovers-external-b",
-          transactions: [artifacts("discovered-external-b").transaction],
-        })
-      )
-    )
-
-    const usage = await runPg(
-      Effect.gen(function* () {
-        const db = yield* drizzle
-        return yield* db
-          .select({ reference: schema.creditLedger.reference })
-          .from(schema.creditLedger)
-          .where(eq(schema.creditLedger.kind, "transaction_usage"))
-      })
-    )
-
-    expect(firstReservation).toEqual([])
-    expect(secondReservation).toEqual([])
-    expect(usage).toEqual([
-      { reference: `transaction:${TEST_SOURCE_ID}:raw:${TEST_RAW_RECORD_ID}` },
-    ])
-  })
-
-  it("migrates a corrected external credit identity and still deduplicates another raw row", async () => {
-    const secondRawRecordId = "00000000-0000-0000-0000-000000000485"
-    const occurredAt = new Date("2025-01-01T10:00:00.000Z")
-    const artifacts = ({
-      externalId,
-      sourceRawRecordId,
-    }: {
-      readonly externalId: string
-      readonly sourceRawRecordId: string
-    }) =>
-      ({
-        transaction: {
-          sourceId: TEST_SOURCE_ID,
           sourceRawRecordId,
-          externalId,
-          externalGroupId: null,
-          timestamp: occurredAt,
-          transactionType: "buy_fiat",
-          providerTransactionType: "buy",
-          providerStatus: "completed",
-          providerResourcePath: null,
-          providerDescription: null,
-          providerCreatedAt: occurredAt,
-          providerUpdatedAt: occurredAt,
-          metadata: null,
-          providerFiatAmount: null,
-          providerFiatCurrency: null,
-          principalId: TEST_PRINCIPAL_ID,
-        },
-        venueContext: {
-          venueType: "cex" as const,
-          cexAccountId: fixture.cexAccountId,
-          externalAccountId: "coinbase-account-1",
-          externalOrderId: null,
-          externalFillId: null,
-          side: "buy",
-          instrument: "BTC-EUR",
-          fillPrice: "10000.00",
-          commissionAmount: null,
-          commissionCurrency: null,
-          metadata: null,
-        },
-        providerTransfers: [],
-        canonicalTransfers: [],
-        providerAssetRowIds: [],
-        legs: [],
-        transactionReview: null,
-        resolvedTransactionType: APPROVED_MAPPING,
-      }) as const
-    const original = artifacts({
-      externalId: "external-before-correction",
-      sourceRawRecordId: TEST_RAW_RECORD_ID,
-    })
-    const corrected = artifacts({
-      externalId: "external-after-correction",
-      sourceRawRecordId: TEST_RAW_RECORD_ID,
-    })
-
-    await runRepository(
-      Effect.flatMap(SourceNormalizationRepository, (repository) =>
-        repository.persistNormalizedArtifacts(original)
-      )
-    )
-    const correctionReservation = await runRepository(
-      Effect.flatMap(SourceNormalizationRepository, (repository) =>
-        repository.reserveReplayTransactionCredits({
-          reservationId: "replay-corrects-external",
-          transactions: [corrected.transaction],
-        })
-      )
-    )
-    await runPg(
-      Effect.gen(function* () {
-        const db = yield* drizzle
-        yield* db
-          .delete(schema.transactions)
-          .where(eq(schema.transactions.sourceId, TEST_SOURCE_ID))
-        yield* seedRawRecord({
-          rawRecordId: secondRawRecordId,
-          externalRecordId: "raw-corrected-duplicate",
-          occurredAt,
-        })
-      })
-    )
-    await runRepository(
-      Effect.gen(function* () {
-        const repository = yield* SourceNormalizationRepository
-        yield* repository.persistNormalizedArtifacts(corrected)
-        yield* repository.persistNormalizedArtifacts(
-          artifacts({
-            externalId: "external-after-correction",
-            sourceRawRecordId: secondRawRecordId,
-          })
-        )
-      })
-    )
-
-    const usage = await runPg(
-      Effect.gen(function* () {
-        const db = yield* drizzle
-        return yield* db
-          .select({ delta: schema.creditLedger.delta, reference: schema.creditLedger.reference })
-          .from(schema.creditLedger)
-          .where(eq(schema.creditLedger.kind, "transaction_usage"))
-      })
-    )
-
-    expect(correctionReservation).toEqual([])
-    expect(usage).toEqual([
-      {
-        delta: -1,
-        reference: `transaction:${TEST_SOURCE_ID}:external:external-after-correction`,
-      },
-    ])
-  })
-
-  it("allows only one concurrent transaction when one credit remains across sources", async () => {
-    const secondSourceId = "00000000-0000-0000-0000-000000000481"
-    const secondRawRecordId = "00000000-0000-0000-0000-000000000482"
-    const occurredAt = new Date("2025-01-01T10:00:00.000Z")
-    const secondCexAccountId = await runPg(
-      Effect.gen(function* () {
-        const db = yield* drizzle
-        yield* db.delete(schema.creditLedger)
-        yield* db.insert(schema.creditLedger).values({
-          userId: fixture.userId,
-          delta: 1,
-          kind: "manual_adjustment",
-          reference: "test:one-concurrent-credit",
-          paymentReference: null,
-          expiresAt: null,
-        })
-        const [currentAccount] = yield* db
-          .select({ cexId: schema.cexAccount.cexId })
-          .from(schema.cexAccount)
-          .where(eq(schema.cexAccount.id, fixture.cexAccountId))
-          .limit(1)
-        if (currentAccount === undefined) {
-          return yield* Effect.die("Missing primary CEX account fixture")
-        }
-        const [secondAccount] = yield* db
-          .insert(schema.cexAccount)
-          .values({
-            cexId: currentAccount.cexId,
-            principalId: TEST_PRINCIPAL_ID,
-            providerUserId: "coinbase-concurrent-user",
-            providerAccountId: "coinbase-concurrent-account",
-            accessToken: "test-access-token",
-            refreshToken: "test-refresh-token",
-            expiresAt: new Date("2030-01-01T00:00:00.000Z"),
-            scopes: "wallet:accounts:read wallet:transactions:read",
-          })
-          .returning({ id: schema.cexAccount.id })
-        if (secondAccount === undefined) {
-          return yield* Effect.die("Failed to create second CEX account fixture")
-        }
-        yield* db.insert(schema.sources).values({
-          id: secondSourceId,
-          principalId: TEST_PRINCIPAL_ID,
-          name: "Concurrent Coinbase Source",
-          providerKey: "coinbase",
-          sourceableType: "cex",
-          cexAccountId: secondAccount.id,
-          addressId: null,
-        })
-        yield* db.insert(schema.sourceRecordsRaw).values({
-          id: secondRawRecordId,
-          sourceId: secondSourceId,
-          provider: "coinbase",
-          recordType: "coinbase_transaction",
-          externalAccountId: "coinbase-concurrent-account",
-          externalRecordId: "raw-concurrent-second",
-          occurredAt,
-          payload: { id: "raw-concurrent-second" },
-          importedAt: occurredAt,
-        })
-        return secondAccount.id
-      })
-    )
-
-    const artifacts = ({
-      sourceId,
-      sourceRawRecordId,
-      externalId,
-      cexAccountId,
-      externalAccountId,
-    }: {
-      readonly sourceId: string
-      readonly sourceRawRecordId: string
-      readonly externalId: string
-      readonly cexAccountId: string
-      readonly externalAccountId: string
-    }) => ({
-      transaction: {
-        sourceId,
-        sourceRawRecordId,
-        externalId,
-        externalGroupId: null,
-        timestamp: occurredAt,
-        transactionType: "buy_fiat" as const,
-        providerTransactionType: "buy",
-        providerStatus: "completed",
-        providerResourcePath: null,
-        providerDescription: null,
-        providerCreatedAt: occurredAt,
-        providerUpdatedAt: occurredAt,
-        metadata: null,
-        providerFiatAmount: null,
-        providerFiatCurrency: null,
-        principalId: TEST_PRINCIPAL_ID,
-      },
-      venueContext: {
-        venueType: "cex" as const,
-        cexAccountId,
-        externalAccountId,
-        externalOrderId: null,
-        externalFillId: null,
-        side: "buy" as const,
-        instrument: "BTC-EUR",
-        fillPrice: "10000.00",
-        commissionAmount: null,
-        commissionCurrency: null,
-        metadata: null,
-      },
-      providerTransfers: [],
-      canonicalTransfers: [],
-      providerAssetRowIds: [],
-      legs: [],
-      transactionReview: null,
-      resolvedTransactionType: APPROVED_MAPPING,
-    })
-    const results = await Promise.allSettled([
-      runRepository(
-        Effect.flatMap(SourceNormalizationRepository, (repository) =>
-          repository.persistNormalizedArtifacts(
-            artifacts({
-              sourceId: TEST_SOURCE_ID,
-              sourceRawRecordId: TEST_RAW_RECORD_ID,
-              externalId: "concurrent-credit-first",
-              cexAccountId: fixture.cexAccountId,
-              externalAccountId: "coinbase-account-1",
-            })
-          )
-        )
-      ),
-      runRepository(
-        Effect.flatMap(SourceNormalizationRepository, (repository) =>
-          repository.persistNormalizedArtifacts(
-            artifacts({
-              sourceId: secondSourceId,
-              sourceRawRecordId: secondRawRecordId,
-              externalId: "concurrent-credit-second",
-              cexAccountId: secondCexAccountId,
-              externalAccountId: "coinbase-concurrent-account",
-            })
-          )
-        )
-      ),
-    ])
-
-    const state = await runPg(
-      Effect.gen(function* () {
-        const db = yield* drizzle
-        const usage = yield* db
-          .select({
-            count: sql<number>`count(*)`,
-            delta: sql<number>`sum(${schema.creditLedger.delta})`,
-          })
-          .from(schema.creditLedger)
-          .where(eq(schema.creditLedger.kind, "transaction_usage"))
-        const transactions = yield* db
-          .select({ externalId: schema.transactions.externalId })
-          .from(schema.transactions)
-        return { usage, transactions }
-      })
-    )
-
-    expect(results.filter(({ status }) => status === "fulfilled")).toHaveLength(1)
-    expect(results.filter(({ status }) => status === "rejected")).toHaveLength(1)
-    expect(Number(state.usage[0]?.count ?? 0)).toBe(1)
-    expect(Number(state.usage[0]?.delta ?? 0)).toBe(-1)
-    expect(
-      state.transactions.filter(({ externalId }) => externalId?.startsWith("concurrent-credit-"))
-    ).toHaveLength(1)
-  })
-
-  it("preserves x402 payment for raw records retained when a source is claimed", async () => {
-    const anonymousPrincipalId = "00000000-0000-0000-0000-000000000491"
-    const postClaimRawRecordId = "00000000-0000-0000-0000-000000000492"
-    const claimConsumedAt = new Date("2025-01-02T00:00:00.000Z")
-    const occurredAt = new Date("2025-01-01T10:00:00.000Z")
-    const paidArtifacts = {
-      transaction: {
-        sourceId: TEST_SOURCE_ID,
-        sourceRawRecordId: TEST_RAW_RECORD_ID,
-        externalId: "claimed-x402-paid-transaction",
-        externalGroupId: null,
-        timestamp: occurredAt,
-        transactionType: "buy_fiat",
-        providerTransactionType: "buy",
-        providerStatus: "completed",
-        providerResourcePath: null,
-        providerDescription: null,
-        providerCreatedAt: occurredAt,
-        providerUpdatedAt: occurredAt,
-        metadata: null,
-        providerFiatAmount: null,
-        providerFiatCurrency: null,
-        principalId: TEST_PRINCIPAL_ID,
-      },
-      venueContext: {
-        venueType: "cex" as const,
-        cexAccountId: fixture.cexAccountId,
-        externalAccountId: "coinbase-account-1",
-        externalOrderId: null,
-        externalFillId: null,
-        side: "buy" as const,
-        instrument: "BTC-EUR",
-        fillPrice: "10000.00",
-        commissionAmount: null,
-        commissionCurrency: null,
-        metadata: null,
-      },
-      providerTransfers: [],
-      canonicalTransfers: [],
-      providerAssetRowIds: [],
-      legs: [],
-      transactionReview: null,
-      resolvedTransactionType: APPROVED_MAPPING,
-    } as const
-
-    await runPg(
-      Effect.gen(function* () {
-        const db = yield* drizzle
-        yield* db.delete(schema.creditLedger)
-        yield* db.delete(schema.billingAccounts)
-        yield* db.insert(schema.principals).values({
-          id: anonymousPrincipalId,
-          kind: "anonymous_wallet",
-          userId: null,
-        })
-        yield* db.insert(schema.principalClaims).values({
-          principalId: anonymousPrincipalId,
-          sourceId: TEST_SOURCE_ID,
-          requestId: "00000000-0000-0000-0000-000000000493",
-          claimType: "x402_receipt",
-          claimValueHash: "claimed-x402-paid-replay",
-          consumedAt: claimConsumedAt,
-        })
-      })
-    )
-
-    await runRepository(
-      Effect.flatMap(SourceNormalizationRepository, (repository) =>
-        repository.persistNormalizedArtifacts(paidArtifacts)
-      )
-    )
-    await runPg(
-      Effect.gen(function* () {
-        const db = yield* drizzle
-        yield* db
-          .delete(schema.transactions)
-          .where(eq(schema.transactions.externalId, "claimed-x402-paid-transaction"))
-      })
-    )
-    await runRepository(
-      Effect.flatMap(SourceNormalizationRepository, (repository) =>
-        repository.persistNormalizedArtifacts(paidArtifacts)
-      )
-    )
-
-    await runPg(
-      seedRawRecord({
-        rawRecordId: postClaimRawRecordId,
-        externalRecordId: "raw-after-x402-claim",
-        occurredAt: new Date("2025-01-03T00:00:00.000Z"),
-      })
-    )
-    const postClaimCreditError = await runRepository(
-      Effect.flip(
-        Effect.flatMap(SourceNormalizationRepository, (repository) =>
-          repository.persistNormalizedArtifacts({
-            ...paidArtifacts,
-            transaction: {
-              ...paidArtifacts.transaction,
-              sourceRawRecordId: postClaimRawRecordId,
-              externalId: "transaction-after-x402-claim",
-              timestamp: new Date("2025-01-03T00:00:00.000Z"),
-              providerCreatedAt: new Date("2025-01-03T00:00:00.000Z"),
-              providerUpdatedAt: new Date("2025-01-03T00:00:00.000Z"),
-            },
-          })
-        )
-      )
-    )
-
-    expect(postClaimCreditError).toBeInstanceOf(SourceSyncCreditExhaustedError)
-    expect(postClaimCreditError).toMatchObject({ reasonCode: "no_usable_credits" })
-
-    const state = await runPg(
-      Effect.gen(function* () {
-        const db = yield* drizzle
-        const usage = yield* db
-          .select({ count: sql<number>`count(*)` })
-          .from(schema.creditLedger)
-          .where(eq(schema.creditLedger.kind, "transaction_usage"))
-        const transactions = yield* db
-          .select({ externalId: schema.transactions.externalId })
-          .from(schema.transactions)
-        return { usage, transactions }
-      })
-    )
-
-    expect(Number(state.usage[0]?.count ?? 0)).toBe(0)
-    expect(state.transactions.map(({ externalId }) => externalId)).toContain(
-      "claimed-x402-paid-transaction"
-    )
-    expect(state.transactions.map(({ externalId }) => externalId)).not.toContain(
-      "transaction-after-x402-claim"
-    )
-  })
-
-  it("rolls back a registered user transaction when credits are exhausted", async () => {
-    const occurredAt = new Date("2025-01-01T10:00:00.000Z")
-
-    await runPg(
-      Effect.gen(function* () {
-        const db = yield* drizzle
-        yield* db.delete(schema.creditLedger)
-      })
-    )
-
-    const noCreditError = await runRepository(
-      Effect.flip(
-        Effect.flatMap(SourceNormalizationRepository, (repository) =>
-          repository.persistNormalizedArtifacts({
+        }: {
+          readonly externalId: string
+          readonly sourceRawRecordId: string
+        }) =>
+          ({
             transaction: {
               sourceId: TEST_SOURCE_ID,
-              sourceRawRecordId: TEST_RAW_RECORD_ID,
-              externalId: "transaction-without-credit",
+              sourceRawRecordId,
+              externalId,
               externalGroupId: null,
               timestamp: occurredAt,
               transactionType: "buy_fiat",
@@ -1919,7 +1633,7 @@ describe("SourceNormalizationRepositoryLive", () => {
               principalId: TEST_PRINCIPAL_ID,
             },
             venueContext: {
-              venueType: "cex",
+              venueType: "cex" as const,
               cexAccountId: fixture.cexAccountId,
               externalAccountId: "coinbase-account-1",
               externalOrderId: null,
@@ -1937,220 +1651,1188 @@ describe("SourceNormalizationRepositoryLive", () => {
             legs: [],
             transactionReview: null,
             resolvedTransactionType: APPROVED_MAPPING,
+          }) as const
+        const original = artifacts({
+          externalId: "external-before-correction",
+          sourceRawRecordId: TEST_RAW_RECORD_ID,
+        })
+        const corrected = artifacts({
+          externalId: "external-after-correction",
+          sourceRawRecordId: TEST_RAW_RECORD_ID,
+        })
+
+        yield* Effect.promise(() =>
+          runRepository(
+            Effect.flatMap(SourceNormalizationRepository, (repository) =>
+              repository.persistNormalizedArtifacts(original)
+            )
+          )
+        )
+        const correctionReservation = yield* Effect.promise(() =>
+          runRepository(
+            Effect.flatMap(SourceNormalizationRepository, (repository) =>
+              repository.reserveReplayTransactionCredits({
+                reservationId: "replay-corrects-external",
+                transactions: [corrected.transaction],
+              })
+            )
+          )
+        )
+        yield* Effect.promise(() =>
+          runPg(
+            Effect.gen(function* () {
+              const db = yield* drizzle
+              yield* db
+                .delete(schema.transactions)
+                .where(eq(schema.transactions.sourceId, TEST_SOURCE_ID))
+              yield* seedRawRecord({
+                rawRecordId: secondRawRecordId,
+                externalRecordId: "raw-corrected-duplicate",
+                occurredAt,
+              })
+            })
+          )
+        )
+        yield* Effect.promise(() =>
+          runRepository(
+            Effect.gen(function* () {
+              const repository = yield* SourceNormalizationRepository
+              yield* repository.persistNormalizedArtifacts(corrected)
+              yield* repository.persistNormalizedArtifacts(
+                artifacts({
+                  externalId: "external-after-correction",
+                  sourceRawRecordId: secondRawRecordId,
+                })
+              )
+            })
+          )
+        )
+
+        const usage = yield* Effect.promise(() =>
+          runPg(
+            Effect.gen(function* () {
+              const db = yield* drizzle
+              return yield* db
+                .select({
+                  delta: schema.creditLedger.delta,
+                  reference: schema.creditLedger.reference,
+                })
+                .from(schema.creditLedger)
+                .where(eq(schema.creditLedger.kind, "transaction_usage"))
+            })
+          )
+        )
+
+        expect(correctionReservation).toEqual([])
+        expect(usage).toEqual([
+          {
+            delta: -1,
+            reference: `transaction:${TEST_SOURCE_ID}:external:external-after-correction`,
+          },
+        ])
+      })
+  )
+
+  it.effect("allows only one concurrent transaction when one credit remains across sources", () =>
+    Effect.gen(function* () {
+      const secondSourceId = "00000000-0000-0000-0000-000000000481"
+      const secondRawRecordId = "00000000-0000-0000-0000-000000000482"
+      const occurredAt = DateTime.toDateUtc(DateTime.makeUnsafe("2025-01-01T10:00:00.000Z"))
+      const secondCexAccountId = yield* Effect.promise(() =>
+        runPg(
+          Effect.gen(function* () {
+            const db = yield* drizzle
+            yield* db.delete(schema.creditLedger)
+            yield* db.insert(schema.creditLedger).values({
+              userId: fixture.userId,
+              delta: 1,
+              kind: "manual_adjustment",
+              reference: "test:one-concurrent-credit",
+              paymentReference: null,
+              expiresAt: null,
+            })
+            const [currentAccount] = yield* db
+              .select({ cexId: schema.cexAccount.cexId })
+              .from(schema.cexAccount)
+              .where(eq(schema.cexAccount.id, fixture.cexAccountId))
+              .limit(1)
+            if (currentAccount === undefined) {
+              return yield* Effect.die("Missing primary CEX account fixture")
+            }
+            const [secondAccount] = yield* db
+              .insert(schema.cexAccount)
+              .values({
+                cexId: currentAccount.cexId,
+                principalId: TEST_PRINCIPAL_ID,
+                providerUserId: "coinbase-concurrent-user",
+                providerAccountId: "coinbase-concurrent-account",
+                accessToken: "test-access-token",
+                refreshToken: "test-refresh-token",
+                expiresAt: DateTime.toDateUtc(DateTime.makeUnsafe("2030-01-01T00:00:00.000Z")),
+                scopes: "wallet:accounts:read wallet:transactions:read",
+              })
+              .returning({ id: schema.cexAccount.id })
+            if (secondAccount === undefined) {
+              return yield* Effect.die("Failed to create second CEX account fixture")
+            }
+            yield* db.insert(schema.sources).values({
+              id: secondSourceId,
+              principalId: TEST_PRINCIPAL_ID,
+              name: "Concurrent Coinbase Source",
+              providerKey: "coinbase",
+              sourceableType: "cex",
+              cexAccountId: secondAccount.id,
+              addressId: null,
+            })
+            yield* db.insert(schema.sourceRecordsRaw).values({
+              id: secondRawRecordId,
+              sourceId: secondSourceId,
+              provider: "coinbase",
+              recordType: "coinbase_transaction",
+              externalAccountId: "coinbase-concurrent-account",
+              externalRecordId: "raw-concurrent-second",
+              occurredAt,
+              payload: { id: "raw-concurrent-second" },
+              importedAt: occurredAt,
+            })
+            return secondAccount.id
           })
         )
       )
-    )
 
-    expect(noCreditError).toBeInstanceOf(SourceSyncCreditExhaustedError)
-    expect(noCreditError).toMatchObject({ reasonCode: "no_usable_credits" })
-
-    const persistedTransactions = await runPg(
-      Effect.gen(function* () {
-        const db = yield* drizzle
-        return yield* db
-          .select({ count: sql<number>`count(*)` })
-          .from(schema.transactions)
-          .where(eq(schema.transactions.externalId, "transaction-without-credit"))
+      const artifacts = ({
+        sourceId,
+        sourceRawRecordId,
+        externalId,
+        cexAccountId,
+        externalAccountId,
+      }: {
+        readonly sourceId: string
+        readonly sourceRawRecordId: string
+        readonly externalId: string
+        readonly cexAccountId: string
+        readonly externalAccountId: string
+      }) => ({
+        transaction: {
+          sourceId,
+          sourceRawRecordId,
+          externalId,
+          externalGroupId: null,
+          timestamp: occurredAt,
+          transactionType: "buy_fiat" as const,
+          providerTransactionType: "buy",
+          providerStatus: "completed",
+          providerResourcePath: null,
+          providerDescription: null,
+          providerCreatedAt: occurredAt,
+          providerUpdatedAt: occurredAt,
+          metadata: null,
+          providerFiatAmount: null,
+          providerFiatCurrency: null,
+          principalId: TEST_PRINCIPAL_ID,
+        },
+        venueContext: {
+          venueType: "cex" as const,
+          cexAccountId,
+          externalAccountId,
+          externalOrderId: null,
+          externalFillId: null,
+          side: "buy" as const,
+          instrument: "BTC-EUR",
+          fillPrice: "10000.00",
+          commissionAmount: null,
+          commissionCurrency: null,
+          metadata: null,
+        },
+        providerTransfers: [],
+        canonicalTransfers: [],
+        providerAssetRowIds: [],
+        legs: [],
+        transactionReview: null,
+        resolvedTransactionType: APPROVED_MAPPING,
       })
-    )
+      const results = yield* Effect.promise(() =>
+        Promise.allSettled([
+          runRepository(
+            Effect.flatMap(SourceNormalizationRepository, (repository) =>
+              repository.persistNormalizedArtifacts(
+                artifacts({
+                  sourceId: TEST_SOURCE_ID,
+                  sourceRawRecordId: TEST_RAW_RECORD_ID,
+                  externalId: "concurrent-credit-first",
+                  cexAccountId: fixture.cexAccountId,
+                  externalAccountId: "coinbase-account-1",
+                })
+              )
+            )
+          ),
+          runRepository(
+            Effect.flatMap(SourceNormalizationRepository, (repository) =>
+              repository.persistNormalizedArtifacts(
+                artifacts({
+                  sourceId: secondSourceId,
+                  sourceRawRecordId: secondRawRecordId,
+                  externalId: "concurrent-credit-second",
+                  cexAccountId: secondCexAccountId,
+                  externalAccountId: "coinbase-concurrent-account",
+                })
+              )
+            )
+          ),
+        ])
+      )
 
-    expect(Number(persistedTransactions[0]?.count ?? 0)).toBe(0)
-  })
+      const state = yield* Effect.promise(() =>
+        runPg(
+          Effect.gen(function* () {
+            const db = yield* drizzle
+            const usage = yield* db
+              .select({
+                count: sql<number>`count(*)`,
+                delta: sql<number>`sum(${schema.creditLedger.delta})`,
+              })
+              .from(schema.creditLedger)
+              .where(eq(schema.creditLedger.kind, "transaction_usage"))
+            const transactions = yield* db
+              .select({ externalId: schema.transactions.externalId })
+              .from(schema.transactions)
+            return { usage, transactions }
+          })
+        )
+      )
 
-  it("persists exact observed provider transfer representations", async () => {
-    const occurredAt = new Date("2025-01-01T10:00:00.000Z")
-    const smallestU8DecimalAmount = `0.${"0".repeat(254)}1`
-    const globalRepresentationCountBefore = await runPg(
-      Effect.gen(function* () {
-        const db = yield* drizzle
-        const [row] = yield* db
-          .select({ count: sql<number>`count(*)` })
-          .from(schema.assetRepresentations)
-        return Number(row?.count ?? 0)
-      })
-    )
-    const sharedTransfer = {
-      sourceId: TEST_SOURCE_ID,
-      sourceRawRecordId: TEST_RAW_RECORD_ID,
-      externalGroupId: "group-observed-representations",
-      providerAssetId: null,
-      timestamp: occurredAt,
-      direction: "inbound" as const,
-      processingMode: "accounting_and_evidence" as const,
-      fromAccountRef: null,
-      toAccountRef: null,
-      fromAddress: "external-address",
-      toAddress: "owned-address",
-      networkName: "base",
-      networkHash: "hash-observed-representations",
-      observedBlockchainId: fixture.baseBlockchainId,
-      observedContractAddress: null,
-      observedMintAddress: null,
-      amount: "1",
-      metadata: { provider: "test-onchain-adapter" },
-    }
-    const providerTransfers = [
-      {
-        ...sharedTransfer,
-        externalId: "observed-native",
-        observedRepresentationType: "native" as const,
-        observedDecimals: 18,
-      },
-      {
-        ...sharedTransfer,
-        externalId: "observed-token",
-        observedRepresentationType: "token" as const,
-        observedContractAddress: "0xAbCd000000000000000000000000000000000096",
-        observedDecimals: 6,
-      },
-      {
-        ...sharedTransfer,
-        externalId: "observed-case-sensitive-contract",
-        observedRepresentationType: "token" as const,
-        observedContractAddress: "CaseSensitiveContractAddress",
-        observedDecimals: 6,
-      },
-      {
-        ...sharedTransfer,
-        externalId: "observed-nft",
-        observedRepresentationType: "nft" as const,
-        observedMintAddress: "NftMint111111111111111111111111111111111111",
-        observedDecimals: 0,
-      },
-      {
-        ...sharedTransfer,
-        externalId: "observed-unknown-type",
-        observedRepresentationType: null,
-        observedMintAddress: "UnknownMint11111111111111111111111111111111",
-        observedDecimals: 5,
-      },
-      {
-        ...sharedTransfer,
-        externalId: "observed-max-decimals",
-        observedRepresentationType: "token" as const,
-        observedMintAddress: "MaxDecimalsMint111111111111111111111111111111",
-        observedDecimals: 255,
-        amount: smallestU8DecimalAmount,
-      },
-    ]
+      expect(results.filter(({ status }) => status === "fulfilled")).toHaveLength(1)
+      expect(results.filter(({ status }) => status === "rejected")).toHaveLength(1)
+      expect(Number(state.usage[0]?.count ?? 0)).toBe(1)
+      expect(Number(state.usage[0]?.delta ?? 0)).toBe(-1)
+      expect(
+        state.transactions.filter(({ externalId }) => externalId?.startsWith("concurrent-credit-"))
+      ).toHaveLength(1)
+    })
+  )
 
-    const normalizedArtifacts = {
-      transaction: {
+  it.effect("preserves x402 payment for raw records retained when a source is claimed", () =>
+    Effect.gen(function* () {
+      const anonymousPrincipalId = "00000000-0000-0000-0000-000000000491"
+      const postClaimRawRecordId = "00000000-0000-0000-0000-000000000492"
+      const claimConsumedAt = DateTime.toDateUtc(DateTime.makeUnsafe("2025-01-02T00:00:00.000Z"))
+      const occurredAt = DateTime.toDateUtc(DateTime.makeUnsafe("2025-01-01T10:00:00.000Z"))
+      const paidArtifacts = {
+        transaction: {
+          sourceId: TEST_SOURCE_ID,
+          sourceRawRecordId: TEST_RAW_RECORD_ID,
+          externalId: "claimed-x402-paid-transaction",
+          externalGroupId: null,
+          timestamp: occurredAt,
+          transactionType: "buy_fiat",
+          providerTransactionType: "buy",
+          providerStatus: "completed",
+          providerResourcePath: null,
+          providerDescription: null,
+          providerCreatedAt: occurredAt,
+          providerUpdatedAt: occurredAt,
+          metadata: null,
+          providerFiatAmount: null,
+          providerFiatCurrency: null,
+          principalId: TEST_PRINCIPAL_ID,
+        },
+        venueContext: {
+          venueType: "cex" as const,
+          cexAccountId: fixture.cexAccountId,
+          externalAccountId: "coinbase-account-1",
+          externalOrderId: null,
+          externalFillId: null,
+          side: "buy" as const,
+          instrument: "BTC-EUR",
+          fillPrice: "10000.00",
+          commissionAmount: null,
+          commissionCurrency: null,
+          metadata: null,
+        },
+        providerTransfers: [],
+        canonicalTransfers: [],
+        providerAssetRowIds: [],
+        legs: [],
+        transactionReview: null,
+        resolvedTransactionType: APPROVED_MAPPING,
+      } as const
+
+      yield* Effect.promise(() =>
+        runPg(
+          Effect.gen(function* () {
+            const db = yield* drizzle
+            yield* db.delete(schema.creditLedger)
+            yield* db.delete(schema.billingAccounts)
+            yield* db.insert(schema.principals).values({
+              id: anonymousPrincipalId,
+              kind: "anonymous_wallet",
+              userId: null,
+            })
+            yield* db.insert(schema.principalClaims).values({
+              principalId: anonymousPrincipalId,
+              sourceId: TEST_SOURCE_ID,
+              requestId: "00000000-0000-0000-0000-000000000493",
+              claimType: "x402_receipt",
+              claimValueHash: "claimed-x402-paid-replay",
+              consumedAt: claimConsumedAt,
+            })
+          })
+        )
+      )
+
+      yield* Effect.promise(() =>
+        runRepository(
+          Effect.flatMap(SourceNormalizationRepository, (repository) =>
+            repository.persistNormalizedArtifacts(paidArtifacts)
+          )
+        )
+      )
+      yield* Effect.promise(() =>
+        runPg(
+          Effect.gen(function* () {
+            const db = yield* drizzle
+            yield* db
+              .delete(schema.transactions)
+              .where(eq(schema.transactions.externalId, "claimed-x402-paid-transaction"))
+          })
+        )
+      )
+      yield* Effect.promise(() =>
+        runRepository(
+          Effect.flatMap(SourceNormalizationRepository, (repository) =>
+            repository.persistNormalizedArtifacts(paidArtifacts)
+          )
+        )
+      )
+
+      yield* Effect.promise(() =>
+        runPg(
+          seedRawRecord({
+            rawRecordId: postClaimRawRecordId,
+            externalRecordId: "raw-after-x402-claim",
+            occurredAt: DateTime.toDateUtc(DateTime.makeUnsafe("2025-01-03T00:00:00.000Z")),
+          })
+        )
+      )
+      const postClaimCreditError = yield* Effect.promise(() =>
+        runRepository(
+          Effect.flip(
+            Effect.flatMap(SourceNormalizationRepository, (repository) =>
+              repository.persistNormalizedArtifacts({
+                ...paidArtifacts,
+                transaction: {
+                  ...paidArtifacts.transaction,
+                  sourceRawRecordId: postClaimRawRecordId,
+                  externalId: "transaction-after-x402-claim",
+                  timestamp: DateTime.toDateUtc(DateTime.makeUnsafe("2025-01-03T00:00:00.000Z")),
+                  providerCreatedAt: DateTime.toDateUtc(
+                    DateTime.makeUnsafe("2025-01-03T00:00:00.000Z")
+                  ),
+                  providerUpdatedAt: DateTime.toDateUtc(
+                    DateTime.makeUnsafe("2025-01-03T00:00:00.000Z")
+                  ),
+                },
+              })
+            )
+          )
+        )
+      )
+
+      expect(postClaimCreditError).toBeInstanceOf(SourceSyncCreditExhaustedError)
+      expect(postClaimCreditError).toMatchObject({ reasonCode: "no_usable_credits" })
+
+      const state = yield* Effect.promise(() =>
+        runPg(
+          Effect.gen(function* () {
+            const db = yield* drizzle
+            const usage = yield* db
+              .select({ count: sql<number>`count(*)` })
+              .from(schema.creditLedger)
+              .where(eq(schema.creditLedger.kind, "transaction_usage"))
+            const transactions = yield* db
+              .select({ externalId: schema.transactions.externalId })
+              .from(schema.transactions)
+            return { usage, transactions }
+          })
+        )
+      )
+
+      expect(Number(state.usage[0]?.count ?? 0)).toBe(0)
+      expect(state.transactions.map(({ externalId }) => externalId)).toContain(
+        "claimed-x402-paid-transaction"
+      )
+      expect(state.transactions.map(({ externalId }) => externalId)).not.toContain(
+        "transaction-after-x402-claim"
+      )
+    })
+  )
+
+  it.effect("rolls back a registered user transaction when credits are exhausted", () =>
+    Effect.gen(function* () {
+      const occurredAt = DateTime.toDateUtc(DateTime.makeUnsafe("2025-01-01T10:00:00.000Z"))
+
+      yield* Effect.promise(() =>
+        runPg(
+          Effect.gen(function* () {
+            const db = yield* drizzle
+            yield* db.delete(schema.creditLedger)
+          })
+        )
+      )
+
+      const noCreditError = yield* Effect.promise(() =>
+        runRepository(
+          Effect.flip(
+            Effect.flatMap(SourceNormalizationRepository, (repository) =>
+              repository.persistNormalizedArtifacts({
+                transaction: {
+                  sourceId: TEST_SOURCE_ID,
+                  sourceRawRecordId: TEST_RAW_RECORD_ID,
+                  externalId: "transaction-without-credit",
+                  externalGroupId: null,
+                  timestamp: occurredAt,
+                  transactionType: "buy_fiat",
+                  providerTransactionType: "buy",
+                  providerStatus: "completed",
+                  providerResourcePath: null,
+                  providerDescription: null,
+                  providerCreatedAt: occurredAt,
+                  providerUpdatedAt: occurredAt,
+                  metadata: null,
+                  providerFiatAmount: null,
+                  providerFiatCurrency: null,
+                  principalId: TEST_PRINCIPAL_ID,
+                },
+                venueContext: {
+                  venueType: "cex",
+                  cexAccountId: fixture.cexAccountId,
+                  externalAccountId: "coinbase-account-1",
+                  externalOrderId: null,
+                  externalFillId: null,
+                  side: "buy",
+                  instrument: "BTC-EUR",
+                  fillPrice: "10000.00",
+                  commissionAmount: null,
+                  commissionCurrency: null,
+                  metadata: null,
+                },
+                providerTransfers: [],
+                canonicalTransfers: [],
+                providerAssetRowIds: [],
+                legs: [],
+                transactionReview: null,
+                resolvedTransactionType: APPROVED_MAPPING,
+              })
+            )
+          )
+        )
+      )
+
+      expect(noCreditError).toBeInstanceOf(SourceSyncCreditExhaustedError)
+      expect(noCreditError).toMatchObject({ reasonCode: "no_usable_credits" })
+
+      const persistedTransactions = yield* Effect.promise(() =>
+        runPg(
+          Effect.gen(function* () {
+            const db = yield* drizzle
+            return yield* db
+              .select({ count: sql<number>`count(*)` })
+              .from(schema.transactions)
+              .where(eq(schema.transactions.externalId, "transaction-without-credit"))
+          })
+        )
+      )
+
+      expect(Number(persistedTransactions[0]?.count ?? 0)).toBe(0)
+    })
+  )
+
+  it.effect("persists exact observed provider transfer representations", () =>
+    Effect.gen(function* () {
+      const occurredAt = DateTime.toDateUtc(DateTime.makeUnsafe("2025-01-01T10:00:00.000Z"))
+      const smallestU8DecimalAmount = `0.${"0".repeat(254)}1`
+      const globalRepresentationCountBefore = yield* Effect.promise(() =>
+        runPg(
+          Effect.gen(function* () {
+            const db = yield* drizzle
+            const [row] = yield* db
+              .select({ count: sql<number>`count(*)` })
+              .from(schema.assetRepresentations)
+            return Number(row?.count ?? 0)
+          })
+        )
+      )
+      const sharedTransfer = {
         sourceId: TEST_SOURCE_ID,
         sourceRawRecordId: TEST_RAW_RECORD_ID,
-        externalId: "tx-observed-representations",
         externalGroupId: "group-observed-representations",
+        providerAssetId: null,
         timestamp: occurredAt,
-        transactionType: "buy_fiat",
-        providerTransactionType: "buy",
-        providerStatus: "completed",
-        providerResourcePath: null,
-        providerDescription: null,
-        providerCreatedAt: occurredAt,
-        providerUpdatedAt: occurredAt,
+        direction: "inbound" as const,
+        processingMode: "accounting_and_evidence" as const,
+        fromAccountRef: null,
+        toAccountRef: null,
+        fromAddress: "external-address",
+        toAddress: "owned-address",
+        networkName: "base",
+        networkHash: "hash-observed-representations",
+        observedBlockchainId: fixture.baseBlockchainId,
+        observedContractAddress: null,
+        observedMintAddress: null,
+        amount: "1",
         metadata: { provider: "test-onchain-adapter" },
-        providerFiatAmount: null,
-        providerFiatCurrency: null,
-        principalId: TEST_PRINCIPAL_ID,
-      },
-      venueContext: {
-        venueType: "dex",
-        cexAccountId: null,
-        externalAccountId: "owned-address",
-        externalOrderId: null,
-        externalFillId: null,
-        side: null,
-        instrument: null,
-        fillPrice: null,
-        commissionAmount: null,
-        commissionCurrency: null,
-        metadata: { provider: "test-onchain-adapter" },
-      },
-      providerTransfers,
-      canonicalTransfers: [],
-      providerAssetRowIds: [],
-      legs: [],
-      transactionReview: null,
-      resolvedTransactionType: APPROVED_MAPPING,
-    } as const
-
-    const result = await runRepository(
-      Effect.flatMap(SourceNormalizationRepository, (repository) =>
-        repository.persistNormalizedArtifacts(normalizedArtifacts)
-      )
-    )
-
-    expect(result.providerTransfers).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
+      }
+      const providerTransfers = [
+        {
+          ...sharedTransfer,
           externalId: "observed-native",
-          observedBlockchainId: fixture.baseBlockchainId,
-          observedRepresentationType: "native",
-          observedContractAddress: null,
-          observedMintAddress: null,
+          observedRepresentationType: "native" as const,
           observedDecimals: 18,
-        }),
-        expect.objectContaining({
+        },
+        {
+          ...sharedTransfer,
           externalId: "observed-token",
-          observedBlockchainId: fixture.baseBlockchainId,
-          observedRepresentationType: "token",
+          observedRepresentationType: "token" as const,
           observedContractAddress: "0xAbCd000000000000000000000000000000000096",
-          observedMintAddress: null,
           observedDecimals: 6,
-        }),
-        expect.objectContaining({
+        },
+        {
+          ...sharedTransfer,
           externalId: "observed-case-sensitive-contract",
-          observedBlockchainId: fixture.baseBlockchainId,
-          observedRepresentationType: "token",
+          observedRepresentationType: "token" as const,
           observedContractAddress: "CaseSensitiveContractAddress",
-          observedMintAddress: null,
           observedDecimals: 6,
-        }),
-        expect.objectContaining({
+        },
+        {
+          ...sharedTransfer,
           externalId: "observed-nft",
-          observedBlockchainId: fixture.baseBlockchainId,
-          observedRepresentationType: "nft",
-          observedContractAddress: null,
+          observedRepresentationType: "nft" as const,
           observedMintAddress: "NftMint111111111111111111111111111111111111",
           observedDecimals: 0,
-        }),
-        expect.objectContaining({
+        },
+        {
+          ...sharedTransfer,
           externalId: "observed-unknown-type",
-          observedBlockchainId: fixture.baseBlockchainId,
           observedRepresentationType: null,
-          observedContractAddress: null,
           observedMintAddress: "UnknownMint11111111111111111111111111111111",
           observedDecimals: 5,
-        }),
-        expect.objectContaining({
+        },
+        {
+          ...sharedTransfer,
           externalId: "observed-max-decimals",
-          observedRepresentationType: "token",
+          observedRepresentationType: "token" as const,
           observedMintAddress: "MaxDecimalsMint111111111111111111111111111111",
           observedDecimals: 255,
           amount: smallestU8DecimalAmount,
+        },
+      ]
+
+      const normalizedArtifacts = {
+        transaction: {
+          sourceId: TEST_SOURCE_ID,
+          sourceRawRecordId: TEST_RAW_RECORD_ID,
+          externalId: "tx-observed-representations",
+          externalGroupId: "group-observed-representations",
+          timestamp: occurredAt,
+          transactionType: "buy_fiat",
+          providerTransactionType: "buy",
+          providerStatus: "completed",
+          providerResourcePath: null,
+          providerDescription: null,
+          providerCreatedAt: occurredAt,
+          providerUpdatedAt: occurredAt,
+          metadata: { provider: "test-onchain-adapter" },
+          providerFiatAmount: null,
+          providerFiatCurrency: null,
+          principalId: TEST_PRINCIPAL_ID,
+        },
+        venueContext: {
+          venueType: "dex",
+          cexAccountId: null,
+          externalAccountId: "owned-address",
+          externalOrderId: null,
+          externalFillId: null,
+          side: null,
+          instrument: null,
+          fillPrice: null,
+          commissionAmount: null,
+          commissionCurrency: null,
+          metadata: { provider: "test-onchain-adapter" },
+        },
+        providerTransfers,
+        canonicalTransfers: [],
+        providerAssetRowIds: [],
+        legs: [],
+        transactionReview: null,
+        resolvedTransactionType: APPROVED_MAPPING,
+      } as const
+
+      const result = yield* Effect.promise(() =>
+        runRepository(
+          Effect.flatMap(SourceNormalizationRepository, (repository) =>
+            repository.persistNormalizedArtifacts(normalizedArtifacts)
+          )
+        )
+      )
+
+      expect(result.providerTransfers).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            externalId: "observed-native",
+            observedBlockchainId: fixture.baseBlockchainId,
+            observedRepresentationType: "native",
+            observedContractAddress: null,
+            observedMintAddress: null,
+            observedDecimals: 18,
+          }),
+          expect.objectContaining({
+            externalId: "observed-token",
+            observedBlockchainId: fixture.baseBlockchainId,
+            observedRepresentationType: "token",
+            observedContractAddress: "0xAbCd000000000000000000000000000000000096",
+            observedMintAddress: null,
+            observedDecimals: 6,
+          }),
+          expect.objectContaining({
+            externalId: "observed-case-sensitive-contract",
+            observedBlockchainId: fixture.baseBlockchainId,
+            observedRepresentationType: "token",
+            observedContractAddress: "CaseSensitiveContractAddress",
+            observedMintAddress: null,
+            observedDecimals: 6,
+          }),
+          expect.objectContaining({
+            externalId: "observed-nft",
+            observedBlockchainId: fixture.baseBlockchainId,
+            observedRepresentationType: "nft",
+            observedContractAddress: null,
+            observedMintAddress: "NftMint111111111111111111111111111111111111",
+            observedDecimals: 0,
+          }),
+          expect.objectContaining({
+            externalId: "observed-unknown-type",
+            observedBlockchainId: fixture.baseBlockchainId,
+            observedRepresentationType: null,
+            observedContractAddress: null,
+            observedMintAddress: "UnknownMint11111111111111111111111111111111",
+            observedDecimals: 5,
+          }),
+          expect.objectContaining({
+            externalId: "observed-max-decimals",
+            observedRepresentationType: "token",
+            observedMintAddress: "MaxDecimalsMint111111111111111111111111111111",
+            observedDecimals: 255,
+            amount: smallestU8DecimalAmount,
+          }),
+        ])
+      )
+
+      const sourceUses = yield* Effect.promise(() => loadSourceRepresentationUses(TEST_SOURCE_ID))
+      const globalRepresentationCount = yield* Effect.promise(() =>
+        runPg(
+          Effect.gen(function* () {
+            const db = yield* drizzle
+            const [globalCount] = yield* db
+              .select({ count: sql<number>`count(*)` })
+              .from(schema.assetRepresentations)
+            return Number(globalCount?.count ?? 0)
+          })
+        )
+      )
+
+      expect({ sourceUses, globalRepresentationCount }).toEqual({
+        sourceUses: [
+          {
+            representationType: "native",
+            contractAddress: null,
+            mintAddress: null,
+          },
+          {
+            representationType: "token",
+            contractAddress: "0xabcd000000000000000000000000000000000096",
+            mintAddress: null,
+          },
+          {
+            representationType: "token",
+            contractAddress: "CaseSensitiveContractAddress",
+            mintAddress: null,
+          },
+          {
+            representationType: "token",
+            contractAddress: null,
+            mintAddress: "MaxDecimalsMint111111111111111111111111111111",
+          },
+          {
+            representationType: "nft",
+            contractAddress: null,
+            mintAddress: "NftMint111111111111111111111111111111111111",
+          },
+        ],
+        globalRepresentationCount: globalRepresentationCountBefore,
+      })
+
+      const observedNativeTransfer = result.providerTransfers.find(
+        (transfer) => transfer.externalId === "observed-native"
+      )
+      expect(observedNativeTransfer).toBeDefined()
+      if (observedNativeTransfer === undefined) {
+        return
+      }
+
+      yield* Effect.promise(() =>
+        runPg(
+          Effect.gen(function* () {
+            const db = yield* drizzle
+            const [canonicalTransfer] = yield* db
+              .insert(schema.transfers)
+              .values({
+                sourceId: TEST_SOURCE_ID,
+                sourceRawRecordId: TEST_RAW_RECORD_ID,
+                principalId: TEST_PRINCIPAL_ID,
+                externalId: "canonical-observed-native",
+                externalGroupId: "group-observed-representations",
+                addressId: null,
+                blockchainId: null,
+                txHash: null,
+                timestamp: occurredAt,
+                type: "cex",
+                fromAddress: "external-address",
+                toAddress: "owned-address",
+                fromAccountRef: null,
+                toAccountRef: null,
+                fromPartyType: null,
+                fromPartyResourcePath: null,
+                toPartyType: null,
+                toPartyResourcePath: null,
+                assetId: TEST_BTC_ASSET_ID,
+                assetRepresentationId: null,
+                amount: "1",
+                tokenId: null,
+                notes: null,
+                metadata: { provider: "test-onchain-adapter" },
+              })
+              .returning({ id: schema.transfers.id })
+
+            if (canonicalTransfer === undefined) {
+              return yield* Effect.die("Failed to create canonical transfer fixture")
+            }
+
+            yield* db.insert(schema.transferReconciliations).values({
+              principalId: TEST_PRINCIPAL_ID,
+              providerTransferId: observedNativeTransfer.id,
+              canonicalTransferId: canonicalTransfer.id,
+              canonicalTransactionId: result.transaction.id,
+              status: "auto_applied",
+              matchReason: "test_stale_observation",
+              confidence: "1",
+              deterministic: true,
+              reviewMetadata: null,
+            })
+          })
+        )
+      )
+
+      yield* Effect.promise(() =>
+        expect(
+          runPg(
+            Effect.gen(function* () {
+              const db = yield* drizzle
+              yield* db
+                .update(schema.providerTransfers)
+                .set({ observedMintAddress: null })
+                .where(eq(schema.providerTransfers.externalId, "observed-unknown-type"))
+            })
+          )
+        ).rejects.toThrow()
+      )
+
+      yield* Effect.promise(() =>
+        expect(
+          runPg(
+            Effect.gen(function* () {
+              const db = yield* drizzle
+              yield* db
+                .update(schema.providerTransfers)
+                .set({ processingMode: "accounting_only" })
+                .where(eq(schema.providerTransfers.externalId, "observed-native"))
+            })
+          )
+        ).rejects.toThrow()
+      )
+
+      yield* Effect.promise(() =>
+        expect(
+          runPg(
+            Effect.gen(function* () {
+              const db = yield* drizzle
+              yield* db
+                .update(schema.providerTransfers)
+                .set({ processingMode: "stale" })
+                .where(eq(schema.providerTransfers.externalId, "observed-native"))
+            })
+          )
+        ).rejects.toThrow()
+      )
+
+      yield* Effect.promise(() =>
+        expect(
+          runPg(
+            Effect.gen(function* () {
+              const db = yield* drizzle
+              yield* db
+                .update(schema.providerTransfers)
+                .set({
+                  observedContractAddress: "0x0000000000000000000000000000000000000096",
+                })
+                .where(eq(schema.providerTransfers.externalId, "observed-unknown-type"))
+            })
+          )
+        ).rejects.toThrow()
+      )
+
+      yield* Effect.promise(() =>
+        expect(
+          runPg(
+            Effect.gen(function* () {
+              const db = yield* drizzle
+              yield* db
+                .update(schema.providerTransfers)
+                .set({ observedDecimals: -1 })
+                .where(eq(schema.providerTransfers.externalId, "observed-native"))
+            })
+          )
+        ).rejects.toThrow()
+      )
+
+      const partialRetryResult = yield* Effect.promise(() =>
+        runRepository(
+          Effect.flatMap(SourceNormalizationRepository, (repository) =>
+            repository.persistNormalizedArtifacts({
+              ...normalizedArtifacts,
+              providerTransfers: providerTransfers.map((transfer) =>
+                transfer.externalId === "observed-unknown-type"
+                  ? {
+                      ...transfer,
+                      observedDecimals: null,
+                      amount: "2",
+                      metadata: {
+                        provider: "retry-without-exact-decimal-evidence",
+                        rawUnits: "2",
+                      },
+                    }
+                  : transfer
+              ),
+            })
+          )
+        )
+      )
+      const partiallyRetriedUnknownType = partialRetryResult.providerTransfers.find(
+        (transfer) => transfer.externalId === "observed-unknown-type"
+      )
+
+      expect(partiallyRetriedUnknownType).toMatchObject({
+        observedBlockchainId: fixture.baseBlockchainId,
+        observedRepresentationType: null,
+        observedContractAddress: null,
+        observedMintAddress: "UnknownMint11111111111111111111111111111111",
+        observedDecimals: 5,
+        amount: expect.stringMatching(/^2(?:\.0+)?$/),
+        metadata: {
+          provider: "retry-without-exact-decimal-evidence",
+          rawUnits: "2",
+        },
+      })
+
+      const retryResult = yield* Effect.promise(() =>
+        runRepository(
+          Effect.flatMap(SourceNormalizationRepository, (repository) =>
+            repository.persistNormalizedArtifacts({
+              ...normalizedArtifacts,
+              providerTransfers: providerTransfers.map((transfer) =>
+                transfer.externalId === "observed-unknown-type"
+                  ? {
+                      ...transfer,
+                      observedBlockchainId: null,
+                      observedRepresentationType: null,
+                      observedContractAddress: null,
+                      observedMintAddress: null,
+                      observedDecimals: null,
+                      amount: "3",
+                      metadata: {
+                        provider: "retry-without-observed-representation",
+                        rawUnits: "3",
+                      },
+                    }
+                  : transfer
+              ),
+            })
+          )
+        )
+      )
+      const retriedUnknownType = retryResult.providerTransfers.find(
+        (transfer) => transfer.externalId === "observed-unknown-type"
+      )
+
+      expect(retriedUnknownType).toMatchObject({
+        observedBlockchainId: fixture.baseBlockchainId,
+        observedRepresentationType: null,
+        observedContractAddress: null,
+        observedMintAddress: "UnknownMint11111111111111111111111111111111",
+        observedDecimals: 5,
+        amount: expect.stringMatching(/^3(?:\.0+)?$/),
+        metadata: {
+          provider: "retry-without-observed-representation",
+          rawUnits: "3",
+        },
+      })
+
+      const correctedResult = yield* Effect.promise(() =>
+        runRepository(
+          Effect.flatMap(SourceNormalizationRepository, (repository) =>
+            repository.persistNormalizedArtifacts({
+              ...normalizedArtifacts,
+              providerTransfers: providerTransfers.map((transfer) =>
+                transfer.externalId === "observed-token"
+                  ? {
+                      ...transfer,
+                      observedContractAddress: null,
+                      observedMintAddress: "0xAbCd000000000000000000000000000000000097",
+                      observedDecimals: 9,
+                      amount: "3",
+                      metadata: {
+                        provider: "corrected-mint-observation",
+                        rawUnits: "3000000000",
+                      },
+                    }
+                  : transfer
+              ),
+            })
+          )
+        )
+      )
+      const correctedToken = correctedResult.providerTransfers.find(
+        (transfer) => transfer.externalId === "observed-token"
+      )
+
+      expect(correctedToken).toMatchObject({
+        observedBlockchainId: fixture.baseBlockchainId,
+        observedRepresentationType: "token",
+        observedContractAddress: null,
+        observedMintAddress: "0xAbCd000000000000000000000000000000000097",
+        observedDecimals: 9,
+        amount: expect.stringMatching(/^3(?:\.0+)?$/),
+        metadata: { provider: "corrected-mint-observation", rawUnits: "3000000000" },
+      })
+
+      const nativeCorrectionResult = yield* Effect.promise(() =>
+        runRepository(
+          Effect.flatMap(SourceNormalizationRepository, (repository) =>
+            repository.persistNormalizedArtifacts({
+              ...normalizedArtifacts,
+              providerTransfers: providerTransfers.map((transfer) =>
+                transfer.externalId === "observed-token"
+                  ? {
+                      ...transfer,
+                      observedRepresentationType: "native" as const,
+                      observedContractAddress: null,
+                      observedMintAddress: null,
+                      observedDecimals: 18,
+                      amount: "4",
+                      metadata: {
+                        provider: "corrected-native-observation",
+                        rawUnits: "4000000000000000000",
+                      },
+                    }
+                  : transfer
+              ),
+            })
+          )
+        )
+      )
+      const correctedNative = nativeCorrectionResult.providerTransfers.find(
+        (transfer) => transfer.externalId === "observed-token"
+      )
+
+      expect(correctedNative).toMatchObject({
+        observedBlockchainId: fixture.baseBlockchainId,
+        observedRepresentationType: "native",
+        observedContractAddress: null,
+        observedMintAddress: null,
+        observedDecimals: 18,
+        amount: expect.stringMatching(/^4(?:\.0+)?$/),
+        metadata: {
+          provider: "corrected-native-observation",
+          rawUnits: "4000000000000000000",
+        },
+      })
+
+      const accountingOnlyResult = yield* Effect.promise(() =>
+        runRepository(
+          Effect.flatMap(SourceNormalizationRepository, (repository) =>
+            repository.persistNormalizedArtifacts({
+              ...normalizedArtifacts,
+              providerTransfers: providerTransfers.map((transfer) =>
+                transfer.externalId === "observed-nft"
+                  ? {
+                      ...transfer,
+                      observedBlockchainId: null,
+                      observedRepresentationType: null,
+                      observedContractAddress: null,
+                      observedMintAddress: null,
+                      observedDecimals: null,
+                      processingMode: "accounting_only" as const,
+                      metadata: { provider: "test-onchain-adapter" },
+                    }
+                  : transfer
+              ),
+            })
+          )
+        )
+      )
+      expect(
+        accountingOnlyResult.providerTransfers.find(
+          (transfer) => transfer.externalId === "observed-nft"
+        )
+      ).toMatchObject({
+        observedBlockchainId: null,
+        observedRepresentationType: null,
+        observedContractAddress: null,
+        observedMintAddress: null,
+        observedDecimals: null,
+        processingMode: "accounting_only",
+        metadata: { provider: "test-onchain-adapter" },
+      })
+
+      const persistWithoutObservedTransfers = () =>
+        runRepository(
+          Effect.flatMap(SourceNormalizationRepository, (repository) =>
+            repository.persistNormalizedArtifacts({
+              ...normalizedArtifacts,
+              providerTransfers: [],
+            })
+          )
+        )
+
+      yield* Effect.promise(() =>
+        expect(persistWithoutObservedTransfers()).rejects.toThrow(
+          "sourceNormalizationRepository.clearStaleObservedProviderTransferRepresentations.activeReconciliation"
+        )
+      )
+
+      const stateAfterRejectedRemoval = yield* Effect.promise(() =>
+        runPg(
+          Effect.gen(function* () {
+            const db = yield* drizzle
+            const activeReconciliations = yield* db
+              .select()
+              .from(schema.transferReconciliations)
+              .where(
+                eq(schema.transferReconciliations.providerTransferId, observedNativeTransfer.id)
+              )
+            const preservedTransfers = yield* db
+              .select()
+              .from(schema.providerTransfers)
+              .where(eq(schema.providerTransfers.externalGroupId, "group-observed-representations"))
+
+            return { activeReconciliations, preservedTransfers }
+          })
+        )
+      )
+
+      expect(stateAfterRejectedRemoval.activeReconciliations).toEqual([
+        expect.objectContaining({
+          providerTransferId: observedNativeTransfer.id,
+          status: "auto_applied",
         }),
       ])
-    )
+      expect(stateAfterRejectedRemoval.preservedTransfers).toHaveLength(6)
+      expect(stateAfterRejectedRemoval.preservedTransfers).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            externalId: "observed-native",
+            observedRepresentationType: "native",
+            observedDecimals: 18,
+          }),
+        ])
+      )
 
-    const sourceUses = await loadSourceRepresentationUses(TEST_SOURCE_ID)
-    const globalRepresentationCount = await runPg(
-      Effect.gen(function* () {
-        const db = yield* drizzle
-        const [globalCount] = yield* db
-          .select({ count: sql<number>`count(*)` })
-          .from(schema.assetRepresentations)
-        return Number(globalCount?.count ?? 0)
-      })
-    )
+      yield* Effect.promise(() =>
+        runPg(
+          Effect.gen(function* () {
+            const db = yield* drizzle
+            yield* db
+              .update(schema.transferReconciliations)
+              .set({ status: "approved" })
+              .where(
+                eq(schema.transferReconciliations.providerTransferId, observedNativeTransfer.id)
+              )
+          })
+        )
+      )
+      yield* Effect.promise(() =>
+        expect(persistWithoutObservedTransfers()).rejects.toThrow(
+          "sourceNormalizationRepository.clearStaleObservedProviderTransferRepresentations.activeReconciliation"
+        )
+      )
 
-    expect({ sourceUses, globalRepresentationCount }).toEqual({
-      sourceUses: [
-        {
-          representationType: "native",
-          contractAddress: null,
-          mintAddress: null,
-        },
+      yield* Effect.promise(() =>
+        runPg(
+          Effect.gen(function* () {
+            const db = yield* drizzle
+            yield* db
+              .delete(schema.transferReconciliations)
+              .where(
+                eq(schema.transferReconciliations.providerTransferId, observedNativeTransfer.id)
+              )
+          })
+        )
+      )
+      yield* Effect.promise(() =>
+        runRepository(
+          Effect.flatMap(SourceNormalizationRepository, (repository) =>
+            repository.persistNormalizedArtifacts({
+              ...normalizedArtifacts,
+              providerTransfers: [],
+            })
+          )
+        )
+      )
+
+      const staleProviderTransfers = yield* Effect.promise(() =>
+        runPg(
+          Effect.gen(function* () {
+            const db = yield* drizzle
+            return yield* db
+              .select()
+              .from(schema.providerTransfers)
+              .where(eq(schema.providerTransfers.externalGroupId, "group-observed-representations"))
+          })
+        )
+      )
+
+      expect(staleProviderTransfers).toHaveLength(6)
+      expect(staleProviderTransfers).toEqual(
+        expect.arrayContaining(
+          providerTransfers.map((transfer) =>
+            expect.objectContaining({
+              externalId: transfer.externalId,
+              observedBlockchainId: null,
+              observedRepresentationType: null,
+              observedContractAddress: null,
+              observedMintAddress: null,
+              observedDecimals: null,
+              processingMode: "stale",
+            })
+          )
+        )
+      )
+
+      const historicalAndFutureUses = yield* Effect.promise(() =>
+        loadSourceRepresentationUses(TEST_SOURCE_ID)
+      )
+
+      expect(historicalAndFutureUses).toEqual([
+        { representationType: "native", contractAddress: null, mintAddress: null },
         {
           representationType: "token",
           contractAddress: "0xabcd000000000000000000000000000000000096",
@@ -2164,6 +2846,11 @@ describe("SourceNormalizationRepositoryLive", () => {
         {
           representationType: "token",
           contractAddress: null,
+          mintAddress: "0xabcd000000000000000000000000000000000097",
+        },
+        {
+          representationType: "token",
+          contractAddress: null,
           mintAddress: "MaxDecimalsMint111111111111111111111111111111",
         },
         {
@@ -2171,3583 +2858,2845 @@ describe("SourceNormalizationRepositoryLive", () => {
           contractAddress: null,
           mintAddress: "NftMint111111111111111111111111111111111111",
         },
-      ],
-      globalRepresentationCount: globalRepresentationCountBefore,
-    })
-
-    const observedNativeTransfer = result.providerTransfers.find(
-      (transfer) => transfer.externalId === "observed-native"
-    )
-    expect(observedNativeTransfer).toBeDefined()
-    if (observedNativeTransfer === undefined) {
-      return
-    }
-
-    await runPg(
-      Effect.gen(function* () {
-        const db = yield* drizzle
-        const [canonicalTransfer] = yield* db
-          .insert(schema.transfers)
-          .values({
-            sourceId: TEST_SOURCE_ID,
-            sourceRawRecordId: TEST_RAW_RECORD_ID,
-            principalId: TEST_PRINCIPAL_ID,
-            externalId: "canonical-observed-native",
-            externalGroupId: "group-observed-representations",
-            addressId: null,
-            blockchainId: null,
-            txHash: null,
-            timestamp: occurredAt,
-            type: "cex",
-            fromAddress: "external-address",
-            toAddress: "owned-address",
-            fromAccountRef: null,
-            toAccountRef: null,
-            fromPartyType: null,
-            fromPartyResourcePath: null,
-            toPartyType: null,
-            toPartyResourcePath: null,
-            assetId: TEST_BTC_ASSET_ID,
-            assetRepresentationId: null,
-            amount: "1",
-            tokenId: null,
-            notes: null,
-            metadata: { provider: "test-onchain-adapter" },
-          })
-          .returning({ id: schema.transfers.id })
-
-        if (canonicalTransfer === undefined) {
-          return yield* Effect.die("Failed to create canonical transfer fixture")
-        }
-
-        yield* db.insert(schema.transferReconciliations).values({
-          principalId: TEST_PRINCIPAL_ID,
-          providerTransferId: observedNativeTransfer.id,
-          canonicalTransferId: canonicalTransfer.id,
-          canonicalTransactionId: result.transaction.id,
-          status: "auto_applied",
-          matchReason: "test_stale_observation",
-          confidence: "1",
-          deterministic: true,
-          reviewMetadata: null,
-        })
-      })
-    )
-
-    await expect(
-      runPg(
-        Effect.gen(function* () {
-          const db = yield* drizzle
-          yield* db
-            .update(schema.providerTransfers)
-            .set({ observedMintAddress: null })
-            .where(eq(schema.providerTransfers.externalId, "observed-unknown-type"))
-        })
-      )
-    ).rejects.toThrow()
-
-    await expect(
-      runPg(
-        Effect.gen(function* () {
-          const db = yield* drizzle
-          yield* db
-            .update(schema.providerTransfers)
-            .set({ processingMode: "accounting_only" })
-            .where(eq(schema.providerTransfers.externalId, "observed-native"))
-        })
-      )
-    ).rejects.toThrow()
-
-    await expect(
-      runPg(
-        Effect.gen(function* () {
-          const db = yield* drizzle
-          yield* db
-            .update(schema.providerTransfers)
-            .set({ processingMode: "stale" })
-            .where(eq(schema.providerTransfers.externalId, "observed-native"))
-        })
-      )
-    ).rejects.toThrow()
-
-    await expect(
-      runPg(
-        Effect.gen(function* () {
-          const db = yield* drizzle
-          yield* db
-            .update(schema.providerTransfers)
-            .set({
-              observedContractAddress: "0x0000000000000000000000000000000000000096",
-            })
-            .where(eq(schema.providerTransfers.externalId, "observed-unknown-type"))
-        })
-      )
-    ).rejects.toThrow()
-
-    await expect(
-      runPg(
-        Effect.gen(function* () {
-          const db = yield* drizzle
-          yield* db
-            .update(schema.providerTransfers)
-            .set({ observedDecimals: -1 })
-            .where(eq(schema.providerTransfers.externalId, "observed-native"))
-        })
-      )
-    ).rejects.toThrow()
-
-    const partialRetryResult = await runRepository(
-      Effect.flatMap(SourceNormalizationRepository, (repository) =>
-        repository.persistNormalizedArtifacts({
-          ...normalizedArtifacts,
-          providerTransfers: providerTransfers.map((transfer) =>
-            transfer.externalId === "observed-unknown-type"
-              ? {
-                  ...transfer,
-                  observedDecimals: null,
-                  amount: "2",
-                  metadata: {
-                    provider: "retry-without-exact-decimal-evidence",
-                    rawUnits: "2",
-                  },
-                }
-              : transfer
-          ),
-        })
-      )
-    )
-    const partiallyRetriedUnknownType = partialRetryResult.providerTransfers.find(
-      (transfer) => transfer.externalId === "observed-unknown-type"
-    )
-
-    expect(partiallyRetriedUnknownType).toMatchObject({
-      observedBlockchainId: fixture.baseBlockchainId,
-      observedRepresentationType: null,
-      observedContractAddress: null,
-      observedMintAddress: "UnknownMint11111111111111111111111111111111",
-      observedDecimals: 5,
-      amount: expect.stringMatching(/^2(?:\.0+)?$/),
-      metadata: {
-        provider: "retry-without-exact-decimal-evidence",
-        rawUnits: "2",
-      },
-    })
-
-    const retryResult = await runRepository(
-      Effect.flatMap(SourceNormalizationRepository, (repository) =>
-        repository.persistNormalizedArtifacts({
-          ...normalizedArtifacts,
-          providerTransfers: providerTransfers.map((transfer) =>
-            transfer.externalId === "observed-unknown-type"
-              ? {
-                  ...transfer,
-                  observedBlockchainId: null,
-                  observedRepresentationType: null,
-                  observedContractAddress: null,
-                  observedMintAddress: null,
-                  observedDecimals: null,
-                  amount: "3",
-                  metadata: {
-                    provider: "retry-without-observed-representation",
-                    rawUnits: "3",
-                  },
-                }
-              : transfer
-          ),
-        })
-      )
-    )
-    const retriedUnknownType = retryResult.providerTransfers.find(
-      (transfer) => transfer.externalId === "observed-unknown-type"
-    )
-
-    expect(retriedUnknownType).toMatchObject({
-      observedBlockchainId: fixture.baseBlockchainId,
-      observedRepresentationType: null,
-      observedContractAddress: null,
-      observedMintAddress: "UnknownMint11111111111111111111111111111111",
-      observedDecimals: 5,
-      amount: expect.stringMatching(/^3(?:\.0+)?$/),
-      metadata: {
-        provider: "retry-without-observed-representation",
-        rawUnits: "3",
-      },
-    })
-
-    const correctedResult = await runRepository(
-      Effect.flatMap(SourceNormalizationRepository, (repository) =>
-        repository.persistNormalizedArtifacts({
-          ...normalizedArtifacts,
-          providerTransfers: providerTransfers.map((transfer) =>
-            transfer.externalId === "observed-token"
-              ? {
-                  ...transfer,
-                  observedContractAddress: null,
-                  observedMintAddress: "0xAbCd000000000000000000000000000000000097",
-                  observedDecimals: 9,
-                  amount: "3",
-                  metadata: { provider: "corrected-mint-observation", rawUnits: "3000000000" },
-                }
-              : transfer
-          ),
-        })
-      )
-    )
-    const correctedToken = correctedResult.providerTransfers.find(
-      (transfer) => transfer.externalId === "observed-token"
-    )
-
-    expect(correctedToken).toMatchObject({
-      observedBlockchainId: fixture.baseBlockchainId,
-      observedRepresentationType: "token",
-      observedContractAddress: null,
-      observedMintAddress: "0xAbCd000000000000000000000000000000000097",
-      observedDecimals: 9,
-      amount: expect.stringMatching(/^3(?:\.0+)?$/),
-      metadata: { provider: "corrected-mint-observation", rawUnits: "3000000000" },
-    })
-
-    const nativeCorrectionResult = await runRepository(
-      Effect.flatMap(SourceNormalizationRepository, (repository) =>
-        repository.persistNormalizedArtifacts({
-          ...normalizedArtifacts,
-          providerTransfers: providerTransfers.map((transfer) =>
-            transfer.externalId === "observed-token"
-              ? {
-                  ...transfer,
-                  observedRepresentationType: "native" as const,
-                  observedContractAddress: null,
-                  observedMintAddress: null,
-                  observedDecimals: 18,
-                  amount: "4",
-                  metadata: {
-                    provider: "corrected-native-observation",
-                    rawUnits: "4000000000000000000",
-                  },
-                }
-              : transfer
-          ),
-        })
-      )
-    )
-    const correctedNative = nativeCorrectionResult.providerTransfers.find(
-      (transfer) => transfer.externalId === "observed-token"
-    )
-
-    expect(correctedNative).toMatchObject({
-      observedBlockchainId: fixture.baseBlockchainId,
-      observedRepresentationType: "native",
-      observedContractAddress: null,
-      observedMintAddress: null,
-      observedDecimals: 18,
-      amount: expect.stringMatching(/^4(?:\.0+)?$/),
-      metadata: {
-        provider: "corrected-native-observation",
-        rawUnits: "4000000000000000000",
-      },
-    })
-
-    const accountingOnlyResult = await runRepository(
-      Effect.flatMap(SourceNormalizationRepository, (repository) =>
-        repository.persistNormalizedArtifacts({
-          ...normalizedArtifacts,
-          providerTransfers: providerTransfers.map((transfer) =>
-            transfer.externalId === "observed-nft"
-              ? {
-                  ...transfer,
-                  observedBlockchainId: null,
-                  observedRepresentationType: null,
-                  observedContractAddress: null,
-                  observedMintAddress: null,
-                  observedDecimals: null,
-                  processingMode: "accounting_only" as const,
-                  metadata: { provider: "test-onchain-adapter" },
-                }
-              : transfer
-          ),
-        })
-      )
-    )
-    expect(
-      accountingOnlyResult.providerTransfers.find(
-        (transfer) => transfer.externalId === "observed-nft"
-      )
-    ).toMatchObject({
-      observedBlockchainId: null,
-      observedRepresentationType: null,
-      observedContractAddress: null,
-      observedMintAddress: null,
-      observedDecimals: null,
-      processingMode: "accounting_only",
-      metadata: { provider: "test-onchain-adapter" },
-    })
-
-    const persistWithoutObservedTransfers = () =>
-      runRepository(
-        Effect.flatMap(SourceNormalizationRepository, (repository) =>
-          repository.persistNormalizedArtifacts({
-            ...normalizedArtifacts,
-            providerTransfers: [],
-          })
-        )
-      )
-
-    await expect(persistWithoutObservedTransfers()).rejects.toThrow(
-      "sourceNormalizationRepository.clearStaleObservedProviderTransferRepresentations.activeReconciliation"
-    )
-
-    const stateAfterRejectedRemoval = await runPg(
-      Effect.gen(function* () {
-        const db = yield* drizzle
-        const activeReconciliations = yield* db
-          .select()
-          .from(schema.transferReconciliations)
-          .where(eq(schema.transferReconciliations.providerTransferId, observedNativeTransfer.id))
-        const preservedTransfers = yield* db
-          .select()
-          .from(schema.providerTransfers)
-          .where(eq(schema.providerTransfers.externalGroupId, "group-observed-representations"))
-
-        return { activeReconciliations, preservedTransfers }
-      })
-    )
-
-    expect(stateAfterRejectedRemoval.activeReconciliations).toEqual([
-      expect.objectContaining({
-        providerTransferId: observedNativeTransfer.id,
-        status: "auto_applied",
-      }),
-    ])
-    expect(stateAfterRejectedRemoval.preservedTransfers).toHaveLength(6)
-    expect(stateAfterRejectedRemoval.preservedTransfers).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          externalId: "observed-native",
-          observedRepresentationType: "native",
-          observedDecimals: 18,
-        }),
       ])
-    )
+    })
+  )
 
-    await runPg(
-      Effect.gen(function* () {
-        const db = yield* drizzle
-        yield* db
-          .update(schema.transferReconciliations)
-          .set({ status: "approved" })
-          .where(eq(schema.transferReconciliations.providerTransferId, observedNativeTransfer.id))
-      })
-    )
-    await expect(persistWithoutObservedTransfers()).rejects.toThrow(
-      "sourceNormalizationRepository.clearStaleObservedProviderTransferRepresentations.activeReconciliation"
-    )
-
-    await runPg(
-      Effect.gen(function* () {
-        const db = yield* drizzle
-        yield* db
-          .delete(schema.transferReconciliations)
-          .where(eq(schema.transferReconciliations.providerTransferId, observedNativeTransfer.id))
-      })
-    )
-    await runRepository(
-      Effect.flatMap(SourceNormalizationRepository, (repository) =>
-        repository.persistNormalizedArtifacts({
-          ...normalizedArtifacts,
-          providerTransfers: [],
-        })
-      )
-    )
-
-    const staleProviderTransfers = await runPg(
-      Effect.gen(function* () {
-        const db = yield* drizzle
-        return yield* db
-          .select()
-          .from(schema.providerTransfers)
-          .where(eq(schema.providerTransfers.externalGroupId, "group-observed-representations"))
-      })
-    )
-
-    expect(staleProviderTransfers).toHaveLength(6)
-    expect(staleProviderTransfers).toEqual(
-      expect.arrayContaining(
-        providerTransfers.map((transfer) =>
-          expect.objectContaining({
-            externalId: transfer.externalId,
-            observedBlockchainId: null,
-            observedRepresentationType: null,
-            observedContractAddress: null,
-            observedMintAddress: null,
-            observedDecimals: null,
-            processingMode: "stale",
-          })
-        )
-      )
-    )
-
-    const historicalAndFutureUses = await loadSourceRepresentationUses(TEST_SOURCE_ID)
-
-    expect(historicalAndFutureUses).toEqual([
-      { representationType: "native", contractAddress: null, mintAddress: null },
-      {
-        representationType: "token",
-        contractAddress: "0xabcd000000000000000000000000000000000096",
-        mintAddress: null,
-      },
-      {
-        representationType: "token",
-        contractAddress: "CaseSensitiveContractAddress",
-        mintAddress: null,
-      },
-      {
-        representationType: "token",
-        contractAddress: null,
-        mintAddress: "0xabcd000000000000000000000000000000000097",
-      },
-      {
-        representationType: "token",
-        contractAddress: null,
-        mintAddress: "MaxDecimalsMint111111111111111111111111111111",
-      },
-      {
-        representationType: "nft",
-        contractAddress: null,
-        mintAddress: "NftMint111111111111111111111111111111111111",
-      },
-    ])
-  })
-
-  it("persists normalized artifacts idempotently and feeds FIFO side effects", async () => {
-    const acquisitionResult = await runRepository(
-      Effect.flatMap(SourceNormalizationRepository, (repository) =>
-        repository.persistNormalizedArtifacts({
-          transaction: {
-            sourceId: TEST_SOURCE_ID,
-            sourceRawRecordId: TEST_RAW_RECORD_ID,
-            externalId: "tx-acquire-1",
-            externalGroupId: "group-acquire-1",
-            timestamp: new Date("2025-01-01T10:00:00.000Z"),
-            transactionType: "buy_fiat",
-            providerTransactionType: "buy",
-            providerStatus: "completed",
-            providerResourcePath: "/v2/accounts/coinbase-account-1/transactions/tx-acquire-1",
-            providerDescription: "Seed buy",
-            providerCreatedAt: new Date("2025-01-01T10:00:00.000Z"),
-            providerUpdatedAt: new Date("2025-01-01T10:00:00.000Z"),
-            metadata: { provider: "coinbase" },
-            providerFiatAmount: null,
-            providerFiatCurrency: null,
-            principalId: TEST_PRINCIPAL_ID,
-          },
-          venueContext: {
-            venueType: "cex",
-            cexAccountId: fixture.cexAccountId,
-            externalAccountId: "coinbase-account-1",
-            externalOrderId: "order-acquire-1",
-            externalFillId: "fill-acquire-1",
-            side: "buy",
-            instrument: "BTC-EUR",
-            fillPrice: "10000.00",
-            commissionAmount: "10.00",
-            commissionCurrency: "EUR",
-            metadata: { provider: "coinbase" },
-          },
-          providerTransfers: [],
-          canonicalTransfers: [
-            {
-              sourceId: TEST_SOURCE_ID,
-              principalId: TEST_PRINCIPAL_ID,
-              sourceRawRecordId: TEST_RAW_RECORD_ID,
-              externalId: "tx-acquire-1:commission",
-              externalGroupId: "group-acquire-1",
-              addressId: null,
-              blockchainId: null,
-              txHash: null,
-              timestamp: new Date("2025-01-01T10:00:00.000Z"),
-              type: "fee",
-              fromAddress: null,
-              toAddress: null,
-              fromAccountRef: "coinbase-account-1",
-              toAccountRef: "coinbase:commission",
-              fromPartyType: "account",
-              fromPartyResourcePath: "/v2/accounts/coinbase-account-1",
-              toPartyType: "fee",
-              toPartyResourcePath: null,
-              assetId: TEST_EUR_ASSET_ID,
-              amount: "10.00",
-              tokenId: null,
-              notes: "Coinbase trade commission",
-              metadata: { provider: "coinbase" },
-            },
-          ],
-          providerAssetRowIds: [],
-          legs: [
-            {
-              sourceId: TEST_SOURCE_ID,
-              principalId: TEST_PRINCIPAL_ID,
-              sourceRawRecordId: TEST_RAW_RECORD_ID,
-              externalId: "leg-acquire-1",
-              txHash: null,
-              timestamp: new Date("2025-01-01T10:00:00.000Z"),
-              addressId: null,
-              assetId: TEST_BTC_ASSET_ID,
-              amount: "1.00000000",
-              kind: "acquisition",
-              provenance: "deterministic",
-              derivationRule: "spot_buy",
-              metadata: { provider: "coinbase" },
-              transactionId: null,
-              sourceTransferId: null,
-              fiatAmount: "10000.00000000",
-              fiatCurrency: "EUR",
-              feeForTransactionId: null,
-            },
-          ],
-          transactionReview: {
-            principalId: TEST_PRINCIPAL_ID,
-            reviewStatus: "needs_review",
-            originalTypeKey: "buy_fiat",
-            originalConfidence: "0.95",
-            currentTypeKey: "buy_fiat",
-            legalRuleSetVersion: "de-2025-01",
-            categorizationReason: "Fixture review",
-            matchedLayer: "fixture",
-            needsReview: true,
-            userNotes: null,
-            reviewedAt: null,
-          },
-          resolvedTransactionType: APPROVED_MAPPING,
-        })
-      )
-    )
-
-    expect(acquisitionResult.transaction.externalId).toBe("tx-acquire-1")
-    expect(acquisitionResult.canonicalTransfers).toHaveLength(1)
-    expect(acquisitionResult.legs).toHaveLength(1)
-
-    await runRepository(
-      Effect.flatMap(SourceNormalizationRepository, (repository) =>
-        repository.persistNormalizedArtifacts({
-          transaction: {
-            sourceId: TEST_SOURCE_ID,
-            sourceRawRecordId: TEST_RAW_RECORD_ID,
-            externalId: "tx-acquire-1",
-            externalGroupId: "group-acquire-1",
-            timestamp: new Date("2025-01-01T10:00:00.000Z"),
-            transactionType: "buy_fiat",
-            providerTransactionType: "buy",
-            providerStatus: "completed",
-            providerResourcePath: "/v2/accounts/coinbase-account-1/transactions/tx-acquire-1",
-            providerDescription: "Seed buy",
-            providerCreatedAt: new Date("2025-01-01T10:00:00.000Z"),
-            providerUpdatedAt: new Date("2025-01-01T10:00:00.000Z"),
-            metadata: { provider: "coinbase" },
-            providerFiatAmount: null,
-            providerFiatCurrency: null,
-            principalId: TEST_PRINCIPAL_ID,
-          },
-          venueContext: {
-            venueType: "cex",
-            cexAccountId: fixture.cexAccountId,
-            externalAccountId: "coinbase-account-1",
-            externalOrderId: "order-acquire-1",
-            externalFillId: "fill-acquire-1",
-            side: "buy",
-            instrument: "BTC-EUR",
-            fillPrice: "10000.00",
-            commissionAmount: "10.00",
-            commissionCurrency: "EUR",
-            metadata: { provider: "coinbase" },
-          },
-          providerTransfers: [],
-          canonicalTransfers: [
-            {
-              sourceId: TEST_SOURCE_ID,
-              principalId: TEST_PRINCIPAL_ID,
-              sourceRawRecordId: TEST_RAW_RECORD_ID,
-              externalId: "tx-acquire-1:commission",
-              externalGroupId: "group-acquire-1",
-              addressId: null,
-              blockchainId: null,
-              txHash: null,
-              timestamp: new Date("2025-01-01T10:00:00.000Z"),
-              type: "fee",
-              fromAddress: null,
-              toAddress: null,
-              fromAccountRef: "coinbase-account-1",
-              toAccountRef: "coinbase:commission",
-              fromPartyType: "account",
-              fromPartyResourcePath: "/v2/accounts/coinbase-account-1",
-              toPartyType: "fee",
-              toPartyResourcePath: null,
-              assetId: TEST_EUR_ASSET_ID,
-              amount: "10.00",
-              tokenId: null,
-              notes: "Coinbase trade commission",
-              metadata: { provider: "coinbase" },
-            },
-          ],
-          providerAssetRowIds: [],
-          legs: [
-            {
-              sourceId: TEST_SOURCE_ID,
-              sourceRawRecordId: TEST_RAW_RECORD_ID,
-              externalId: "leg-acquire-1",
-              txHash: null,
-              timestamp: new Date("2025-01-01T10:00:00.000Z"),
-              principalId: TEST_PRINCIPAL_ID,
-              addressId: null,
-              assetId: TEST_BTC_ASSET_ID,
-              assetRepresentationId: TEST_BTC_REPRESENTATION_ID,
-              amount: "1.00000000",
-              kind: "acquisition",
-              provenance: "deterministic",
-              derivationRule: "spot_buy",
-              metadata: { provider: "coinbase" },
-              transactionId: null,
-              sourceTransferId: null,
-              fiatAmount: "10000.00000000",
-              fiatCurrency: "EUR",
-              feeForTransactionId: null,
-            },
-          ],
-          transactionReview: {
-            principalId: TEST_PRINCIPAL_ID,
-            reviewStatus: "needs_review",
-            originalTypeKey: "buy_fiat",
-            originalConfidence: "0.95",
-            currentTypeKey: "buy_fiat",
-            legalRuleSetVersion: "de-2025-01",
-            categorizationReason: "Fixture review",
-            matchedLayer: "fixture",
-            needsReview: true,
-            userNotes: null,
-            reviewedAt: null,
-          },
-          resolvedTransactionType: APPROVED_MAPPING,
-        })
-      )
-    )
-
-    await runPg(
-      seedRawRecord({
-        rawRecordId: "00000000-0000-0000-0000-000000000382",
-        externalRecordId: "raw-dispose-1",
-        occurredAt: new Date("2025-02-01T10:00:00.000Z"),
-      })
-    )
-
-    await runRepository(
-      Effect.flatMap(SourceNormalizationRepository, (repository) =>
-        repository.persistNormalizedArtifacts({
-          transaction: {
-            sourceId: TEST_SOURCE_ID,
-            sourceRawRecordId: "00000000-0000-0000-0000-000000000382",
-            externalId: "tx-dispose-1",
-            externalGroupId: "group-dispose-1",
-            timestamp: new Date("2025-02-01T10:00:00.000Z"),
-            transactionType: "sell_fiat",
-            providerTransactionType: "advanced_trade_fill",
-            providerStatus: "completed",
-            providerResourcePath: "/v2/accounts/coinbase-account-1/transactions/tx-dispose-1",
-            providerDescription: "Fixture sell",
-            providerCreatedAt: new Date("2025-02-01T10:00:00.000Z"),
-            providerUpdatedAt: new Date("2025-02-01T10:00:00.000Z"),
-            metadata: { provider: "coinbase" },
-            providerFiatAmount: null,
-            providerFiatCurrency: null,
-            principalId: TEST_PRINCIPAL_ID,
-          },
-          venueContext: {
-            venueType: "cex",
-            cexAccountId: fixture.cexAccountId,
-            externalAccountId: "coinbase-account-1",
-            externalOrderId: "order-dispose-1",
-            externalFillId: "fill-dispose-1",
-            side: "sell",
-            instrument: "BTC-EUR",
-            fillPrice: "15000.00",
-            commissionAmount: null,
-            commissionCurrency: null,
-            metadata: { provider: "coinbase" },
-          },
-          providerTransfers: [],
-          canonicalTransfers: [],
-          providerAssetRowIds: [],
-          legs: [
-            {
-              sourceId: TEST_SOURCE_ID,
-              sourceRawRecordId: "00000000-0000-0000-0000-000000000382",
-              externalId: "leg-dispose-1",
-              txHash: null,
-              timestamp: new Date("2025-02-01T10:00:00.000Z"),
-              principalId: TEST_PRINCIPAL_ID,
-              addressId: null,
-              assetId: TEST_BTC_ASSET_ID,
-              amount: "0.40000000",
-              kind: "disposal",
-              provenance: "deterministic",
-              derivationRule: "spot_sell",
-              metadata: { provider: "coinbase" },
-              transactionId: null,
-              sourceTransferId: null,
-              fiatAmount: "6000.00000000",
-              fiatCurrency: "EUR",
-              feeForTransactionId: null,
-            },
-          ],
-          transactionReview: null,
-          resolvedTransactionType: {
-            ...APPROVED_MAPPING,
-            providerTransactionType: "advanced_trade_fill",
-            transactionType: "sell_fiat",
-            inventoryEffect: "disposal",
-          },
-        })
-      )
-    )
-
-    const counts = await runPg(
-      Effect.gen(function* () {
-        const db = yield* drizzle
-        const transactions = yield* db
-          .select()
-          .from(schema.transactions)
-          .where(eq(schema.transactions.sourceId, TEST_SOURCE_ID))
-        const reviews = yield* db.select().from(schema.transactionReviews)
-        const [lot] = yield* db.select().from(schema.fifoLots).limit(1)
-        const matches = yield* db.select().from(schema.disposalMatches)
-        const legs = yield* db.select().from(schema.transactionLegs)
-        const transfers = yield* db.select().from(schema.transfers)
-        return {
-          transactions,
-          reviews,
-          lot,
-          matches,
-          legs,
-          transfers,
-        }
-      })
-    )
-
-    expect(counts.transactions).toHaveLength(2)
-    expect(counts.legs).toHaveLength(2)
-    expect(counts.transfers).toHaveLength(1)
-    expect(counts.matches).toHaveLength(1)
-    expect(counts.reviews).toHaveLength(1)
-    expect(String(counts.lot?.remainingAmount)).toContain("0.6")
-    expect(counts.lot?.assetRepresentationId).toBe(TEST_BTC_REPRESENTATION_ID)
-  })
-
-  it("stores cost basis for the smallest supported acquisition quantity", async () => {
-    const amount = `0.${"0".repeat(254)}1`
-    const expectedCostBasisPerToken = `1${"0".repeat(255)}.000000000000000000`
-    const timestamp = new Date("2025-01-01T10:00:00.000Z")
-
-    const result = await runRepository(
-      Effect.flatMap(SourceNormalizationRepository, (repository) =>
-        repository.persistNormalizedArtifacts({
-          transaction: {
-            sourceId: TEST_SOURCE_ID,
-            sourceRawRecordId: TEST_RAW_RECORD_ID,
-            externalId: "tx-smallest-supported-acquisition",
-            externalGroupId: "group-smallest-supported-acquisition",
-            timestamp,
-            transactionType: "buy_fiat",
-            providerTransactionType: "buy",
-            providerStatus: "completed",
-            providerResourcePath: null,
-            providerDescription: null,
-            providerCreatedAt: timestamp,
-            providerUpdatedAt: timestamp,
-            metadata: { provider: "test" },
-            providerFiatAmount: null,
-            providerFiatCurrency: null,
-            principalId: TEST_PRINCIPAL_ID,
-          },
-          venueContext: {
-            venueType: "cex",
-            cexAccountId: fixture.cexAccountId,
-            externalAccountId: "test-account",
-            externalOrderId: null,
-            externalFillId: null,
-            side: "buy",
-            instrument: "BTC-EUR",
-            fillPrice: null,
-            commissionAmount: null,
-            commissionCurrency: null,
-            metadata: { provider: "test" },
-          },
-          providerTransfers: [],
-          canonicalTransfers: [],
-          providerAssetRowIds: [],
-          legs: [
-            {
-              sourceId: TEST_SOURCE_ID,
-              principalId: TEST_PRINCIPAL_ID,
-              sourceRawRecordId: TEST_RAW_RECORD_ID,
-              externalId: "leg-smallest-supported-acquisition",
-              txHash: null,
-              timestamp,
-              addressId: null,
-              assetId: TEST_BTC_ASSET_ID,
-              amount,
-              kind: "acquisition",
-              provenance: "deterministic",
-              derivationRule: "test_smallest_quantity",
-              metadata: { provider: "test" },
-              transactionId: null,
-              sourceTransferId: null,
-              fiatAmount: "1",
-              fiatCurrency: "EUR",
-              feeForTransactionId: null,
-            },
-          ],
-          transactionReview: null,
-          resolvedTransactionType: APPROVED_MAPPING,
-        })
-      )
-    )
-    const leg = result.legs[0]
-    expect(leg).toBeDefined()
-    if (leg === undefined) {
-      return
-    }
-
-    const fifoLots = await runPg(
-      Effect.gen(function* () {
-        const db = yield* drizzle
-        return yield* db
-          .select()
-          .from(schema.fifoLots)
-          .where(eq(schema.fifoLots.sourceLegId, leg.id))
-      })
-    )
-
-    expect(fifoLots).toEqual([
-      expect.objectContaining({
-        originalAmount: amount,
-        remainingAmount: amount,
-        costBasisPerToken: expectedCostBasisPerToken,
-      }),
-    ])
-  })
-
-  it("marks a fresh acquisition lot pending when its fiat value is missing", async () => {
-    const timestamp = new Date("2025-01-01T10:00:00.000Z")
-
-    const result = await runRepository(
-      Effect.flatMap(SourceNormalizationRepository, (repository) =>
-        repository.persistNormalizedArtifacts({
-          transaction: {
-            sourceId: TEST_SOURCE_ID,
-            sourceRawRecordId: TEST_RAW_RECORD_ID,
-            externalId: "tx-acquisition-without-fiat-value",
-            externalGroupId: null,
-            timestamp,
-            transactionType: "buy_fiat",
-            providerTransactionType: "buy",
-            providerStatus: "completed",
-            providerResourcePath: null,
-            providerDescription: null,
-            providerCreatedAt: timestamp,
-            providerUpdatedAt: timestamp,
-            metadata: { provider: "test" },
-            providerFiatAmount: null,
-            providerFiatCurrency: null,
-            principalId: TEST_PRINCIPAL_ID,
-          },
-          venueContext: {
-            venueType: "cex",
-            cexAccountId: fixture.cexAccountId,
-            externalAccountId: "test-account",
-            externalOrderId: null,
-            externalFillId: null,
-            side: "buy",
-            instrument: "BTC-EUR",
-            fillPrice: null,
-            commissionAmount: null,
-            commissionCurrency: null,
-            metadata: { provider: "test" },
-          },
-          providerTransfers: [],
-          canonicalTransfers: [],
-          providerAssetRowIds: [],
-          legs: [
-            {
-              sourceId: TEST_SOURCE_ID,
-              principalId: TEST_PRINCIPAL_ID,
-              sourceRawRecordId: TEST_RAW_RECORD_ID,
-              externalId: "leg-acquisition-without-fiat-value",
-              txHash: null,
-              timestamp,
-              addressId: null,
-              assetId: TEST_BTC_ASSET_ID,
-              amount: "0.5",
-              kind: "acquisition",
-              provenance: "deterministic",
-              derivationRule: "test_missing_fiat_value",
-              metadata: { provider: "test" },
-              transactionId: null,
-              sourceTransferId: null,
-              fiatAmount: null,
-              fiatCurrency: null,
-              feeForTransactionId: null,
-            },
-          ],
-          transactionReview: null,
-          resolvedTransactionType: APPROVED_MAPPING,
-        })
-      )
-    )
-    const leg = result.legs[0]
-    expect(leg).toBeDefined()
-    if (leg === undefined) {
-      return
-    }
-
-    const [lot] = await runPg(
-      Effect.gen(function* () {
-        const db = yield* drizzle
-        return yield* db
-          .select()
-          .from(schema.fifoLots)
-          .where(eq(schema.fifoLots.sourceLegId, leg.id))
-      })
-    )
-
-    expect(lot).toEqual(
-      expect.objectContaining({
-        costBasisPerToken: "0.000000000000000000",
-        costBasisCurrency: "EUR",
-        costBasisStatus: "pending_review",
-      })
-    )
-  })
-
-  it("marks disposals with missing FIFO inventory for review instead of failing", async () => {
-    await runRepository(
-      Effect.flatMap(SourceNormalizationRepository, (repository) =>
-        repository.persistNormalizedArtifacts({
-          transaction: {
-            sourceId: TEST_SOURCE_ID,
-            sourceRawRecordId: TEST_RAW_RECORD_ID,
-            externalId: "tx-acquire-2",
-            externalGroupId: "group-acquire-2",
-            timestamp: new Date("2025-01-01T10:00:00.000Z"),
-            transactionType: "buy_fiat",
-            providerTransactionType: "buy",
-            providerStatus: "completed",
-            providerResourcePath: "/v2/accounts/coinbase-account-1/transactions/tx-acquire-2",
-            providerDescription: "Seed buy",
-            providerCreatedAt: new Date("2025-01-01T10:00:00.000Z"),
-            providerUpdatedAt: new Date("2025-01-01T10:00:00.000Z"),
-            metadata: { provider: "coinbase" },
-            providerFiatAmount: null,
-            providerFiatCurrency: null,
-            principalId: TEST_PRINCIPAL_ID,
-          },
-          venueContext: {
-            venueType: "cex",
-            cexAccountId: fixture.cexAccountId,
-            externalAccountId: "coinbase-account-1",
-            externalOrderId: "order-acquire-2",
-            externalFillId: "fill-acquire-2",
-            side: "buy",
-            instrument: "BTC-EUR",
-            fillPrice: "10000.00",
-            commissionAmount: null,
-            commissionCurrency: null,
-            metadata: { provider: "coinbase" },
-          },
-          providerTransfers: [],
-          canonicalTransfers: [],
-          providerAssetRowIds: [],
-          legs: [
-            {
-              sourceId: TEST_SOURCE_ID,
-              sourceRawRecordId: TEST_RAW_RECORD_ID,
-              externalId: "leg-acquire-2",
-              txHash: null,
-              timestamp: new Date("2025-01-01T10:00:00.000Z"),
-              principalId: TEST_PRINCIPAL_ID,
-              addressId: null,
-              assetId: TEST_BTC_ASSET_ID,
-              amount: "1.00000000",
-              kind: "acquisition",
-              provenance: "deterministic",
-              derivationRule: "spot_buy",
-              metadata: { provider: "coinbase" },
-              transactionId: null,
-              sourceTransferId: null,
-              fiatAmount: "10000.00000000",
-              fiatCurrency: "EUR",
-              feeForTransactionId: null,
-            },
-          ],
-          transactionReview: null,
-          resolvedTransactionType: APPROVED_MAPPING,
-        })
-      )
-    )
-
-    const insufficientRawRecordId = "00000000-0000-0000-0000-000000000492"
-
-    await runPg(
-      seedRawRecord({
-        rawRecordId: insufficientRawRecordId,
-        externalRecordId: "raw-dispose-insufficient-1",
-        occurredAt: new Date("2025-02-01T10:00:00.000Z"),
-      })
-    )
-
-    const result = await runRepository(
-      Effect.flatMap(SourceNormalizationRepository, (repository) =>
-        repository.persistNormalizedArtifacts({
-          transaction: {
-            sourceId: TEST_SOURCE_ID,
-            sourceRawRecordId: insufficientRawRecordId,
-            externalId: "tx-dispose-insufficient-1",
-            externalGroupId: "group-dispose-insufficient-1",
-            timestamp: new Date("2025-02-01T10:00:00.000Z"),
-            transactionType: "sell_fiat",
-            providerTransactionType: "advanced_trade_fill",
-            providerStatus: "completed",
-            providerResourcePath:
-              "/v2/accounts/coinbase-account-1/transactions/tx-dispose-insufficient-1",
-            providerDescription: "Fixture sell with missing opening inventory",
-            providerCreatedAt: new Date("2025-02-01T10:00:00.000Z"),
-            providerUpdatedAt: new Date("2025-02-01T10:00:00.000Z"),
-            metadata: { provider: "coinbase" },
-            providerFiatAmount: null,
-            providerFiatCurrency: null,
-            principalId: TEST_PRINCIPAL_ID,
-          },
-          venueContext: {
-            venueType: "cex",
-            cexAccountId: fixture.cexAccountId,
-            externalAccountId: "coinbase-account-1",
-            externalOrderId: "order-dispose-insufficient-1",
-            externalFillId: "fill-dispose-insufficient-1",
-            side: "sell",
-            instrument: "BTC-EUR",
-            fillPrice: "15000.00",
-            commissionAmount: null,
-            commissionCurrency: null,
-            metadata: { provider: "coinbase" },
-          },
-          providerTransfers: [],
-          canonicalTransfers: [],
-          providerAssetRowIds: [],
-          legs: [
-            {
-              sourceId: TEST_SOURCE_ID,
-              sourceRawRecordId: insufficientRawRecordId,
-              externalId: "leg-dispose-insufficient-1",
-              txHash: null,
-              timestamp: new Date("2025-02-01T10:00:00.000Z"),
-              principalId: TEST_PRINCIPAL_ID,
-              addressId: null,
-              assetId: TEST_BTC_ASSET_ID,
-              amount: "2.00000000",
-              kind: "disposal",
-              provenance: "deterministic",
-              derivationRule: "spot_sell",
-              metadata: { provider: "coinbase" },
-              transactionId: null,
-              sourceTransferId: null,
-              fiatAmount: "30000.00000000",
-              fiatCurrency: "EUR",
-              feeForTransactionId: null,
-            },
-          ],
-          transactionReview: null,
-          resolvedTransactionType: {
-            ...APPROVED_MAPPING,
-            providerTransactionType: "advanced_trade_fill",
-            transactionType: "sell_fiat",
-            inventoryEffect: "disposal",
-          },
-        })
-      )
-    )
-
-    expect(result.legs).toHaveLength(1)
-
-    const counts = await runPg(
-      Effect.gen(function* () {
-        const db = yield* drizzle
-        const reviews = yield* db.select().from(schema.transactionReviews)
-        const matches = yield* db.select().from(schema.disposalMatches)
-        const [lot] = yield* db.select().from(schema.fifoLots).limit(1)
-        const [rawRecord] = yield* db
-          .select({
-            normalizedAt: schema.sourceRecordsRaw.normalizedAt,
-            normalizationError: schema.sourceRecordsRaw.normalizationError,
-          })
-          .from(schema.sourceRecordsRaw)
-          .where(eq(schema.sourceRecordsRaw.id, insufficientRawRecordId))
-          .limit(1)
-
-        return {
-          reviews,
-          matches,
-          lot,
-          rawRecord,
-        }
-      })
-    )
-
-    expect(counts.matches).toHaveLength(0)
-    expect(counts.reviews).toHaveLength(1)
-    expect(counts.reviews).toEqual([
-      expect.objectContaining({
-        reviewStatus: "needs_review",
-        originalTypeKey: "sell_fiat",
-        currentTypeKey: "sell_fiat",
-        matchedLayer: "fifo_inventory",
-        needsReview: true,
-        categorizationReason: expect.stringContaining("Insufficient FIFO inventory"),
-      }),
-    ])
-    expect(counts.rawRecord?.normalizedAt).not.toBeNull()
-    expect(counts.rawRecord?.normalizationError).toBeNull()
-    expect(String(counts.lot?.remainingAmount)).toContain("1")
-  })
-
-  it("keeps FIFO inventory isolated by source for the same principal", async () => {
-    const dependentSourceId = "00000000-0000-0000-0000-000000000282"
-    const originTransactionId = "00000000-0000-0000-0000-000000000283"
-
-    const lotId = await runPg(
-      Effect.gen(function* () {
-        const db = yield* drizzle
-        const [address] = yield* db
-          .insert(schema.addresses)
-          .values({
-            address: "bc1qcrosssourcefifo",
-            type: "bitcoin",
-            name: "Cross-source FIFO",
-            principalId: TEST_PRINCIPAL_ID,
-          })
-          .returning({ id: schema.addresses.id })
-
-        if (address === undefined) {
-          return yield* Effect.die("Failed to create cross-source FIFO address")
-        }
-
-        yield* db.insert(schema.sources).values({
-          id: dependentSourceId,
-          principalId: TEST_PRINCIPAL_ID,
-          name: "Cross-source FIFO",
-          providerKey: "bitcoin-rpc",
-          sourceableType: "onchain",
-          cexAccountId: null,
-          addressId: address.id,
-        })
-        yield* db.insert(schema.transactions).values({
-          id: originTransactionId,
-          sourceId: TEST_SOURCE_ID,
-          externalId: "cross-source-fifo-origin",
-          timestamp: new Date("2025-01-01T10:00:00.000Z"),
-          principalId: TEST_PRINCIPAL_ID,
-        })
-        const [originLeg] = yield* db
-          .insert(schema.transactionLegs)
-          .values({
-            sourceId: TEST_SOURCE_ID,
-            externalId: "cross-source-fifo-origin-leg",
-            timestamp: new Date("2025-01-01T10:00:00.000Z"),
-            principalId: TEST_PRINCIPAL_ID,
-            assetId: TEST_BTC_ASSET_ID,
-            amount: "1.00000000",
-            kind: "acquisition",
-            provenance: "deterministic",
-            transactionId: originTransactionId,
-          })
-          .returning({ id: schema.transactionLegs.id })
-
-        if (originLeg === undefined) {
-          return yield* Effect.die("Failed to create cross-source FIFO origin leg")
-        }
-
-        const [lot] = yield* db
-          .insert(schema.fifoLots)
-          .values({
-            principalId: TEST_PRINCIPAL_ID,
-            sourceId: TEST_SOURCE_ID,
-            assetId: TEST_BTC_ASSET_ID,
-            acquiredAt: new Date("2025-01-01T10:00:00.000Z"),
-            originalAmount: "1.00000000",
-            remainingAmount: "1.00000000",
-            costBasisPerToken: "10000.00",
-            costBasisCurrency: "EUR",
-            sourceLegId: originLeg.id,
-          })
-          .returning({ id: schema.fifoLots.id })
-
-        if (lot === undefined) {
-          return yield* Effect.die("Failed to create cross-source FIFO lot")
-        }
-
-        return lot.id
-      })
-    )
-
-    await runRepository(
-      Effect.flatMap(SourceNormalizationRepository, (repository) =>
-        repository.persistNormalizedArtifacts({
-          transaction: {
-            sourceId: dependentSourceId,
-            sourceRawRecordId: null,
-            externalId: "cross-source-fifo-disposal",
-            externalGroupId: null,
-            timestamp: new Date("2025-02-01T10:00:00.000Z"),
-            transactionType: "sell_fiat",
-            providerTransactionType: "sell",
-            providerStatus: "completed",
-            providerResourcePath: null,
-            providerDescription: null,
-            providerCreatedAt: null,
-            providerUpdatedAt: null,
-            metadata: null,
-            providerFiatAmount: null,
-            providerFiatCurrency: null,
-            principalId: TEST_PRINCIPAL_ID,
-          },
-          venueContext: {
-            venueType: "cex",
-            cexAccountId: fixture.cexAccountId,
-            externalAccountId: "cross-source-fifo",
-            externalOrderId: null,
-            externalFillId: null,
-            side: "sell",
-            instrument: "BTC-EUR",
-            fillPrice: "12000.00",
-            commissionAmount: null,
-            commissionCurrency: null,
-            metadata: null,
-          },
-          providerTransfers: [],
-          canonicalTransfers: [],
-          providerAssetRowIds: [],
-          legs: [
-            {
-              sourceId: dependentSourceId,
-              sourceRawRecordId: null,
-              externalId: "cross-source-fifo-disposal-leg",
-              txHash: null,
-              timestamp: new Date("2025-02-01T10:00:00.000Z"),
-              principalId: TEST_PRINCIPAL_ID,
-              addressId: null,
-              assetId: TEST_BTC_ASSET_ID,
-              amount: "0.40000000",
-              kind: "disposal",
-              provenance: "deterministic",
-              derivationRule: "spot_sell",
-              metadata: null,
-              transactionId: null,
-              sourceTransferId: null,
-              fiatAmount: "4800.00",
-              fiatCurrency: "EUR",
-              feeForTransactionId: null,
-            },
-          ],
-          transactionReview: null,
-          resolvedTransactionType: {
-            ...APPROVED_MAPPING,
-            providerTransactionType: "sell",
-            transactionType: "sell_fiat",
-            inventoryEffect: "disposal",
-          },
-        })
-      )
-    )
-
-    const state = await runPg(
-      Effect.gen(function* () {
-        const db = yield* drizzle
-        const [lot] = yield* db.select().from(schema.fifoLots).where(eq(schema.fifoLots.id, lotId))
-        const matches = yield* db.select().from(schema.disposalMatches)
-        const reviews = yield* db
-          .select()
-          .from(schema.transactionReviews)
-          .where(eq(schema.transactionReviews.matchedLayer, "fifo_inventory"))
-        return { lot, matches, reviews }
-      })
-    )
-    expect(state.lot?.remainingAmount).toContain("1.00000000")
-    expect(state.matches).toHaveLength(0)
-    expect(state.reviews).toEqual([
-      expect.objectContaining({
-        reviewStatus: "needs_review",
-        matchedLayer: "fifo_inventory",
-        needsReview: true,
-        categorizationReason: expect.stringContaining("Insufficient FIFO inventory"),
-      }),
-    ])
-  })
-
-  it("serializes concurrent FIFO allocations for one principal", async () => {
-    const firstRawRecordId = "00000000-0000-0000-0000-000000000721"
-    const secondRawRecordId = "00000000-0000-0000-0000-000000000722"
-    const openingTransactionId = "00000000-0000-0000-0000-000000000723"
-    const occurredAt = new Date("2025-03-02T10:00:00.000Z")
-
-    await runPg(
-      Effect.gen(function* () {
-        const db = yield* drizzle
-        yield* Effect.forEach(
-          [
-            { id: firstRawRecordId, externalId: "raw-concurrent-fee-1" },
-            { id: secondRawRecordId, externalId: "raw-concurrent-fee-2" },
-          ],
-          (record) =>
-            seedRawRecord({
-              rawRecordId: record.id,
-              externalRecordId: record.externalId,
-              occurredAt,
-            })
-        )
-        yield* db.insert(schema.transactions).values({
-          id: openingTransactionId,
-          sourceId: TEST_SOURCE_ID,
-          externalId: "tx-concurrent-opening",
-          timestamp: new Date("2025-03-01T10:00:00.000Z"),
-          principalId: TEST_PRINCIPAL_ID,
-        })
-        const [openingLeg] = yield* db
-          .insert(schema.transactionLegs)
-          .values({
-            sourceId: TEST_SOURCE_ID,
-            externalId: "leg-concurrent-opening",
-            timestamp: new Date("2025-03-01T10:00:00.000Z"),
-            principalId: TEST_PRINCIPAL_ID,
-            assetId: TEST_BTC_ASSET_ID,
-            amount: "1.00000000",
-            kind: "acquisition",
-            provenance: "deterministic",
-            transactionId: openingTransactionId,
-          })
-          .returning({ id: schema.transactionLegs.id })
-
-        if (openingLeg === undefined) {
-          return yield* Effect.die("Failed to seed concurrent FIFO opening leg")
-        }
-
-        yield* db.insert(schema.fifoLots).values({
-          principalId: TEST_PRINCIPAL_ID,
-          sourceId: TEST_SOURCE_ID,
-          assetId: TEST_BTC_ASSET_ID,
-          acquiredAt: new Date("2025-03-01T10:00:00.000Z"),
-          originalAmount: "1.00000000",
-          remainingAmount: "1.00000000",
-          costBasisPerToken: "10000.00",
-          costBasisCurrency: "EUR",
-          sourceLegId: openingLeg.id,
-        })
-      })
-    )
-
-    const persistFee = ({ rawRecordId, sequence }: { rawRecordId: string; sequence: number }) =>
-      runRepository(
-        Effect.flatMap(SourceNormalizationRepository, (repository) =>
-          repository.persistNormalizedArtifacts({
-            transaction: {
-              sourceId: TEST_SOURCE_ID,
-              sourceRawRecordId: rawRecordId,
-              externalId: `tx-concurrent-fee-${sequence}`,
-              externalGroupId: null,
-              timestamp: occurredAt,
-              transactionType: "fee",
-              providerTransactionType: "fee",
-              providerStatus: "completed",
-              providerResourcePath: null,
-              providerDescription: "Concurrent fee fixture",
-              providerCreatedAt: occurredAt,
-              providerUpdatedAt: occurredAt,
-              metadata: { provider: "fixture" },
-              providerFiatAmount: null,
-              providerFiatCurrency: null,
-              principalId: TEST_PRINCIPAL_ID,
-            },
-            venueContext: {
-              venueType: "cex",
-              cexAccountId: fixture.cexAccountId,
-              externalAccountId: "coinbase-account-1",
-              externalOrderId: null,
-              externalFillId: null,
-              side: null,
-              instrument: null,
-              fillPrice: null,
-              commissionAmount: null,
-              commissionCurrency: null,
-              metadata: { provider: "fixture" },
-            },
-            providerTransfers: [],
-            canonicalTransfers: [],
-            providerAssetRowIds: [],
-            deriveLegs: ({ transaction }) =>
-              Effect.succeed([
+  it.effect("persists normalized artifacts idempotently and feeds FIFO side effects", () =>
+    Effect.gen(function* () {
+      const acquisitionResult = yield* Effect.promise(() =>
+        runRepository(
+          Effect.flatMap(SourceNormalizationRepository, (repository) =>
+            repository.persistNormalizedArtifacts({
+              transaction: {
+                sourceId: TEST_SOURCE_ID,
+                sourceRawRecordId: TEST_RAW_RECORD_ID,
+                externalId: "tx-acquire-1",
+                externalGroupId: "group-acquire-1",
+                timestamp: DateTime.toDateUtc(DateTime.makeUnsafe("2025-01-01T10:00:00.000Z")),
+                transactionType: "buy_fiat",
+                providerTransactionType: "buy",
+                providerStatus: "completed",
+                providerResourcePath: "/v2/accounts/coinbase-account-1/transactions/tx-acquire-1",
+                providerDescription: "Seed buy",
+                providerCreatedAt: DateTime.toDateUtc(
+                  DateTime.makeUnsafe("2025-01-01T10:00:00.000Z")
+                ),
+                providerUpdatedAt: DateTime.toDateUtc(
+                  DateTime.makeUnsafe("2025-01-01T10:00:00.000Z")
+                ),
+                metadata: { provider: "coinbase" },
+                providerFiatAmount: null,
+                providerFiatCurrency: null,
+                principalId: TEST_PRINCIPAL_ID,
+              },
+              venueContext: {
+                venueType: "cex",
+                cexAccountId: fixture.cexAccountId,
+                externalAccountId: "coinbase-account-1",
+                externalOrderId: "order-acquire-1",
+                externalFillId: "fill-acquire-1",
+                side: "buy",
+                instrument: "BTC-EUR",
+                fillPrice: "10000.00",
+                commissionAmount: "10.00",
+                commissionCurrency: "EUR",
+                metadata: { provider: "coinbase" },
+              },
+              providerTransfers: [],
+              canonicalTransfers: [
                 {
                   sourceId: TEST_SOURCE_ID,
-                  sourceRawRecordId: rawRecordId,
-                  externalId: `leg-concurrent-fee-${sequence}`,
+                  principalId: TEST_PRINCIPAL_ID,
+                  sourceRawRecordId: TEST_RAW_RECORD_ID,
+                  externalId: "tx-acquire-1:commission",
+                  externalGroupId: "group-acquire-1",
+                  addressId: null,
+                  blockchainId: null,
                   txHash: null,
-                  timestamp: occurredAt,
+                  timestamp: DateTime.toDateUtc(DateTime.makeUnsafe("2025-01-01T10:00:00.000Z")),
+                  type: "fee",
+                  fromAddress: null,
+                  toAddress: null,
+                  fromAccountRef: "coinbase-account-1",
+                  toAccountRef: "coinbase:commission",
+                  fromPartyType: "account",
+                  fromPartyResourcePath: "/v2/accounts/coinbase-account-1",
+                  toPartyType: "fee",
+                  toPartyResourcePath: null,
+                  assetId: TEST_EUR_ASSET_ID,
+                  amount: "10.00",
+                  tokenId: null,
+                  notes: "Coinbase trade commission",
+                  metadata: { provider: "coinbase" },
+                },
+              ],
+              providerAssetRowIds: [],
+              legs: [
+                {
+                  sourceId: TEST_SOURCE_ID,
+                  principalId: TEST_PRINCIPAL_ID,
+                  sourceRawRecordId: TEST_RAW_RECORD_ID,
+                  externalId: "leg-acquire-1",
+                  txHash: null,
+                  timestamp: DateTime.toDateUtc(DateTime.makeUnsafe("2025-01-01T10:00:00.000Z")),
+                  addressId: null,
+                  assetId: TEST_BTC_ASSET_ID,
+                  amount: "1.00000000",
+                  kind: "acquisition",
+                  provenance: "deterministic",
+                  derivationRule: "spot_buy",
+                  metadata: { provider: "coinbase" },
+                  transactionId: null,
+                  sourceTransferId: null,
+                  fiatAmount: "10000.00000000",
+                  fiatCurrency: "EUR",
+                  feeForTransactionId: null,
+                },
+              ],
+              transactionReview: {
+                principalId: TEST_PRINCIPAL_ID,
+                reviewStatus: "needs_review",
+                originalTypeKey: "buy_fiat",
+                originalConfidence: "0.95",
+                currentTypeKey: "buy_fiat",
+                legalRuleSetVersion: "de-2025-01",
+                categorizationReason: "Fixture review",
+                matchedLayer: "fixture",
+                needsReview: true,
+                userNotes: null,
+                reviewedAt: null,
+              },
+              resolvedTransactionType: APPROVED_MAPPING,
+            })
+          )
+        )
+      )
+
+      expect(acquisitionResult.transaction.externalId).toBe("tx-acquire-1")
+      expect(acquisitionResult.canonicalTransfers).toHaveLength(1)
+      expect(acquisitionResult.legs).toHaveLength(1)
+
+      yield* Effect.promise(() =>
+        runRepository(
+          Effect.flatMap(SourceNormalizationRepository, (repository) =>
+            repository.persistNormalizedArtifacts({
+              transaction: {
+                sourceId: TEST_SOURCE_ID,
+                sourceRawRecordId: TEST_RAW_RECORD_ID,
+                externalId: "tx-acquire-1",
+                externalGroupId: "group-acquire-1",
+                timestamp: DateTime.toDateUtc(DateTime.makeUnsafe("2025-01-01T10:00:00.000Z")),
+                transactionType: "buy_fiat",
+                providerTransactionType: "buy",
+                providerStatus: "completed",
+                providerResourcePath: "/v2/accounts/coinbase-account-1/transactions/tx-acquire-1",
+                providerDescription: "Seed buy",
+                providerCreatedAt: DateTime.toDateUtc(
+                  DateTime.makeUnsafe("2025-01-01T10:00:00.000Z")
+                ),
+                providerUpdatedAt: DateTime.toDateUtc(
+                  DateTime.makeUnsafe("2025-01-01T10:00:00.000Z")
+                ),
+                metadata: { provider: "coinbase" },
+                providerFiatAmount: null,
+                providerFiatCurrency: null,
+                principalId: TEST_PRINCIPAL_ID,
+              },
+              venueContext: {
+                venueType: "cex",
+                cexAccountId: fixture.cexAccountId,
+                externalAccountId: "coinbase-account-1",
+                externalOrderId: "order-acquire-1",
+                externalFillId: "fill-acquire-1",
+                side: "buy",
+                instrument: "BTC-EUR",
+                fillPrice: "10000.00",
+                commissionAmount: "10.00",
+                commissionCurrency: "EUR",
+                metadata: { provider: "coinbase" },
+              },
+              providerTransfers: [],
+              canonicalTransfers: [
+                {
+                  sourceId: TEST_SOURCE_ID,
+                  principalId: TEST_PRINCIPAL_ID,
+                  sourceRawRecordId: TEST_RAW_RECORD_ID,
+                  externalId: "tx-acquire-1:commission",
+                  externalGroupId: "group-acquire-1",
+                  addressId: null,
+                  blockchainId: null,
+                  txHash: null,
+                  timestamp: DateTime.toDateUtc(DateTime.makeUnsafe("2025-01-01T10:00:00.000Z")),
+                  type: "fee",
+                  fromAddress: null,
+                  toAddress: null,
+                  fromAccountRef: "coinbase-account-1",
+                  toAccountRef: "coinbase:commission",
+                  fromPartyType: "account",
+                  fromPartyResourcePath: "/v2/accounts/coinbase-account-1",
+                  toPartyType: "fee",
+                  toPartyResourcePath: null,
+                  assetId: TEST_EUR_ASSET_ID,
+                  amount: "10.00",
+                  tokenId: null,
+                  notes: "Coinbase trade commission",
+                  metadata: { provider: "coinbase" },
+                },
+              ],
+              providerAssetRowIds: [],
+              legs: [
+                {
+                  sourceId: TEST_SOURCE_ID,
+                  sourceRawRecordId: TEST_RAW_RECORD_ID,
+                  externalId: "leg-acquire-1",
+                  txHash: null,
+                  timestamp: DateTime.toDateUtc(DateTime.makeUnsafe("2025-01-01T10:00:00.000Z")),
                   principalId: TEST_PRINCIPAL_ID,
                   addressId: null,
                   assetId: TEST_BTC_ASSET_ID,
-                  amount: "0.60000000",
-                  kind: "fee",
+                  assetRepresentationId: TEST_BTC_REPRESENTATION_ID,
+                  amount: "1.00000000",
+                  kind: "acquisition",
                   provenance: "deterministic",
-                  derivationRule: "fixture_fee",
-                  metadata: { provider: "fixture" },
-                  transactionId: transaction.id,
+                  derivationRule: "spot_buy",
+                  metadata: { provider: "coinbase" },
+                  transactionId: null,
+                  sourceTransferId: null,
+                  fiatAmount: "10000.00000000",
+                  fiatCurrency: "EUR",
+                  feeForTransactionId: null,
+                },
+              ],
+              transactionReview: {
+                principalId: TEST_PRINCIPAL_ID,
+                reviewStatus: "needs_review",
+                originalTypeKey: "buy_fiat",
+                originalConfidence: "0.95",
+                currentTypeKey: "buy_fiat",
+                legalRuleSetVersion: "de-2025-01",
+                categorizationReason: "Fixture review",
+                matchedLayer: "fixture",
+                needsReview: true,
+                userNotes: null,
+                reviewedAt: null,
+              },
+              resolvedTransactionType: APPROVED_MAPPING,
+            })
+          )
+        )
+      )
+
+      yield* Effect.promise(() =>
+        runPg(
+          seedRawRecord({
+            rawRecordId: "00000000-0000-0000-0000-000000000382",
+            externalRecordId: "raw-dispose-1",
+            occurredAt: DateTime.toDateUtc(DateTime.makeUnsafe("2025-02-01T10:00:00.000Z")),
+          })
+        )
+      )
+
+      yield* Effect.promise(() =>
+        runRepository(
+          Effect.flatMap(SourceNormalizationRepository, (repository) =>
+            repository.persistNormalizedArtifacts({
+              transaction: {
+                sourceId: TEST_SOURCE_ID,
+                sourceRawRecordId: "00000000-0000-0000-0000-000000000382",
+                externalId: "tx-dispose-1",
+                externalGroupId: "group-dispose-1",
+                timestamp: DateTime.toDateUtc(DateTime.makeUnsafe("2025-02-01T10:00:00.000Z")),
+                transactionType: "sell_fiat",
+                providerTransactionType: "advanced_trade_fill",
+                providerStatus: "completed",
+                providerResourcePath: "/v2/accounts/coinbase-account-1/transactions/tx-dispose-1",
+                providerDescription: "Fixture sell",
+                providerCreatedAt: DateTime.toDateUtc(
+                  DateTime.makeUnsafe("2025-02-01T10:00:00.000Z")
+                ),
+                providerUpdatedAt: DateTime.toDateUtc(
+                  DateTime.makeUnsafe("2025-02-01T10:00:00.000Z")
+                ),
+                metadata: { provider: "coinbase" },
+                providerFiatAmount: null,
+                providerFiatCurrency: null,
+                principalId: TEST_PRINCIPAL_ID,
+              },
+              venueContext: {
+                venueType: "cex",
+                cexAccountId: fixture.cexAccountId,
+                externalAccountId: "coinbase-account-1",
+                externalOrderId: "order-dispose-1",
+                externalFillId: "fill-dispose-1",
+                side: "sell",
+                instrument: "BTC-EUR",
+                fillPrice: "15000.00",
+                commissionAmount: null,
+                commissionCurrency: null,
+                metadata: { provider: "coinbase" },
+              },
+              providerTransfers: [],
+              canonicalTransfers: [],
+              providerAssetRowIds: [],
+              legs: [
+                {
+                  sourceId: TEST_SOURCE_ID,
+                  sourceRawRecordId: "00000000-0000-0000-0000-000000000382",
+                  externalId: "leg-dispose-1",
+                  txHash: null,
+                  timestamp: DateTime.toDateUtc(DateTime.makeUnsafe("2025-02-01T10:00:00.000Z")),
+                  principalId: TEST_PRINCIPAL_ID,
+                  addressId: null,
+                  assetId: TEST_BTC_ASSET_ID,
+                  amount: "0.40000000",
+                  kind: "disposal",
+                  provenance: "deterministic",
+                  derivationRule: "spot_sell",
+                  metadata: { provider: "coinbase" },
+                  transactionId: null,
+                  sourceTransferId: null,
+                  fiatAmount: "6000.00000000",
+                  fiatCurrency: "EUR",
+                  feeForTransactionId: null,
+                },
+              ],
+              transactionReview: null,
+              resolvedTransactionType: {
+                ...APPROVED_MAPPING,
+                providerTransactionType: "advanced_trade_fill",
+                transactionType: "sell_fiat",
+                inventoryEffect: "disposal",
+              },
+            })
+          )
+        )
+      )
+
+      const counts = yield* Effect.promise(() =>
+        runPg(
+          Effect.gen(function* () {
+            const db = yield* drizzle
+            const transactions = yield* db
+              .select()
+              .from(schema.transactions)
+              .where(eq(schema.transactions.sourceId, TEST_SOURCE_ID))
+            const reviews = yield* db.select().from(schema.transactionReviews)
+            const [lot] = yield* db.select().from(schema.fifoLots).limit(1)
+            const matches = yield* db.select().from(schema.disposalMatches)
+            const legs = yield* db.select().from(schema.transactionLegs)
+            const transfers = yield* db.select().from(schema.transfers)
+            return {
+              transactions,
+              reviews,
+              lot,
+              matches,
+              legs,
+              transfers,
+            }
+          })
+        )
+      )
+
+      expect(counts.transactions).toHaveLength(2)
+      expect(counts.legs).toHaveLength(2)
+      expect(counts.transfers).toHaveLength(1)
+      expect(counts.matches).toHaveLength(1)
+      expect(counts.reviews).toHaveLength(1)
+      expect(String(counts.lot?.remainingAmount)).toContain("0.6")
+      expect(counts.lot?.assetRepresentationId).toBe(TEST_BTC_REPRESENTATION_ID)
+    })
+  )
+
+  it.effect("stores cost basis for the smallest supported acquisition quantity", () =>
+    Effect.gen(function* () {
+      const amount = `0.${"0".repeat(254)}1`
+      const expectedCostBasisPerToken = `1${"0".repeat(255)}.000000000000000000`
+      const timestamp = DateTime.toDateUtc(DateTime.makeUnsafe("2025-01-01T10:00:00.000Z"))
+
+      const result = yield* Effect.promise(() =>
+        runRepository(
+          Effect.flatMap(SourceNormalizationRepository, (repository) =>
+            repository.persistNormalizedArtifacts({
+              transaction: {
+                sourceId: TEST_SOURCE_ID,
+                sourceRawRecordId: TEST_RAW_RECORD_ID,
+                externalId: "tx-smallest-supported-acquisition",
+                externalGroupId: "group-smallest-supported-acquisition",
+                timestamp,
+                transactionType: "buy_fiat",
+                providerTransactionType: "buy",
+                providerStatus: "completed",
+                providerResourcePath: null,
+                providerDescription: null,
+                providerCreatedAt: timestamp,
+                providerUpdatedAt: timestamp,
+                metadata: { provider: "test" },
+                providerFiatAmount: null,
+                providerFiatCurrency: null,
+                principalId: TEST_PRINCIPAL_ID,
+              },
+              venueContext: {
+                venueType: "cex",
+                cexAccountId: fixture.cexAccountId,
+                externalAccountId: "test-account",
+                externalOrderId: null,
+                externalFillId: null,
+                side: "buy",
+                instrument: "BTC-EUR",
+                fillPrice: null,
+                commissionAmount: null,
+                commissionCurrency: null,
+                metadata: { provider: "test" },
+              },
+              providerTransfers: [],
+              canonicalTransfers: [],
+              providerAssetRowIds: [],
+              legs: [
+                {
+                  sourceId: TEST_SOURCE_ID,
+                  principalId: TEST_PRINCIPAL_ID,
+                  sourceRawRecordId: TEST_RAW_RECORD_ID,
+                  externalId: "leg-smallest-supported-acquisition",
+                  txHash: null,
+                  timestamp,
+                  addressId: null,
+                  assetId: TEST_BTC_ASSET_ID,
+                  amount,
+                  kind: "acquisition",
+                  provenance: "deterministic",
+                  derivationRule: "test_smallest_quantity",
+                  metadata: { provider: "test" },
+                  transactionId: null,
+                  sourceTransferId: null,
+                  fiatAmount: "1",
+                  fiatCurrency: "EUR",
+                  feeForTransactionId: null,
+                },
+              ],
+              transactionReview: null,
+              resolvedTransactionType: APPROVED_MAPPING,
+            })
+          )
+        )
+      )
+      const leg = result.legs[0]
+      expect(leg).toBeDefined()
+      if (leg === undefined) {
+        return
+      }
+
+      const fifoLots = yield* Effect.promise(() =>
+        runPg(
+          Effect.gen(function* () {
+            const db = yield* drizzle
+            return yield* db
+              .select()
+              .from(schema.fifoLots)
+              .where(eq(schema.fifoLots.sourceLegId, leg.id))
+          })
+        )
+      )
+
+      expect(fifoLots).toEqual([
+        expect.objectContaining({
+          originalAmount: amount,
+          remainingAmount: amount,
+          costBasisPerToken: expectedCostBasisPerToken,
+        }),
+      ])
+    })
+  )
+
+  it.effect("marks a fresh acquisition lot pending when its fiat value is missing", () =>
+    Effect.gen(function* () {
+      const timestamp = DateTime.toDateUtc(DateTime.makeUnsafe("2025-01-01T10:00:00.000Z"))
+
+      const result = yield* Effect.promise(() =>
+        runRepository(
+          Effect.flatMap(SourceNormalizationRepository, (repository) =>
+            repository.persistNormalizedArtifacts({
+              transaction: {
+                sourceId: TEST_SOURCE_ID,
+                sourceRawRecordId: TEST_RAW_RECORD_ID,
+                externalId: "tx-acquisition-without-fiat-value",
+                externalGroupId: null,
+                timestamp,
+                transactionType: "buy_fiat",
+                providerTransactionType: "buy",
+                providerStatus: "completed",
+                providerResourcePath: null,
+                providerDescription: null,
+                providerCreatedAt: timestamp,
+                providerUpdatedAt: timestamp,
+                metadata: { provider: "test" },
+                providerFiatAmount: null,
+                providerFiatCurrency: null,
+                principalId: TEST_PRINCIPAL_ID,
+              },
+              venueContext: {
+                venueType: "cex",
+                cexAccountId: fixture.cexAccountId,
+                externalAccountId: "test-account",
+                externalOrderId: null,
+                externalFillId: null,
+                side: "buy",
+                instrument: "BTC-EUR",
+                fillPrice: null,
+                commissionAmount: null,
+                commissionCurrency: null,
+                metadata: { provider: "test" },
+              },
+              providerTransfers: [],
+              canonicalTransfers: [],
+              providerAssetRowIds: [],
+              legs: [
+                {
+                  sourceId: TEST_SOURCE_ID,
+                  principalId: TEST_PRINCIPAL_ID,
+                  sourceRawRecordId: TEST_RAW_RECORD_ID,
+                  externalId: "leg-acquisition-without-fiat-value",
+                  txHash: null,
+                  timestamp,
+                  addressId: null,
+                  assetId: TEST_BTC_ASSET_ID,
+                  amount: "0.5",
+                  kind: "acquisition",
+                  provenance: "deterministic",
+                  derivationRule: "test_missing_fiat_value",
+                  metadata: { provider: "test" },
+                  transactionId: null,
                   sourceTransferId: null,
                   fiatAmount: null,
                   fiatCurrency: null,
                   feeForTransactionId: null,
                 },
-              ]),
-            transactionReview: null,
-            resolvedTransactionType: APPROVED_MAPPING,
+              ],
+              transactionReview: null,
+              resolvedTransactionType: APPROVED_MAPPING,
+            })
+          )
+        )
+      )
+      const leg = result.legs[0]
+      expect(leg).toBeDefined()
+      if (leg === undefined) {
+        return
+      }
+
+      const [lot] = yield* Effect.promise(() =>
+        runPg(
+          Effect.gen(function* () {
+            const db = yield* drizzle
+            return yield* db
+              .select()
+              .from(schema.fifoLots)
+              .where(eq(schema.fifoLots.sourceLegId, leg.id))
           })
         )
       )
 
-    await Promise.all([
-      persistFee({ rawRecordId: firstRawRecordId, sequence: 1 }),
-      persistFee({ rawRecordId: secondRawRecordId, sequence: 2 }),
-    ])
-
-    const state = await runPg(
-      Effect.gen(function* () {
-        const db = yield* drizzle
-        const [lot] = yield* db.select().from(schema.fifoLots)
-        const allocations = yield* db.select().from(schema.inventoryMovementAllocations)
-        const reviews = yield* db
-          .select()
-          .from(schema.transactionReviews)
-          .where(eq(schema.transactionReviews.matchedLayer, "fifo_inventory"))
-        return { lot, allocations, reviews }
-      })
-    )
-
-    expect(state.lot?.remainingAmount).toContain("0.40000000")
-    expect(state.allocations).toHaveLength(1)
-    expect(state.allocations[0]?.matchedAmount).toContain("0.60000000")
-    expect(state.reviews).toHaveLength(1)
-  })
-
-  it("persists a reviewable partial normalization with no canonical legs", async () => {
-    const partialRawRecordId = "00000000-0000-0000-0000-000000000591"
-
-    await runPg(
-      seedRawRecord({
-        rawRecordId: partialRawRecordId,
-        externalRecordId: "raw-partial-review-1",
-        occurredAt: new Date("2025-01-15T10:00:00.000Z"),
-      })
-    )
-
-    const result = await runRepository(
-      Effect.flatMap(SourceNormalizationRepository, (repository) =>
-        repository.persistNormalizedArtifacts({
-          transaction: {
-            sourceId: TEST_SOURCE_ID,
-            sourceRawRecordId: partialRawRecordId,
-            externalId: "tx-partial-review-1",
-            externalGroupId: "group-partial-review-1",
-            timestamp: new Date("2025-01-15T10:00:00.000Z"),
-            transactionType: "buy_fiat",
-            providerTransactionType: "buy",
-            providerStatus: "completed",
-            providerResourcePath:
-              "/v2/accounts/coinbase-account-1/transactions/tx-partial-review-1",
-            providerDescription: "Fixture partial normalization",
-            providerCreatedAt: new Date("2025-01-15T10:00:00.000Z"),
-            providerUpdatedAt: new Date("2025-01-15T10:00:00.000Z"),
-            metadata: { provider: "coinbase", partial: true },
-            providerFiatAmount: null,
-            providerFiatCurrency: null,
-            principalId: TEST_PRINCIPAL_ID,
-          },
-          venueContext: {
-            venueType: "cex",
-            cexAccountId: fixture.cexAccountId,
-            externalAccountId: "coinbase-account-1",
-            externalOrderId: "order-partial-review-1",
-            externalFillId: "fill-partial-review-1",
-            side: "buy",
-            instrument: "HYPE-EUR",
-            fillPrice: "42.00",
-            commissionAmount: null,
-            commissionCurrency: null,
-            metadata: { provider: "coinbase", partial: true },
-          },
-          providerTransfers: [],
-          canonicalTransfers: [],
-          providerAssetRowIds: [],
-          legs: [],
-          transactionReview: {
-            principalId: TEST_PRINCIPAL_ID,
-            reviewStatus: "needs_review",
-            originalTypeKey: "buy_fiat",
-            originalConfidence: null,
-            currentTypeKey: "buy_fiat",
-            legalRuleSetVersion: null,
-            categorizationReason:
-              "provider_asset_mapping: Coinbase provider asset mapping review is required.",
-            matchedLayer: "provider_asset_mapping",
-            needsReview: true,
-            userNotes: null,
-            reviewedAt: null,
-          },
-          resolvedTransactionType: APPROVED_MAPPING,
+      expect(lot).toEqual(
+        expect.objectContaining({
+          costBasisPerToken: "0.000000000000000000",
+          costBasisCurrency: "EUR",
+          costBasisStatus: "pending_review",
         })
       )
-    )
+    })
+  )
 
-    expect(result.transaction.externalId).toBe("tx-partial-review-1")
-    expect(result.legs).toHaveLength(0)
-
-    const counts = await runPg(
-      Effect.gen(function* () {
-        const db = yield* drizzle
-        const [review] = yield* db
-          .select({
-            reviewStatus: schema.transactionReviews.reviewStatus,
-            matchedLayer: schema.transactionReviews.matchedLayer,
-            needsReview: schema.transactionReviews.needsReview,
-            categorizationReason: schema.transactionReviews.categorizationReason,
-          })
-          .from(schema.transactionReviews)
-          .where(eq(schema.transactionReviews.principalId, TEST_PRINCIPAL_ID))
-          .orderBy(schema.transactionReviews.createdAt)
-          .limit(1)
-        const legs = yield* db.select().from(schema.transactionLegs)
-        const [rawRecord] = yield* db
-          .select({
-            normalizedAt: schema.sourceRecordsRaw.normalizedAt,
-            normalizationError: schema.sourceRecordsRaw.normalizationError,
-          })
-          .from(schema.sourceRecordsRaw)
-          .where(eq(schema.sourceRecordsRaw.id, partialRawRecordId))
-          .limit(1)
-
-        return {
-          review,
-          legs,
-          rawRecord,
-        }
-      })
-    )
-
-    expect(counts.review).toEqual(
-      expect.objectContaining({
-        reviewStatus: "needs_review",
-        matchedLayer: "provider_asset_mapping",
-        needsReview: true,
-        categorizationReason: expect.stringContaining("provider_asset_mapping"),
-      })
-    )
-    expect(counts.legs).toHaveLength(0)
-    expect(counts.rawRecord?.normalizedAt).not.toBeNull()
-    expect(counts.rawRecord?.normalizationError).toBeNull()
-  })
-
-  it("persists Coinbase send movements without duplicating matching fee inventory", async () => {
-    const acquisitionRawRecordId = "00000000-0000-0000-0000-000000000690"
-    const acquiredAt = new Date("2025-03-01T10:00:00.000Z")
-    const acquisitionPayload = {
-      id: "tx-send-provider-transfer-opening-inventory",
-      type: "buy",
-      status: "completed",
-      amount: { amount: "1.00000000", currency: "BTC" },
-      native_amount: { amount: "10000.00", currency: "EUR" },
-      created_at: acquiredAt.toISOString(),
-      resource_path:
-        "/v2/accounts/coinbase-account-1/transactions/tx-send-provider-transfer-opening-inventory",
-    }
-    const rawRecordId = "00000000-0000-0000-0000-000000000691"
-    const occurredAt = new Date("2025-04-01T10:00:00.000Z")
-    const payload = {
-      id: "tx-send-provider-transfer-1",
-      type: "send",
-      status: "completed",
-      amount: { amount: "-0.10000000", currency: "BTC" },
-      native_amount: { amount: "-1500.00", currency: "EUR" },
-      created_at: occurredAt.toISOString(),
-      resource_path: "/v2/accounts/coinbase-account-1/transactions/tx-send-provider-transfer-1",
-      network: {
-        status: "confirmed",
-        hash: "tx-send-provider-transfer-hash-1",
-        network_name: "base",
-        transaction_fee: { amount: "0.00010000", currency: "BTC" },
-      },
-      to: {
-        address: "bc1qprovidertransferdestination",
-        resource: "address",
-      },
-    }
-
-    await runPg(
-      Effect.all([
-        seedRawRecord({
-          rawRecordId: acquisitionRawRecordId,
-          externalRecordId: "raw-provider-send-opening-inventory",
-          occurredAt: acquiredAt,
-          payload: acquisitionPayload,
-        }),
-        seedRawRecord({
-          rawRecordId,
-          externalRecordId: "raw-provider-send-1",
-          occurredAt,
-          payload,
-        }),
-      ])
-    )
-
-    await runCoinbaseNormalization(
-      persistCoinbaseNormalization({
-        source: buildCoinbaseSource({ cexAccountId: fixture.cexAccountId }),
-        sourceRecord: buildSeededRawRecord({
-          rawRecordId: acquisitionRawRecordId,
-          externalRecordId: "raw-provider-send-opening-inventory",
-          occurredAt: acquiredAt,
-          payload: acquisitionPayload,
-        }),
-      })
-    )
-
-    const result = await runCoinbaseNormalization(
-      persistCoinbaseNormalization({
-        source: buildCoinbaseSource({ cexAccountId: fixture.cexAccountId }),
-        sourceRecord: buildSeededRawRecord({
-          rawRecordId,
-          externalRecordId: "raw-provider-send-1",
-          occurredAt,
-          payload,
-        }),
-      })
-    )
-
-    expect(result.providerTransfers).toHaveLength(1)
-    expect(result.legs).toHaveLength(1)
-    expect(result.legs).toEqual([expect.objectContaining({ kind: "fee" })])
-    expect(result.canonicalTransfers).toHaveLength(1)
-    expect(result.providerTransfers[0]).toEqual(
-      expect.objectContaining({
-        externalId: "tx-send-provider-transfer-1:principal",
-        providerAssetId: expect.any(String),
-        direction: "outbound",
-        fromAccountRef: "coinbase-account-1",
-        toAddress: "bc1qprovidertransferdestination",
-        networkName: "base",
-        networkHash: "tx-send-provider-transfer-hash-1",
-      })
-    )
-    expect(result.providerTransfers[0]?.amount).toContain("0.09990000")
-
-    const counts = await runPg(
-      Effect.gen(function* () {
-        const db = yield* drizzle
-        const providerTransfers = yield* db.select().from(schema.providerTransfers)
-        const legs = yield* db.select().from(schema.transactionLegs)
-        const lots = yield* db.select().from(schema.fifoLots)
-        const inventoryMovements = yield* db.select().from(schema.inventoryMovements)
-        const reviews = yield* db.select().from(schema.transactionReviews)
-        return {
-          providerTransfers,
-          legs,
-          lots,
-          inventoryMovements,
-          reviews,
-        }
-      })
-    )
-
-    expect(counts.providerTransfers).toHaveLength(1)
-    expect(counts.legs).toHaveLength(2)
-    expect(counts.legs.filter((leg) => leg.kind === "disposal")).toHaveLength(0)
-    expect(counts.lots).toEqual([
-      expect.objectContaining({
-        sourceId: TEST_SOURCE_ID,
-        remainingAmount: expect.stringContaining("0.90000000"),
-      }),
-    ])
-    expect(counts.inventoryMovements).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          direction: "outbound",
-          purpose: "principal",
-          taxTreatment: "pending_review",
-        }),
-        expect.objectContaining({
-          direction: "outbound",
-          purpose: "fee",
-          amount: expect.stringContaining("0.0001"),
-        }),
-      ])
-    )
-    expect(counts.reviews).toContainEqual(
-      expect.objectContaining({
-        reviewStatus: "needs_review",
-        needsReview: true,
-      })
-    )
-
-    const feeRoleRawRecordId = "00000000-0000-0000-0000-000000000698"
-    const feeRoleAt = new Date("2025-03-03T10:00:00.000Z")
-    const feeRolePayload = {
-      ...payload,
-      id: "tx-provider-fee-role-1",
-      amount: { amount: "-0.00020000", currency: "BTC" },
-      native_amount: { amount: "-150.00", currency: "EUR" },
-      created_at: feeRoleAt.toISOString(),
-      resource_path: "/v2/accounts/coinbase-account-1/transactions/tx-provider-fee-role-1",
-      network: {
-        ...payload.network,
-        hash: "tx-provider-fee-role-hash-1",
-      },
-    }
-
-    await runPg(
-      seedRawRecord({
-        rawRecordId: feeRoleRawRecordId,
-        externalRecordId: "raw-provider-fee-role-1",
-        occurredAt: feeRoleAt,
-        payload: feeRolePayload,
-      })
-    )
-    const feeRoleResult = await runCoinbaseNormalization(
-      persistCoinbaseNormalization({
-        source: buildCoinbaseSource({ cexAccountId: fixture.cexAccountId }),
-        sourceRecord: buildSeededRawRecord({
-          rawRecordId: feeRoleRawRecordId,
-          externalRecordId: "raw-provider-fee-role-1",
-          occurredAt: feeRoleAt,
-          payload: feeRolePayload,
-        }),
-        providerTransferRole: "fee",
-      })
-    )
-    const feeRoleProviderTransfer = feeRoleResult.providerTransfers[0]
-    const feeRoleState = await runPg(
-      Effect.gen(function* () {
-        const db = yield* drizzle
-        const [feeRoleMovement] = yield* db
-          .select()
-          .from(schema.inventoryMovements)
-          .where(
-            eq(schema.inventoryMovements.providerTransferId, feeRoleProviderTransfer?.id ?? "")
+  it.effect("marks disposals with missing FIFO inventory for review instead of failing", () =>
+    Effect.gen(function* () {
+      yield* Effect.promise(() =>
+        runRepository(
+          Effect.flatMap(SourceNormalizationRepository, (repository) =>
+            repository.persistNormalizedArtifacts({
+              transaction: {
+                sourceId: TEST_SOURCE_ID,
+                sourceRawRecordId: TEST_RAW_RECORD_ID,
+                externalId: "tx-acquire-2",
+                externalGroupId: "group-acquire-2",
+                timestamp: DateTime.toDateUtc(DateTime.makeUnsafe("2025-01-01T10:00:00.000Z")),
+                transactionType: "buy_fiat",
+                providerTransactionType: "buy",
+                providerStatus: "completed",
+                providerResourcePath: "/v2/accounts/coinbase-account-1/transactions/tx-acquire-2",
+                providerDescription: "Seed buy",
+                providerCreatedAt: DateTime.toDateUtc(
+                  DateTime.makeUnsafe("2025-01-01T10:00:00.000Z")
+                ),
+                providerUpdatedAt: DateTime.toDateUtc(
+                  DateTime.makeUnsafe("2025-01-01T10:00:00.000Z")
+                ),
+                metadata: { provider: "coinbase" },
+                providerFiatAmount: null,
+                providerFiatCurrency: null,
+                principalId: TEST_PRINCIPAL_ID,
+              },
+              venueContext: {
+                venueType: "cex",
+                cexAccountId: fixture.cexAccountId,
+                externalAccountId: "coinbase-account-1",
+                externalOrderId: "order-acquire-2",
+                externalFillId: "fill-acquire-2",
+                side: "buy",
+                instrument: "BTC-EUR",
+                fillPrice: "10000.00",
+                commissionAmount: null,
+                commissionCurrency: null,
+                metadata: { provider: "coinbase" },
+              },
+              providerTransfers: [],
+              canonicalTransfers: [],
+              providerAssetRowIds: [],
+              legs: [
+                {
+                  sourceId: TEST_SOURCE_ID,
+                  sourceRawRecordId: TEST_RAW_RECORD_ID,
+                  externalId: "leg-acquire-2",
+                  txHash: null,
+                  timestamp: DateTime.toDateUtc(DateTime.makeUnsafe("2025-01-01T10:00:00.000Z")),
+                  principalId: TEST_PRINCIPAL_ID,
+                  addressId: null,
+                  assetId: TEST_BTC_ASSET_ID,
+                  amount: "1.00000000",
+                  kind: "acquisition",
+                  provenance: "deterministic",
+                  derivationRule: "spot_buy",
+                  metadata: { provider: "coinbase" },
+                  transactionId: null,
+                  sourceTransferId: null,
+                  fiatAmount: "10000.00000000",
+                  fiatCurrency: "EUR",
+                  feeForTransactionId: null,
+                },
+              ],
+              transactionReview: null,
+              resolvedTransactionType: APPROVED_MAPPING,
+            })
           )
-        const allocations = yield* db
-          .select({
-            matchedAmount: schema.inventoryMovementAllocations.matchedAmount,
-            providerTransferId: schema.inventoryMovements.providerTransferId,
-            transactionLegId: schema.inventoryMovements.transactionLegId,
+        )
+      )
+
+      const insufficientRawRecordId = "00000000-0000-0000-0000-000000000492"
+
+      yield* Effect.promise(() =>
+        runPg(
+          seedRawRecord({
+            rawRecordId: insufficientRawRecordId,
+            externalRecordId: "raw-dispose-insufficient-1",
+            occurredAt: DateTime.toDateUtc(DateTime.makeUnsafe("2025-02-01T10:00:00.000Z")),
           })
-          .from(schema.inventoryMovementAllocations)
-          .innerJoin(
-            schema.inventoryMovements,
-            eq(
-              schema.inventoryMovementAllocations.inventoryMovementId,
-              schema.inventoryMovements.id
+        )
+      )
+
+      const result = yield* Effect.promise(() =>
+        runRepository(
+          Effect.flatMap(SourceNormalizationRepository, (repository) =>
+            repository.persistNormalizedArtifacts({
+              transaction: {
+                sourceId: TEST_SOURCE_ID,
+                sourceRawRecordId: insufficientRawRecordId,
+                externalId: "tx-dispose-insufficient-1",
+                externalGroupId: "group-dispose-insufficient-1",
+                timestamp: DateTime.toDateUtc(DateTime.makeUnsafe("2025-02-01T10:00:00.000Z")),
+                transactionType: "sell_fiat",
+                providerTransactionType: "advanced_trade_fill",
+                providerStatus: "completed",
+                providerResourcePath:
+                  "/v2/accounts/coinbase-account-1/transactions/tx-dispose-insufficient-1",
+                providerDescription: "Fixture sell with missing opening inventory",
+                providerCreatedAt: DateTime.toDateUtc(
+                  DateTime.makeUnsafe("2025-02-01T10:00:00.000Z")
+                ),
+                providerUpdatedAt: DateTime.toDateUtc(
+                  DateTime.makeUnsafe("2025-02-01T10:00:00.000Z")
+                ),
+                metadata: { provider: "coinbase" },
+                providerFiatAmount: null,
+                providerFiatCurrency: null,
+                principalId: TEST_PRINCIPAL_ID,
+              },
+              venueContext: {
+                venueType: "cex",
+                cexAccountId: fixture.cexAccountId,
+                externalAccountId: "coinbase-account-1",
+                externalOrderId: "order-dispose-insufficient-1",
+                externalFillId: "fill-dispose-insufficient-1",
+                side: "sell",
+                instrument: "BTC-EUR",
+                fillPrice: "15000.00",
+                commissionAmount: null,
+                commissionCurrency: null,
+                metadata: { provider: "coinbase" },
+              },
+              providerTransfers: [],
+              canonicalTransfers: [],
+              providerAssetRowIds: [],
+              legs: [
+                {
+                  sourceId: TEST_SOURCE_ID,
+                  sourceRawRecordId: insufficientRawRecordId,
+                  externalId: "leg-dispose-insufficient-1",
+                  txHash: null,
+                  timestamp: DateTime.toDateUtc(DateTime.makeUnsafe("2025-02-01T10:00:00.000Z")),
+                  principalId: TEST_PRINCIPAL_ID,
+                  addressId: null,
+                  assetId: TEST_BTC_ASSET_ID,
+                  amount: "2.00000000",
+                  kind: "disposal",
+                  provenance: "deterministic",
+                  derivationRule: "spot_sell",
+                  metadata: { provider: "coinbase" },
+                  transactionId: null,
+                  sourceTransferId: null,
+                  fiatAmount: "30000.00000000",
+                  fiatCurrency: "EUR",
+                  feeForTransactionId: null,
+                },
+              ],
+              transactionReview: null,
+              resolvedTransactionType: {
+                ...APPROVED_MAPPING,
+                providerTransactionType: "advanced_trade_fill",
+                transactionType: "sell_fiat",
+                inventoryEffect: "disposal",
+              },
+            })
+          )
+        )
+      )
+
+      expect(result.legs).toHaveLength(1)
+
+      const counts = yield* Effect.promise(() =>
+        runPg(
+          Effect.gen(function* () {
+            const db = yield* drizzle
+            const reviews = yield* db.select().from(schema.transactionReviews)
+            const matches = yield* db.select().from(schema.disposalMatches)
+            const [lot] = yield* db.select().from(schema.fifoLots).limit(1)
+            const [rawRecord] = yield* db
+              .select({
+                normalizedAt: schema.sourceRecordsRaw.normalizedAt,
+                normalizationError: schema.sourceRecordsRaw.normalizationError,
+              })
+              .from(schema.sourceRecordsRaw)
+              .where(eq(schema.sourceRecordsRaw.id, insufficientRawRecordId))
+              .limit(1)
+
+            return {
+              reviews,
+              matches,
+              lot,
+              rawRecord,
+            }
+          })
+        )
+      )
+
+      expect(counts.matches).toHaveLength(0)
+      expect(counts.reviews).toHaveLength(1)
+      expect(counts.reviews).toEqual([
+        expect.objectContaining({
+          reviewStatus: "needs_review",
+          originalTypeKey: "sell_fiat",
+          currentTypeKey: "sell_fiat",
+          matchedLayer: "fifo_inventory",
+          needsReview: true,
+          categorizationReason: expect.stringContaining("Insufficient FIFO inventory"),
+        }),
+      ])
+      expect(counts.rawRecord?.normalizedAt).not.toBeNull()
+      expect(counts.rawRecord?.normalizationError).toBeNull()
+      expect(String(counts.lot?.remainingAmount)).toContain("1")
+    })
+  )
+
+  it.effect("keeps FIFO inventory isolated by source for the same principal", () =>
+    Effect.gen(function* () {
+      const dependentSourceId = "00000000-0000-0000-0000-000000000282"
+      const originTransactionId = "00000000-0000-0000-0000-000000000283"
+
+      const lotId = yield* Effect.promise(() =>
+        runPg(
+          Effect.gen(function* () {
+            const db = yield* drizzle
+            const [address] = yield* db
+              .insert(schema.addresses)
+              .values({
+                address: "bc1qcrosssourcefifo",
+                type: "bitcoin",
+                name: "Cross-source FIFO",
+                principalId: TEST_PRINCIPAL_ID,
+              })
+              .returning({ id: schema.addresses.id })
+
+            if (address === undefined) {
+              return yield* Effect.die("Failed to create cross-source FIFO address")
+            }
+
+            yield* db.insert(schema.sources).values({
+              id: dependentSourceId,
+              principalId: TEST_PRINCIPAL_ID,
+              name: "Cross-source FIFO",
+              providerKey: "bitcoin-rpc",
+              sourceableType: "onchain",
+              cexAccountId: null,
+              addressId: address.id,
+            })
+            yield* db.insert(schema.transactions).values({
+              id: originTransactionId,
+              sourceId: TEST_SOURCE_ID,
+              externalId: "cross-source-fifo-origin",
+              timestamp: DateTime.toDateUtc(DateTime.makeUnsafe("2025-01-01T10:00:00.000Z")),
+              principalId: TEST_PRINCIPAL_ID,
+            })
+            const [originLeg] = yield* db
+              .insert(schema.transactionLegs)
+              .values({
+                sourceId: TEST_SOURCE_ID,
+                externalId: "cross-source-fifo-origin-leg",
+                timestamp: DateTime.toDateUtc(DateTime.makeUnsafe("2025-01-01T10:00:00.000Z")),
+                principalId: TEST_PRINCIPAL_ID,
+                assetId: TEST_BTC_ASSET_ID,
+                amount: "1.00000000",
+                kind: "acquisition",
+                provenance: "deterministic",
+                transactionId: originTransactionId,
+              })
+              .returning({ id: schema.transactionLegs.id })
+
+            if (originLeg === undefined) {
+              return yield* Effect.die("Failed to create cross-source FIFO origin leg")
+            }
+
+            const [lot] = yield* db
+              .insert(schema.fifoLots)
+              .values({
+                principalId: TEST_PRINCIPAL_ID,
+                sourceId: TEST_SOURCE_ID,
+                assetId: TEST_BTC_ASSET_ID,
+                acquiredAt: DateTime.toDateUtc(DateTime.makeUnsafe("2025-01-01T10:00:00.000Z")),
+                originalAmount: "1.00000000",
+                remainingAmount: "1.00000000",
+                costBasisPerToken: "10000.00",
+                costBasisCurrency: "EUR",
+                sourceLegId: originLeg.id,
+              })
+              .returning({ id: schema.fifoLots.id })
+
+            if (lot === undefined) {
+              return yield* Effect.die("Failed to create cross-source FIFO lot")
+            }
+
+            return lot.id
+          })
+        )
+      )
+
+      yield* Effect.promise(() =>
+        runRepository(
+          Effect.flatMap(SourceNormalizationRepository, (repository) =>
+            repository.persistNormalizedArtifacts({
+              transaction: {
+                sourceId: dependentSourceId,
+                sourceRawRecordId: null,
+                externalId: "cross-source-fifo-disposal",
+                externalGroupId: null,
+                timestamp: DateTime.toDateUtc(DateTime.makeUnsafe("2025-02-01T10:00:00.000Z")),
+                transactionType: "sell_fiat",
+                providerTransactionType: "sell",
+                providerStatus: "completed",
+                providerResourcePath: null,
+                providerDescription: null,
+                providerCreatedAt: null,
+                providerUpdatedAt: null,
+                metadata: null,
+                providerFiatAmount: null,
+                providerFiatCurrency: null,
+                principalId: TEST_PRINCIPAL_ID,
+              },
+              venueContext: {
+                venueType: "cex",
+                cexAccountId: fixture.cexAccountId,
+                externalAccountId: "cross-source-fifo",
+                externalOrderId: null,
+                externalFillId: null,
+                side: "sell",
+                instrument: "BTC-EUR",
+                fillPrice: "12000.00",
+                commissionAmount: null,
+                commissionCurrency: null,
+                metadata: null,
+              },
+              providerTransfers: [],
+              canonicalTransfers: [],
+              providerAssetRowIds: [],
+              legs: [
+                {
+                  sourceId: dependentSourceId,
+                  sourceRawRecordId: null,
+                  externalId: "cross-source-fifo-disposal-leg",
+                  txHash: null,
+                  timestamp: DateTime.toDateUtc(DateTime.makeUnsafe("2025-02-01T10:00:00.000Z")),
+                  principalId: TEST_PRINCIPAL_ID,
+                  addressId: null,
+                  assetId: TEST_BTC_ASSET_ID,
+                  amount: "0.40000000",
+                  kind: "disposal",
+                  provenance: "deterministic",
+                  derivationRule: "spot_sell",
+                  metadata: null,
+                  transactionId: null,
+                  sourceTransferId: null,
+                  fiatAmount: "4800.00",
+                  fiatCurrency: "EUR",
+                  feeForTransactionId: null,
+                },
+              ],
+              transactionReview: null,
+              resolvedTransactionType: {
+                ...APPROVED_MAPPING,
+                providerTransactionType: "sell",
+                transactionType: "sell_fiat",
+                inventoryEffect: "disposal",
+              },
+            })
+          )
+        )
+      )
+
+      const state = yield* Effect.promise(() =>
+        runPg(
+          Effect.gen(function* () {
+            const db = yield* drizzle
+            const [lot] = yield* db
+              .select()
+              .from(schema.fifoLots)
+              .where(eq(schema.fifoLots.id, lotId))
+            const matches = yield* db.select().from(schema.disposalMatches)
+            const reviews = yield* db
+              .select()
+              .from(schema.transactionReviews)
+              .where(eq(schema.transactionReviews.matchedLayer, "fifo_inventory"))
+            return { lot, matches, reviews }
+          })
+        )
+      )
+      expect(state.lot?.remainingAmount).toContain("1.00000000")
+      expect(state.matches).toHaveLength(0)
+      expect(state.reviews).toEqual([
+        expect.objectContaining({
+          reviewStatus: "needs_review",
+          matchedLayer: "fifo_inventory",
+          needsReview: true,
+          categorizationReason: expect.stringContaining("Insufficient FIFO inventory"),
+        }),
+      ])
+    })
+  )
+
+  it.effect("serializes concurrent FIFO allocations for one principal", () =>
+    Effect.gen(function* () {
+      const firstRawRecordId = "00000000-0000-0000-0000-000000000721"
+      const secondRawRecordId = "00000000-0000-0000-0000-000000000722"
+      const openingTransactionId = "00000000-0000-0000-0000-000000000723"
+      const occurredAt = DateTime.toDateUtc(DateTime.makeUnsafe("2025-03-02T10:00:00.000Z"))
+
+      yield* Effect.promise(() =>
+        runPg(
+          Effect.gen(function* () {
+            const db = yield* drizzle
+            yield* Effect.forEach(
+              [
+                { id: firstRawRecordId, externalId: "raw-concurrent-fee-1" },
+                { id: secondRawRecordId, externalId: "raw-concurrent-fee-2" },
+              ],
+              (record) =>
+                seedRawRecord({
+                  rawRecordId: record.id,
+                  externalRecordId: record.externalId,
+                  occurredAt,
+                })
             )
+            yield* db.insert(schema.transactions).values({
+              id: openingTransactionId,
+              sourceId: TEST_SOURCE_ID,
+              externalId: "tx-concurrent-opening",
+              timestamp: DateTime.toDateUtc(DateTime.makeUnsafe("2025-03-01T10:00:00.000Z")),
+              principalId: TEST_PRINCIPAL_ID,
+            })
+            const [openingLeg] = yield* db
+              .insert(schema.transactionLegs)
+              .values({
+                sourceId: TEST_SOURCE_ID,
+                externalId: "leg-concurrent-opening",
+                timestamp: DateTime.toDateUtc(DateTime.makeUnsafe("2025-03-01T10:00:00.000Z")),
+                principalId: TEST_PRINCIPAL_ID,
+                assetId: TEST_BTC_ASSET_ID,
+                amount: "1.00000000",
+                kind: "acquisition",
+                provenance: "deterministic",
+                transactionId: openingTransactionId,
+              })
+              .returning({ id: schema.transactionLegs.id })
+
+            if (openingLeg === undefined) {
+              return yield* Effect.die("Failed to seed concurrent FIFO opening leg")
+            }
+
+            yield* db.insert(schema.fifoLots).values({
+              principalId: TEST_PRINCIPAL_ID,
+              sourceId: TEST_SOURCE_ID,
+              assetId: TEST_BTC_ASSET_ID,
+              acquiredAt: DateTime.toDateUtc(DateTime.makeUnsafe("2025-03-01T10:00:00.000Z")),
+              originalAmount: "1.00000000",
+              remainingAmount: "1.00000000",
+              costBasisPerToken: "10000.00",
+              costBasisCurrency: "EUR",
+              sourceLegId: openingLeg.id,
+            })
+          })
+        )
+      )
+
+      const persistFee = ({ rawRecordId, sequence }: { rawRecordId: string; sequence: number }) =>
+        runRepository(
+          Effect.flatMap(SourceNormalizationRepository, (repository) =>
+            repository.persistNormalizedArtifacts({
+              transaction: {
+                sourceId: TEST_SOURCE_ID,
+                sourceRawRecordId: rawRecordId,
+                externalId: `tx-concurrent-fee-${sequence}`,
+                externalGroupId: null,
+                timestamp: occurredAt,
+                transactionType: "fee",
+                providerTransactionType: "fee",
+                providerStatus: "completed",
+                providerResourcePath: null,
+                providerDescription: "Concurrent fee fixture",
+                providerCreatedAt: occurredAt,
+                providerUpdatedAt: occurredAt,
+                metadata: { provider: "fixture" },
+                providerFiatAmount: null,
+                providerFiatCurrency: null,
+                principalId: TEST_PRINCIPAL_ID,
+              },
+              venueContext: {
+                venueType: "cex",
+                cexAccountId: fixture.cexAccountId,
+                externalAccountId: "coinbase-account-1",
+                externalOrderId: null,
+                externalFillId: null,
+                side: null,
+                instrument: null,
+                fillPrice: null,
+                commissionAmount: null,
+                commissionCurrency: null,
+                metadata: { provider: "fixture" },
+              },
+              providerTransfers: [],
+              canonicalTransfers: [],
+              providerAssetRowIds: [],
+              deriveLegs: ({ transaction }) =>
+                Effect.succeed([
+                  {
+                    sourceId: TEST_SOURCE_ID,
+                    sourceRawRecordId: rawRecordId,
+                    externalId: `leg-concurrent-fee-${sequence}`,
+                    txHash: null,
+                    timestamp: occurredAt,
+                    principalId: TEST_PRINCIPAL_ID,
+                    addressId: null,
+                    assetId: TEST_BTC_ASSET_ID,
+                    amount: "0.60000000",
+                    kind: "fee",
+                    provenance: "deterministic",
+                    derivationRule: "fixture_fee",
+                    metadata: { provider: "fixture" },
+                    transactionId: transaction.id,
+                    sourceTransferId: null,
+                    fiatAmount: null,
+                    fiatCurrency: null,
+                    feeForTransactionId: null,
+                  },
+                ]),
+              transactionReview: null,
+              resolvedTransactionType: APPROVED_MAPPING,
+            })
           )
-          .where(eq(schema.inventoryMovements.transactionId, feeRoleResult.transaction.id))
-        const [lot] = yield* db.select().from(schema.fifoLots).limit(1)
+        )
 
-        return { allocations, feeRoleMovement, lot }
-      })
-    )
-
-    expect(feeRoleState.feeRoleMovement).toEqual(
-      expect.objectContaining({
-        direction: "outbound",
-        purpose: "fee",
-      })
-    )
-    expect(feeRoleState.allocations).toEqual([
-      expect.objectContaining({
-        matchedAmount: expect.stringContaining("0.00010000"),
-        providerTransferId: null,
-        transactionLegId: expect.any(String),
-      }),
-    ])
-    expect(feeRoleState.lot?.remainingAmount).toContain("0.89990000")
-  })
-
-  it("does not allocate an internal-transfer outflow after its disposal leg consumed inventory", async () => {
-    const acquisitionRawRecordId = "00000000-0000-0000-0000-000000000698"
-    const acquiredAt = new Date("2025-03-01T10:00:00.000Z")
-    const acquisitionPayload = {
-      id: "tx-internal-transfer-opening-inventory",
-      type: "buy",
-      status: "completed",
-      amount: { amount: "1.00000000", currency: "BTC" },
-      native_amount: { amount: "10000.00", currency: "EUR" },
-      created_at: acquiredAt.toISOString(),
-      resource_path:
-        "/v2/accounts/coinbase-account-1/transactions/tx-internal-transfer-opening-inventory",
-    }
-    const rawRecordId = "00000000-0000-0000-0000-000000000699"
-    const occurredAt = new Date("2025-04-01T10:00:00.000Z")
-    const payload = {
-      id: "tx-internal-transfer-outflow",
-      type: "intx_withdrawal",
-      status: "completed",
-      amount: { amount: "-0.10000000", currency: "BTC" },
-      native_amount: { amount: "-1500.00", currency: "EUR" },
-      created_at: occurredAt.toISOString(),
-      resource_path: "/v2/accounts/coinbase-account-1/transactions/tx-internal-transfer-outflow",
-    }
-
-    await runPg(
-      Effect.all([
-        seedRawRecord({
-          rawRecordId: acquisitionRawRecordId,
-          externalRecordId: "raw-internal-transfer-opening-inventory",
-          occurredAt: acquiredAt,
-          payload: acquisitionPayload,
-        }),
-        seedRawRecord({
-          rawRecordId,
-          externalRecordId: "raw-internal-transfer-outflow",
-          occurredAt,
-          payload,
-        }),
-      ])
-    )
-
-    await runCoinbaseNormalization(
-      persistCoinbaseNormalization({
-        source: buildCoinbaseSource({ cexAccountId: fixture.cexAccountId }),
-        sourceRecord: buildSeededRawRecord({
-          rawRecordId: acquisitionRawRecordId,
-          externalRecordId: "raw-internal-transfer-opening-inventory",
-          occurredAt: acquiredAt,
-          payload: acquisitionPayload,
-        }),
-      })
-    )
-
-    const result = await runCoinbaseNormalization(
-      persistCoinbaseNormalization({
-        source: buildCoinbaseSource({ cexAccountId: fixture.cexAccountId }),
-        sourceRecord: buildSeededRawRecord({
-          rawRecordId,
-          externalRecordId: "raw-internal-transfer-outflow",
-          occurredAt,
-          payload,
-        }),
-      })
-    )
-
-    expect(result.providerTransfers).toHaveLength(1)
-    expect(result.legs).toEqual([expect.objectContaining({ kind: "disposal" })])
-
-    const state = await runPg(
-      Effect.gen(function* () {
-        const db = yield* drizzle
-        const lots = yield* db.select().from(schema.fifoLots)
-        const inventoryMovements = yield* db.select().from(schema.inventoryMovements)
-        const inventoryMovementAllocations = yield* db
-          .select()
-          .from(schema.inventoryMovementAllocations)
-        const disposalMatches = yield* db.select().from(schema.disposalMatches)
-
-        return {
-          lots,
-          inventoryMovements,
-          inventoryMovementAllocations,
-          disposalMatches,
-        }
-      })
-    )
-
-    expect(state.lots).toEqual([
-      expect.objectContaining({
-        sourceId: TEST_SOURCE_ID,
-        remainingAmount: expect.stringContaining("0.90000000"),
-      }),
-    ])
-    expect(state.inventoryMovements).toEqual([
-      expect.objectContaining({
-        direction: "outbound",
-        purpose: "principal",
-        amount: expect.stringContaining("0.10000000"),
-      }),
-    ])
-    expect(state.inventoryMovementAllocations).toHaveLength(0)
-    expect(state.disposalMatches).toEqual([
-      expect.objectContaining({ matchedAmount: expect.stringContaining("0.10000000") }),
-    ])
-  })
-
-  it("rebuilds changed movement allocations and clears them for a pending replay", async () => {
-    const acquisitionRawRecordId = "00000000-0000-0000-0000-000000000700"
-    const acquiredAt = new Date("2025-03-01T10:00:00.000Z")
-    const acquisitionPayload = {
-      id: "tx-movement-replay-opening-inventory",
-      type: "buy",
-      status: "completed",
-      amount: { amount: "1.00000000", currency: "BTC" },
-      native_amount: { amount: "10000.00", currency: "EUR" },
-      created_at: acquiredAt.toISOString(),
-      resource_path:
-        "/v2/accounts/coinbase-account-1/transactions/tx-movement-replay-opening-inventory",
-    }
-    const rawRecordId = "00000000-0000-0000-0000-000000000701"
-    const occurredAt = new Date("2025-04-01T10:00:00.000Z")
-    const buildSendPayload = ({
-      status,
-      amount,
-      feeAmount,
-    }: {
-      readonly status: "completed" | "pending" | "succeeded"
-      readonly amount: string
-      readonly feeAmount: string
-    }) => ({
-      id: "tx-movement-replay-send",
-      type: "send",
-      status,
-      amount: { amount, currency: "BTC" },
-      native_amount: { amount: "-1500.00", currency: "EUR" },
-      created_at: occurredAt.toISOString(),
-      resource_path: "/v2/accounts/coinbase-account-1/transactions/tx-movement-replay-send",
-      network: {
-        status: "confirmed",
-        hash: "tx-movement-replay-hash",
-        network_name: "base",
-        transaction_fee: { amount: feeAmount, currency: "BTC" },
-      },
-      to: {
-        address: "bc1qmovementreplaydestination",
-        resource: "address",
-      },
-    })
-    const initialSendPayload = buildSendPayload({
-      status: "completed",
-      amount: "-0.10000000",
-      feeAmount: "0.01000000",
-    })
-
-    await runPg(
-      Effect.all([
-        seedRawRecord({
-          rawRecordId: acquisitionRawRecordId,
-          externalRecordId: "raw-movement-replay-opening-inventory",
-          occurredAt: acquiredAt,
-          payload: acquisitionPayload,
-        }),
-        seedRawRecord({
-          rawRecordId,
-          externalRecordId: "raw-movement-replay-send",
-          occurredAt,
-          payload: initialSendPayload,
-        }),
-      ])
-    )
-
-    const source = buildCoinbaseSource({ cexAccountId: fixture.cexAccountId })
-    const normalizeSend = (payload: ReturnType<typeof buildSendPayload>) =>
-      runCoinbaseNormalization(
-        persistCoinbaseNormalization({
-          source,
-          sourceRecord: buildSeededRawRecord({
-            rawRecordId,
-            externalRecordId: "raw-movement-replay-send",
-            occurredAt,
-            payload,
-          }),
-        })
+      yield* Effect.promise(() =>
+        Promise.all([
+          persistFee({ rawRecordId: firstRawRecordId, sequence: 1 }),
+          persistFee({ rawRecordId: secondRawRecordId, sequence: 2 }),
+        ])
       )
 
-    await runCoinbaseNormalization(
-      persistCoinbaseNormalization({
-        source,
-        sourceRecord: buildSeededRawRecord({
-          rawRecordId: acquisitionRawRecordId,
-          externalRecordId: "raw-movement-replay-opening-inventory",
-          occurredAt: acquiredAt,
-          payload: acquisitionPayload,
-        }),
-      })
-    )
-    await normalizeSend(initialSendPayload)
-    await runPg(
-      Effect.gen(function* () {
-        const db = yield* drizzle
-        yield* db
-          .update(schema.inventoryMovements)
-          .set({
-            taxTreatment: "non_taxable",
-            reconciliationStatus: "matched",
+      const state = yield* Effect.promise(() =>
+        runPg(
+          Effect.gen(function* () {
+            const db = yield* drizzle
+            const [lot] = yield* db.select().from(schema.fifoLots)
+            const allocations = yield* db.select().from(schema.inventoryMovementAllocations)
+            const reviews = yield* db
+              .select()
+              .from(schema.transactionReviews)
+              .where(eq(schema.transactionReviews.matchedLayer, "fifo_inventory"))
+            return { lot, allocations, reviews }
           })
-          .where(eq(schema.inventoryMovements.sourceId, TEST_SOURCE_ID))
-      })
-    )
-    await normalizeSend(
-      buildSendPayload({
-        status: "completed",
-        amount: "-0.20000000",
-        feeAmount: "0.02000000",
-      })
-    )
-
-    const changedState = await runPg(
-      Effect.gen(function* () {
-        const db = yield* drizzle
-        const [lot] = yield* db.select().from(schema.fifoLots)
-        const movements = yield* db.select().from(schema.inventoryMovements)
-        const allocations = yield* db.select().from(schema.inventoryMovementAllocations)
-        return { lot, movements, allocations }
-      })
-    )
-
-    expect(changedState.lot?.remainingAmount).toContain("0.80000000")
-    expect(changedState.movements).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          purpose: "principal",
-          amount: expect.stringContaining("0.18"),
-          taxTreatment: "pending_review",
-          reconciliationStatus: "unmatched",
-        }),
-        expect.objectContaining({ purpose: "fee", amount: expect.stringContaining("0.02") }),
-      ])
-    )
-    expect(changedState.allocations).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ matchedAmount: expect.stringContaining("0.18") }),
-        expect.objectContaining({ matchedAmount: expect.stringContaining("0.02") }),
-      ])
-    )
-
-    await normalizeSend(
-      buildSendPayload({
-        status: "succeeded",
-        amount: "-0.20000000",
-        feeAmount: "0.02000000",
-      })
-    )
-
-    const succeededState = await runPg(
-      Effect.gen(function* () {
-        const db = yield* drizzle
-        const [lot] = yield* db.select().from(schema.fifoLots)
-        const movements = yield* db.select().from(schema.inventoryMovements)
-        const allocations = yield* db.select().from(schema.inventoryMovementAllocations)
-        return { lot, movements, allocations }
-      })
-    )
-
-    expect(succeededState.lot?.remainingAmount).toContain("0.80000000")
-    expect(succeededState.movements).toHaveLength(2)
-    expect(succeededState.allocations).toHaveLength(2)
-
-    await normalizeSend(
-      buildSendPayload({
-        status: "completed",
-        amount: "-0.20000000",
-        feeAmount: "0",
-      })
-    )
-
-    const zeroFeeState = await runPg(
-      Effect.gen(function* () {
-        const db = yield* drizzle
-        const [lot] = yield* db.select().from(schema.fifoLots)
-        const movements = yield* db.select().from(schema.inventoryMovements)
-        const allocations = yield* db.select().from(schema.inventoryMovementAllocations)
-        return { lot, movements, allocations }
-      })
-    )
-
-    expect(zeroFeeState.lot?.remainingAmount).toContain("0.80000000")
-    expect(zeroFeeState.movements).toEqual([
-      expect.objectContaining({ purpose: "principal", amount: expect.stringContaining("0.2") }),
-    ])
-    expect(zeroFeeState.allocations).toEqual([
-      expect.objectContaining({ matchedAmount: expect.stringContaining("0.2") }),
-    ])
-
-    await normalizeSend(
-      buildSendPayload({
-        status: "pending",
-        amount: "-0.20000000",
-        feeAmount: "0.02000000",
-      })
-    )
-
-    const pendingState = await runPg(
-      Effect.gen(function* () {
-        const db = yield* drizzle
-        const [lot] = yield* db.select().from(schema.fifoLots)
-        const movements = yield* db.select().from(schema.inventoryMovements)
-        const allocations = yield* db.select().from(schema.inventoryMovementAllocations)
-        return { lot, movements, allocations }
-      })
-    )
-
-    expect(pendingState.lot?.remainingAmount).toContain("1.00000000")
-    expect(pendingState.movements).toHaveLength(0)
-    expect(pendingState.allocations).toHaveLength(0)
-  })
-
-  it("resets reconciliation when replay changes only the asset representation", async () => {
-    const rawRecordId = "00000000-0000-0000-0000-000000000710"
-    const occurredAt = new Date("2025-04-10T10:00:00.000Z")
-    const payload = {
-      id: "tx-representation-replay-send",
-      type: "send",
-      status: "completed",
-      amount: { amount: "-0.10000000", currency: "BTC" },
-      native_amount: { amount: "-1500.00", currency: "EUR" },
-      created_at: occurredAt.toISOString(),
-      resource_path: "/v2/accounts/coinbase-account-1/transactions/tx-representation-replay-send",
-      network: {
-        status: "confirmed",
-        hash: "tx-representation-replay-hash",
-        network_name: "bitcoin",
-      },
-      to: {
-        address: "bc1qrepresentationreplaydestination",
-        resource: "address",
-      },
-    }
-
-    await runPg(
-      seedRawRecord({
-        rawRecordId,
-        externalRecordId: "raw-representation-replay-send",
-        occurredAt,
-        payload,
-      })
-    )
-
-    const source = buildCoinbaseSource({ cexAccountId: fixture.cexAccountId })
-    const normalize = () =>
-      runCoinbaseNormalization(
-        persistCoinbaseNormalization({
-          source,
-          sourceRecord: buildSeededRawRecord({
-            rawRecordId,
-            externalRecordId: "raw-representation-replay-send",
-            occurredAt,
-            payload,
-          }),
-        })
+        )
       )
 
-    await normalize()
-    await runPg(
-      Effect.gen(function* () {
-        const db = yield* drizzle
-        const [providerAsset] = yield* db
-          .select({ id: schema.providerAssets.id })
-          .from(schema.providerAssets)
-          .where(eq(schema.providerAssets.currencyCode, "BTC"))
-          .limit(1)
+      expect(state.lot?.remainingAmount).toContain("0.40000000")
+      expect(state.allocations).toHaveLength(1)
+      expect(state.allocations[0]?.matchedAmount).toContain("0.60000000")
+      expect(state.reviews).toHaveLength(1)
+    })
+  )
 
-        if (providerAsset === undefined) {
-          return yield* Effect.die("Missing Coinbase BTC provider asset")
-        }
+  it.effect("persists a reviewable partial normalization with no canonical legs", () =>
+    Effect.gen(function* () {
+      const partialRawRecordId = "00000000-0000-0000-0000-000000000591"
 
-        yield* db
-          .update(schema.providerAssetMappings)
-          .set({ assetRepresentationId: TEST_BTC_REPRESENTATION_ID })
-          .where(eq(schema.providerAssetMappings.providerAssetRowId, providerAsset.id))
-        yield* db
-          .update(schema.inventoryMovements)
-          .set({ taxTreatment: "non_taxable", reconciliationStatus: "matched" })
-          .where(eq(schema.inventoryMovements.purpose, "principal"))
-      })
-    )
-
-    await normalize()
-
-    const [movement] = await runPg(
-      Effect.gen(function* () {
-        const db = yield* drizzle
-        return yield* db
-          .select()
-          .from(schema.inventoryMovements)
-          .where(eq(schema.inventoryMovements.purpose, "principal"))
-      })
-    )
-
-    expect(movement).toEqual(
-      expect.objectContaining({
-        assetRepresentationId: TEST_BTC_REPRESENTATION_ID,
-        taxTreatment: "pending_review",
-        reconciliationStatus: "unmatched",
-      })
-    )
-  })
-
-  it("persists a Coinbase receive provider transfer with source and destination context", async () => {
-    const rawRecordId = "00000000-0000-0000-0000-000000000692"
-    const occurredAt = new Date("2025-04-02T10:00:00.000Z")
-    const payload = {
-      id: "tx-receive-provider-transfer-1",
-      type: "receive",
-      status: "completed",
-      amount: { amount: "0.25000000", currency: "BTC" },
-      native_amount: { amount: "3750.00", currency: "EUR" },
-      created_at: occurredAt.toISOString(),
-      resource_path: "/v2/accounts/coinbase-account-1/transactions/tx-receive-provider-transfer-1",
-      from: {
-        address: "bc1qprovidertransfersource",
-        resource: "address",
-      },
-      to: {
-        id: "coinbase-account-1",
-        resource: "account",
-        resource_path: "/v2/accounts/coinbase-account-1",
-      },
-    }
-
-    await runPg(
-      seedRawRecord({
-        rawRecordId,
-        externalRecordId: "raw-provider-receive-1",
-        occurredAt,
-        payload,
-      })
-    )
-
-    const result = await runCoinbaseNormalization(
-      persistCoinbaseNormalization({
-        source: buildCoinbaseSource({ cexAccountId: fixture.cexAccountId }),
-        sourceRecord: buildSeededRawRecord({
-          rawRecordId,
-          externalRecordId: "raw-provider-receive-1",
-          occurredAt,
-          payload,
-        }),
-        skipLegDerivation: true,
-        providerTransferRole: "principal",
-      })
-    )
-
-    expect(result.providerTransfers).toHaveLength(1)
-    expect(result.providerTransfers[0]).toEqual(
-      expect.objectContaining({
-        externalId: "tx-receive-provider-transfer-1:principal",
-        providerAssetId: expect.any(String),
-        direction: "inbound",
-        fromAddress: "bc1qprovidertransfersource",
-        toAccountRef: "coinbase-account-1",
-      })
-    )
-    expect(result.providerTransfers[0]?.amount).toContain("0.25000000")
-
-    const state = await runPg(
-      Effect.gen(function* () {
-        const db = yield* drizzle
-        const [providerTransfer] = yield* db.select().from(schema.providerTransfers)
-        const [movement] = yield* db.select().from(schema.inventoryMovements)
-        const lots = yield* db.select().from(schema.fifoLots)
-        return { providerTransfer, movement, lots }
-      })
-    )
-    const positions = await Effect.runPromise(
-      context.runWithLayer({
-        effect: Effect.flatMap(PortfolioRepository, (repository) =>
-          repository.listAssetPositions({
-            principalId: TEST_PRINCIPAL_ID,
-            sourceId: TEST_SOURCE_ID,
+      yield* Effect.promise(() =>
+        runPg(
+          seedRawRecord({
+            rawRecordId: partialRawRecordId,
+            externalRecordId: "raw-partial-review-1",
+            occurredAt: DateTime.toDateUtc(DateTime.makeUnsafe("2025-01-15T10:00:00.000Z")),
           })
-        ),
-        layer: PortfolioRepositoryLive,
-      })
-    )
+        )
+      )
 
-    expect(state.providerTransfer).toEqual(
-      expect.objectContaining({
-        externalId: "tx-receive-provider-transfer-1:principal",
-        direction: "inbound",
-        fromAddress: "bc1qprovidertransfersource",
-        toAccountRef: "coinbase-account-1",
-      })
-    )
-    expect(state.movement).toEqual(
-      expect.objectContaining({
-        providerTransferId: state.providerTransfer?.id,
-        direction: "inbound",
-        purpose: "principal",
-        amount: expect.stringContaining("0.25000000"),
-      })
-    )
-    expect(state.lots).toEqual([
-      expect.objectContaining({
-        sourceProviderTransferId: state.providerTransfer?.id,
-        sourceLegId: null,
-        costBasisStatus: "pending_review",
-        originalAmount: expect.stringContaining("0.25000000"),
-        remainingAmount: expect.stringContaining("0.25000000"),
-      }),
-    ])
-    expect(positions).toEqual([
-      expect.objectContaining({
-        assetId: TEST_BTC_ASSET_ID,
-        amount: "0.25",
-        costBasis: null,
-        costBasisCurrency: null,
-        costBasisStatus: "pending_review",
-      }),
-    ])
-  })
+      const result = yield* Effect.promise(() =>
+        runRepository(
+          Effect.flatMap(SourceNormalizationRepository, (repository) =>
+            repository.persistNormalizedArtifacts({
+              transaction: {
+                sourceId: TEST_SOURCE_ID,
+                sourceRawRecordId: partialRawRecordId,
+                externalId: "tx-partial-review-1",
+                externalGroupId: "group-partial-review-1",
+                timestamp: DateTime.toDateUtc(DateTime.makeUnsafe("2025-01-15T10:00:00.000Z")),
+                transactionType: "buy_fiat",
+                providerTransactionType: "buy",
+                providerStatus: "completed",
+                providerResourcePath:
+                  "/v2/accounts/coinbase-account-1/transactions/tx-partial-review-1",
+                providerDescription: "Fixture partial normalization",
+                providerCreatedAt: DateTime.toDateUtc(
+                  DateTime.makeUnsafe("2025-01-15T10:00:00.000Z")
+                ),
+                providerUpdatedAt: DateTime.toDateUtc(
+                  DateTime.makeUnsafe("2025-01-15T10:00:00.000Z")
+                ),
+                metadata: { provider: "coinbase", partial: true },
+                providerFiatAmount: null,
+                providerFiatCurrency: null,
+                principalId: TEST_PRINCIPAL_ID,
+              },
+              venueContext: {
+                venueType: "cex",
+                cexAccountId: fixture.cexAccountId,
+                externalAccountId: "coinbase-account-1",
+                externalOrderId: "order-partial-review-1",
+                externalFillId: "fill-partial-review-1",
+                side: "buy",
+                instrument: "HYPE-EUR",
+                fillPrice: "42.00",
+                commissionAmount: null,
+                commissionCurrency: null,
+                metadata: { provider: "coinbase", partial: true },
+              },
+              providerTransfers: [],
+              canonicalTransfers: [],
+              providerAssetRowIds: [],
+              legs: [],
+              transactionReview: {
+                principalId: TEST_PRINCIPAL_ID,
+                reviewStatus: "needs_review",
+                originalTypeKey: "buy_fiat",
+                originalConfidence: null,
+                currentTypeKey: "buy_fiat",
+                legalRuleSetVersion: null,
+                categorizationReason:
+                  "provider_asset_mapping: Coinbase provider asset mapping review is required.",
+                matchedLayer: "provider_asset_mapping",
+                needsReview: true,
+                userNotes: null,
+                reviewedAt: null,
+              },
+              resolvedTransactionType: APPROVED_MAPPING,
+            })
+          )
+        )
+      )
 
-  it("removes provider movements that disappear on replay and restores them when they return", async () => {
-    const rawRecordId = "00000000-0000-0000-0000-000000000713"
-    const occurredAt = new Date("2025-04-02T10:00:00.000Z")
-    const receivePayload = {
-      id: "tx-provider-transfer-disappears",
-      type: "receive",
-      status: "completed",
-      amount: { amount: "0.25000000", currency: "BTC" },
-      native_amount: { amount: "2500.00", currency: "EUR" },
-      created_at: occurredAt.toISOString(),
-      resource_path: "/v2/accounts/coinbase-account-1/transactions/tx-provider-transfer-disappears",
-      from: { address: "bc1qprovidertransfersource", resource: "address" },
-    }
-    await runPg(
-      seedRawRecord({
-        rawRecordId,
-        externalRecordId: "raw-provider-transfer-disappears",
-        occurredAt,
-        payload: receivePayload,
-      })
-    )
+      expect(result.transaction.externalId).toBe("tx-partial-review-1")
+      expect(result.legs).toHaveLength(0)
 
-    const source = buildCoinbaseSource({ cexAccountId: fixture.cexAccountId })
-    const normalize = ({ omitProviderTransfers = false } = {}) =>
-      runCoinbaseNormalization(
-        persistCoinbaseNormalization({
-          source,
-          sourceRecord: buildSeededRawRecord({
-            rawRecordId,
-            externalRecordId: "raw-provider-transfer-disappears",
-            occurredAt,
-            payload: receivePayload,
+      const counts = yield* Effect.promise(() =>
+        runPg(
+          Effect.gen(function* () {
+            const db = yield* drizzle
+            const [review] = yield* db
+              .select({
+                reviewStatus: schema.transactionReviews.reviewStatus,
+                matchedLayer: schema.transactionReviews.matchedLayer,
+                needsReview: schema.transactionReviews.needsReview,
+                categorizationReason: schema.transactionReviews.categorizationReason,
+              })
+              .from(schema.transactionReviews)
+              .where(eq(schema.transactionReviews.principalId, TEST_PRINCIPAL_ID))
+              .orderBy(schema.transactionReviews.createdAt)
+              .limit(1)
+            const legs = yield* db.select().from(schema.transactionLegs)
+            const [rawRecord] = yield* db
+              .select({
+                normalizedAt: schema.sourceRecordsRaw.normalizedAt,
+                normalizationError: schema.sourceRecordsRaw.normalizationError,
+              })
+              .from(schema.sourceRecordsRaw)
+              .where(eq(schema.sourceRecordsRaw.id, partialRawRecordId))
+              .limit(1)
+
+            return {
+              review,
+              legs,
+              rawRecord,
+            }
+          })
+        )
+      )
+
+      expect(counts.review).toEqual(
+        expect.objectContaining({
+          reviewStatus: "needs_review",
+          matchedLayer: "provider_asset_mapping",
+          needsReview: true,
+          categorizationReason: expect.stringContaining("provider_asset_mapping"),
+        })
+      )
+      expect(counts.legs).toHaveLength(0)
+      expect(counts.rawRecord?.normalizedAt).not.toBeNull()
+      expect(counts.rawRecord?.normalizationError).toBeNull()
+    })
+  )
+
+  it.effect("persists Coinbase send movements without duplicating matching fee inventory", () =>
+    Effect.gen(function* () {
+      const acquisitionRawRecordId = "00000000-0000-0000-0000-000000000690"
+      const acquiredAt = DateTime.toDateUtc(DateTime.makeUnsafe("2025-03-01T10:00:00.000Z"))
+      const acquisitionPayload = {
+        id: "tx-send-provider-transfer-opening-inventory",
+        type: "buy",
+        status: "completed",
+        amount: { amount: "1.00000000", currency: "BTC" },
+        native_amount: { amount: "10000.00", currency: "EUR" },
+        created_at: acquiredAt.toISOString(),
+        resource_path:
+          "/v2/accounts/coinbase-account-1/transactions/tx-send-provider-transfer-opening-inventory",
+      }
+      const rawRecordId = "00000000-0000-0000-0000-000000000691"
+      const occurredAt = DateTime.toDateUtc(DateTime.makeUnsafe("2025-04-01T10:00:00.000Z"))
+      const payload = {
+        id: "tx-send-provider-transfer-1",
+        type: "send",
+        status: "completed",
+        amount: { amount: "-0.10000000", currency: "BTC" },
+        native_amount: { amount: "-1500.00", currency: "EUR" },
+        created_at: occurredAt.toISOString(),
+        resource_path: "/v2/accounts/coinbase-account-1/transactions/tx-send-provider-transfer-1",
+        network: {
+          status: "confirmed",
+          hash: "tx-send-provider-transfer-hash-1",
+          network_name: "base",
+          transaction_fee: { amount: "0.00010000", currency: "BTC" },
+        },
+        to: {
+          address: "bc1qprovidertransferdestination",
+          resource: "address",
+        },
+      }
+
+      yield* Effect.promise(() =>
+        runPg(
+          Effect.all([
+            seedRawRecord({
+              rawRecordId: acquisitionRawRecordId,
+              externalRecordId: "raw-provider-send-opening-inventory",
+              occurredAt: acquiredAt,
+              payload: acquisitionPayload,
+            }),
+            seedRawRecord({
+              rawRecordId,
+              externalRecordId: "raw-provider-send-1",
+              occurredAt,
+              payload,
+            }),
+          ])
+        )
+      )
+
+      yield* Effect.promise(() =>
+        runCoinbaseNormalization(
+          persistCoinbaseNormalization({
+            source: buildCoinbaseSource({ cexAccountId: fixture.cexAccountId }),
+            sourceRecord: buildSeededRawRecord({
+              rawRecordId: acquisitionRawRecordId,
+              externalRecordId: "raw-provider-send-opening-inventory",
+              occurredAt: acquiredAt,
+              payload: acquisitionPayload,
+            }),
+          })
+        )
+      )
+
+      const result = yield* Effect.promise(() =>
+        runCoinbaseNormalization(
+          persistCoinbaseNormalization({
+            source: buildCoinbaseSource({ cexAccountId: fixture.cexAccountId }),
+            sourceRecord: buildSeededRawRecord({
+              rawRecordId,
+              externalRecordId: "raw-provider-send-1",
+              occurredAt,
+              payload,
+            }),
+          })
+        )
+      )
+
+      expect(result.providerTransfers).toHaveLength(1)
+      expect(result.legs).toHaveLength(1)
+      expect(result.legs).toEqual([expect.objectContaining({ kind: "fee" })])
+      expect(result.canonicalTransfers).toHaveLength(1)
+      expect(result.providerTransfers[0]).toEqual(
+        expect.objectContaining({
+          externalId: "tx-send-provider-transfer-1:principal",
+          providerAssetId: expect.any(String),
+          direction: "outbound",
+          fromAccountRef: "coinbase-account-1",
+          toAddress: "bc1qprovidertransferdestination",
+          networkName: "base",
+          networkHash: "tx-send-provider-transfer-hash-1",
+        })
+      )
+      expect(result.providerTransfers[0]?.amount).toContain("0.09990000")
+
+      const counts = yield* Effect.promise(() =>
+        runPg(
+          Effect.gen(function* () {
+            const db = yield* drizzle
+            const providerTransfers = yield* db.select().from(schema.providerTransfers)
+            const legs = yield* db.select().from(schema.transactionLegs)
+            const lots = yield* db.select().from(schema.fifoLots)
+            const inventoryMovements = yield* db.select().from(schema.inventoryMovements)
+            const reviews = yield* db.select().from(schema.transactionReviews)
+            return {
+              providerTransfers,
+              legs,
+              lots,
+              inventoryMovements,
+              reviews,
+            }
+          })
+        )
+      )
+
+      expect(counts.providerTransfers).toHaveLength(1)
+      expect(counts.legs).toHaveLength(2)
+      expect(counts.legs.filter((leg) => leg.kind === "disposal")).toHaveLength(0)
+      expect(counts.lots).toEqual([
+        expect.objectContaining({
+          sourceId: TEST_SOURCE_ID,
+          remainingAmount: expect.stringContaining("0.90000000"),
+        }),
+      ])
+      expect(counts.inventoryMovements).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            direction: "outbound",
+            purpose: "principal",
+            taxTreatment: "pending_review",
           }),
-          skipLegDerivation: true,
-          omitProviderTransfers,
-        })
+          expect.objectContaining({
+            direction: "outbound",
+            purpose: "fee",
+            amount: expect.stringContaining("0.0001"),
+          }),
+        ])
       )
-
-    const initialResult = await normalize()
-    const initialProviderTransfer = initialResult.providerTransfers[0]
-    expect(initialProviderTransfer).toBeDefined()
-    if (initialProviderTransfer === undefined) {
-      return
-    }
-
-    await normalize({ omitProviderTransfers: true })
-
-    const removedState = await runPg(
-      Effect.gen(function* () {
-        const db = yield* drizzle
-        const [providerTransfer] = yield* db
-          .select()
-          .from(schema.providerTransfers)
-          .where(eq(schema.providerTransfers.id, initialProviderTransfer.id))
-        const movements = yield* db.select().from(schema.inventoryMovements)
-        const lots = yield* db.select().from(schema.fifoLots)
-        return { providerTransfer, movements, lots }
-      })
-    )
-
-    expect(removedState.providerTransfer).toEqual(
-      expect.objectContaining({
-        id: initialProviderTransfer.id,
-        processingMode: "stale",
-      })
-    )
-    expect(removedState.movements).toHaveLength(0)
-    expect(removedState.lots).toHaveLength(0)
-    const staleReconciliationCandidates = await runTransferReconciliationRepository(
-      Effect.flatMap(TransferReconciliationRepository, (repository) =>
-        repository.listProviderTransfersForReconciliation({
-          principalId: TEST_PRINCIPAL_ID,
-          sourceId: TEST_SOURCE_ID,
-        })
-      )
-    )
-    expect(
-      staleReconciliationCandidates.some(
-        ({ providerTransferId }) => providerTransferId === initialProviderTransfer.id
-      )
-    ).toBe(false)
-
-    const restoredResult = await normalize()
-    expect(restoredResult.providerTransfers).toEqual([
-      expect.objectContaining({
-        id: initialProviderTransfer.id,
-        processingMode: "accounting_and_evidence",
-      }),
-    ])
-
-    const restoredState = await runPg(
-      Effect.gen(function* () {
-        const db = yield* drizzle
-        const [providerTransfer] = yield* db
-          .select()
-          .from(schema.providerTransfers)
-          .where(eq(schema.providerTransfers.id, initialProviderTransfer.id))
-        const movements = yield* db
-          .select()
-          .from(schema.inventoryMovements)
-          .where(eq(schema.inventoryMovements.providerTransferId, initialProviderTransfer.id))
-        const lots = yield* db.select().from(schema.fifoLots)
-        return { providerTransfer, movements, lots }
-      })
-    )
-
-    expect(restoredState.providerTransfer).toEqual(
-      expect.objectContaining({
-        id: initialProviderTransfer.id,
-        processingMode: "accounting_and_evidence",
-      })
-    )
-    expect(restoredState.movements).toEqual([
-      expect.objectContaining({
-        providerTransferId: initialProviderTransfer.id,
-        direction: "inbound",
-      }),
-    ])
-    expect(restoredState.lots).toEqual([
-      expect.objectContaining({
-        sourceProviderTransferId: initialProviderTransfer.id,
-        originalAmount: expect.stringContaining("0.25000000"),
-        remainingAmount: expect.stringContaining("0.25000000"),
-      }),
-    ])
-    const restoredReconciliationCandidates = await runTransferReconciliationRepository(
-      Effect.flatMap(TransferReconciliationRepository, (repository) =>
-        repository.listProviderTransfersForReconciliation({
-          principalId: TEST_PRINCIPAL_ID,
-          sourceId: TEST_SOURCE_ID,
-        })
-      )
-    )
-    expect(restoredReconciliationCandidates).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ providerTransferId: initialProviderTransfer.id }),
-      ])
-    )
-  })
-
-  it("does not spend an unreconciled inbound provider lot", async () => {
-    const receiveRawRecordId = "00000000-0000-0000-0000-000000000704"
-    const sendRawRecordId = "00000000-0000-0000-0000-000000000705"
-    const receiveAt = new Date("2025-04-02T10:00:00.000Z")
-    const sendAt = new Date("2025-04-03T10:00:00.000Z")
-    const receivePayload = {
-      id: "tx-consumed-provider-receive",
-      type: "receive",
-      status: "completed",
-      amount: { amount: "1.00000000", currency: "BTC" },
-      native_amount: { amount: "10000.00", currency: "EUR" },
-      created_at: receiveAt.toISOString(),
-      resource_path: "/v2/accounts/coinbase-account-1/transactions/tx-consumed-provider-receive",
-      from: { address: "bc1qconsumedproviderlot", resource: "address" },
-    }
-    const sendPayload = {
-      id: "tx-consuming-provider-send",
-      type: "send",
-      status: "completed",
-      amount: { amount: "-0.80000000", currency: "BTC" },
-      native_amount: { amount: "-8000.00", currency: "EUR" },
-      created_at: sendAt.toISOString(),
-      resource_path: "/v2/accounts/coinbase-account-1/transactions/tx-consuming-provider-send",
-      to: { address: "bc1qconsumedproviderdestination", resource: "address" },
-    }
-
-    await runPg(
-      Effect.all([
-        seedRawRecord({
-          rawRecordId: receiveRawRecordId,
-          externalRecordId: "raw-consumed-provider-receive",
-          occurredAt: receiveAt,
-          payload: receivePayload,
-        }),
-        seedRawRecord({
-          rawRecordId: sendRawRecordId,
-          externalRecordId: "raw-consuming-provider-send",
-          occurredAt: sendAt,
-          payload: sendPayload,
-        }),
-      ])
-    )
-
-    const source = buildCoinbaseSource({ cexAccountId: fixture.cexAccountId })
-    await runCoinbaseNormalization(
-      persistCoinbaseNormalization({
-        source,
-        sourceRecord: buildSeededRawRecord({
-          rawRecordId: receiveRawRecordId,
-          externalRecordId: "raw-consumed-provider-receive",
-          occurredAt: receiveAt,
-          payload: receivePayload,
-        }),
-        skipLegDerivation: true,
-      })
-    )
-    await runCoinbaseNormalization(
-      persistCoinbaseNormalization({
-        source,
-        sourceRecord: buildSeededRawRecord({
-          rawRecordId: sendRawRecordId,
-          externalRecordId: "raw-consuming-provider-send",
-          occurredAt: sendAt,
-          payload: sendPayload,
-        }),
-        skipLegDerivation: true,
-      })
-    )
-
-    const state = await runPg(
-      Effect.gen(function* () {
-        const db = yield* drizzle
-        const [inboundLot] = yield* db
-          .select()
-          .from(schema.fifoLots)
-          .where(sql`${schema.fifoLots.sourceProviderTransferId} is not null`)
-        const allocations = yield* db.select().from(schema.inventoryMovementAllocations)
-        const reviews = yield* db.select().from(schema.transactionReviews)
-        return { inboundLot, allocations, reviews }
-      })
-    )
-
-    expect(state.inboundLot).toEqual(
-      expect.objectContaining({
-        originalAmount: expect.stringContaining("1.00000000"),
-        remainingAmount: expect.stringContaining("1.00000000"),
-      })
-    )
-    expect(state.allocations).toHaveLength(0)
-    expect(state.reviews).toContainEqual(
-      expect.objectContaining({
-        matchedLayer: "coinbase_reference_mapping,fifo_inventory",
-        needsReview: true,
-        categorizationReason: expect.stringContaining("Insufficient FIFO inventory"),
-      })
-    )
-  })
-
-  it("drops the principal movement when the network fee covers the whole send debit", async () => {
-    const acquisitionRawRecordId = "00000000-0000-0000-0000-000000000720"
-    const sendRawRecordId = "00000000-0000-0000-0000-000000000721"
-    const acquiredAt = new Date("2025-04-01T10:00:00.000Z")
-    const sentAt = new Date("2025-04-02T10:00:00.000Z")
-    const acquisitionPayload = {
-      id: "tx-partial-movement-opening-inventory",
-      type: "buy",
-      status: "completed",
-      amount: { amount: "0.25000000", currency: "BTC" },
-      native_amount: { amount: "2500.00", currency: "EUR" },
-      created_at: acquiredAt.toISOString(),
-      resource_path:
-        "/v2/accounts/coinbase-account-1/transactions/tx-partial-movement-opening-inventory",
-    }
-    const sendPayload = {
-      id: "tx-partial-movement-send",
-      type: "send",
-      status: "completed",
-      amount: { amount: "-0.10000000", currency: "BTC" },
-      native_amount: { amount: "-1000.00", currency: "EUR" },
-      created_at: sentAt.toISOString(),
-      resource_path: "/v2/accounts/coinbase-account-1/transactions/tx-partial-movement-send",
-      network: {
-        status: "confirmed",
-        hash: "tx-partial-movement-send-hash",
-        network_name: "base",
-        transaction_fee: { amount: "0.10000000", currency: "BTC" },
-      },
-      to: {
-        address: "bc1qpartialmovementdestination",
-        resource: "address",
-      },
-    }
-
-    await runPg(
-      Effect.all([
-        seedRawRecord({
-          rawRecordId: acquisitionRawRecordId,
-          externalRecordId: "raw-partial-movement-opening-inventory",
-          occurredAt: acquiredAt,
-          payload: acquisitionPayload,
-        }),
-        seedRawRecord({
-          rawRecordId: sendRawRecordId,
-          externalRecordId: "raw-partial-movement-send",
-          occurredAt: sentAt,
-          payload: sendPayload,
-        }),
-      ])
-    )
-
-    const source = buildCoinbaseSource({ cexAccountId: fixture.cexAccountId })
-    await runCoinbaseNormalization(
-      persistCoinbaseNormalization({
-        source,
-        sourceRecord: buildSeededRawRecord({
-          rawRecordId: acquisitionRawRecordId,
-          externalRecordId: "raw-partial-movement-opening-inventory",
-          occurredAt: acquiredAt,
-          payload: acquisitionPayload,
-        }),
-      })
-    )
-    const result = await runCoinbaseNormalization(
-      persistCoinbaseNormalization({
-        source,
-        sourceRecord: buildSeededRawRecord({
-          rawRecordId: sendRawRecordId,
-          externalRecordId: "raw-partial-movement-send",
-          occurredAt: sentAt,
-          payload: sendPayload,
-        }),
-      })
-    )
-
-    const state = await runPg(
-      Effect.gen(function* () {
-        const db = yield* drizzle
-        const [lot] = yield* db.select().from(schema.fifoLots).limit(1)
-        const movements = yield* db
-          .select()
-          .from(schema.inventoryMovements)
-          .where(eq(schema.inventoryMovements.transactionId, result.transaction.id))
-        const allocations = yield* db.select().from(schema.inventoryMovementAllocations)
-        const [review] = yield* db
-          .select()
-          .from(schema.transactionReviews)
-          .where(eq(schema.transactionReviews.transactionId, result.transaction.id))
-        return { lot, movements, allocations, review }
-      })
-    )
-
-    expect(state.movements).toEqual([
-      expect.objectContaining({ purpose: "fee", amount: expect.stringContaining("0.1") }),
-    ])
-    expect(state.allocations).toEqual([
-      expect.objectContaining({ matchedAmount: expect.stringContaining("0.1") }),
-    ])
-    expect(state.lot?.remainingAmount).toContain("0.15000000")
-    expect(state.review).toEqual(
-      expect.objectContaining({
-        reviewStatus: "needs_review",
-        matchedLayer: "coinbase_reference_mapping",
-        needsReview: true,
-      })
-    )
-  })
-
-  it("allocates a whole-balance Coinbase send whose amount includes the network fee", async () => {
-    const acquisitionRawRecordId = "00000000-0000-0000-0000-000000000725"
-    const sendRawRecordId = "00000000-0000-0000-0000-000000000726"
-    const acquiredAt = new Date("2025-04-01T10:00:00.000Z")
-    const sentAt = new Date("2025-04-02T10:00:00.000Z")
-    const acquisitionPayload = {
-      id: "tx-whole-balance-opening-inventory",
-      type: "buy",
-      status: "completed",
-      amount: { amount: "0.10010000", currency: "BTC" },
-      native_amount: { amount: "1001.00", currency: "EUR" },
-      created_at: acquiredAt.toISOString(),
-      resource_path:
-        "/v2/accounts/coinbase-account-1/transactions/tx-whole-balance-opening-inventory",
-    }
-    const sendPayload = {
-      id: "tx-whole-balance-send",
-      type: "send",
-      status: "completed",
-      amount: { amount: "-0.10010000", currency: "BTC" },
-      native_amount: { amount: "-1001.00", currency: "EUR" },
-      created_at: sentAt.toISOString(),
-      resource_path: "/v2/accounts/coinbase-account-1/transactions/tx-whole-balance-send",
-      network: {
-        status: "confirmed",
-        hash: "tx-whole-balance-send-hash",
-        network_name: "base",
-        transaction_fee: { amount: "0.00010000", currency: "BTC" },
-      },
-      to: {
-        address: "bc1qwholebalancedestination",
-        resource: "address",
-      },
-    }
-
-    await runPg(
-      Effect.all([
-        seedRawRecord({
-          rawRecordId: acquisitionRawRecordId,
-          externalRecordId: "raw-whole-balance-opening-inventory",
-          occurredAt: acquiredAt,
-          payload: acquisitionPayload,
-        }),
-        seedRawRecord({
-          rawRecordId: sendRawRecordId,
-          externalRecordId: "raw-whole-balance-send",
-          occurredAt: sentAt,
-          payload: sendPayload,
-        }),
-      ])
-    )
-
-    const source = buildCoinbaseSource({ cexAccountId: fixture.cexAccountId })
-    await runCoinbaseNormalization(
-      persistCoinbaseNormalization({
-        source,
-        sourceRecord: buildSeededRawRecord({
-          rawRecordId: acquisitionRawRecordId,
-          externalRecordId: "raw-whole-balance-opening-inventory",
-          occurredAt: acquiredAt,
-          payload: acquisitionPayload,
-        }),
-      })
-    )
-    const result = await runCoinbaseNormalization(
-      persistCoinbaseNormalization({
-        source,
-        sourceRecord: buildSeededRawRecord({
-          rawRecordId: sendRawRecordId,
-          externalRecordId: "raw-whole-balance-send",
-          occurredAt: sentAt,
-          payload: sendPayload,
-        }),
-      })
-    )
-
-    expect(result.providerTransfers).toEqual([
-      expect.objectContaining({
-        externalId: "tx-whole-balance-send:principal",
-        direction: "outbound",
-        amount: expect.stringContaining("0.10000000"),
-      }),
-    ])
-    expect(result.legs).toEqual([expect.objectContaining({ kind: "fee" })])
-
-    const state = await runPg(
-      Effect.gen(function* () {
-        const db = yield* drizzle
-        const [lot] = yield* db.select().from(schema.fifoLots).limit(1)
-        const movements = yield* db
-          .select()
-          .from(schema.inventoryMovements)
-          .where(eq(schema.inventoryMovements.transactionId, result.transaction.id))
-        const [review] = yield* db
-          .select()
-          .from(schema.transactionReviews)
-          .where(eq(schema.transactionReviews.transactionId, result.transaction.id))
-        return { lot, movements, review }
-      })
-    )
-
-    expect(state.movements).toEqual(
-      expect.arrayContaining([
+      expect(counts.reviews).toContainEqual(
         expect.objectContaining({
-          purpose: "principal",
-          amount: expect.stringContaining("0.10000000"),
-        }),
+          reviewStatus: "needs_review",
+          needsReview: true,
+        })
+      )
+
+      const feeRoleRawRecordId = "00000000-0000-0000-0000-000000000698"
+      const feeRoleAt = DateTime.toDateUtc(DateTime.makeUnsafe("2025-03-03T10:00:00.000Z"))
+      const feeRolePayload = {
+        ...payload,
+        id: "tx-provider-fee-role-1",
+        amount: { amount: "-0.00020000", currency: "BTC" },
+        native_amount: { amount: "-150.00", currency: "EUR" },
+        created_at: feeRoleAt.toISOString(),
+        resource_path: "/v2/accounts/coinbase-account-1/transactions/tx-provider-fee-role-1",
+        network: {
+          ...payload.network,
+          hash: "tx-provider-fee-role-hash-1",
+        },
+      }
+
+      yield* Effect.promise(() =>
+        runPg(
+          seedRawRecord({
+            rawRecordId: feeRoleRawRecordId,
+            externalRecordId: "raw-provider-fee-role-1",
+            occurredAt: feeRoleAt,
+            payload: feeRolePayload,
+          })
+        )
+      )
+      const feeRoleResult = yield* Effect.promise(() =>
+        runCoinbaseNormalization(
+          persistCoinbaseNormalization({
+            source: buildCoinbaseSource({ cexAccountId: fixture.cexAccountId }),
+            sourceRecord: buildSeededRawRecord({
+              rawRecordId: feeRoleRawRecordId,
+              externalRecordId: "raw-provider-fee-role-1",
+              occurredAt: feeRoleAt,
+              payload: feeRolePayload,
+            }),
+            providerTransferRole: "fee",
+          })
+        )
+      )
+      const feeRoleProviderTransfer = feeRoleResult.providerTransfers[0]
+      const feeRoleState = yield* Effect.promise(() =>
+        runPg(
+          Effect.gen(function* () {
+            const db = yield* drizzle
+            const [feeRoleMovement] = yield* db
+              .select()
+              .from(schema.inventoryMovements)
+              .where(
+                eq(schema.inventoryMovements.providerTransferId, feeRoleProviderTransfer?.id ?? "")
+              )
+            const allocations = yield* db
+              .select({
+                matchedAmount: schema.inventoryMovementAllocations.matchedAmount,
+                providerTransferId: schema.inventoryMovements.providerTransferId,
+                transactionLegId: schema.inventoryMovements.transactionLegId,
+              })
+              .from(schema.inventoryMovementAllocations)
+              .innerJoin(
+                schema.inventoryMovements,
+                eq(
+                  schema.inventoryMovementAllocations.inventoryMovementId,
+                  schema.inventoryMovements.id
+                )
+              )
+              .where(eq(schema.inventoryMovements.transactionId, feeRoleResult.transaction.id))
+            const [lot] = yield* db.select().from(schema.fifoLots).limit(1)
+
+            return { allocations, feeRoleMovement, lot }
+          })
+        )
+      )
+
+      expect(feeRoleState.feeRoleMovement).toEqual(
         expect.objectContaining({
+          direction: "outbound",
           purpose: "fee",
-          amount: expect.stringContaining("0.00010000"),
-        }),
-      ])
-    )
-    expect(state.lot?.remainingAmount).toContain("0.00000000")
-    expect(state.review?.matchedLayer ?? "").not.toContain("fifo_inventory")
-  })
-
-  it("keeps a receive whose sender-paid network fee exceeds the credited amount", async () => {
-    const receiveRawRecordId = "00000000-0000-0000-0000-000000000729"
-    const receivedAt = new Date("2025-04-02T10:00:00.000Z")
-    const receivePayload = {
-      id: "tx-small-receive",
-      type: "receive",
-      status: "completed",
-      amount: { amount: "0.00005000", currency: "BTC" },
-      native_amount: { amount: "0.50", currency: "EUR" },
-      created_at: receivedAt.toISOString(),
-      resource_path: "/v2/accounts/coinbase-account-1/transactions/tx-small-receive",
-      network: {
-        status: "confirmed",
-        hash: "tx-small-receive-hash",
-        network_name: "base",
-        transaction_fee: { amount: "0.00010000", currency: "BTC" },
-      },
-      from: {
-        address: "bc1qsmallreceiveorigin",
-        resource: "address",
-      },
-    }
-
-    await runPg(
-      seedRawRecord({
-        rawRecordId: receiveRawRecordId,
-        externalRecordId: "raw-small-receive",
-        occurredAt: receivedAt,
-        payload: receivePayload,
-      })
-    )
-
-    const result = await runCoinbaseNormalization(
-      persistCoinbaseNormalization({
-        source: buildCoinbaseSource({ cexAccountId: fixture.cexAccountId }),
-        sourceRecord: buildSeededRawRecord({
-          rawRecordId: receiveRawRecordId,
-          externalRecordId: "raw-small-receive",
-          occurredAt: receivedAt,
-          payload: receivePayload,
-        }),
-      })
-    )
-
-    expect(result.providerTransfers).toEqual([
-      expect.objectContaining({
-        externalId: "tx-small-receive:principal",
-        direction: "inbound",
-        amount: expect.stringContaining("0.00005000"),
-      }),
-    ])
-    expect(result.canonicalTransfers).toHaveLength(0)
-    expect(result.legs).toEqual([
-      expect.objectContaining({
-        kind: "acquisition",
-        amount: expect.stringContaining("0.00005000"),
-      }),
-    ])
-  })
-
-  it("carves a same-currency network fee out of an internal-transfer disposal leg", async () => {
-    const acquisitionRawRecordId = "00000000-0000-0000-0000-000000000727"
-    const withdrawalRawRecordId = "00000000-0000-0000-0000-000000000728"
-    const acquiredAt = new Date("2025-04-01T10:00:00.000Z")
-    const withdrawnAt = new Date("2025-04-02T10:00:00.000Z")
-    const acquisitionPayload = {
-      id: "tx-carved-withdrawal-opening-inventory",
-      type: "buy",
-      status: "completed",
-      amount: { amount: "1.00000000", currency: "BTC" },
-      native_amount: { amount: "10000.00", currency: "EUR" },
-      created_at: acquiredAt.toISOString(),
-      resource_path:
-        "/v2/accounts/coinbase-account-1/transactions/tx-carved-withdrawal-opening-inventory",
-    }
-    const withdrawalPayload = {
-      id: "tx-carved-withdrawal",
-      type: "intx_withdrawal",
-      status: "completed",
-      amount: { amount: "-0.10000000", currency: "BTC" },
-      native_amount: { amount: "-1500.00", currency: "EUR" },
-      created_at: withdrawnAt.toISOString(),
-      resource_path: "/v2/accounts/coinbase-account-1/transactions/tx-carved-withdrawal",
-      network: {
-        status: "confirmed",
-        hash: "tx-carved-withdrawal-hash",
-        network_name: "base",
-        transaction_fee: { amount: "0.01000000", currency: "BTC" },
-      },
-    }
-
-    await runPg(
-      Effect.all([
-        seedRawRecord({
-          rawRecordId: acquisitionRawRecordId,
-          externalRecordId: "raw-carved-withdrawal-opening-inventory",
-          occurredAt: acquiredAt,
-          payload: acquisitionPayload,
-        }),
-        seedRawRecord({
-          rawRecordId: withdrawalRawRecordId,
-          externalRecordId: "raw-carved-withdrawal",
-          occurredAt: withdrawnAt,
-          payload: withdrawalPayload,
-        }),
-      ])
-    )
-
-    const source = buildCoinbaseSource({ cexAccountId: fixture.cexAccountId })
-    await runCoinbaseNormalization(
-      persistCoinbaseNormalization({
-        source,
-        sourceRecord: buildSeededRawRecord({
-          rawRecordId: acquisitionRawRecordId,
-          externalRecordId: "raw-carved-withdrawal-opening-inventory",
-          occurredAt: acquiredAt,
-          payload: acquisitionPayload,
-        }),
-      })
-    )
-    const result = await runCoinbaseNormalization(
-      persistCoinbaseNormalization({
-        source,
-        sourceRecord: buildSeededRawRecord({
-          rawRecordId: withdrawalRawRecordId,
-          externalRecordId: "raw-carved-withdrawal",
-          occurredAt: withdrawnAt,
-          payload: withdrawalPayload,
-        }),
-      })
-    )
-
-    expect(result.legs).toEqual(
-      expect.arrayContaining([
+        })
+      )
+      expect(feeRoleState.allocations).toEqual([
         expect.objectContaining({
-          kind: "disposal",
-          amount: expect.stringContaining("0.09000000"),
-          fiatAmount: expect.stringContaining("1350.00000000"),
-        }),
-        expect.objectContaining({
-          kind: "fee",
-          amount: expect.stringContaining("0.01000000"),
+          matchedAmount: expect.stringContaining("0.00010000"),
+          providerTransferId: null,
+          transactionLegId: expect.any(String),
         }),
       ])
-    )
+      expect(feeRoleState.lot?.remainingAmount).toContain("0.89990000")
+    })
+  )
 
-    const state = await runPg(
+  it.effect(
+    "does not allocate an internal-transfer outflow after its disposal leg consumed inventory",
+    () =>
       Effect.gen(function* () {
-        const db = yield* drizzle
-        const [lot] = yield* db.select().from(schema.fifoLots).limit(1)
-        const movements = yield* db
-          .select()
-          .from(schema.inventoryMovements)
-          .where(eq(schema.inventoryMovements.transactionId, result.transaction.id))
-        const disposalMatches = yield* db.select().from(schema.disposalMatches)
-        return { lot, movements, disposalMatches }
-      })
-    )
-
-    expect(state.movements).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          purpose: "principal",
-          amount: expect.stringContaining("0.09000000"),
-        }),
-        expect.objectContaining({
-          purpose: "fee",
-          amount: expect.stringContaining("0.01000000"),
-        }),
-      ])
-    )
-    expect(state.disposalMatches).toEqual([
-      expect.objectContaining({ matchedAmount: expect.stringContaining("0.09000000") }),
-    ])
-    expect(state.lot?.remainingAmount).toContain("0.90000000")
-  })
-
-  it("allocates a completed Coinbase send network fee paid in another asset", async () => {
-    const btcOpeningAt = new Date("2025-04-01T10:00:00.000Z")
-    const solOpeningAt = new Date("2025-04-01T11:00:00.000Z")
-    const sentAt = new Date("2025-04-02T10:00:00.000Z")
-    const records = [
-      {
-        rawRecordId: "00000000-0000-0000-0000-000000000722",
-        externalRecordId: "btc-opening-for-cross-asset-fee",
-        occurredAt: btcOpeningAt,
-        payload: {
-          id: "btc-opening-for-cross-asset-fee",
+        const acquisitionRawRecordId = "00000000-0000-0000-0000-000000000698"
+        const acquiredAt = DateTime.toDateUtc(DateTime.makeUnsafe("2025-03-01T10:00:00.000Z"))
+        const acquisitionPayload = {
+          id: "tx-internal-transfer-opening-inventory",
           type: "buy",
           status: "completed",
           amount: { amount: "1.00000000", currency: "BTC" },
           native_amount: { amount: "10000.00", currency: "EUR" },
-          created_at: btcOpeningAt.toISOString(),
+          created_at: acquiredAt.toISOString(),
           resource_path:
-            "/v2/accounts/coinbase-account-1/transactions/btc-opening-for-cross-asset-fee",
-        },
-      },
-      {
-        rawRecordId: "00000000-0000-0000-0000-000000000723",
-        externalRecordId: "sol-opening-for-cross-asset-fee",
-        occurredAt: solOpeningAt,
-        payload: {
-          id: "sol-opening-for-cross-asset-fee",
-          type: "buy",
-          status: "completed",
-          amount: { amount: "1.000000000", currency: "SOL" },
-          native_amount: { amount: "100.00", currency: "EUR" },
-          created_at: solOpeningAt.toISOString(),
-          resource_path:
-            "/v2/accounts/coinbase-account-1/transactions/sol-opening-for-cross-asset-fee",
-        },
-      },
-      {
-        rawRecordId: "00000000-0000-0000-0000-000000000724",
-        externalRecordId: "btc-send-with-sol-network-fee",
-        occurredAt: sentAt,
-        payload: {
-          id: "btc-send-with-sol-network-fee",
-          type: "send",
+            "/v2/accounts/coinbase-account-1/transactions/tx-internal-transfer-opening-inventory",
+        }
+        const rawRecordId = "00000000-0000-0000-0000-000000000699"
+        const occurredAt = DateTime.toDateUtc(DateTime.makeUnsafe("2025-04-01T10:00:00.000Z"))
+        const payload = {
+          id: "tx-internal-transfer-outflow",
+          type: "intx_withdrawal",
           status: "completed",
           amount: { amount: "-0.10000000", currency: "BTC" },
-          native_amount: { amount: "-1000.00", currency: "EUR" },
-          created_at: sentAt.toISOString(),
+          native_amount: { amount: "-1500.00", currency: "EUR" },
+          created_at: occurredAt.toISOString(),
           resource_path:
-            "/v2/accounts/coinbase-account-1/transactions/btc-send-with-sol-network-fee",
-          network: {
-            status: "confirmed",
-            hash: "btc-send-with-sol-network-fee-hash",
-            network_name: "bitcoin",
-            transaction_fee: { amount: "0.010000000", currency: "SOL" },
-          },
-          to: {
-            address: "bc1qcrossassetfeedestination",
-            resource: "address",
-          },
-        },
-      },
-    ] as const
-
-    await runPg(
-      Effect.gen(function* () {
-        const db = yield* drizzle
-        yield* db.insert(schema.assets).values({
-          id: TEST_SOL_ASSET_ID,
-          name: "Sync Engine Solana Cross-Asset Fee Fixture",
-          symbol: "SOL",
-          coingeckoCoinId: "solana",
-          type: "fungible",
-        })
-
-        yield* Effect.forEach(records, (record) => seedRawRecord(record))
-      })
-    )
-
-    for (const record of records) {
-      await runCoinbaseNormalization(
-        persistCoinbaseNormalization({
-          source: buildCoinbaseSource({ cexAccountId: fixture.cexAccountId }),
-          sourceRecord: buildSeededRawRecord(record),
-        })
-      )
-    }
-
-    const positions = await Effect.runPromise(
-      context.runWithLayer({
-        effect: Effect.flatMap(PortfolioRepository, (repository) =>
-          repository.listAssetPositions({
-            principalId: TEST_PRINCIPAL_ID,
-            sourceId: TEST_SOURCE_ID,
-          })
-        ),
-        layer: PortfolioRepositoryLive,
-      })
-    )
-
-    expect(positions).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ assetId: TEST_BTC_ASSET_ID, amount: "0.9" }),
-        expect.objectContaining({ assetId: TEST_SOL_ASSET_ID, amount: "0.99" }),
-      ])
-    )
-  })
-
-  it("moves a replayed fee movement to the leg's current transaction and raw record", async () => {
-    const newRawRecordId = "00000000-0000-0000-0000-000000000710"
-    const openingTransactionId = "00000000-0000-0000-0000-000000000711"
-    const oldTransactionId = "00000000-0000-0000-0000-000000000712"
-    const feeLegExternalId = "fee-leg-moved-between-transactions"
-    const occurredAt = new Date("2025-04-03T10:00:00.000Z")
-
-    await runPg(
-      Effect.gen(function* () {
-        const db = yield* drizzle
-        yield* seedRawRecord({
-          rawRecordId: newRawRecordId,
-          externalRecordId: "raw-fee-new-parent",
-          occurredAt,
-        })
-        yield* db.insert(schema.transactions).values([
-          {
-            id: openingTransactionId,
-            sourceId: TEST_SOURCE_ID,
-            externalId: "fee-opening-transaction",
-            timestamp: new Date("2025-04-01T10:00:00.000Z"),
-            principalId: TEST_PRINCIPAL_ID,
-          },
-          {
-            id: oldTransactionId,
-            sourceId: TEST_SOURCE_ID,
-            sourceRawRecordId: TEST_RAW_RECORD_ID,
-            externalId: "fee-old-parent",
-            timestamp: new Date("2025-04-02T10:00:00.000Z"),
-            principalId: TEST_PRINCIPAL_ID,
-          },
-        ])
-        const [openingLeg] = yield* db
-          .insert(schema.transactionLegs)
-          .values({
-            sourceId: TEST_SOURCE_ID,
-            externalId: "fee-opening-leg",
-            timestamp: new Date("2025-04-01T10:00:00.000Z"),
-            principalId: TEST_PRINCIPAL_ID,
-            assetId: TEST_BTC_ASSET_ID,
-            amount: "1.00000000",
-            kind: "acquisition",
-            provenance: "deterministic",
-            transactionId: openingTransactionId,
-          })
-          .returning({ id: schema.transactionLegs.id })
-        const [feeLeg] = yield* db
-          .insert(schema.transactionLegs)
-          .values({
-            sourceId: TEST_SOURCE_ID,
-            sourceRawRecordId: TEST_RAW_RECORD_ID,
-            externalId: feeLegExternalId,
-            timestamp: new Date("2025-04-02T10:00:00.000Z"),
-            principalId: TEST_PRINCIPAL_ID,
-            assetId: TEST_BTC_ASSET_ID,
-            amount: "0.10000000",
-            kind: "fee",
-            provenance: "deterministic",
-            transactionId: oldTransactionId,
-            feeForTransactionId: oldTransactionId,
-          })
-          .returning({ id: schema.transactionLegs.id })
-
-        if (openingLeg === undefined || feeLeg === undefined) {
-          return yield* Effect.die("Failed to create replayed fee movement legs")
+            "/v2/accounts/coinbase-account-1/transactions/tx-internal-transfer-outflow",
         }
 
-        const [lot] = yield* db
-          .insert(schema.fifoLots)
-          .values({
-            principalId: TEST_PRINCIPAL_ID,
+        yield* Effect.promise(() =>
+          runPg(
+            Effect.all([
+              seedRawRecord({
+                rawRecordId: acquisitionRawRecordId,
+                externalRecordId: "raw-internal-transfer-opening-inventory",
+                occurredAt: acquiredAt,
+                payload: acquisitionPayload,
+              }),
+              seedRawRecord({
+                rawRecordId,
+                externalRecordId: "raw-internal-transfer-outflow",
+                occurredAt,
+                payload,
+              }),
+            ])
+          )
+        )
+
+        yield* Effect.promise(() =>
+          runCoinbaseNormalization(
+            persistCoinbaseNormalization({
+              source: buildCoinbaseSource({ cexAccountId: fixture.cexAccountId }),
+              sourceRecord: buildSeededRawRecord({
+                rawRecordId: acquisitionRawRecordId,
+                externalRecordId: "raw-internal-transfer-opening-inventory",
+                occurredAt: acquiredAt,
+                payload: acquisitionPayload,
+              }),
+            })
+          )
+        )
+
+        const result = yield* Effect.promise(() =>
+          runCoinbaseNormalization(
+            persistCoinbaseNormalization({
+              source: buildCoinbaseSource({ cexAccountId: fixture.cexAccountId }),
+              sourceRecord: buildSeededRawRecord({
+                rawRecordId,
+                externalRecordId: "raw-internal-transfer-outflow",
+                occurredAt,
+                payload,
+              }),
+            })
+          )
+        )
+
+        expect(result.providerTransfers).toHaveLength(1)
+        expect(result.legs).toEqual([expect.objectContaining({ kind: "disposal" })])
+
+        const state = yield* Effect.promise(() =>
+          runPg(
+            Effect.gen(function* () {
+              const db = yield* drizzle
+              const lots = yield* db.select().from(schema.fifoLots)
+              const inventoryMovements = yield* db.select().from(schema.inventoryMovements)
+              const inventoryMovementAllocations = yield* db
+                .select()
+                .from(schema.inventoryMovementAllocations)
+              const disposalMatches = yield* db.select().from(schema.disposalMatches)
+
+              return {
+                lots,
+                inventoryMovements,
+                inventoryMovementAllocations,
+                disposalMatches,
+              }
+            })
+          )
+        )
+
+        expect(state.lots).toEqual([
+          expect.objectContaining({
             sourceId: TEST_SOURCE_ID,
-            assetId: TEST_BTC_ASSET_ID,
-            acquiredAt: new Date("2025-04-01T10:00:00.000Z"),
-            originalAmount: "1.00000000",
-            remainingAmount: "0.90000000",
-            costBasisPerToken: "10000.00",
-            costBasisCurrency: "EUR",
-            sourceLegId: openingLeg.id,
-          })
-          .returning({ id: schema.fifoLots.id })
-        const [movement] = yield* db
-          .insert(schema.inventoryMovements)
-          .values({
-            principalId: TEST_PRINCIPAL_ID,
-            sourceId: TEST_SOURCE_ID,
-            sourceRawRecordId: TEST_RAW_RECORD_ID,
-            transactionId: oldTransactionId,
-            transactionLegId: feeLeg.id,
-            assetId: TEST_BTC_ASSET_ID,
-            timestamp: new Date("2025-04-02T10:00:00.000Z"),
-            direction: "outbound",
-            purpose: "fee",
-            taxTreatment: "non_taxable",
-            reconciliationStatus: "matched",
-            amount: "0.10000000",
-          })
-          .returning({ id: schema.inventoryMovements.id })
-
-        if (lot === undefined || movement === undefined) {
-          return yield* Effect.die("Failed to create replayed fee movement allocation")
-        }
-
-        yield* db.insert(schema.inventoryMovementAllocations).values({
-          inventoryMovementId: movement.id,
-          fifoLotId: lot.id,
-          matchedAmount: "0.10000000",
-        })
-      })
-    )
-
-    const result = await runRepository(
-      Effect.flatMap(SourceNormalizationRepository, (repository) =>
-        repository.persistNormalizedArtifacts({
-          transaction: {
-            sourceId: TEST_SOURCE_ID,
-            sourceRawRecordId: newRawRecordId,
-            externalId: "fee-new-parent",
-            externalGroupId: null,
-            timestamp: occurredAt,
-            transactionType: "buy_fiat",
-            providerTransactionType: "buy",
-            providerStatus: "completed",
-            providerResourcePath: null,
-            providerDescription: null,
-            providerCreatedAt: occurredAt,
-            providerUpdatedAt: occurredAt,
-            metadata: { provider: "coinbase" },
-            providerFiatAmount: null,
-            providerFiatCurrency: null,
-            principalId: TEST_PRINCIPAL_ID,
-          },
-          venueContext: {
-            venueType: "cex",
-            cexAccountId: fixture.cexAccountId,
-            externalAccountId: "coinbase-account-1",
-            externalOrderId: "fee-new-parent-order",
-            externalFillId: null,
-            side: null,
-            instrument: null,
-            fillPrice: null,
-            commissionAmount: null,
-            commissionCurrency: null,
-            metadata: { provider: "coinbase" },
-          },
-          providerTransfers: [],
-          canonicalTransfers: [],
-          providerAssetRowIds: [],
-          deriveLegs: ({ transaction }) =>
-            Effect.succeed([
-              {
-                sourceId: TEST_SOURCE_ID,
-                sourceRawRecordId: newRawRecordId,
-                externalId: feeLegExternalId,
-                txHash: null,
-                timestamp: occurredAt,
-                principalId: TEST_PRINCIPAL_ID,
-                addressId: null,
-                assetId: TEST_BTC_ASSET_ID,
-                amount: "0.10000000",
-                kind: "fee" as const,
-                provenance: "deterministic" as const,
-                derivationRule: "commission",
-                metadata: { provider: "coinbase" },
-                transactionId: transaction.id,
-                sourceTransferId: null,
-                fiatAmount: null,
-                fiatCurrency: null,
-                feeForTransactionId: transaction.id,
-              },
-            ]),
-          transactionReview: null,
-          resolvedTransactionType: APPROVED_MAPPING,
-        })
-      )
-    )
-
-    const [movement] = await runPg(
-      Effect.gen(function* () {
-        const db = yield* drizzle
-        return yield* db.select().from(schema.inventoryMovements)
-      })
-    )
-
-    expect(movement).toEqual(
-      expect.objectContaining({
-        transactionId: result.transaction.id,
-        sourceRawRecordId: newRawRecordId,
-        taxTreatment: "pending_review",
-        reconciliationStatus: "unmatched",
-      })
-    )
-  })
-
-  it("removes an unused inbound provider lot before replaying the transfer as outbound", async () => {
-    const openingRawRecordId = "00000000-0000-0000-0000-000000000706"
-    const correctedRawRecordId = "00000000-0000-0000-0000-000000000707"
-    const openingAt = new Date("2025-04-01T10:00:00.000Z")
-    const correctedAt = new Date("2025-04-02T10:00:00.000Z")
-    const openingPayload = {
-      id: "tx-direction-flip-opening",
-      type: "buy",
-      status: "completed",
-      amount: { amount: "1.00000000", currency: "BTC" },
-      native_amount: { amount: "10000.00", currency: "EUR" },
-      created_at: openingAt.toISOString(),
-      resource_path: "/v2/accounts/coinbase-account-1/transactions/tx-direction-flip-opening",
-    }
-    const buildCorrectedPayload = (direction: "inbound" | "outbound") => ({
-      id: "tx-direction-flip",
-      type: direction === "inbound" ? "receive" : "send",
-      status: "completed",
-      amount: { amount: direction === "inbound" ? "0.50000000" : "-0.50000000", currency: "BTC" },
-      native_amount: { amount: "5000.00", currency: "EUR" },
-      created_at: correctedAt.toISOString(),
-      resource_path: "/v2/accounts/coinbase-account-1/transactions/tx-direction-flip",
-      from:
-        direction === "inbound" ? { address: "bc1qfliporigin", resource: "address" } : undefined,
-      to:
-        direction === "outbound"
-          ? { address: "bc1qflipdestination", resource: "address" }
-          : undefined,
-    })
-
-    await runPg(
-      Effect.all([
-        seedRawRecord({
-          rawRecordId: openingRawRecordId,
-          externalRecordId: "raw-direction-flip-opening",
-          occurredAt: openingAt,
-          payload: openingPayload,
-        }),
-        seedRawRecord({
-          rawRecordId: correctedRawRecordId,
-          externalRecordId: "raw-direction-flip",
-          occurredAt: correctedAt,
-          payload: buildCorrectedPayload("inbound"),
-        }),
-      ])
-    )
-
-    const source = buildCoinbaseSource({ cexAccountId: fixture.cexAccountId })
-    await runCoinbaseNormalization(
-      persistCoinbaseNormalization({
-        source,
-        sourceRecord: buildSeededRawRecord({
-          rawRecordId: openingRawRecordId,
-          externalRecordId: "raw-direction-flip-opening",
-          occurredAt: openingAt,
-          payload: openingPayload,
-        }),
-      })
-    )
-
-    for (const direction of ["inbound", "outbound"] as const) {
-      await runCoinbaseNormalization(
-        persistCoinbaseNormalization({
-          source,
-          sourceRecord: buildSeededRawRecord({
-            rawRecordId: correctedRawRecordId,
-            externalRecordId: "raw-direction-flip",
-            occurredAt: correctedAt,
-            payload: buildCorrectedPayload(direction),
+            remainingAmount: expect.stringContaining("0.90000000"),
           }),
-          skipLegDerivation: true,
-        })
+        ])
+        expect(state.inventoryMovements).toEqual([
+          expect.objectContaining({
+            direction: "outbound",
+            purpose: "principal",
+            amount: expect.stringContaining("0.10000000"),
+          }),
+        ])
+        expect(state.inventoryMovementAllocations).toHaveLength(0)
+        expect(state.disposalMatches).toEqual([
+          expect.objectContaining({ matchedAmount: expect.stringContaining("0.10000000") }),
+        ])
+      })
+  )
+
+  it.effect("rebuilds changed movement allocations and clears them for a pending replay", () =>
+    Effect.gen(function* () {
+      const acquisitionRawRecordId = "00000000-0000-0000-0000-000000000700"
+      const acquiredAt = DateTime.toDateUtc(DateTime.makeUnsafe("2025-03-01T10:00:00.000Z"))
+      const acquisitionPayload = {
+        id: "tx-movement-replay-opening-inventory",
+        type: "buy",
+        status: "completed",
+        amount: { amount: "1.00000000", currency: "BTC" },
+        native_amount: { amount: "10000.00", currency: "EUR" },
+        created_at: acquiredAt.toISOString(),
+        resource_path:
+          "/v2/accounts/coinbase-account-1/transactions/tx-movement-replay-opening-inventory",
+      }
+      const rawRecordId = "00000000-0000-0000-0000-000000000701"
+      const occurredAt = DateTime.toDateUtc(DateTime.makeUnsafe("2025-04-01T10:00:00.000Z"))
+      const buildSendPayload = ({
+        status,
+        amount,
+        feeAmount,
+      }: {
+        readonly status: "completed" | "pending" | "succeeded"
+        readonly amount: string
+        readonly feeAmount: string
+      }) => ({
+        id: "tx-movement-replay-send",
+        type: "send",
+        status,
+        amount: { amount, currency: "BTC" },
+        native_amount: { amount: "-1500.00", currency: "EUR" },
+        created_at: occurredAt.toISOString(),
+        resource_path: "/v2/accounts/coinbase-account-1/transactions/tx-movement-replay-send",
+        network: {
+          status: "confirmed",
+          hash: "tx-movement-replay-hash",
+          network_name: "base",
+          transaction_fee: { amount: feeAmount, currency: "BTC" },
+        },
+        to: {
+          address: "bc1qmovementreplaydestination",
+          resource: "address",
+        },
+      })
+      const initialSendPayload = buildSendPayload({
+        status: "completed",
+        amount: "-0.10000000",
+        feeAmount: "0.01000000",
+      })
+
+      yield* Effect.promise(() =>
+        runPg(
+          Effect.all([
+            seedRawRecord({
+              rawRecordId: acquisitionRawRecordId,
+              externalRecordId: "raw-movement-replay-opening-inventory",
+              occurredAt: acquiredAt,
+              payload: acquisitionPayload,
+            }),
+            seedRawRecord({
+              rawRecordId,
+              externalRecordId: "raw-movement-replay-send",
+              occurredAt,
+              payload: initialSendPayload,
+            }),
+          ])
+        )
       )
-    }
 
-    const state = await runPg(
-      Effect.gen(function* () {
-        const db = yield* drizzle
-        const lots = yield* db.select().from(schema.fifoLots)
-        const allocations = yield* db.select().from(schema.inventoryMovementAllocations)
-        return { lots, allocations }
-      })
-    )
-
-    expect(state.lots).toEqual([
-      expect.objectContaining({
-        sourceProviderTransferId: null,
-        remainingAmount: expect.stringContaining("0.50000000"),
-      }),
-    ])
-    expect(state.allocations).toEqual([
-      expect.objectContaining({ matchedAmount: expect.stringContaining("0.50000000") }),
-    ])
-  })
-
-  it("records a failed Coinbase network fee leg as a custody movement", async () => {
-    const openingRawRecordId = "00000000-0000-0000-0000-000000000708"
-    const feeRawRecordId = "00000000-0000-0000-0000-000000000709"
-    const openingAt = new Date("2025-04-01T10:00:00.000Z")
-    const feeAt = new Date("2025-04-02T10:00:00.000Z")
-    const openingPayload = {
-      id: "tx-failed-fee-opening",
-      type: "buy",
-      status: "completed",
-      amount: { amount: "1.00000000", currency: "BTC" },
-      native_amount: { amount: "10000.00", currency: "EUR" },
-      created_at: openingAt.toISOString(),
-      resource_path: "/v2/accounts/coinbase-account-1/transactions/tx-failed-fee-opening",
-    }
-    const failedFeePayload = {
-      id: "tx-failed-onchain-fee",
-      type: "send",
-      status: "failed",
-      amount: { amount: "-0.01000000", currency: "BTC" },
-      native_amount: { amount: "-100.00", currency: "EUR" },
-      created_at: feeAt.toISOString(),
-      resource_path: "/v2/accounts/coinbase-account-1/transactions/tx-failed-onchain-fee",
-      to: { address: "bc1qfailedfeedestination", resource: "address" },
-      network: {
-        status: "failed",
-        transaction_fee: { amount: "0.01000000", currency: "BTC" },
-      },
-    }
-
-    await runPg(
-      Effect.all([
-        seedRawRecord({
-          rawRecordId: openingRawRecordId,
-          externalRecordId: "raw-failed-fee-opening",
-          occurredAt: openingAt,
-          payload: openingPayload,
-        }),
-        seedRawRecord({
-          rawRecordId: feeRawRecordId,
-          externalRecordId: "raw-failed-onchain-fee",
-          occurredAt: feeAt,
-          payload: failedFeePayload,
-        }),
-      ])
-    )
-
-    const source = buildCoinbaseSource({ cexAccountId: fixture.cexAccountId })
-    await runCoinbaseNormalization(
-      persistCoinbaseNormalization({
-        source,
-        sourceRecord: buildSeededRawRecord({
-          rawRecordId: openingRawRecordId,
-          externalRecordId: "raw-failed-fee-opening",
-          occurredAt: openingAt,
-          payload: openingPayload,
-        }),
-      })
-    )
-    const result = await runCoinbaseNormalization(
-      persistCoinbaseNormalization({
-        source,
-        sourceRecord: buildSeededRawRecord({
-          rawRecordId: feeRawRecordId,
-          externalRecordId: "raw-failed-onchain-fee",
-          occurredAt: feeAt,
-          payload: failedFeePayload,
-        }),
-      })
-    )
-
-    expect(result.legs).toEqual([expect.objectContaining({ kind: "fee" })])
-
-    const state = await runPg(
-      Effect.gen(function* () {
-        const db = yield* drizzle
-        const [lot] = yield* db.select().from(schema.fifoLots)
-        const [movement] = yield* db.select().from(schema.inventoryMovements)
-        return { lot, movement }
-      })
-    )
-
-    expect(state.lot?.remainingAmount).toContain("0.99000000")
-    expect(state.movement).toEqual(
-      expect.objectContaining({
-        direction: "outbound",
-        purpose: "fee",
-        amount: expect.stringContaining("0.01000000"),
-        providerTransferId: null,
-        transactionLegId: expect.any(String),
-      })
-    )
-  })
-
-  it("projects the exact SOL balance after instant unstaking and an unmatched send", async () => {
-    const openingAt = new Date("2025-05-01T09:00:00.000Z")
-    const unstakingAt = new Date("2025-05-02T10:00:00.000Z")
-    const sendAt = new Date("2025-05-03T11:00:00.000Z")
-    const records = [
-      {
-        rawRecordId: "00000000-0000-0000-0000-000000000694",
-        externalRecordId: "sol-opening-inventory",
-        externalAccountId: "coinbase-sol-primary",
-        externalParentId: null,
-        occurredAt: openingAt,
-        payload: {
-          id: "sol-opening-inventory",
-          type: "buy",
-          status: "completed",
-          amount: { amount: "45.99611069037", currency: "SOL" },
-          native_amount: { amount: "4599.611069037", currency: "EUR" },
-          created_at: openingAt.toISOString(),
-          resource_path: "/v2/accounts/coinbase-sol-primary/transactions/sol-opening-inventory",
-        },
-      },
-      {
-        // Live instant-unstaking rows can omit both `idem` and an order id, so
-        // neither side has a durable provider group identifier.
-        rawRecordId: "00000000-0000-0000-0000-000000000695",
-        externalRecordId: "sol-instant-unstaking-credit",
-        externalAccountId: "coinbase-sol-primary",
-        externalParentId: null,
-        occurredAt: unstakingAt,
-        payload: {
-          id: "sol-instant-unstaking-credit",
-          type: "retail_instant_unstaking",
-          status: "completed",
-          amount: { amount: "0.95693779863", currency: "SOL" },
-          native_amount: { amount: "99.08", currency: "EUR" },
-          created_at: unstakingAt.toISOString(),
-          resource_path:
-            "/v2/accounts/coinbase-sol-primary/transactions/sol-instant-unstaking-credit",
-        },
-      },
-      {
-        rawRecordId: "00000000-0000-0000-0000-000000000696",
-        externalRecordId: "sol-instant-unstaking-release",
-        externalAccountId: "coinbase-sol-staking",
-        externalParentId: null,
-        occurredAt: unstakingAt,
-        payload: {
-          id: "sol-instant-unstaking-release",
-          type: "retail_instant_unstaking",
-          status: "completed",
-          amount: { amount: "-0.966603837", currency: "SOL" },
-          native_amount: { amount: "-100.08", currency: "EUR" },
-          created_at: unstakingAt.toISOString(),
-          resource_path:
-            "/v2/accounts/coinbase-sol-staking/transactions/sol-instant-unstaking-release",
-        },
-      },
-      {
-        rawRecordId: "00000000-0000-0000-0000-000000000697",
-        externalRecordId: "sol-external-send",
-        externalAccountId: "coinbase-sol-primary",
-        externalParentId: null,
-        occurredAt: sendAt,
-        payload: {
-          id: "sol-external-send",
-          type: "send",
-          status: "completed",
-          amount: { amount: "-0.956937799", currency: "SOL" },
-          native_amount: { amount: "-99.06", currency: "EUR" },
-          created_at: sendAt.toISOString(),
-          resource_path: "/v2/accounts/coinbase-sol-primary/transactions/sol-external-send",
-          network: {
-            status: "confirmed",
-            hash: "sol-external-send-hash",
-            network_name: "solana",
-            transaction_fee: { amount: "0.0001", currency: "SOL" },
-          },
-          to: {
-            address: "sol-external-destination",
-            resource: "address",
-          },
-        },
-      },
-    ] as const
-
-    await runPg(
-      Effect.gen(function* () {
-        const db = yield* drizzle
-        yield* db.insert(schema.assets).values({
-          id: TEST_SOL_ASSET_ID,
-          name: "Sync Engine Solana Fixture",
-          symbol: "SOL",
-          coingeckoCoinId: "solana",
-          type: "fungible",
-        })
-
-        yield* Effect.forEach(records, (record) =>
-          seedRawRecord({
-            ...record,
+      const source = buildCoinbaseSource({ cexAccountId: fixture.cexAccountId })
+      const normalizeSend = (payload: ReturnType<typeof buildSendPayload>) =>
+        runCoinbaseNormalization(
+          persistCoinbaseNormalization({
+            source,
+            sourceRecord: buildSeededRawRecord({
+              rawRecordId,
+              externalRecordId: "raw-movement-replay-send",
+              occurredAt,
+              payload,
+            }),
           })
         )
-      })
-    )
 
-    for (const record of records) {
-      await runCoinbaseNormalization(
-        persistCoinbaseNormalization({
-          source: buildCoinbaseSource({ cexAccountId: fixture.cexAccountId }),
-          sourceRecord: buildSeededRawRecord({ ...record }),
+      yield* Effect.promise(() =>
+        runCoinbaseNormalization(
+          persistCoinbaseNormalization({
+            source,
+            sourceRecord: buildSeededRawRecord({
+              rawRecordId: acquisitionRawRecordId,
+              externalRecordId: "raw-movement-replay-opening-inventory",
+              occurredAt: acquiredAt,
+              payload: acquisitionPayload,
+            }),
+          })
+        )
+      )
+      yield* Effect.promise(() => normalizeSend(initialSendPayload))
+      yield* Effect.promise(() =>
+        runPg(
+          Effect.gen(function* () {
+            const db = yield* drizzle
+            yield* db
+              .update(schema.inventoryMovements)
+              .set({
+                taxTreatment: "non_taxable",
+                reconciliationStatus: "matched",
+              })
+              .where(eq(schema.inventoryMovements.sourceId, TEST_SOURCE_ID))
+          })
+        )
+      )
+      yield* Effect.promise(() =>
+        normalizeSend(
+          buildSendPayload({
+            status: "completed",
+            amount: "-0.20000000",
+            feeAmount: "0.02000000",
+          })
+        )
+      )
+
+      const changedState = yield* Effect.promise(() =>
+        runPg(
+          Effect.gen(function* () {
+            const db = yield* drizzle
+            const [lot] = yield* db.select().from(schema.fifoLots)
+            const movements = yield* db.select().from(schema.inventoryMovements)
+            const allocations = yield* db.select().from(schema.inventoryMovementAllocations)
+            return { lot, movements, allocations }
+          })
+        )
+      )
+
+      expect(changedState.lot?.remainingAmount).toContain("0.80000000")
+      expect(changedState.movements).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            purpose: "principal",
+            amount: expect.stringContaining("0.18"),
+            taxTreatment: "pending_review",
+            reconciliationStatus: "unmatched",
+          }),
+          expect.objectContaining({ purpose: "fee", amount: expect.stringContaining("0.02") }),
+        ])
+      )
+      expect(changedState.allocations).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ matchedAmount: expect.stringContaining("0.18") }),
+          expect.objectContaining({ matchedAmount: expect.stringContaining("0.02") }),
+        ])
+      )
+
+      yield* Effect.promise(() =>
+        normalizeSend(
+          buildSendPayload({
+            status: "succeeded",
+            amount: "-0.20000000",
+            feeAmount: "0.02000000",
+          })
+        )
+      )
+
+      const succeededState = yield* Effect.promise(() =>
+        runPg(
+          Effect.gen(function* () {
+            const db = yield* drizzle
+            const [lot] = yield* db.select().from(schema.fifoLots)
+            const movements = yield* db.select().from(schema.inventoryMovements)
+            const allocations = yield* db.select().from(schema.inventoryMovementAllocations)
+            return { lot, movements, allocations }
+          })
+        )
+      )
+
+      expect(succeededState.lot?.remainingAmount).toContain("0.80000000")
+      expect(succeededState.movements).toHaveLength(2)
+      expect(succeededState.allocations).toHaveLength(2)
+
+      yield* Effect.promise(() =>
+        normalizeSend(
+          buildSendPayload({
+            status: "completed",
+            amount: "-0.20000000",
+            feeAmount: "0",
+          })
+        )
+      )
+
+      const zeroFeeState = yield* Effect.promise(() =>
+        runPg(
+          Effect.gen(function* () {
+            const db = yield* drizzle
+            const [lot] = yield* db.select().from(schema.fifoLots)
+            const movements = yield* db.select().from(schema.inventoryMovements)
+            const allocations = yield* db.select().from(schema.inventoryMovementAllocations)
+            return { lot, movements, allocations }
+          })
+        )
+      )
+
+      expect(zeroFeeState.lot?.remainingAmount).toContain("0.80000000")
+      expect(zeroFeeState.movements).toEqual([
+        expect.objectContaining({ purpose: "principal", amount: expect.stringContaining("0.2") }),
+      ])
+      expect(zeroFeeState.allocations).toEqual([
+        expect.objectContaining({ matchedAmount: expect.stringContaining("0.2") }),
+      ])
+
+      yield* Effect.promise(() =>
+        normalizeSend(
+          buildSendPayload({
+            status: "pending",
+            amount: "-0.20000000",
+            feeAmount: "0.02000000",
+          })
+        )
+      )
+
+      const pendingState = yield* Effect.promise(() =>
+        runPg(
+          Effect.gen(function* () {
+            const db = yield* drizzle
+            const [lot] = yield* db.select().from(schema.fifoLots)
+            const movements = yield* db.select().from(schema.inventoryMovements)
+            const allocations = yield* db.select().from(schema.inventoryMovementAllocations)
+            return { lot, movements, allocations }
+          })
+        )
+      )
+
+      expect(pendingState.lot?.remainingAmount).toContain("1.00000000")
+      expect(pendingState.movements).toHaveLength(0)
+      expect(pendingState.allocations).toHaveLength(0)
+    })
+  )
+
+  it.effect("resets reconciliation when replay changes only the asset representation", () =>
+    Effect.gen(function* () {
+      const rawRecordId = "00000000-0000-0000-0000-000000000710"
+      const occurredAt = DateTime.toDateUtc(DateTime.makeUnsafe("2025-04-10T10:00:00.000Z"))
+      const payload = {
+        id: "tx-representation-replay-send",
+        type: "send",
+        status: "completed",
+        amount: { amount: "-0.10000000", currency: "BTC" },
+        native_amount: { amount: "-1500.00", currency: "EUR" },
+        created_at: occurredAt.toISOString(),
+        resource_path: "/v2/accounts/coinbase-account-1/transactions/tx-representation-replay-send",
+        network: {
+          status: "confirmed",
+          hash: "tx-representation-replay-hash",
+          network_name: "bitcoin",
+        },
+        to: {
+          address: "bc1qrepresentationreplaydestination",
+          resource: "address",
+        },
+      }
+
+      yield* Effect.promise(() =>
+        runPg(
+          seedRawRecord({
+            rawRecordId,
+            externalRecordId: "raw-representation-replay-send",
+            occurredAt,
+            payload,
+          })
+        )
+      )
+
+      const source = buildCoinbaseSource({ cexAccountId: fixture.cexAccountId })
+      const normalize = () =>
+        runCoinbaseNormalization(
+          persistCoinbaseNormalization({
+            source,
+            sourceRecord: buildSeededRawRecord({
+              rawRecordId,
+              externalRecordId: "raw-representation-replay-send",
+              occurredAt,
+              payload,
+            }),
+          })
+        )
+
+      yield* Effect.promise(() => normalize())
+      yield* Effect.promise(() =>
+        runPg(
+          Effect.gen(function* () {
+            const db = yield* drizzle
+            const [providerAsset] = yield* db
+              .select({ id: schema.providerAssets.id })
+              .from(schema.providerAssets)
+              .where(eq(schema.providerAssets.currencyCode, "BTC"))
+              .limit(1)
+
+            if (providerAsset === undefined) {
+              return yield* Effect.die("Missing Coinbase BTC provider asset")
+            }
+
+            yield* db
+              .update(schema.providerAssetMappings)
+              .set({ assetRepresentationId: TEST_BTC_REPRESENTATION_ID })
+              .where(eq(schema.providerAssetMappings.providerAssetRowId, providerAsset.id))
+            yield* db
+              .update(schema.inventoryMovements)
+              .set({ taxTreatment: "non_taxable", reconciliationStatus: "matched" })
+              .where(eq(schema.inventoryMovements.purpose, "principal"))
+          })
+        )
+      )
+
+      yield* Effect.promise(() => normalize())
+
+      const [movement] = yield* Effect.promise(() =>
+        runPg(
+          Effect.gen(function* () {
+            const db = yield* drizzle
+            return yield* db
+              .select()
+              .from(schema.inventoryMovements)
+              .where(eq(schema.inventoryMovements.purpose, "principal"))
+          })
+        )
+      )
+
+      expect(movement).toEqual(
+        expect.objectContaining({
+          assetRepresentationId: TEST_BTC_REPRESENTATION_ID,
+          taxTreatment: "pending_review",
+          reconciliationStatus: "unmatched",
         })
       )
-    }
+    })
+  )
 
-    const positions = await Effect.runPromise(
-      context.runWithLayer({
+  it.effect(
+    "persists a Coinbase receive provider transfer with source and destination context",
+    () =>
+      Effect.gen(function* () {
+        const rawRecordId = "00000000-0000-0000-0000-000000000692"
+        const occurredAt = DateTime.toDateUtc(DateTime.makeUnsafe("2025-04-02T10:00:00.000Z"))
+        const payload = {
+          id: "tx-receive-provider-transfer-1",
+          type: "receive",
+          status: "completed",
+          amount: { amount: "0.25000000", currency: "BTC" },
+          native_amount: { amount: "3750.00", currency: "EUR" },
+          created_at: occurredAt.toISOString(),
+          resource_path:
+            "/v2/accounts/coinbase-account-1/transactions/tx-receive-provider-transfer-1",
+          from: {
+            address: "bc1qprovidertransfersource",
+            resource: "address",
+          },
+          to: {
+            id: "coinbase-account-1",
+            resource: "account",
+            resource_path: "/v2/accounts/coinbase-account-1",
+          },
+        }
+
+        yield* Effect.promise(() =>
+          runPg(
+            seedRawRecord({
+              rawRecordId,
+              externalRecordId: "raw-provider-receive-1",
+              occurredAt,
+              payload,
+            })
+          )
+        )
+
+        const result = yield* Effect.promise(() =>
+          runCoinbaseNormalization(
+            persistCoinbaseNormalization({
+              source: buildCoinbaseSource({ cexAccountId: fixture.cexAccountId }),
+              sourceRecord: buildSeededRawRecord({
+                rawRecordId,
+                externalRecordId: "raw-provider-receive-1",
+                occurredAt,
+                payload,
+              }),
+              skipLegDerivation: true,
+              providerTransferRole: "principal",
+            })
+          )
+        )
+
+        expect(result.providerTransfers).toHaveLength(1)
+        expect(result.providerTransfers[0]).toEqual(
+          expect.objectContaining({
+            externalId: "tx-receive-provider-transfer-1:principal",
+            providerAssetId: expect.any(String),
+            direction: "inbound",
+            fromAddress: "bc1qprovidertransfersource",
+            toAccountRef: "coinbase-account-1",
+          })
+        )
+        expect(result.providerTransfers[0]?.amount).toContain("0.25000000")
+
+        const state = yield* Effect.promise(() =>
+          runPg(
+            Effect.gen(function* () {
+              const db = yield* drizzle
+              const [providerTransfer] = yield* db.select().from(schema.providerTransfers)
+              const [movement] = yield* db.select().from(schema.inventoryMovements)
+              const lots = yield* db.select().from(schema.fifoLots)
+              return { providerTransfer, movement, lots }
+            })
+          )
+        )
+        const positions = yield* context.runWithLayer({
+          effect: Effect.flatMap(PortfolioRepository, (repository) =>
+            repository.listAssetPositions({
+              principalId: TEST_PRINCIPAL_ID,
+              sourceId: TEST_SOURCE_ID,
+            })
+          ),
+          layer: PortfolioRepositoryLive,
+        })
+
+        expect(state.providerTransfer).toEqual(
+          expect.objectContaining({
+            externalId: "tx-receive-provider-transfer-1:principal",
+            direction: "inbound",
+            fromAddress: "bc1qprovidertransfersource",
+            toAccountRef: "coinbase-account-1",
+          })
+        )
+        expect(state.movement).toEqual(
+          expect.objectContaining({
+            providerTransferId: state.providerTransfer?.id,
+            direction: "inbound",
+            purpose: "principal",
+            amount: expect.stringContaining("0.25000000"),
+          })
+        )
+        expect(state.lots).toEqual([
+          expect.objectContaining({
+            sourceProviderTransferId: state.providerTransfer?.id,
+            sourceLegId: null,
+            costBasisStatus: "pending_review",
+            originalAmount: expect.stringContaining("0.25000000"),
+            remainingAmount: expect.stringContaining("0.25000000"),
+          }),
+        ])
+        expect(positions).toEqual([
+          expect.objectContaining({
+            assetId: TEST_BTC_ASSET_ID,
+            amount: "0.25",
+            costBasis: null,
+            costBasisCurrency: null,
+            costBasisStatus: "pending_review",
+          }),
+        ])
+      })
+  )
+
+  it.effect(
+    "removes provider movements that disappear on replay and restores them when they return",
+    () =>
+      Effect.gen(function* () {
+        const rawRecordId = "00000000-0000-0000-0000-000000000713"
+        const occurredAt = DateTime.toDateUtc(DateTime.makeUnsafe("2025-04-02T10:00:00.000Z"))
+        const receivePayload = {
+          id: "tx-provider-transfer-disappears",
+          type: "receive",
+          status: "completed",
+          amount: { amount: "0.25000000", currency: "BTC" },
+          native_amount: { amount: "2500.00", currency: "EUR" },
+          created_at: occurredAt.toISOString(),
+          resource_path:
+            "/v2/accounts/coinbase-account-1/transactions/tx-provider-transfer-disappears",
+          from: { address: "bc1qprovidertransfersource", resource: "address" },
+        }
+        yield* Effect.promise(() =>
+          runPg(
+            seedRawRecord({
+              rawRecordId,
+              externalRecordId: "raw-provider-transfer-disappears",
+              occurredAt,
+              payload: receivePayload,
+            })
+          )
+        )
+
+        const source = buildCoinbaseSource({ cexAccountId: fixture.cexAccountId })
+        const normalize = ({ omitProviderTransfers = false } = {}) =>
+          runCoinbaseNormalization(
+            persistCoinbaseNormalization({
+              source,
+              sourceRecord: buildSeededRawRecord({
+                rawRecordId,
+                externalRecordId: "raw-provider-transfer-disappears",
+                occurredAt,
+                payload: receivePayload,
+              }),
+              skipLegDerivation: true,
+              omitProviderTransfers,
+            })
+          )
+
+        const initialResult = yield* Effect.promise(() => normalize())
+        const initialProviderTransfer = initialResult.providerTransfers[0]
+        expect(initialProviderTransfer).toBeDefined()
+        if (initialProviderTransfer === undefined) {
+          return
+        }
+
+        yield* Effect.promise(() => normalize({ omitProviderTransfers: true }))
+
+        const removedState = yield* Effect.promise(() =>
+          runPg(
+            Effect.gen(function* () {
+              const db = yield* drizzle
+              const [providerTransfer] = yield* db
+                .select()
+                .from(schema.providerTransfers)
+                .where(eq(schema.providerTransfers.id, initialProviderTransfer.id))
+              const movements = yield* db.select().from(schema.inventoryMovements)
+              const lots = yield* db.select().from(schema.fifoLots)
+              return { providerTransfer, movements, lots }
+            })
+          )
+        )
+
+        expect(removedState.providerTransfer).toEqual(
+          expect.objectContaining({
+            id: initialProviderTransfer.id,
+            processingMode: "stale",
+          })
+        )
+        expect(removedState.movements).toHaveLength(0)
+        expect(removedState.lots).toHaveLength(0)
+        const staleReconciliationCandidates = yield* Effect.promise(() =>
+          runTransferReconciliationRepository(
+            Effect.flatMap(TransferReconciliationRepository, (repository) =>
+              repository.listProviderTransfersForReconciliation({
+                principalId: TEST_PRINCIPAL_ID,
+                sourceId: TEST_SOURCE_ID,
+              })
+            )
+          )
+        )
+        expect(
+          staleReconciliationCandidates.some(
+            ({ providerTransferId }) => providerTransferId === initialProviderTransfer.id
+          )
+        ).toBe(false)
+
+        const restoredResult = yield* Effect.promise(() => normalize())
+        expect(restoredResult.providerTransfers).toEqual([
+          expect.objectContaining({
+            id: initialProviderTransfer.id,
+            processingMode: "accounting_and_evidence",
+          }),
+        ])
+
+        const restoredState = yield* Effect.promise(() =>
+          runPg(
+            Effect.gen(function* () {
+              const db = yield* drizzle
+              const [providerTransfer] = yield* db
+                .select()
+                .from(schema.providerTransfers)
+                .where(eq(schema.providerTransfers.id, initialProviderTransfer.id))
+              const movements = yield* db
+                .select()
+                .from(schema.inventoryMovements)
+                .where(eq(schema.inventoryMovements.providerTransferId, initialProviderTransfer.id))
+              const lots = yield* db.select().from(schema.fifoLots)
+              return { providerTransfer, movements, lots }
+            })
+          )
+        )
+
+        expect(restoredState.providerTransfer).toEqual(
+          expect.objectContaining({
+            id: initialProviderTransfer.id,
+            processingMode: "accounting_and_evidence",
+          })
+        )
+        expect(restoredState.movements).toEqual([
+          expect.objectContaining({
+            providerTransferId: initialProviderTransfer.id,
+            direction: "inbound",
+          }),
+        ])
+        expect(restoredState.lots).toEqual([
+          expect.objectContaining({
+            sourceProviderTransferId: initialProviderTransfer.id,
+            originalAmount: expect.stringContaining("0.25000000"),
+            remainingAmount: expect.stringContaining("0.25000000"),
+          }),
+        ])
+        const restoredReconciliationCandidates = yield* Effect.promise(() =>
+          runTransferReconciliationRepository(
+            Effect.flatMap(TransferReconciliationRepository, (repository) =>
+              repository.listProviderTransfersForReconciliation({
+                principalId: TEST_PRINCIPAL_ID,
+                sourceId: TEST_SOURCE_ID,
+              })
+            )
+          )
+        )
+        expect(restoredReconciliationCandidates).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({ providerTransferId: initialProviderTransfer.id }),
+          ])
+        )
+      })
+  )
+
+  it.effect("does not spend an unreconciled inbound provider lot", () =>
+    Effect.gen(function* () {
+      const receiveRawRecordId = "00000000-0000-0000-0000-000000000704"
+      const sendRawRecordId = "00000000-0000-0000-0000-000000000705"
+      const receiveAt = DateTime.toDateUtc(DateTime.makeUnsafe("2025-04-02T10:00:00.000Z"))
+      const sendAt = DateTime.toDateUtc(DateTime.makeUnsafe("2025-04-03T10:00:00.000Z"))
+      const receivePayload = {
+        id: "tx-consumed-provider-receive",
+        type: "receive",
+        status: "completed",
+        amount: { amount: "1.00000000", currency: "BTC" },
+        native_amount: { amount: "10000.00", currency: "EUR" },
+        created_at: receiveAt.toISOString(),
+        resource_path: "/v2/accounts/coinbase-account-1/transactions/tx-consumed-provider-receive",
+        from: { address: "bc1qconsumedproviderlot", resource: "address" },
+      }
+      const sendPayload = {
+        id: "tx-consuming-provider-send",
+        type: "send",
+        status: "completed",
+        amount: { amount: "-0.80000000", currency: "BTC" },
+        native_amount: { amount: "-8000.00", currency: "EUR" },
+        created_at: sendAt.toISOString(),
+        resource_path: "/v2/accounts/coinbase-account-1/transactions/tx-consuming-provider-send",
+        to: { address: "bc1qconsumedproviderdestination", resource: "address" },
+      }
+
+      yield* Effect.promise(() =>
+        runPg(
+          Effect.all([
+            seedRawRecord({
+              rawRecordId: receiveRawRecordId,
+              externalRecordId: "raw-consumed-provider-receive",
+              occurredAt: receiveAt,
+              payload: receivePayload,
+            }),
+            seedRawRecord({
+              rawRecordId: sendRawRecordId,
+              externalRecordId: "raw-consuming-provider-send",
+              occurredAt: sendAt,
+              payload: sendPayload,
+            }),
+          ])
+        )
+      )
+
+      const source = buildCoinbaseSource({ cexAccountId: fixture.cexAccountId })
+      yield* Effect.promise(() =>
+        runCoinbaseNormalization(
+          persistCoinbaseNormalization({
+            source,
+            sourceRecord: buildSeededRawRecord({
+              rawRecordId: receiveRawRecordId,
+              externalRecordId: "raw-consumed-provider-receive",
+              occurredAt: receiveAt,
+              payload: receivePayload,
+            }),
+            skipLegDerivation: true,
+          })
+        )
+      )
+      yield* Effect.promise(() =>
+        runCoinbaseNormalization(
+          persistCoinbaseNormalization({
+            source,
+            sourceRecord: buildSeededRawRecord({
+              rawRecordId: sendRawRecordId,
+              externalRecordId: "raw-consuming-provider-send",
+              occurredAt: sendAt,
+              payload: sendPayload,
+            }),
+            skipLegDerivation: true,
+          })
+        )
+      )
+
+      const state = yield* Effect.promise(() =>
+        runPg(
+          Effect.gen(function* () {
+            const db = yield* drizzle
+            const [inboundLot] = yield* db
+              .select()
+              .from(schema.fifoLots)
+              .where(sql`${schema.fifoLots.sourceProviderTransferId} is not null`)
+            const allocations = yield* db.select().from(schema.inventoryMovementAllocations)
+            const reviews = yield* db.select().from(schema.transactionReviews)
+            return { inboundLot, allocations, reviews }
+          })
+        )
+      )
+
+      expect(state.inboundLot).toEqual(
+        expect.objectContaining({
+          originalAmount: expect.stringContaining("1.00000000"),
+          remainingAmount: expect.stringContaining("1.00000000"),
+        })
+      )
+      expect(state.allocations).toHaveLength(0)
+      expect(state.reviews).toContainEqual(
+        expect.objectContaining({
+          matchedLayer: "coinbase_reference_mapping,fifo_inventory",
+          needsReview: true,
+          categorizationReason: expect.stringContaining("Insufficient FIFO inventory"),
+        })
+      )
+    })
+  )
+
+  it.effect("drops the principal movement when the network fee covers the whole send debit", () =>
+    Effect.gen(function* () {
+      const acquisitionRawRecordId = "00000000-0000-0000-0000-000000000720"
+      const sendRawRecordId = "00000000-0000-0000-0000-000000000721"
+      const acquiredAt = DateTime.toDateUtc(DateTime.makeUnsafe("2025-04-01T10:00:00.000Z"))
+      const sentAt = DateTime.toDateUtc(DateTime.makeUnsafe("2025-04-02T10:00:00.000Z"))
+      const acquisitionPayload = {
+        id: "tx-partial-movement-opening-inventory",
+        type: "buy",
+        status: "completed",
+        amount: { amount: "0.25000000", currency: "BTC" },
+        native_amount: { amount: "2500.00", currency: "EUR" },
+        created_at: acquiredAt.toISOString(),
+        resource_path:
+          "/v2/accounts/coinbase-account-1/transactions/tx-partial-movement-opening-inventory",
+      }
+      const sendPayload = {
+        id: "tx-partial-movement-send",
+        type: "send",
+        status: "completed",
+        amount: { amount: "-0.10000000", currency: "BTC" },
+        native_amount: { amount: "-1000.00", currency: "EUR" },
+        created_at: sentAt.toISOString(),
+        resource_path: "/v2/accounts/coinbase-account-1/transactions/tx-partial-movement-send",
+        network: {
+          status: "confirmed",
+          hash: "tx-partial-movement-send-hash",
+          network_name: "base",
+          transaction_fee: { amount: "0.10000000", currency: "BTC" },
+        },
+        to: {
+          address: "bc1qpartialmovementdestination",
+          resource: "address",
+        },
+      }
+
+      yield* Effect.promise(() =>
+        runPg(
+          Effect.all([
+            seedRawRecord({
+              rawRecordId: acquisitionRawRecordId,
+              externalRecordId: "raw-partial-movement-opening-inventory",
+              occurredAt: acquiredAt,
+              payload: acquisitionPayload,
+            }),
+            seedRawRecord({
+              rawRecordId: sendRawRecordId,
+              externalRecordId: "raw-partial-movement-send",
+              occurredAt: sentAt,
+              payload: sendPayload,
+            }),
+          ])
+        )
+      )
+
+      const source = buildCoinbaseSource({ cexAccountId: fixture.cexAccountId })
+      yield* Effect.promise(() =>
+        runCoinbaseNormalization(
+          persistCoinbaseNormalization({
+            source,
+            sourceRecord: buildSeededRawRecord({
+              rawRecordId: acquisitionRawRecordId,
+              externalRecordId: "raw-partial-movement-opening-inventory",
+              occurredAt: acquiredAt,
+              payload: acquisitionPayload,
+            }),
+          })
+        )
+      )
+      const result = yield* Effect.promise(() =>
+        runCoinbaseNormalization(
+          persistCoinbaseNormalization({
+            source,
+            sourceRecord: buildSeededRawRecord({
+              rawRecordId: sendRawRecordId,
+              externalRecordId: "raw-partial-movement-send",
+              occurredAt: sentAt,
+              payload: sendPayload,
+            }),
+          })
+        )
+      )
+
+      const state = yield* Effect.promise(() =>
+        runPg(
+          Effect.gen(function* () {
+            const db = yield* drizzle
+            const [lot] = yield* db.select().from(schema.fifoLots).limit(1)
+            const movements = yield* db
+              .select()
+              .from(schema.inventoryMovements)
+              .where(eq(schema.inventoryMovements.transactionId, result.transaction.id))
+            const allocations = yield* db.select().from(schema.inventoryMovementAllocations)
+            const [review] = yield* db
+              .select()
+              .from(schema.transactionReviews)
+              .where(eq(schema.transactionReviews.transactionId, result.transaction.id))
+            return { lot, movements, allocations, review }
+          })
+        )
+      )
+
+      expect(state.movements).toEqual([
+        expect.objectContaining({ purpose: "fee", amount: expect.stringContaining("0.1") }),
+      ])
+      expect(state.allocations).toEqual([
+        expect.objectContaining({ matchedAmount: expect.stringContaining("0.1") }),
+      ])
+      expect(state.lot?.remainingAmount).toContain("0.15000000")
+      expect(state.review).toEqual(
+        expect.objectContaining({
+          reviewStatus: "needs_review",
+          matchedLayer: "coinbase_reference_mapping",
+          needsReview: true,
+        })
+      )
+    })
+  )
+
+  it.effect("allocates a whole-balance Coinbase send whose amount includes the network fee", () =>
+    Effect.gen(function* () {
+      const acquisitionRawRecordId = "00000000-0000-0000-0000-000000000725"
+      const sendRawRecordId = "00000000-0000-0000-0000-000000000726"
+      const acquiredAt = DateTime.toDateUtc(DateTime.makeUnsafe("2025-04-01T10:00:00.000Z"))
+      const sentAt = DateTime.toDateUtc(DateTime.makeUnsafe("2025-04-02T10:00:00.000Z"))
+      const acquisitionPayload = {
+        id: "tx-whole-balance-opening-inventory",
+        type: "buy",
+        status: "completed",
+        amount: { amount: "0.10010000", currency: "BTC" },
+        native_amount: { amount: "1001.00", currency: "EUR" },
+        created_at: acquiredAt.toISOString(),
+        resource_path:
+          "/v2/accounts/coinbase-account-1/transactions/tx-whole-balance-opening-inventory",
+      }
+      const sendPayload = {
+        id: "tx-whole-balance-send",
+        type: "send",
+        status: "completed",
+        amount: { amount: "-0.10010000", currency: "BTC" },
+        native_amount: { amount: "-1001.00", currency: "EUR" },
+        created_at: sentAt.toISOString(),
+        resource_path: "/v2/accounts/coinbase-account-1/transactions/tx-whole-balance-send",
+        network: {
+          status: "confirmed",
+          hash: "tx-whole-balance-send-hash",
+          network_name: "base",
+          transaction_fee: { amount: "0.00010000", currency: "BTC" },
+        },
+        to: {
+          address: "bc1qwholebalancedestination",
+          resource: "address",
+        },
+      }
+
+      yield* Effect.promise(() =>
+        runPg(
+          Effect.all([
+            seedRawRecord({
+              rawRecordId: acquisitionRawRecordId,
+              externalRecordId: "raw-whole-balance-opening-inventory",
+              occurredAt: acquiredAt,
+              payload: acquisitionPayload,
+            }),
+            seedRawRecord({
+              rawRecordId: sendRawRecordId,
+              externalRecordId: "raw-whole-balance-send",
+              occurredAt: sentAt,
+              payload: sendPayload,
+            }),
+          ])
+        )
+      )
+
+      const source = buildCoinbaseSource({ cexAccountId: fixture.cexAccountId })
+      yield* Effect.promise(() =>
+        runCoinbaseNormalization(
+          persistCoinbaseNormalization({
+            source,
+            sourceRecord: buildSeededRawRecord({
+              rawRecordId: acquisitionRawRecordId,
+              externalRecordId: "raw-whole-balance-opening-inventory",
+              occurredAt: acquiredAt,
+              payload: acquisitionPayload,
+            }),
+          })
+        )
+      )
+      const result = yield* Effect.promise(() =>
+        runCoinbaseNormalization(
+          persistCoinbaseNormalization({
+            source,
+            sourceRecord: buildSeededRawRecord({
+              rawRecordId: sendRawRecordId,
+              externalRecordId: "raw-whole-balance-send",
+              occurredAt: sentAt,
+              payload: sendPayload,
+            }),
+          })
+        )
+      )
+
+      expect(result.providerTransfers).toEqual([
+        expect.objectContaining({
+          externalId: "tx-whole-balance-send:principal",
+          direction: "outbound",
+          amount: expect.stringContaining("0.10000000"),
+        }),
+      ])
+      expect(result.legs).toEqual([expect.objectContaining({ kind: "fee" })])
+
+      const state = yield* Effect.promise(() =>
+        runPg(
+          Effect.gen(function* () {
+            const db = yield* drizzle
+            const [lot] = yield* db.select().from(schema.fifoLots).limit(1)
+            const movements = yield* db
+              .select()
+              .from(schema.inventoryMovements)
+              .where(eq(schema.inventoryMovements.transactionId, result.transaction.id))
+            const [review] = yield* db
+              .select()
+              .from(schema.transactionReviews)
+              .where(eq(schema.transactionReviews.transactionId, result.transaction.id))
+            return { lot, movements, review }
+          })
+        )
+      )
+
+      expect(state.movements).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            purpose: "principal",
+            amount: expect.stringContaining("0.10000000"),
+          }),
+          expect.objectContaining({
+            purpose: "fee",
+            amount: expect.stringContaining("0.00010000"),
+          }),
+        ])
+      )
+      expect(state.lot?.remainingAmount).toContain("0.00000000")
+      expect(state.review?.matchedLayer ?? "").not.toContain("fifo_inventory")
+    })
+  )
+
+  it.effect("keeps a receive whose sender-paid network fee exceeds the credited amount", () =>
+    Effect.gen(function* () {
+      const receiveRawRecordId = "00000000-0000-0000-0000-000000000729"
+      const receivedAt = DateTime.toDateUtc(DateTime.makeUnsafe("2025-04-02T10:00:00.000Z"))
+      const receivePayload = {
+        id: "tx-small-receive",
+        type: "receive",
+        status: "completed",
+        amount: { amount: "0.00005000", currency: "BTC" },
+        native_amount: { amount: "0.50", currency: "EUR" },
+        created_at: receivedAt.toISOString(),
+        resource_path: "/v2/accounts/coinbase-account-1/transactions/tx-small-receive",
+        network: {
+          status: "confirmed",
+          hash: "tx-small-receive-hash",
+          network_name: "base",
+          transaction_fee: { amount: "0.00010000", currency: "BTC" },
+        },
+        from: {
+          address: "bc1qsmallreceiveorigin",
+          resource: "address",
+        },
+      }
+
+      yield* Effect.promise(() =>
+        runPg(
+          seedRawRecord({
+            rawRecordId: receiveRawRecordId,
+            externalRecordId: "raw-small-receive",
+            occurredAt: receivedAt,
+            payload: receivePayload,
+          })
+        )
+      )
+
+      const result = yield* Effect.promise(() =>
+        runCoinbaseNormalization(
+          persistCoinbaseNormalization({
+            source: buildCoinbaseSource({ cexAccountId: fixture.cexAccountId }),
+            sourceRecord: buildSeededRawRecord({
+              rawRecordId: receiveRawRecordId,
+              externalRecordId: "raw-small-receive",
+              occurredAt: receivedAt,
+              payload: receivePayload,
+            }),
+          })
+        )
+      )
+
+      expect(result.providerTransfers).toEqual([
+        expect.objectContaining({
+          externalId: "tx-small-receive:principal",
+          direction: "inbound",
+          amount: expect.stringContaining("0.00005000"),
+        }),
+      ])
+      expect(result.canonicalTransfers).toHaveLength(0)
+      expect(result.legs).toEqual([
+        expect.objectContaining({
+          kind: "acquisition",
+          amount: expect.stringContaining("0.00005000"),
+        }),
+      ])
+    })
+  )
+
+  it.effect("carves a same-currency network fee out of an internal-transfer disposal leg", () =>
+    Effect.gen(function* () {
+      const acquisitionRawRecordId = "00000000-0000-0000-0000-000000000727"
+      const withdrawalRawRecordId = "00000000-0000-0000-0000-000000000728"
+      const acquiredAt = DateTime.toDateUtc(DateTime.makeUnsafe("2025-04-01T10:00:00.000Z"))
+      const withdrawnAt = DateTime.toDateUtc(DateTime.makeUnsafe("2025-04-02T10:00:00.000Z"))
+      const acquisitionPayload = {
+        id: "tx-carved-withdrawal-opening-inventory",
+        type: "buy",
+        status: "completed",
+        amount: { amount: "1.00000000", currency: "BTC" },
+        native_amount: { amount: "10000.00", currency: "EUR" },
+        created_at: acquiredAt.toISOString(),
+        resource_path:
+          "/v2/accounts/coinbase-account-1/transactions/tx-carved-withdrawal-opening-inventory",
+      }
+      const withdrawalPayload = {
+        id: "tx-carved-withdrawal",
+        type: "intx_withdrawal",
+        status: "completed",
+        amount: { amount: "-0.10000000", currency: "BTC" },
+        native_amount: { amount: "-1500.00", currency: "EUR" },
+        created_at: withdrawnAt.toISOString(),
+        resource_path: "/v2/accounts/coinbase-account-1/transactions/tx-carved-withdrawal",
+        network: {
+          status: "confirmed",
+          hash: "tx-carved-withdrawal-hash",
+          network_name: "base",
+          transaction_fee: { amount: "0.01000000", currency: "BTC" },
+        },
+      }
+
+      yield* Effect.promise(() =>
+        runPg(
+          Effect.all([
+            seedRawRecord({
+              rawRecordId: acquisitionRawRecordId,
+              externalRecordId: "raw-carved-withdrawal-opening-inventory",
+              occurredAt: acquiredAt,
+              payload: acquisitionPayload,
+            }),
+            seedRawRecord({
+              rawRecordId: withdrawalRawRecordId,
+              externalRecordId: "raw-carved-withdrawal",
+              occurredAt: withdrawnAt,
+              payload: withdrawalPayload,
+            }),
+          ])
+        )
+      )
+
+      const source = buildCoinbaseSource({ cexAccountId: fixture.cexAccountId })
+      yield* Effect.promise(() =>
+        runCoinbaseNormalization(
+          persistCoinbaseNormalization({
+            source,
+            sourceRecord: buildSeededRawRecord({
+              rawRecordId: acquisitionRawRecordId,
+              externalRecordId: "raw-carved-withdrawal-opening-inventory",
+              occurredAt: acquiredAt,
+              payload: acquisitionPayload,
+            }),
+          })
+        )
+      )
+      const result = yield* Effect.promise(() =>
+        runCoinbaseNormalization(
+          persistCoinbaseNormalization({
+            source,
+            sourceRecord: buildSeededRawRecord({
+              rawRecordId: withdrawalRawRecordId,
+              externalRecordId: "raw-carved-withdrawal",
+              occurredAt: withdrawnAt,
+              payload: withdrawalPayload,
+            }),
+          })
+        )
+      )
+
+      expect(result.legs).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            kind: "disposal",
+            amount: expect.stringContaining("0.09000000"),
+            fiatAmount: expect.stringContaining("1350.00000000"),
+          }),
+          expect.objectContaining({
+            kind: "fee",
+            amount: expect.stringContaining("0.01000000"),
+          }),
+        ])
+      )
+
+      const state = yield* Effect.promise(() =>
+        runPg(
+          Effect.gen(function* () {
+            const db = yield* drizzle
+            const [lot] = yield* db.select().from(schema.fifoLots).limit(1)
+            const movements = yield* db
+              .select()
+              .from(schema.inventoryMovements)
+              .where(eq(schema.inventoryMovements.transactionId, result.transaction.id))
+            const disposalMatches = yield* db.select().from(schema.disposalMatches)
+            return { lot, movements, disposalMatches }
+          })
+        )
+      )
+
+      expect(state.movements).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            purpose: "principal",
+            amount: expect.stringContaining("0.09000000"),
+          }),
+          expect.objectContaining({
+            purpose: "fee",
+            amount: expect.stringContaining("0.01000000"),
+          }),
+        ])
+      )
+      expect(state.disposalMatches).toEqual([
+        expect.objectContaining({ matchedAmount: expect.stringContaining("0.09000000") }),
+      ])
+      expect(state.lot?.remainingAmount).toContain("0.90000000")
+    })
+  )
+
+  it.effect("allocates a completed Coinbase send network fee paid in another asset", () =>
+    Effect.gen(function* () {
+      const btcOpeningAt = DateTime.toDateUtc(DateTime.makeUnsafe("2025-04-01T10:00:00.000Z"))
+      const solOpeningAt = DateTime.toDateUtc(DateTime.makeUnsafe("2025-04-01T11:00:00.000Z"))
+      const sentAt = DateTime.toDateUtc(DateTime.makeUnsafe("2025-04-02T10:00:00.000Z"))
+      const records = [
+        {
+          rawRecordId: "00000000-0000-0000-0000-000000000722",
+          externalRecordId: "btc-opening-for-cross-asset-fee",
+          occurredAt: btcOpeningAt,
+          payload: {
+            id: "btc-opening-for-cross-asset-fee",
+            type: "buy",
+            status: "completed",
+            amount: { amount: "1.00000000", currency: "BTC" },
+            native_amount: { amount: "10000.00", currency: "EUR" },
+            created_at: btcOpeningAt.toISOString(),
+            resource_path:
+              "/v2/accounts/coinbase-account-1/transactions/btc-opening-for-cross-asset-fee",
+          },
+        },
+        {
+          rawRecordId: "00000000-0000-0000-0000-000000000723",
+          externalRecordId: "sol-opening-for-cross-asset-fee",
+          occurredAt: solOpeningAt,
+          payload: {
+            id: "sol-opening-for-cross-asset-fee",
+            type: "buy",
+            status: "completed",
+            amount: { amount: "1.000000000", currency: "SOL" },
+            native_amount: { amount: "100.00", currency: "EUR" },
+            created_at: solOpeningAt.toISOString(),
+            resource_path:
+              "/v2/accounts/coinbase-account-1/transactions/sol-opening-for-cross-asset-fee",
+          },
+        },
+        {
+          rawRecordId: "00000000-0000-0000-0000-000000000724",
+          externalRecordId: "btc-send-with-sol-network-fee",
+          occurredAt: sentAt,
+          payload: {
+            id: "btc-send-with-sol-network-fee",
+            type: "send",
+            status: "completed",
+            amount: { amount: "-0.10000000", currency: "BTC" },
+            native_amount: { amount: "-1000.00", currency: "EUR" },
+            created_at: sentAt.toISOString(),
+            resource_path:
+              "/v2/accounts/coinbase-account-1/transactions/btc-send-with-sol-network-fee",
+            network: {
+              status: "confirmed",
+              hash: "btc-send-with-sol-network-fee-hash",
+              network_name: "bitcoin",
+              transaction_fee: { amount: "0.010000000", currency: "SOL" },
+            },
+            to: {
+              address: "bc1qcrossassetfeedestination",
+              resource: "address",
+            },
+          },
+        },
+      ] as const
+
+      yield* Effect.promise(() =>
+        runPg(
+          Effect.gen(function* () {
+            const db = yield* drizzle
+            yield* db.insert(schema.assets).values({
+              id: TEST_SOL_ASSET_ID,
+              name: "Sync Engine Solana Cross-Asset Fee Fixture",
+              symbol: "SOL",
+              coingeckoCoinId: "solana",
+              type: "fungible",
+            })
+
+            yield* Effect.forEach(records, (record) => seedRawRecord(record))
+          })
+        )
+      )
+
+      for (const record of records) {
+        yield* Effect.promise(() =>
+          runCoinbaseNormalization(
+            persistCoinbaseNormalization({
+              source: buildCoinbaseSource({ cexAccountId: fixture.cexAccountId }),
+              sourceRecord: buildSeededRawRecord(record),
+            })
+          )
+        )
+      }
+
+      const positions = yield* context.runWithLayer({
         effect: Effect.flatMap(PortfolioRepository, (repository) =>
           repository.listAssetPositions({
             principalId: TEST_PRINCIPAL_ID,
@@ -5756,115 +5705,681 @@ describe("SourceNormalizationRepositoryLive", () => {
         ),
         layer: PortfolioRepositoryLive,
       })
-    )
-    const state = await runPg(
-      Effect.gen(function* () {
-        const db = yield* drizzle
-        const movements = yield* db
-          .select()
-          .from(schema.inventoryMovements)
-          .where(eq(schema.inventoryMovements.assetId, TEST_SOL_ASSET_ID))
-        const legs = yield* db
-          .select()
-          .from(schema.transactionLegs)
-          .where(eq(schema.transactionLegs.assetId, TEST_SOL_ASSET_ID))
-        return { movements, legs }
-      })
-    )
 
-    expect(positions).toEqual([
-      expect.objectContaining({
-        assetId: TEST_SOL_ASSET_ID,
-        symbol: "SOL",
-        amount: "45.029506853",
-      }),
-    ])
-    expect(state.movements).toEqual(
-      expect.arrayContaining([
+      expect(positions).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ assetId: TEST_BTC_ASSET_ID, amount: "0.9" }),
+          expect.objectContaining({ assetId: TEST_SOL_ASSET_ID, amount: "0.99" }),
+        ])
+      )
+    })
+  )
+
+  it.effect("moves a replayed fee movement to the leg's current transaction and raw record", () =>
+    Effect.gen(function* () {
+      const newRawRecordId = "00000000-0000-0000-0000-000000000710"
+      const openingTransactionId = "00000000-0000-0000-0000-000000000711"
+      const oldTransactionId = "00000000-0000-0000-0000-000000000712"
+      const feeLegExternalId = "fee-leg-moved-between-transactions"
+      const occurredAt = DateTime.toDateUtc(DateTime.makeUnsafe("2025-04-03T10:00:00.000Z"))
+
+      yield* Effect.promise(() =>
+        runPg(
+          Effect.gen(function* () {
+            const db = yield* drizzle
+            yield* seedRawRecord({
+              rawRecordId: newRawRecordId,
+              externalRecordId: "raw-fee-new-parent",
+              occurredAt,
+            })
+            yield* db.insert(schema.transactions).values([
+              {
+                id: openingTransactionId,
+                sourceId: TEST_SOURCE_ID,
+                externalId: "fee-opening-transaction",
+                timestamp: DateTime.toDateUtc(DateTime.makeUnsafe("2025-04-01T10:00:00.000Z")),
+                principalId: TEST_PRINCIPAL_ID,
+              },
+              {
+                id: oldTransactionId,
+                sourceId: TEST_SOURCE_ID,
+                sourceRawRecordId: TEST_RAW_RECORD_ID,
+                externalId: "fee-old-parent",
+                timestamp: DateTime.toDateUtc(DateTime.makeUnsafe("2025-04-02T10:00:00.000Z")),
+                principalId: TEST_PRINCIPAL_ID,
+              },
+            ])
+            const [openingLeg] = yield* db
+              .insert(schema.transactionLegs)
+              .values({
+                sourceId: TEST_SOURCE_ID,
+                externalId: "fee-opening-leg",
+                timestamp: DateTime.toDateUtc(DateTime.makeUnsafe("2025-04-01T10:00:00.000Z")),
+                principalId: TEST_PRINCIPAL_ID,
+                assetId: TEST_BTC_ASSET_ID,
+                amount: "1.00000000",
+                kind: "acquisition",
+                provenance: "deterministic",
+                transactionId: openingTransactionId,
+              })
+              .returning({ id: schema.transactionLegs.id })
+            const [feeLeg] = yield* db
+              .insert(schema.transactionLegs)
+              .values({
+                sourceId: TEST_SOURCE_ID,
+                sourceRawRecordId: TEST_RAW_RECORD_ID,
+                externalId: feeLegExternalId,
+                timestamp: DateTime.toDateUtc(DateTime.makeUnsafe("2025-04-02T10:00:00.000Z")),
+                principalId: TEST_PRINCIPAL_ID,
+                assetId: TEST_BTC_ASSET_ID,
+                amount: "0.10000000",
+                kind: "fee",
+                provenance: "deterministic",
+                transactionId: oldTransactionId,
+                feeForTransactionId: oldTransactionId,
+              })
+              .returning({ id: schema.transactionLegs.id })
+
+            if (openingLeg === undefined || feeLeg === undefined) {
+              return yield* Effect.die("Failed to create replayed fee movement legs")
+            }
+
+            const [lot] = yield* db
+              .insert(schema.fifoLots)
+              .values({
+                principalId: TEST_PRINCIPAL_ID,
+                sourceId: TEST_SOURCE_ID,
+                assetId: TEST_BTC_ASSET_ID,
+                acquiredAt: DateTime.toDateUtc(DateTime.makeUnsafe("2025-04-01T10:00:00.000Z")),
+                originalAmount: "1.00000000",
+                remainingAmount: "0.90000000",
+                costBasisPerToken: "10000.00",
+                costBasisCurrency: "EUR",
+                sourceLegId: openingLeg.id,
+              })
+              .returning({ id: schema.fifoLots.id })
+            const [movement] = yield* db
+              .insert(schema.inventoryMovements)
+              .values({
+                principalId: TEST_PRINCIPAL_ID,
+                sourceId: TEST_SOURCE_ID,
+                sourceRawRecordId: TEST_RAW_RECORD_ID,
+                transactionId: oldTransactionId,
+                transactionLegId: feeLeg.id,
+                assetId: TEST_BTC_ASSET_ID,
+                timestamp: DateTime.toDateUtc(DateTime.makeUnsafe("2025-04-02T10:00:00.000Z")),
+                direction: "outbound",
+                purpose: "fee",
+                taxTreatment: "non_taxable",
+                reconciliationStatus: "matched",
+                amount: "0.10000000",
+              })
+              .returning({ id: schema.inventoryMovements.id })
+
+            if (lot === undefined || movement === undefined) {
+              return yield* Effect.die("Failed to create replayed fee movement allocation")
+            }
+
+            yield* db.insert(schema.inventoryMovementAllocations).values({
+              inventoryMovementId: movement.id,
+              fifoLotId: lot.id,
+              matchedAmount: "0.10000000",
+            })
+          })
+        )
+      )
+
+      const result = yield* Effect.promise(() =>
+        runRepository(
+          Effect.flatMap(SourceNormalizationRepository, (repository) =>
+            repository.persistNormalizedArtifacts({
+              transaction: {
+                sourceId: TEST_SOURCE_ID,
+                sourceRawRecordId: newRawRecordId,
+                externalId: "fee-new-parent",
+                externalGroupId: null,
+                timestamp: occurredAt,
+                transactionType: "buy_fiat",
+                providerTransactionType: "buy",
+                providerStatus: "completed",
+                providerResourcePath: null,
+                providerDescription: null,
+                providerCreatedAt: occurredAt,
+                providerUpdatedAt: occurredAt,
+                metadata: { provider: "coinbase" },
+                providerFiatAmount: null,
+                providerFiatCurrency: null,
+                principalId: TEST_PRINCIPAL_ID,
+              },
+              venueContext: {
+                venueType: "cex",
+                cexAccountId: fixture.cexAccountId,
+                externalAccountId: "coinbase-account-1",
+                externalOrderId: "fee-new-parent-order",
+                externalFillId: null,
+                side: null,
+                instrument: null,
+                fillPrice: null,
+                commissionAmount: null,
+                commissionCurrency: null,
+                metadata: { provider: "coinbase" },
+              },
+              providerTransfers: [],
+              canonicalTransfers: [],
+              providerAssetRowIds: [],
+              deriveLegs: ({ transaction }) =>
+                Effect.succeed([
+                  {
+                    sourceId: TEST_SOURCE_ID,
+                    sourceRawRecordId: newRawRecordId,
+                    externalId: feeLegExternalId,
+                    txHash: null,
+                    timestamp: occurredAt,
+                    principalId: TEST_PRINCIPAL_ID,
+                    addressId: null,
+                    assetId: TEST_BTC_ASSET_ID,
+                    amount: "0.10000000",
+                    kind: "fee" as const,
+                    provenance: "deterministic" as const,
+                    derivationRule: "commission",
+                    metadata: { provider: "coinbase" },
+                    transactionId: transaction.id,
+                    sourceTransferId: null,
+                    fiatAmount: null,
+                    fiatCurrency: null,
+                    feeForTransactionId: transaction.id,
+                  },
+                ]),
+              transactionReview: null,
+              resolvedTransactionType: APPROVED_MAPPING,
+            })
+          )
+        )
+      )
+
+      const [movement] = yield* Effect.promise(() =>
+        runPg(
+          Effect.gen(function* () {
+            const db = yield* drizzle
+            return yield* db.select().from(schema.inventoryMovements)
+          })
+        )
+      )
+
+      expect(movement).toEqual(
         expect.objectContaining({
-          purpose: "fee",
-          amount: expect.stringContaining("0.00966603837"),
-        }),
-        expect.objectContaining({
-          purpose: "principal",
-          amount: expect.stringContaining("0.956837799"),
+          transactionId: result.transaction.id,
+          sourceRawRecordId: newRawRecordId,
           taxTreatment: "pending_review",
+          reconciliationStatus: "unmatched",
+        })
+      )
+    })
+  )
+
+  it.effect(
+    "removes an unused inbound provider lot before replaying the transfer as outbound",
+    () =>
+      Effect.gen(function* () {
+        const openingRawRecordId = "00000000-0000-0000-0000-000000000706"
+        const correctedRawRecordId = "00000000-0000-0000-0000-000000000707"
+        const openingAt = DateTime.toDateUtc(DateTime.makeUnsafe("2025-04-01T10:00:00.000Z"))
+        const correctedAt = DateTime.toDateUtc(DateTime.makeUnsafe("2025-04-02T10:00:00.000Z"))
+        const openingPayload = {
+          id: "tx-direction-flip-opening",
+          type: "buy",
+          status: "completed",
+          amount: { amount: "1.00000000", currency: "BTC" },
+          native_amount: { amount: "10000.00", currency: "EUR" },
+          created_at: openingAt.toISOString(),
+          resource_path: "/v2/accounts/coinbase-account-1/transactions/tx-direction-flip-opening",
+        }
+        const buildCorrectedPayload = (direction: "inbound" | "outbound") => ({
+          id: "tx-direction-flip",
+          type: direction === "inbound" ? "receive" : "send",
+          status: "completed",
+          amount: {
+            amount: direction === "inbound" ? "0.50000000" : "-0.50000000",
+            currency: "BTC",
+          },
+          native_amount: { amount: "5000.00", currency: "EUR" },
+          created_at: correctedAt.toISOString(),
+          resource_path: "/v2/accounts/coinbase-account-1/transactions/tx-direction-flip",
+          from:
+            direction === "inbound"
+              ? { address: "bc1qfliporigin", resource: "address" }
+              : undefined,
+          to:
+            direction === "outbound"
+              ? { address: "bc1qflipdestination", resource: "address" }
+              : undefined,
+        })
+
+        yield* Effect.promise(() =>
+          runPg(
+            Effect.all([
+              seedRawRecord({
+                rawRecordId: openingRawRecordId,
+                externalRecordId: "raw-direction-flip-opening",
+                occurredAt: openingAt,
+                payload: openingPayload,
+              }),
+              seedRawRecord({
+                rawRecordId: correctedRawRecordId,
+                externalRecordId: "raw-direction-flip",
+                occurredAt: correctedAt,
+                payload: buildCorrectedPayload("inbound"),
+              }),
+            ])
+          )
+        )
+
+        const source = buildCoinbaseSource({ cexAccountId: fixture.cexAccountId })
+        yield* Effect.promise(() =>
+          runCoinbaseNormalization(
+            persistCoinbaseNormalization({
+              source,
+              sourceRecord: buildSeededRawRecord({
+                rawRecordId: openingRawRecordId,
+                externalRecordId: "raw-direction-flip-opening",
+                occurredAt: openingAt,
+                payload: openingPayload,
+              }),
+            })
+          )
+        )
+
+        for (const direction of ["inbound", "outbound"] as const) {
+          yield* Effect.promise(() =>
+            runCoinbaseNormalization(
+              persistCoinbaseNormalization({
+                source,
+                sourceRecord: buildSeededRawRecord({
+                  rawRecordId: correctedRawRecordId,
+                  externalRecordId: "raw-direction-flip",
+                  occurredAt: correctedAt,
+                  payload: buildCorrectedPayload(direction),
+                }),
+                skipLegDerivation: true,
+              })
+            )
+          )
+        }
+
+        const state = yield* Effect.promise(() =>
+          runPg(
+            Effect.gen(function* () {
+              const db = yield* drizzle
+              const lots = yield* db.select().from(schema.fifoLots)
+              const allocations = yield* db.select().from(schema.inventoryMovementAllocations)
+              return { lots, allocations }
+            })
+          )
+        )
+
+        expect(state.lots).toEqual([
+          expect.objectContaining({
+            sourceProviderTransferId: null,
+            remainingAmount: expect.stringContaining("0.50000000"),
+          }),
+        ])
+        expect(state.allocations).toEqual([
+          expect.objectContaining({ matchedAmount: expect.stringContaining("0.50000000") }),
+        ])
+      })
+  )
+
+  it.effect("records a failed Coinbase network fee leg as a custody movement", () =>
+    Effect.gen(function* () {
+      const openingRawRecordId = "00000000-0000-0000-0000-000000000708"
+      const feeRawRecordId = "00000000-0000-0000-0000-000000000709"
+      const openingAt = DateTime.toDateUtc(DateTime.makeUnsafe("2025-04-01T10:00:00.000Z"))
+      const feeAt = DateTime.toDateUtc(DateTime.makeUnsafe("2025-04-02T10:00:00.000Z"))
+      const openingPayload = {
+        id: "tx-failed-fee-opening",
+        type: "buy",
+        status: "completed",
+        amount: { amount: "1.00000000", currency: "BTC" },
+        native_amount: { amount: "10000.00", currency: "EUR" },
+        created_at: openingAt.toISOString(),
+        resource_path: "/v2/accounts/coinbase-account-1/transactions/tx-failed-fee-opening",
+      }
+      const failedFeePayload = {
+        id: "tx-failed-onchain-fee",
+        type: "send",
+        status: "failed",
+        amount: { amount: "-0.01000000", currency: "BTC" },
+        native_amount: { amount: "-100.00", currency: "EUR" },
+        created_at: feeAt.toISOString(),
+        resource_path: "/v2/accounts/coinbase-account-1/transactions/tx-failed-onchain-fee",
+        to: { address: "bc1qfailedfeedestination", resource: "address" },
+        network: {
+          status: "failed",
+          transaction_fee: { amount: "0.01000000", currency: "BTC" },
+        },
+      }
+
+      yield* Effect.promise(() =>
+        runPg(
+          Effect.all([
+            seedRawRecord({
+              rawRecordId: openingRawRecordId,
+              externalRecordId: "raw-failed-fee-opening",
+              occurredAt: openingAt,
+              payload: openingPayload,
+            }),
+            seedRawRecord({
+              rawRecordId: feeRawRecordId,
+              externalRecordId: "raw-failed-onchain-fee",
+              occurredAt: feeAt,
+              payload: failedFeePayload,
+            }),
+          ])
+        )
+      )
+
+      const source = buildCoinbaseSource({ cexAccountId: fixture.cexAccountId })
+      yield* Effect.promise(() =>
+        runCoinbaseNormalization(
+          persistCoinbaseNormalization({
+            source,
+            sourceRecord: buildSeededRawRecord({
+              rawRecordId: openingRawRecordId,
+              externalRecordId: "raw-failed-fee-opening",
+              occurredAt: openingAt,
+              payload: openingPayload,
+            }),
+          })
+        )
+      )
+      const result = yield* Effect.promise(() =>
+        runCoinbaseNormalization(
+          persistCoinbaseNormalization({
+            source,
+            sourceRecord: buildSeededRawRecord({
+              rawRecordId: feeRawRecordId,
+              externalRecordId: "raw-failed-onchain-fee",
+              occurredAt: feeAt,
+              payload: failedFeePayload,
+            }),
+          })
+        )
+      )
+
+      expect(result.legs).toEqual([expect.objectContaining({ kind: "fee" })])
+
+      const state = yield* Effect.promise(() =>
+        runPg(
+          Effect.gen(function* () {
+            const db = yield* drizzle
+            const [lot] = yield* db.select().from(schema.fifoLots)
+            const [movement] = yield* db.select().from(schema.inventoryMovements)
+            return { lot, movement }
+          })
+        )
+      )
+
+      expect(state.lot?.remainingAmount).toContain("0.99000000")
+      expect(state.movement).toEqual(
+        expect.objectContaining({
+          direction: "outbound",
+          purpose: "fee",
+          amount: expect.stringContaining("0.01000000"),
+          providerTransferId: null,
+          transactionLegId: expect.any(String),
+        })
+      )
+    })
+  )
+
+  it.effect("projects the exact SOL balance after instant unstaking and an unmatched send", () =>
+    Effect.gen(function* () {
+      const openingAt = DateTime.toDateUtc(DateTime.makeUnsafe("2025-05-01T09:00:00.000Z"))
+      const unstakingAt = DateTime.toDateUtc(DateTime.makeUnsafe("2025-05-02T10:00:00.000Z"))
+      const sendAt = DateTime.toDateUtc(DateTime.makeUnsafe("2025-05-03T11:00:00.000Z"))
+      const records = [
+        {
+          rawRecordId: "00000000-0000-0000-0000-000000000694",
+          externalRecordId: "sol-opening-inventory",
+          externalAccountId: "coinbase-sol-primary",
+          externalParentId: null,
+          occurredAt: openingAt,
+          payload: {
+            id: "sol-opening-inventory",
+            type: "buy",
+            status: "completed",
+            amount: { amount: "45.99611069037", currency: "SOL" },
+            native_amount: { amount: "4599.611069037", currency: "EUR" },
+            created_at: openingAt.toISOString(),
+            resource_path: "/v2/accounts/coinbase-sol-primary/transactions/sol-opening-inventory",
+          },
+        },
+        {
+          // Live instant-unstaking rows can omit both `idem` and an order id, so
+          // neither side has a durable provider group identifier.
+          rawRecordId: "00000000-0000-0000-0000-000000000695",
+          externalRecordId: "sol-instant-unstaking-credit",
+          externalAccountId: "coinbase-sol-primary",
+          externalParentId: null,
+          occurredAt: unstakingAt,
+          payload: {
+            id: "sol-instant-unstaking-credit",
+            type: "retail_instant_unstaking",
+            status: "completed",
+            amount: { amount: "0.95693779863", currency: "SOL" },
+            native_amount: { amount: "99.08", currency: "EUR" },
+            created_at: unstakingAt.toISOString(),
+            resource_path:
+              "/v2/accounts/coinbase-sol-primary/transactions/sol-instant-unstaking-credit",
+          },
+        },
+        {
+          rawRecordId: "00000000-0000-0000-0000-000000000696",
+          externalRecordId: "sol-instant-unstaking-release",
+          externalAccountId: "coinbase-sol-staking",
+          externalParentId: null,
+          occurredAt: unstakingAt,
+          payload: {
+            id: "sol-instant-unstaking-release",
+            type: "retail_instant_unstaking",
+            status: "completed",
+            amount: { amount: "-0.966603837", currency: "SOL" },
+            native_amount: { amount: "-100.08", currency: "EUR" },
+            created_at: unstakingAt.toISOString(),
+            resource_path:
+              "/v2/accounts/coinbase-sol-staking/transactions/sol-instant-unstaking-release",
+          },
+        },
+        {
+          rawRecordId: "00000000-0000-0000-0000-000000000697",
+          externalRecordId: "sol-external-send",
+          externalAccountId: "coinbase-sol-primary",
+          externalParentId: null,
+          occurredAt: sendAt,
+          payload: {
+            id: "sol-external-send",
+            type: "send",
+            status: "completed",
+            amount: { amount: "-0.956937799", currency: "SOL" },
+            native_amount: { amount: "-99.06", currency: "EUR" },
+            created_at: sendAt.toISOString(),
+            resource_path: "/v2/accounts/coinbase-sol-primary/transactions/sol-external-send",
+            network: {
+              status: "confirmed",
+              hash: "sol-external-send-hash",
+              network_name: "solana",
+              transaction_fee: { amount: "0.0001", currency: "SOL" },
+            },
+            to: {
+              address: "sol-external-destination",
+              resource: "address",
+            },
+          },
+        },
+      ] as const
+
+      yield* Effect.promise(() =>
+        runPg(
+          Effect.gen(function* () {
+            const db = yield* drizzle
+            yield* db.insert(schema.assets).values({
+              id: TEST_SOL_ASSET_ID,
+              name: "Sync Engine Solana Fixture",
+              symbol: "SOL",
+              coingeckoCoinId: "solana",
+              type: "fungible",
+            })
+
+            yield* Effect.forEach(records, (record) =>
+              seedRawRecord({
+                ...record,
+              })
+            )
+          })
+        )
+      )
+
+      for (const record of records) {
+        yield* Effect.promise(() =>
+          runCoinbaseNormalization(
+            persistCoinbaseNormalization({
+              source: buildCoinbaseSource({ cexAccountId: fixture.cexAccountId }),
+              sourceRecord: buildSeededRawRecord({ ...record }),
+            })
+          )
+        )
+      }
+
+      const positions = yield* context.runWithLayer({
+        effect: Effect.flatMap(PortfolioRepository, (repository) =>
+          repository.listAssetPositions({
+            principalId: TEST_PRINCIPAL_ID,
+            sourceId: TEST_SOURCE_ID,
+          })
+        ),
+        layer: PortfolioRepositoryLive,
+      })
+      const state = yield* Effect.promise(() =>
+        runPg(
+          Effect.gen(function* () {
+            const db = yield* drizzle
+            const movements = yield* db
+              .select()
+              .from(schema.inventoryMovements)
+              .where(eq(schema.inventoryMovements.assetId, TEST_SOL_ASSET_ID))
+            const legs = yield* db
+              .select()
+              .from(schema.transactionLegs)
+              .where(eq(schema.transactionLegs.assetId, TEST_SOL_ASSET_ID))
+            return { movements, legs }
+          })
+        )
+      )
+
+      expect(positions).toEqual([
+        expect.objectContaining({
+          assetId: TEST_SOL_ASSET_ID,
+          symbol: "SOL",
+          amount: "45.029506853",
         }),
       ])
-    )
-    expect(state.legs.filter((leg) => leg.kind === "disposal")).toHaveLength(0)
-  })
+      expect(state.movements).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            purpose: "fee",
+            amount: expect.stringContaining("0.00966603837"),
+          }),
+          expect.objectContaining({
+            purpose: "principal",
+            amount: expect.stringContaining("0.956837799"),
+            taxTreatment: "pending_review",
+          }),
+        ])
+      )
+      expect(state.legs.filter((leg) => leg.kind === "disposal")).toHaveLength(0)
+    })
+  )
 
-  it("keeps Coinbase provider transfer persistence idempotent on replay", async () => {
-    const rawRecordId = "00000000-0000-0000-0000-000000000693"
-    const occurredAt = new Date("2025-04-03T10:00:00.000Z")
-    const payload = {
-      id: "tx-send-provider-transfer-replay-1",
-      type: "send",
-      status: "completed",
-      amount: { amount: "-0.05000000", currency: "BTC" },
-      native_amount: { amount: "-750.00", currency: "EUR" },
-      created_at: occurredAt.toISOString(),
-      resource_path:
-        "/v2/accounts/coinbase-account-1/transactions/tx-send-provider-transfer-replay-1",
-      network: {
-        status: "confirmed",
-        hash: "tx-send-provider-transfer-replay-hash-1",
-        network_name: "base",
-      },
-      to: {
-        address: "bc1qprovidertransferreplaydestination",
-        resource: "address",
-      },
-    }
+  it.effect("keeps Coinbase provider transfer persistence idempotent on replay", () =>
+    Effect.gen(function* () {
+      const rawRecordId = "00000000-0000-0000-0000-000000000693"
+      const occurredAt = DateTime.toDateUtc(DateTime.makeUnsafe("2025-04-03T10:00:00.000Z"))
+      const payload = {
+        id: "tx-send-provider-transfer-replay-1",
+        type: "send",
+        status: "completed",
+        amount: { amount: "-0.05000000", currency: "BTC" },
+        native_amount: { amount: "-750.00", currency: "EUR" },
+        created_at: occurredAt.toISOString(),
+        resource_path:
+          "/v2/accounts/coinbase-account-1/transactions/tx-send-provider-transfer-replay-1",
+        network: {
+          status: "confirmed",
+          hash: "tx-send-provider-transfer-replay-hash-1",
+          network_name: "base",
+        },
+        to: {
+          address: "bc1qprovidertransferreplaydestination",
+          resource: "address",
+        },
+      }
 
-    await runPg(
-      seedRawRecord({
+      yield* Effect.promise(() =>
+        runPg(
+          seedRawRecord({
+            rawRecordId,
+            externalRecordId: "raw-provider-send-replay-1",
+            occurredAt,
+            payload,
+          })
+        )
+      )
+
+      const source = buildCoinbaseSource({ cexAccountId: fixture.cexAccountId })
+      const sourceRecord = buildSeededRawRecord({
         rawRecordId,
         externalRecordId: "raw-provider-send-replay-1",
         occurredAt,
         payload,
       })
-    )
 
-    const source = buildCoinbaseSource({ cexAccountId: fixture.cexAccountId })
-    const sourceRecord = buildSeededRawRecord({
-      rawRecordId,
-      externalRecordId: "raw-provider-send-replay-1",
-      occurredAt,
-      payload,
+      yield* Effect.promise(() =>
+        runCoinbaseNormalization(
+          persistCoinbaseNormalization({
+            source,
+            sourceRecord,
+          })
+        )
+      )
+
+      yield* Effect.promise(() =>
+        runCoinbaseNormalization(
+          persistCoinbaseNormalization({
+            source,
+            sourceRecord,
+          })
+        )
+      )
+
+      const counts = yield* Effect.promise(() =>
+        runPg(
+          Effect.gen(function* () {
+            const db = yield* drizzle
+            const providerTransfers = yield* db.select().from(schema.providerTransfers)
+            const transactions = yield* db.select().from(schema.transactions)
+            const inventoryMovements = yield* db.select().from(schema.inventoryMovements)
+            return {
+              providerTransfers,
+              transactions,
+              inventoryMovements,
+            }
+          })
+        )
+      )
+
+      expect(counts.providerTransfers).toHaveLength(1)
+      expect(counts.transactions).toHaveLength(1)
+      expect(counts.inventoryMovements).toHaveLength(1)
     })
-
-    await runCoinbaseNormalization(
-      persistCoinbaseNormalization({
-        source,
-        sourceRecord,
-      })
-    )
-
-    await runCoinbaseNormalization(
-      persistCoinbaseNormalization({
-        source,
-        sourceRecord,
-      })
-    )
-
-    const counts = await runPg(
-      Effect.gen(function* () {
-        const db = yield* drizzle
-        const providerTransfers = yield* db.select().from(schema.providerTransfers)
-        const transactions = yield* db.select().from(schema.transactions)
-        const inventoryMovements = yield* db.select().from(schema.inventoryMovements)
-        return {
-          providerTransfers,
-          transactions,
-          inventoryMovements,
-        }
-      })
-    )
-
-    expect(counts.providerTransfers).toHaveLength(1)
-    expect(counts.transactions).toHaveLength(1)
-    expect(counts.inventoryMovements).toHaveLength(1)
-  })
+  )
 })

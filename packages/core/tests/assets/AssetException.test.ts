@@ -21,7 +21,7 @@ describe("AssetException", () => {
   })
 
   it("decodes a declarative claim for an existing economic identity", () => {
-    const claim = Schema.decodeUnknownSync(AssetExceptionClaim)({
+    const claim = Schema.decodeSync(AssetExceptionClaim)({
       _tag: "identity",
       assetId: "00000000-0000-4000-8000-000000000001",
       newAsset: null,
@@ -48,7 +48,7 @@ describe("AssetException", () => {
 
   it("requires either an existing identity or complete new identity facts", () => {
     expect(() =>
-      Schema.decodeUnknownSync(AssetExceptionClaim)({
+      Schema.decodeSync(AssetExceptionClaim)({
         _tag: "identity",
         assetId: null,
         newAsset: null,
@@ -59,7 +59,7 @@ describe("AssetException", () => {
 
   it("rejects token representations without exactly one address", () => {
     expect(() =>
-      Schema.decodeUnknownSync(AssetExceptionClaim)({
+      Schema.decodeSync(AssetExceptionClaim)({
         _tag: "identity",
         assetId: "00000000-0000-4000-8000-000000000001",
         newAsset: null,
@@ -79,7 +79,7 @@ describe("AssetException", () => {
     { field: "symbol", name: "Whitespace", symbol: "\t" },
   ])("rejects a whitespace-only new asset $field", ({ name, symbol }) => {
     expect(() =>
-      Schema.decodeUnknownSync(AssetExceptionClaim)({
+      Schema.decodeSync(AssetExceptionClaim)({
         _tag: "identity",
         assetId: null,
         newAsset: { name, symbol, type: "fungible" },
@@ -90,7 +90,7 @@ describe("AssetException", () => {
 
   it("rejects surrounding whitespace in new asset display fields", () => {
     expect(() =>
-      Schema.decodeUnknownSync(AssetExceptionClaim)({
+      Schema.decodeSync(AssetExceptionClaim)({
         _tag: "identity",
         assetId: null,
         newAsset: { name: " Wrapped Ether ", symbol: "WETH", type: "fungible" },

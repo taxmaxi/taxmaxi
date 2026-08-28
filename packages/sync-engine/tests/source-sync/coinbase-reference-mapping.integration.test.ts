@@ -1,8 +1,9 @@
+import * as DateTime from "effect/DateTime"
 import { SOLANA_USDC_MINT } from "@my/core/assets"
 import { and, eq } from "drizzle-orm"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
-import { beforeEach, describe, expect, it } from "vitest"
+import { beforeEach, describe, expect, it } from "@effect/vitest"
 import { SourceSyncServiceLive, TransferReconciliationServiceLive } from "@my/sync-engine/layers"
 import { SourceSyncJobExecutorLive } from "../../src/layers/SourceSyncJobExecutorLive.ts"
 import { SourceProviderRegistryLive } from "../../src/layers/SourceProviderRegistryLive.ts"
@@ -75,7 +76,7 @@ const syncRecords = [
   makeCoinbaseRecord({
     recordType: "coinbase_account",
     externalRecordId: "coinbase-account-1",
-    occurredAt: new Date("2025-01-01T00:00:00.000Z"),
+    occurredAt: DateTime.toDateUtc(DateTime.makeUnsafe("2025-01-01T00:00:00.000Z")),
     payload: {
       id: "coinbase-account-1",
       created_at: "2025-01-01T00:00:00.000Z",
@@ -88,7 +89,7 @@ const syncRecords = [
   makeCoinbaseRecord({
     externalRecordId: "tx-unstake-credit",
     externalParentId: "unstake-group-1",
-    occurredAt: new Date("2025-05-01T10:00:00.000Z"),
+    occurredAt: DateTime.toDateUtc(DateTime.makeUnsafe("2025-05-01T10:00:00.000Z")),
     payload: {
       id: "tx-unstake-credit",
       type: "retail_instant_unstaking",
@@ -103,7 +104,7 @@ const syncRecords = [
   makeCoinbaseRecord({
     externalRecordId: "tx-unstake-release",
     externalParentId: "unstake-group-1",
-    occurredAt: new Date("2025-05-01T10:00:00.000Z"),
+    occurredAt: DateTime.toDateUtc(DateTime.makeUnsafe("2025-05-01T10:00:00.000Z")),
     payload: {
       id: "tx-unstake-release",
       type: "retail_instant_unstaking",
@@ -121,7 +122,7 @@ const syncRecords = [
   makeCoinbaseRecord({
     externalRecordId: "tx-unstake-alt-credit",
     externalParentId: "unstake-group-2",
-    occurredAt: new Date("2025-05-01T10:00:00.000Z"),
+    occurredAt: DateTime.toDateUtc(DateTime.makeUnsafe("2025-05-01T10:00:00.000Z")),
     payload: {
       id: "tx-unstake-alt-credit",
       type: "retail_instant_unstaking",
@@ -136,7 +137,7 @@ const syncRecords = [
   makeCoinbaseRecord({
     externalRecordId: "tx-unstake-alt-release",
     externalParentId: "unstake-group-2",
-    occurredAt: new Date("2025-05-01T10:00:00.000Z"),
+    occurredAt: DateTime.toDateUtc(DateTime.makeUnsafe("2025-05-01T10:00:00.000Z")),
     payload: {
       id: "tx-unstake-alt-release",
       type: "retail_instant_unstaking",
@@ -151,7 +152,7 @@ const syncRecords = [
   makeCoinbaseRecord({
     externalRecordId: "tx-eth2-migration-out",
     externalParentId: "eth2-migration-1",
-    occurredAt: new Date("2025-06-01T09:00:00.000Z"),
+    occurredAt: DateTime.toDateUtc(DateTime.makeUnsafe("2025-06-01T09:00:00.000Z")),
     payload: {
       id: "tx-eth2-migration-out",
       type: "retail_eth2_deprecation",
@@ -166,7 +167,7 @@ const syncRecords = [
   makeCoinbaseRecord({
     externalRecordId: "tx-eth2-migration-in",
     externalParentId: "eth2-migration-1",
-    occurredAt: new Date("2025-06-01T09:00:02.000Z"),
+    occurredAt: DateTime.toDateUtc(DateTime.makeUnsafe("2025-06-01T09:00:02.000Z")),
     payload: {
       id: "tx-eth2-migration-in",
       type: "retail_eth2_deprecation",
@@ -511,41 +512,46 @@ describe("coinbase reference mappings", () => {
     }).pipe(Effect.runPromise)
   )
 
-  it("does not bind a default mapping to an unrelated asset with the same symbol", async () => {
-    await Effect.runPromise(
-      seedCanonicalAsset({
+  it.effect("does not bind a default mapping to an unrelated asset with the same symbol", () =>
+    Effect.gen(function* () {
+      yield* seedCanonicalAsset({
         id: "00000000-0000-0000-0000-000000000901",
         symbol: "BTC",
         contractAddress: "coinbase-default-btc",
       })
-    )
 
-    await runReferenceMapping(
-      Effect.flatMap(CoinbaseReferenceMappingService, (service) => service.ensureDefaultMappings)
-    )
+      yield* Effect.promise(() =>
+        runReferenceMapping(
+          Effect.flatMap(
+            CoinbaseReferenceMappingService,
+            (service) => service.ensureDefaultMappings
+          )
+        )
+      )
 
-    const mappings = await Effect.runPromise(fetchProviderAssetMappingRows())
-    const adaMapping = mappings.find((mapping) => mapping.currencyCode === "ADA")
-    const dotMapping = mappings.find((mapping) => mapping.currencyCode === "DOT")
+      const mappings = yield* fetchProviderAssetMappingRows()
+      const adaMapping = mappings.find((mapping) => mapping.currencyCode === "ADA")
+      const dotMapping = mappings.find((mapping) => mapping.currencyCode === "DOT")
 
-    expect(adaMapping).toMatchObject({
-      mappingKind: "asset",
-      canonicalAssetId: null,
-      assetRepresentationId: null,
-      mappingStatus: "pending_review",
+      expect(adaMapping).toMatchObject({
+        mappingKind: "asset",
+        canonicalAssetId: null,
+        assetRepresentationId: null,
+        mappingStatus: "pending_review",
+      })
+      expect(dotMapping).toMatchObject({
+        mappingKind: "asset",
+        canonicalAssetId: null,
+        assetRepresentationId: null,
+        mappingStatus: "pending_review",
+      })
+      expect(adaMapping?.sourceNotes).toContain("no assets row exists")
     })
-    expect(dotMapping).toMatchObject({
-      mappingKind: "asset",
-      canonicalAssetId: null,
-      assetRepresentationId: null,
-      mappingStatus: "pending_review",
-    })
-    expect(adaMapping?.sourceNotes).toContain("no assets row exists")
-  })
+  )
 
-  it("seeds existing BTC ETH SOL and USDC defaults as approved canonical id mappings", async () => {
-    await Effect.runPromise(
-      Effect.all([
+  it.effect("seeds existing BTC ETH SOL and USDC defaults as approved canonical id mappings", () =>
+    Effect.gen(function* () {
+      yield* Effect.all([
         seedCanonicalAsset({
           id: BTC_ASSET_ID,
           symbol: "BTC",
@@ -571,104 +577,121 @@ describe("coinbase reference mappings", () => {
           contractAddress: "coinbase-default-existing-usdc",
         }),
       ])
-    )
 
-    await runReferenceMapping(
-      Effect.flatMap(CoinbaseReferenceMappingService, (service) => service.ensureDefaultMappings)
-    )
-
-    const mappings = await Effect.runPromise(fetchProviderAssetMappingRows())
-
-    expect(mappings.find((mapping) => mapping.currencyCode === "BTC")).toMatchObject({
-      canonicalAssetId: BTC_ASSET_ID,
-      assetRepresentationId: null,
-      mappingStatus: "approved",
-    })
-    expect(mappings.find((mapping) => mapping.currencyCode === "ETH")).toMatchObject({
-      canonicalAssetId: ETH_ASSET_ID,
-      assetRepresentationId: null,
-      mappingStatus: "approved",
-    })
-    expect(mappings.find((mapping) => mapping.currencyCode === "SOL")).toMatchObject({
-      canonicalAssetId: SOL_ASSET_ID,
-      assetRepresentationId: null,
-      mappingStatus: "approved",
-    })
-    expect(mappings.find((mapping) => mapping.currencyCode === "USDC")).toMatchObject({
-      canonicalAssetId: USDC_ASSET_ID,
-      assetRepresentationId: null,
-      mappingStatus: "approved",
-    })
-    expect(mappings.find((mapping) => mapping.currencyCode === "ADA")).toMatchObject({
-      canonicalAssetId: null,
-      assetRepresentationId: null,
-      mappingStatus: "pending_review",
-    })
-    expect(mappings.find((mapping) => mapping.currencyCode === "DOT")).toMatchObject({
-      canonicalAssetId: null,
-      assetRepresentationId: null,
-      mappingStatus: "pending_review",
-    })
-  })
-
-  it("resolves Coinbase and Solana USDC to one catalog-seeded economic asset", async () => {
-    await context.runPg(seedData)
-    await runReferenceMapping(
-      Effect.flatMap(CoinbaseReferenceMappingService, (service) => service.ensureDefaultMappings)
-    )
-
-    const solanaUsdc = await runHeliusAssetResolution(
-      Effect.flatMap(HeliusSolanaAssetResolutionService, (service) =>
-        Effect.gen(function* () {
-          yield* service.ensureDefaultMappings
-          return yield* service.resolveAsset({
-            kind: "spl",
-            mintAddress: SOLANA_USDC_MINT,
-          })
-        })
+      yield* Effect.promise(() =>
+        runReferenceMapping(
+          Effect.flatMap(
+            CoinbaseReferenceMappingService,
+            (service) => service.ensureDefaultMappings
+          )
+        )
       )
-    )
-    const mappings = await Effect.runPromise(fetchProviderAssetMappingRows())
-    const coinbaseUsdc = mappings.find(
-      (mapping) => mapping.provider === "coinbase" && mapping.currencyCode === "USDC"
-    )
 
-    expect(coinbaseUsdc).toMatchObject({
-      mappingStatus: "approved",
-      assetRepresentationId: null,
-    })
-    expect(coinbaseUsdc?.canonicalAssetId).toEqual(expect.any(String))
-    expect(solanaUsdc).toMatchObject({
-      kind: "canonical",
-      mintAddress: SOLANA_USDC_MINT,
-    })
-    expect(solanaUsdc.canonicalAssetId).toBe(coinbaseUsdc?.canonicalAssetId)
-  })
+      const mappings = yield* fetchProviderAssetMappingRows()
 
-  it("does not overwrite reviewed provider asset mappings on later default refreshes", async () => {
-    await Effect.runPromise(
-      seedCanonicalAsset({
+      expect(mappings.find((mapping) => mapping.currencyCode === "BTC")).toMatchObject({
+        canonicalAssetId: BTC_ASSET_ID,
+        assetRepresentationId: null,
+        mappingStatus: "approved",
+      })
+      expect(mappings.find((mapping) => mapping.currencyCode === "ETH")).toMatchObject({
+        canonicalAssetId: ETH_ASSET_ID,
+        assetRepresentationId: null,
+        mappingStatus: "approved",
+      })
+      expect(mappings.find((mapping) => mapping.currencyCode === "SOL")).toMatchObject({
+        canonicalAssetId: SOL_ASSET_ID,
+        assetRepresentationId: null,
+        mappingStatus: "approved",
+      })
+      expect(mappings.find((mapping) => mapping.currencyCode === "USDC")).toMatchObject({
+        canonicalAssetId: USDC_ASSET_ID,
+        assetRepresentationId: null,
+        mappingStatus: "approved",
+      })
+      expect(mappings.find((mapping) => mapping.currencyCode === "ADA")).toMatchObject({
+        canonicalAssetId: null,
+        assetRepresentationId: null,
+        mappingStatus: "pending_review",
+      })
+      expect(mappings.find((mapping) => mapping.currencyCode === "DOT")).toMatchObject({
+        canonicalAssetId: null,
+        assetRepresentationId: null,
+        mappingStatus: "pending_review",
+      })
+    })
+  )
+
+  it.effect("resolves Coinbase and Solana USDC to one catalog-seeded economic asset", () =>
+    Effect.gen(function* () {
+      yield* Effect.promise(() => context.runPg(seedData))
+      yield* Effect.promise(() =>
+        runReferenceMapping(
+          Effect.flatMap(
+            CoinbaseReferenceMappingService,
+            (service) => service.ensureDefaultMappings
+          )
+        )
+      )
+
+      const solanaUsdc = yield* Effect.promise(() =>
+        runHeliusAssetResolution(
+          Effect.flatMap(HeliusSolanaAssetResolutionService, (service) =>
+            Effect.gen(function* () {
+              yield* service.ensureDefaultMappings
+              return yield* service.resolveAsset({
+                kind: "spl",
+                mintAddress: SOLANA_USDC_MINT,
+              })
+            })
+          )
+        )
+      )
+      const mappings = yield* fetchProviderAssetMappingRows()
+      const coinbaseUsdc = mappings.find(
+        (mapping) => mapping.provider === "coinbase" && mapping.currencyCode === "USDC"
+      )
+
+      expect(coinbaseUsdc).toMatchObject({
+        mappingStatus: "approved",
+        assetRepresentationId: null,
+      })
+      expect(coinbaseUsdc?.canonicalAssetId).toEqual(expect.any(String))
+      expect(solanaUsdc).toMatchObject({
+        kind: "canonical",
+        mintAddress: SOLANA_USDC_MINT,
+      })
+      expect(solanaUsdc.canonicalAssetId).toBe(coinbaseUsdc?.canonicalAssetId)
+    })
+  )
+
+  it.effect("does not overwrite reviewed provider asset mappings on later default refreshes", () =>
+    Effect.gen(function* () {
+      yield* seedCanonicalAsset({
         id: BTC_ASSET_ID,
         symbol: "BTC",
         coingeckoCoinId: "bitcoin",
         contractAddress: "coinbase-default-reviewed-btc",
       })
-    )
 
-    await runReferenceMapping(
-      Effect.flatMap(CoinbaseReferenceMappingService, (service) => service.ensureDefaultMappings)
-    )
+      yield* Effect.promise(() =>
+        runReferenceMapping(
+          Effect.flatMap(
+            CoinbaseReferenceMappingService,
+            (service) => service.ensureDefaultMappings
+          )
+        )
+      )
 
-    const [adaMapping] = (await Effect.runPromise(fetchProviderAssetMappingRows())).filter(
-      (mapping) => mapping.currencyCode === "ADA"
-    )
+      const [adaMapping] = (yield* fetchProviderAssetMappingRows()).filter(
+        (mapping) => mapping.currencyCode === "ADA"
+      )
 
-    if (adaMapping === undefined) {
-      expect.fail("Expected ADA provider asset mapping to exist")
-    }
+      if (adaMapping === undefined) {
+        expect.fail("Expected ADA provider asset mapping to exist")
+      }
 
-    await Effect.runPromise(
-      Effect.gen(function* () {
+      yield* Effect.gen(function* () {
         const db = yield* drizzle
 
         yield* db
@@ -694,230 +717,277 @@ describe("coinbase reference mappings", () => {
             },
           })
       }).pipe(Effect.provide(TestPgClientLive))
-    )
 
-    await runReferenceMapping(
-      Effect.flatMap(CoinbaseReferenceMappingService, (service) => service.ensureDefaultMappings)
-    )
+      yield* Effect.promise(() =>
+        runReferenceMapping(
+          Effect.flatMap(
+            CoinbaseReferenceMappingService,
+            (service) => service.ensureDefaultMappings
+          )
+        )
+      )
 
-    const refreshedAdaMapping = (await Effect.runPromise(fetchProviderAssetMappingRows())).find(
-      (mapping) => mapping.currencyCode === "ADA"
-    )
+      const refreshedAdaMapping = (yield* fetchProviderAssetMappingRows()).find(
+        (mapping) => mapping.currencyCode === "ADA"
+      )
 
-    expect(refreshedAdaMapping).toMatchObject({
-      canonicalAssetId: BTC_ASSET_ID,
-      assetRepresentationId: null,
-      mappingStatus: "approved",
-      reviewerNotes: "Admin reviewed ADA as BTC test fixture",
-      sourceNotes: "Admin decision",
+      expect(refreshedAdaMapping).toMatchObject({
+        canonicalAssetId: BTC_ASSET_ID,
+        assetRepresentationId: null,
+        mappingStatus: "approved",
+        reviewerNotes: "Admin reviewed ADA as BTC test fixture",
+        sourceNotes: "Admin decision",
+      })
     })
-  })
+  )
 
-  it("maps a chainless custody observation to an economic asset only", async () => {
-    await Effect.runPromise(
-      seedCanonicalAsset({
+  it.effect("maps a chainless custody observation to an economic asset only", () =>
+    Effect.gen(function* () {
+      yield* seedCanonicalAsset({
         id: BTC_ASSET_ID,
         symbol: "BTC",
         coingeckoCoinId: "bitcoin",
         contractAddress: "coinbase-default-legacy-btc",
       })
-    )
 
-    await runReferenceMapping(
-      Effect.flatMap(CoinbaseReferenceMappingService, (service) => service.ensureDefaultMappings)
-    )
-
-    const btcMapping = await runReferenceMapping(
-      Effect.flatMap(CoinbaseReferenceMappingService, (service) =>
-        service.resolveCurrency({ currencyCode: "BTC" })
+      yield* Effect.promise(() =>
+        runReferenceMapping(
+          Effect.flatMap(
+            CoinbaseReferenceMappingService,
+            (service) => service.ensureDefaultMappings
+          )
+        )
       )
-    )
 
-    expect(btcMapping).toMatchObject({
-      kind: "canonical",
-      canonicalAssetId: BTC_ASSET_ID,
-      assetRepresentationId: null,
-      mappingStatus: "approved",
+      const btcMapping = yield* Effect.promise(() =>
+        runReferenceMapping(
+          Effect.flatMap(CoinbaseReferenceMappingService, (service) =>
+            service.resolveCurrency({ currencyCode: "BTC" })
+          )
+        )
+      )
+
+      expect(btcMapping).toMatchObject({
+        kind: "canonical",
+        canonicalAssetId: BTC_ASSET_ID,
+        assetRepresentationId: null,
+        mappingStatus: "approved",
+      })
     })
-  })
+  )
 
-  it("returns a settled exclusion without scheduling more resolution work", async () => {
-    await runReferenceMapping(
-      Effect.flatMap(CoinbaseReferenceMappingService, (service) => service.ensureDefaultMappings)
-    )
+  it.effect("returns a settled exclusion without scheduling more resolution work", () =>
+    Effect.gen(function* () {
+      yield* Effect.promise(() =>
+        runReferenceMapping(
+          Effect.flatMap(
+            CoinbaseReferenceMappingService,
+            (service) => service.ensureDefaultMappings
+          )
+        )
+      )
 
-    const adaMapping = (await Effect.runPromise(fetchProviderAssetMappingRows())).find(
-      (mapping) => mapping.currencyCode === "ADA"
-    )
-    if (adaMapping === undefined) {
-      expect.fail("Expected ADA provider asset mapping to exist")
-    }
+      const adaMapping = (yield* fetchProviderAssetMappingRows()).find(
+        (mapping) => mapping.currencyCode === "ADA"
+      )
+      if (adaMapping === undefined) {
+        expect.fail("Expected ADA provider asset mapping to exist")
+      }
 
-    const jobsBefore = await context.runPg(
-      Effect.gen(function* () {
-        const db = yield* drizzle
-        yield* db
-          .update(schema.providerAssetMappings)
-          .set({
-            mappingStatus: "excluded",
-            canonicalAssetId: null,
-            assetRepresentationId: null,
+      const jobsBefore = yield* Effect.promise(() =>
+        context.runPg(
+          Effect.gen(function* () {
+            const db = yield* drizzle
+            yield* db
+              .update(schema.providerAssetMappings)
+              .set({
+                mappingStatus: "excluded",
+                canonicalAssetId: null,
+                assetRepresentationId: null,
+              })
+              .where(
+                eq(schema.providerAssetMappings.providerAssetRowId, adaMapping.providerAssetRowId)
+              )
+            return yield* db
+              .select({ id: schema.assetResolutionJobs.id })
+              .from(schema.assetResolutionJobs)
           })
-          .where(eq(schema.providerAssetMappings.providerAssetRowId, adaMapping.providerAssetRowId))
-        return yield* db
-          .select({ id: schema.assetResolutionJobs.id })
-          .from(schema.assetResolutionJobs)
-      })
-    )
-
-    const resolution = await runReferenceMapping(
-      Effect.flatMap(CoinbaseReferenceMappingService, (service) =>
-        service.resolveCurrency({ currencyCode: "ADA" })
+        )
       )
-    )
-    const jobsAfter = await context.runPg(
-      Effect.gen(function* () {
-        const db = yield* drizzle
-        return yield* db
-          .select({ id: schema.assetResolutionJobs.id })
-          .from(schema.assetResolutionJobs)
-      })
-    )
 
-    expect(resolution).toMatchObject({
-      kind: "excluded",
-      currencyCode: "ADA",
-      mappingStatus: "excluded",
-      canonicalAssetId: null,
-      assetRepresentationId: null,
+      const resolution = yield* Effect.promise(() =>
+        runReferenceMapping(
+          Effect.flatMap(CoinbaseReferenceMappingService, (service) =>
+            service.resolveCurrency({ currencyCode: "ADA" })
+          )
+        )
+      )
+      const jobsAfter = yield* Effect.promise(() =>
+        context.runPg(
+          Effect.gen(function* () {
+            const db = yield* drizzle
+            return yield* db
+              .select({ id: schema.assetResolutionJobs.id })
+              .from(schema.assetResolutionJobs)
+          })
+        )
+      )
+
+      expect(resolution).toMatchObject({
+        kind: "excluded",
+        currencyCode: "ADA",
+        mappingStatus: "excluded",
+        canonicalAssetId: null,
+        assetRepresentationId: null,
+      })
+      expect(jobsAfter).toHaveLength(jobsBefore.length)
     })
-    expect(jobsAfter).toHaveLength(jobsBefore.length)
-  })
+  )
 
-  it("keeps an approved mapping in force when the provider reclassifies the currency type", async () => {
-    await Effect.runPromise(
-      seedCanonicalAsset({
-        id: BTC_ASSET_ID,
-        symbol: "BTC",
-        coingeckoCoinId: "bitcoin",
-        contractAddress: "coinbase-default-legacy-btc",
-      })
-    )
-    await runReferenceMapping(
-      Effect.flatMap(CoinbaseReferenceMappingService, (service) => service.ensureDefaultMappings)
-    )
-
-    // A later catalog refresh can reopen policy evaluation, but it must not
-    // replace the approved mapping until a human supersedes the conclusion.
-    await context.runPg(
+  it.effect(
+    "keeps an approved mapping in force when the provider reclassifies the currency type",
+    () =>
       Effect.gen(function* () {
-        const db = yield* drizzle
-        yield* db
-          .update(schema.providerAssets)
-          .set({ providerType: "fiat" })
-          .where(
-            and(
-              eq(schema.providerAssets.provider, "coinbase"),
-              eq(schema.providerAssets.currencyCode, "BTC")
+        yield* seedCanonicalAsset({
+          id: BTC_ASSET_ID,
+          symbol: "BTC",
+          coingeckoCoinId: "bitcoin",
+          contractAddress: "coinbase-default-legacy-btc",
+        })
+        yield* Effect.promise(() =>
+          runReferenceMapping(
+            Effect.flatMap(
+              CoinbaseReferenceMappingService,
+              (service) => service.ensureDefaultMappings
             )
           )
-      })
-    )
+        )
 
-    const resolution = await runReferenceMapping(
-      Effect.flatMap(CoinbaseReferenceMappingService, (service) =>
-        service.resolveCurrency({ currencyCode: "BTC" })
-      )
-    )
+        // A later catalog refresh can reopen policy evaluation, but it must not
+        // replace the approved mapping until a human supersedes the conclusion.
+        yield* Effect.promise(() =>
+          context.runPg(
+            Effect.gen(function* () {
+              const db = yield* drizzle
+              yield* db
+                .update(schema.providerAssets)
+                .set({ providerType: "fiat" })
+                .where(
+                  and(
+                    eq(schema.providerAssets.provider, "coinbase"),
+                    eq(schema.providerAssets.currencyCode, "BTC")
+                  )
+                )
+            })
+          )
+        )
 
-    expect(resolution).toMatchObject({
-      kind: "canonical",
-      currencyCode: "BTC",
-      mappingKind: "asset",
-      mappingStatus: "approved",
-      canonicalAssetId: BTC_ASSET_ID,
-    })
+        const resolution = yield* Effect.promise(() =>
+          runReferenceMapping(
+            Effect.flatMap(CoinbaseReferenceMappingService, (service) =>
+              service.resolveCurrency({ currencyCode: "BTC" })
+            )
+          )
+        )
 
-    const btcMapping = (await Effect.runPromise(fetchProviderAssetMappingRows())).find(
-      (mapping) => mapping.currencyCode === "BTC"
-    )
-    expect(btcMapping).toMatchObject({
-      mappingKind: "asset",
-      mappingStatus: "approved",
-      canonicalAssetId: BTC_ASSET_ID,
-      assetRepresentationId: null,
-    })
-  })
-
-  it("resolves EUR as fiat without requiring a canonical asset row", async () => {
-    await runReferenceMapping(
-      Effect.flatMap(CoinbaseReferenceMappingService, (service) => service.ensureDefaultMappings)
-    )
-
-    const eurMapping = await runReferenceMapping(
-      Effect.flatMap(CoinbaseReferenceMappingService, (service) =>
-        service.resolveCurrency({
-          currencyCode: "EUR",
+        expect(resolution).toMatchObject({
+          kind: "canonical",
+          currencyCode: "BTC",
+          mappingKind: "asset",
+          mappingStatus: "approved",
+          canonicalAssetId: BTC_ASSET_ID,
         })
+
+        const btcMapping = (yield* fetchProviderAssetMappingRows()).find(
+          (mapping) => mapping.currencyCode === "BTC"
+        )
+        expect(btcMapping).toMatchObject({
+          mappingKind: "asset",
+          mappingStatus: "approved",
+          canonicalAssetId: BTC_ASSET_ID,
+          assetRepresentationId: null,
+        })
+      })
+  )
+
+  it.effect("resolves EUR as fiat without requiring a canonical asset row", () =>
+    Effect.gen(function* () {
+      yield* Effect.promise(() =>
+        runReferenceMapping(
+          Effect.flatMap(
+            CoinbaseReferenceMappingService,
+            (service) => service.ensureDefaultMappings
+          )
+        )
       )
-    )
 
-    expect(eurMapping).toMatchObject({
-      kind: "canonical",
-      currencyCode: "EUR",
-      mappingKind: "fiat",
-      canonicalAssetId: null,
-      assetRepresentationId: null,
-      canonicalFiatCurrency: "EUR",
-      mappingStatus: "approved",
+      const eurMapping = yield* Effect.promise(() =>
+        runReferenceMapping(
+          Effect.flatMap(CoinbaseReferenceMappingService, (service) =>
+            service.resolveCurrency({
+              currencyCode: "EUR",
+            })
+          )
+        )
+      )
+
+      expect(eurMapping).toMatchObject({
+        kind: "canonical",
+        currencyCode: "EUR",
+        mappingKind: "fiat",
+        canonicalAssetId: null,
+        assetRepresentationId: null,
+        canonicalFiatCurrency: "EUR",
+        mappingStatus: "approved",
+      })
     })
-  })
+  )
 
-  it("does not pair a grouped unstaking row with an ungrouped candidate", async () => {
-    activeSyncRecords = [
-      makeCoinbaseRecord({
-        recordType: "coinbase_account",
-        externalRecordId: "coinbase-account-1",
-        occurredAt: new Date("2025-01-01T00:00:00.000Z"),
-        payload: {
-          id: "coinbase-account-1",
-          created_at: "2025-01-01T00:00:00.000Z",
-          updated_at: "2025-01-01T00:00:00.000Z",
-        },
-      }),
-      makeCoinbaseRecord({
-        externalRecordId: "tx-grouped-release-without-sibling",
-        externalParentId: "unstake-group-without-sibling",
-        occurredAt: new Date("2025-05-01T10:00:00.000Z"),
-        payload: {
-          id: "tx-grouped-release-without-sibling",
-          type: "retail_instant_unstaking",
-          status: "completed",
-          amount: { amount: "-1.00000000", currency: "ETH2" },
-          native_amount: { amount: "-2000.00", currency: "EUR" },
-          created_at: "2025-05-01T10:00:00.000Z",
-          resource_path:
-            "/v2/accounts/coinbase-account-1/transactions/tx-grouped-release-without-sibling",
-        },
-      }),
-      makeCoinbaseRecord({
-        externalRecordId: "tx-unrelated-ungrouped-credit",
-        occurredAt: new Date("2025-05-01T10:00:30.000Z"),
-        payload: {
-          id: "tx-unrelated-ungrouped-credit",
-          type: "retail_instant_unstaking",
-          status: "completed",
-          amount: { amount: "0.99000000", currency: "ETH2" },
-          native_amount: { amount: "1980.00", currency: "EUR" },
-          created_at: "2025-05-01T10:00:30.000Z",
-          resource_path:
-            "/v2/accounts/coinbase-account-1/transactions/tx-unrelated-ungrouped-credit",
-        },
-      }),
-    ]
+  it.effect("does not pair a grouped unstaking row with an ungrouped candidate", () =>
+    Effect.gen(function* () {
+      activeSyncRecords = [
+        makeCoinbaseRecord({
+          recordType: "coinbase_account",
+          externalRecordId: "coinbase-account-1",
+          occurredAt: DateTime.toDateUtc(DateTime.makeUnsafe("2025-01-01T00:00:00.000Z")),
+          payload: {
+            id: "coinbase-account-1",
+            created_at: "2025-01-01T00:00:00.000Z",
+            updated_at: "2025-01-01T00:00:00.000Z",
+          },
+        }),
+        makeCoinbaseRecord({
+          externalRecordId: "tx-grouped-release-without-sibling",
+          externalParentId: "unstake-group-without-sibling",
+          occurredAt: DateTime.toDateUtc(DateTime.makeUnsafe("2025-05-01T10:00:00.000Z")),
+          payload: {
+            id: "tx-grouped-release-without-sibling",
+            type: "retail_instant_unstaking",
+            status: "completed",
+            amount: { amount: "-1.00000000", currency: "ETH2" },
+            native_amount: { amount: "-2000.00", currency: "EUR" },
+            created_at: "2025-05-01T10:00:00.000Z",
+            resource_path:
+              "/v2/accounts/coinbase-account-1/transactions/tx-grouped-release-without-sibling",
+          },
+        }),
+        makeCoinbaseRecord({
+          externalRecordId: "tx-unrelated-ungrouped-credit",
+          occurredAt: DateTime.toDateUtc(DateTime.makeUnsafe("2025-05-01T10:00:30.000Z")),
+          payload: {
+            id: "tx-unrelated-ungrouped-credit",
+            type: "retail_instant_unstaking",
+            status: "completed",
+            amount: { amount: "0.99000000", currency: "ETH2" },
+            native_amount: { amount: "1980.00", currency: "EUR" },
+            created_at: "2025-05-01T10:00:30.000Z",
+            resource_path:
+              "/v2/accounts/coinbase-account-1/transactions/tx-unrelated-ungrouped-credit",
+          },
+        }),
+      ]
 
-    await Effect.runPromise(
-      Effect.gen(function* () {
+      yield* Effect.gen(function* () {
         yield* seedCoinbaseSource()
         yield* runSync()
         const state = yield* fetchNormalizationState()
@@ -933,56 +1003,56 @@ describe("coinbase reference mappings", () => {
           "tx-unrelated-ungrouped-credit",
         ])
       })
-    )
-  })
+    })
+  )
 
-  it("does not pair grouped unstaking rows with different native currencies", async () => {
-    const occurredAt = new Date("2025-05-01T10:00:00.000Z")
-    activeSyncRecords = [
-      makeCoinbaseRecord({
-        recordType: "coinbase_account",
-        externalRecordId: "coinbase-account-1",
-        occurredAt: new Date("2025-01-01T00:00:00.000Z"),
-        payload: {
-          id: "coinbase-account-1",
-          created_at: "2025-01-01T00:00:00.000Z",
-          updated_at: "2025-01-01T00:00:00.000Z",
-        },
-      }),
-      makeCoinbaseRecord({
-        externalRecordId: "tx-mixed-native-release",
-        externalAccountId: "coinbase-account-1",
-        externalParentId: "mixed-native-group",
-        occurredAt,
-        payload: {
-          id: "tx-mixed-native-release",
-          type: "retail_instant_unstaking",
-          status: "completed",
-          amount: { amount: "-1.00000000", currency: "ETH2" },
-          native_amount: { amount: "-2000.00", currency: "EUR" },
-          created_at: occurredAt.toISOString(),
-          resource_path: "/v2/accounts/coinbase-account-1/transactions/tx-mixed-native-release",
-        },
-      }),
-      makeCoinbaseRecord({
-        externalRecordId: "tx-mixed-native-credit",
-        externalAccountId: "coinbase-account-2",
-        externalParentId: "mixed-native-group",
-        occurredAt,
-        payload: {
-          id: "tx-mixed-native-credit",
-          type: "retail_instant_unstaking",
-          status: "completed",
-          amount: { amount: "0.99000000", currency: "ETH2" },
-          native_amount: { amount: "1980.00", currency: "USD" },
-          created_at: occurredAt.toISOString(),
-          resource_path: "/v2/accounts/coinbase-account-2/transactions/tx-mixed-native-credit",
-        },
-      }),
-    ]
+  it.effect("does not pair grouped unstaking rows with different native currencies", () =>
+    Effect.gen(function* () {
+      const occurredAt = DateTime.toDateUtc(DateTime.makeUnsafe("2025-05-01T10:00:00.000Z"))
+      activeSyncRecords = [
+        makeCoinbaseRecord({
+          recordType: "coinbase_account",
+          externalRecordId: "coinbase-account-1",
+          occurredAt: DateTime.toDateUtc(DateTime.makeUnsafe("2025-01-01T00:00:00.000Z")),
+          payload: {
+            id: "coinbase-account-1",
+            created_at: "2025-01-01T00:00:00.000Z",
+            updated_at: "2025-01-01T00:00:00.000Z",
+          },
+        }),
+        makeCoinbaseRecord({
+          externalRecordId: "tx-mixed-native-release",
+          externalAccountId: "coinbase-account-1",
+          externalParentId: "mixed-native-group",
+          occurredAt,
+          payload: {
+            id: "tx-mixed-native-release",
+            type: "retail_instant_unstaking",
+            status: "completed",
+            amount: { amount: "-1.00000000", currency: "ETH2" },
+            native_amount: { amount: "-2000.00", currency: "EUR" },
+            created_at: occurredAt.toISOString(),
+            resource_path: "/v2/accounts/coinbase-account-1/transactions/tx-mixed-native-release",
+          },
+        }),
+        makeCoinbaseRecord({
+          externalRecordId: "tx-mixed-native-credit",
+          externalAccountId: "coinbase-account-2",
+          externalParentId: "mixed-native-group",
+          occurredAt,
+          payload: {
+            id: "tx-mixed-native-credit",
+            type: "retail_instant_unstaking",
+            status: "completed",
+            amount: { amount: "0.99000000", currency: "ETH2" },
+            native_amount: { amount: "1980.00", currency: "USD" },
+            created_at: occurredAt.toISOString(),
+            resource_path: "/v2/accounts/coinbase-account-2/transactions/tx-mixed-native-credit",
+          },
+        }),
+      ]
 
-    await Effect.runPromise(
-      Effect.gen(function* () {
+      yield* Effect.gen(function* () {
         yield* seedCoinbaseSource()
         yield* runSync()
         const state = yield* fetchNormalizationState()
@@ -997,56 +1067,56 @@ describe("coinbase reference mappings", () => {
         expect(state.transactions.map((row) => row.externalId)).toEqual(["tx-mixed-native-credit"])
         expect(state.legs.filter((leg) => leg.kind === "fee")).toHaveLength(0)
       })
-    )
-  })
+    })
+  )
 
-  it("does not pair a grouped unstaking release with a zero-valued credit", async () => {
-    const occurredAt = new Date("2025-05-01T10:00:00.000Z")
-    activeSyncRecords = [
-      makeCoinbaseRecord({
-        recordType: "coinbase_account",
-        externalRecordId: "coinbase-account-1",
-        occurredAt: new Date("2025-01-01T00:00:00.000Z"),
-        payload: {
-          id: "coinbase-account-1",
-          created_at: "2025-01-01T00:00:00.000Z",
-          updated_at: "2025-01-01T00:00:00.000Z",
-        },
-      }),
-      makeCoinbaseRecord({
-        externalRecordId: "tx-zero-credit-release",
-        externalAccountId: "coinbase-account-1",
-        externalParentId: "zero-credit-group",
-        occurredAt,
-        payload: {
-          id: "tx-zero-credit-release",
-          type: "retail_instant_unstaking",
-          status: "completed",
-          amount: { amount: "-1.00000000", currency: "ETH2" },
-          native_amount: { amount: "-2000.00", currency: "EUR" },
-          created_at: occurredAt.toISOString(),
-          resource_path: "/v2/accounts/coinbase-account-1/transactions/tx-zero-credit-release",
-        },
-      }),
-      makeCoinbaseRecord({
-        externalRecordId: "tx-zero-credit",
-        externalAccountId: "coinbase-account-2",
-        externalParentId: "zero-credit-group",
-        occurredAt,
-        payload: {
-          id: "tx-zero-credit",
-          type: "retail_instant_unstaking",
-          status: "completed",
-          amount: { amount: "0.00000000", currency: "ETH2" },
-          native_amount: { amount: "0.00", currency: "EUR" },
-          created_at: occurredAt.toISOString(),
-          resource_path: "/v2/accounts/coinbase-account-2/transactions/tx-zero-credit",
-        },
-      }),
-    ]
+  it.effect("does not pair a grouped unstaking release with a zero-valued credit", () =>
+    Effect.gen(function* () {
+      const occurredAt = DateTime.toDateUtc(DateTime.makeUnsafe("2025-05-01T10:00:00.000Z"))
+      activeSyncRecords = [
+        makeCoinbaseRecord({
+          recordType: "coinbase_account",
+          externalRecordId: "coinbase-account-1",
+          occurredAt: DateTime.toDateUtc(DateTime.makeUnsafe("2025-01-01T00:00:00.000Z")),
+          payload: {
+            id: "coinbase-account-1",
+            created_at: "2025-01-01T00:00:00.000Z",
+            updated_at: "2025-01-01T00:00:00.000Z",
+          },
+        }),
+        makeCoinbaseRecord({
+          externalRecordId: "tx-zero-credit-release",
+          externalAccountId: "coinbase-account-1",
+          externalParentId: "zero-credit-group",
+          occurredAt,
+          payload: {
+            id: "tx-zero-credit-release",
+            type: "retail_instant_unstaking",
+            status: "completed",
+            amount: { amount: "-1.00000000", currency: "ETH2" },
+            native_amount: { amount: "-2000.00", currency: "EUR" },
+            created_at: occurredAt.toISOString(),
+            resource_path: "/v2/accounts/coinbase-account-1/transactions/tx-zero-credit-release",
+          },
+        }),
+        makeCoinbaseRecord({
+          externalRecordId: "tx-zero-credit",
+          externalAccountId: "coinbase-account-2",
+          externalParentId: "zero-credit-group",
+          occurredAt,
+          payload: {
+            id: "tx-zero-credit",
+            type: "retail_instant_unstaking",
+            status: "completed",
+            amount: { amount: "0.00000000", currency: "ETH2" },
+            native_amount: { amount: "0.00", currency: "EUR" },
+            created_at: occurredAt.toISOString(),
+            resource_path: "/v2/accounts/coinbase-account-2/transactions/tx-zero-credit",
+          },
+        }),
+      ]
 
-    await Effect.runPromise(
-      Effect.gen(function* () {
+      yield* Effect.gen(function* () {
         yield* seedCoinbaseSource()
         yield* runSync()
         const state = yield* fetchNormalizationState()
@@ -1062,69 +1132,69 @@ describe("coinbase reference mappings", () => {
         expect(state.legs.filter((leg) => leg.kind === "fee")).toHaveLength(0)
         expect(state.inventoryMovements).toHaveLength(0)
       })
-    )
-  })
+    })
+  )
 
-  it("does not pair a grouped unstaking row with multiple compatible credits", async () => {
-    const occurredAt = new Date("2025-05-01T10:00:00.000Z")
-    activeSyncRecords = [
-      makeCoinbaseRecord({
-        recordType: "coinbase_account",
-        externalRecordId: "coinbase-account-1",
-        occurredAt: new Date("2025-01-01T00:00:00.000Z"),
-        payload: {
-          id: "coinbase-account-1",
-          created_at: "2025-01-01T00:00:00.000Z",
-          updated_at: "2025-01-01T00:00:00.000Z",
-        },
-      }),
-      makeCoinbaseRecord({
-        externalRecordId: "tx-ambiguous-grouped-release",
-        externalParentId: "ambiguous-unstake-group",
-        occurredAt,
-        payload: {
-          id: "tx-ambiguous-grouped-release",
-          type: "retail_instant_unstaking",
-          status: "completed",
-          amount: { amount: "-1.00000000", currency: "ETH2" },
-          native_amount: { amount: "-2000.00", currency: "EUR" },
-          created_at: occurredAt.toISOString(),
-          resource_path:
-            "/v2/accounts/coinbase-account-1/transactions/tx-ambiguous-grouped-release",
-        },
-      }),
-      makeCoinbaseRecord({
-        externalRecordId: "tx-first-grouped-credit",
-        externalParentId: "ambiguous-unstake-group",
-        occurredAt,
-        payload: {
-          id: "tx-first-grouped-credit",
-          type: "retail_instant_unstaking",
-          status: "completed",
-          amount: { amount: "0.99000000", currency: "ETH2" },
-          native_amount: { amount: "1980.00", currency: "EUR" },
-          created_at: occurredAt.toISOString(),
-          resource_path: "/v2/accounts/coinbase-account-1/transactions/tx-first-grouped-credit",
-        },
-      }),
-      makeCoinbaseRecord({
-        externalRecordId: "tx-second-grouped-credit",
-        externalParentId: "ambiguous-unstake-group",
-        occurredAt: new Date("2025-05-01T10:00:01.000Z"),
-        payload: {
-          id: "tx-second-grouped-credit",
-          type: "retail_instant_unstaking",
-          status: "completed",
-          amount: { amount: "0.98000000", currency: "ETH2" },
-          native_amount: { amount: "1960.00", currency: "EUR" },
-          created_at: "2025-05-01T10:00:01.000Z",
-          resource_path: "/v2/accounts/coinbase-account-1/transactions/tx-second-grouped-credit",
-        },
-      }),
-    ]
+  it.effect("does not pair a grouped unstaking row with multiple compatible credits", () =>
+    Effect.gen(function* () {
+      const occurredAt = DateTime.toDateUtc(DateTime.makeUnsafe("2025-05-01T10:00:00.000Z"))
+      activeSyncRecords = [
+        makeCoinbaseRecord({
+          recordType: "coinbase_account",
+          externalRecordId: "coinbase-account-1",
+          occurredAt: DateTime.toDateUtc(DateTime.makeUnsafe("2025-01-01T00:00:00.000Z")),
+          payload: {
+            id: "coinbase-account-1",
+            created_at: "2025-01-01T00:00:00.000Z",
+            updated_at: "2025-01-01T00:00:00.000Z",
+          },
+        }),
+        makeCoinbaseRecord({
+          externalRecordId: "tx-ambiguous-grouped-release",
+          externalParentId: "ambiguous-unstake-group",
+          occurredAt,
+          payload: {
+            id: "tx-ambiguous-grouped-release",
+            type: "retail_instant_unstaking",
+            status: "completed",
+            amount: { amount: "-1.00000000", currency: "ETH2" },
+            native_amount: { amount: "-2000.00", currency: "EUR" },
+            created_at: occurredAt.toISOString(),
+            resource_path:
+              "/v2/accounts/coinbase-account-1/transactions/tx-ambiguous-grouped-release",
+          },
+        }),
+        makeCoinbaseRecord({
+          externalRecordId: "tx-first-grouped-credit",
+          externalParentId: "ambiguous-unstake-group",
+          occurredAt,
+          payload: {
+            id: "tx-first-grouped-credit",
+            type: "retail_instant_unstaking",
+            status: "completed",
+            amount: { amount: "0.99000000", currency: "ETH2" },
+            native_amount: { amount: "1980.00", currency: "EUR" },
+            created_at: occurredAt.toISOString(),
+            resource_path: "/v2/accounts/coinbase-account-1/transactions/tx-first-grouped-credit",
+          },
+        }),
+        makeCoinbaseRecord({
+          externalRecordId: "tx-second-grouped-credit",
+          externalParentId: "ambiguous-unstake-group",
+          occurredAt: DateTime.toDateUtc(DateTime.makeUnsafe("2025-05-01T10:00:01.000Z")),
+          payload: {
+            id: "tx-second-grouped-credit",
+            type: "retail_instant_unstaking",
+            status: "completed",
+            amount: { amount: "0.98000000", currency: "ETH2" },
+            native_amount: { amount: "1960.00", currency: "EUR" },
+            created_at: "2025-05-01T10:00:01.000Z",
+            resource_path: "/v2/accounts/coinbase-account-1/transactions/tx-second-grouped-credit",
+          },
+        }),
+      ]
 
-    await Effect.runPromise(
-      Effect.gen(function* () {
+      yield* Effect.gen(function* () {
         yield* seedCoinbaseSource()
         yield* runSync()
         const state = yield* fetchNormalizationState()
@@ -1143,10 +1213,10 @@ describe("coinbase reference mappings", () => {
         ).toEqual(["tx-first-grouped-credit", "tx-second-grouped-credit"])
         expect(state.legs.filter((leg) => leg.kind === "fee")).toHaveLength(0)
       })
-    )
-  })
+    })
+  )
 
-  it.each([
+  it.effect.each([
     {
       caseName: "a candidate from a provider group",
       candidateAccountId: "coinbase-account-1",
@@ -1192,69 +1262,69 @@ describe("coinbase reference mappings", () => {
       secondCandidateAccountId: "coinbase-account-3",
       expectedTransactionIds: ["tx-second-unrelated-credit", "tx-unrelated-credit"],
     },
-  ])("does not pair an ungrouped unstaking row with $caseName", async (testCase) => {
-    activeSyncRecords = [
-      makeCoinbaseRecord({
-        recordType: "coinbase_account",
-        externalRecordId: "coinbase-account-1",
-        occurredAt: new Date("2025-01-01T00:00:00.000Z"),
-        payload: {
-          id: "coinbase-account-1",
-          created_at: "2025-01-01T00:00:00.000Z",
-          updated_at: "2025-01-01T00:00:00.000Z",
-        },
-      }),
-      makeCoinbaseRecord({
-        externalRecordId: "tx-ungrouped-release-without-sibling",
-        occurredAt: new Date("2025-05-01T10:00:00.000Z"),
-        payload: {
-          id: "tx-ungrouped-release-without-sibling",
-          type: "retail_instant_unstaking",
-          status: "completed",
-          amount: { amount: "-1.00000000", currency: "ETH2" },
-          native_amount: { amount: "-2000.00", currency: "EUR" },
-          created_at: "2025-05-01T10:00:00.000Z",
-          resource_path:
-            "/v2/accounts/coinbase-account-1/transactions/tx-ungrouped-release-without-sibling",
-        },
-      }),
-      makeCoinbaseRecord({
-        externalRecordId: "tx-unrelated-credit",
-        externalAccountId: testCase.candidateAccountId,
-        externalParentId: testCase.candidateParentId,
-        occurredAt: new Date(testCase.candidateOccurredAt),
-        payload: {
-          id: "tx-unrelated-credit",
-          type: testCase.candidateType,
-          status: "completed",
-          amount: { amount: "0.99000000", currency: "ETH2" },
-          native_amount: { amount: "1980.00", currency: "EUR" },
-          created_at: testCase.candidateOccurredAt,
-          resource_path: `/v2/accounts/${testCase.candidateAccountId}/transactions/tx-unrelated-credit`,
-        },
-      }),
-      ...(testCase.secondCandidateAccountId === null
-        ? []
-        : [
-            makeCoinbaseRecord({
-              externalRecordId: "tx-second-unrelated-credit",
-              externalAccountId: testCase.secondCandidateAccountId,
-              occurredAt: new Date(testCase.candidateOccurredAt),
-              payload: {
-                id: "tx-second-unrelated-credit",
-                type: testCase.candidateType,
-                status: "completed",
-                amount: { amount: "0.98000000", currency: "ETH2" },
-                native_amount: { amount: "1960.00", currency: "EUR" },
-                created_at: testCase.candidateOccurredAt,
-                resource_path: `/v2/accounts/${testCase.secondCandidateAccountId}/transactions/tx-second-unrelated-credit`,
-              },
-            }),
-          ]),
-    ]
+  ])("does not pair an ungrouped unstaking row with $caseName", (testCase) =>
+    Effect.gen(function* () {
+      activeSyncRecords = [
+        makeCoinbaseRecord({
+          recordType: "coinbase_account",
+          externalRecordId: "coinbase-account-1",
+          occurredAt: DateTime.toDateUtc(DateTime.makeUnsafe("2025-01-01T00:00:00.000Z")),
+          payload: {
+            id: "coinbase-account-1",
+            created_at: "2025-01-01T00:00:00.000Z",
+            updated_at: "2025-01-01T00:00:00.000Z",
+          },
+        }),
+        makeCoinbaseRecord({
+          externalRecordId: "tx-ungrouped-release-without-sibling",
+          occurredAt: DateTime.toDateUtc(DateTime.makeUnsafe("2025-05-01T10:00:00.000Z")),
+          payload: {
+            id: "tx-ungrouped-release-without-sibling",
+            type: "retail_instant_unstaking",
+            status: "completed",
+            amount: { amount: "-1.00000000", currency: "ETH2" },
+            native_amount: { amount: "-2000.00", currency: "EUR" },
+            created_at: "2025-05-01T10:00:00.000Z",
+            resource_path:
+              "/v2/accounts/coinbase-account-1/transactions/tx-ungrouped-release-without-sibling",
+          },
+        }),
+        makeCoinbaseRecord({
+          externalRecordId: "tx-unrelated-credit",
+          externalAccountId: testCase.candidateAccountId,
+          externalParentId: testCase.candidateParentId,
+          occurredAt: DateTime.toDateUtc(DateTime.makeUnsafe(testCase.candidateOccurredAt)),
+          payload: {
+            id: "tx-unrelated-credit",
+            type: testCase.candidateType,
+            status: "completed",
+            amount: { amount: "0.99000000", currency: "ETH2" },
+            native_amount: { amount: "1980.00", currency: "EUR" },
+            created_at: testCase.candidateOccurredAt,
+            resource_path: `/v2/accounts/${testCase.candidateAccountId}/transactions/tx-unrelated-credit`,
+          },
+        }),
+        ...(testCase.secondCandidateAccountId === null
+          ? []
+          : [
+              makeCoinbaseRecord({
+                externalRecordId: "tx-second-unrelated-credit",
+                externalAccountId: testCase.secondCandidateAccountId,
+                occurredAt: DateTime.toDateUtc(DateTime.makeUnsafe(testCase.candidateOccurredAt)),
+                payload: {
+                  id: "tx-second-unrelated-credit",
+                  type: testCase.candidateType,
+                  status: "completed",
+                  amount: { amount: "0.98000000", currency: "ETH2" },
+                  native_amount: { amount: "1960.00", currency: "EUR" },
+                  created_at: testCase.candidateOccurredAt,
+                  resource_path: `/v2/accounts/${testCase.secondCandidateAccountId}/transactions/tx-second-unrelated-credit`,
+                },
+              }),
+            ]),
+      ]
 
-    await Effect.runPromise(
-      Effect.gen(function* () {
+      yield* Effect.gen(function* () {
         yield* seedCoinbaseSource()
         yield* runSync()
         const state = yield* fetchNormalizationState()
@@ -1270,68 +1340,70 @@ describe("coinbase reference mappings", () => {
           testCase.expectedTransactionIds
         )
       })
-    )
-  })
+    })
+  )
 
-  it("does not pair two ungrouped releases with the same positive row", async () => {
-    const occurredAt = new Date("2025-05-01T10:00:00.000Z")
-    activeSyncRecords = [
-      makeCoinbaseRecord({
-        recordType: "coinbase_account",
-        externalRecordId: "coinbase-account-1",
-        occurredAt: new Date("2025-01-01T00:00:00.000Z"),
-        payload: {
-          id: "coinbase-account-1",
-          created_at: "2025-01-01T00:00:00.000Z",
-          updated_at: "2025-01-01T00:00:00.000Z",
-        },
-      }),
-      makeCoinbaseRecord({
-        externalRecordId: "tx-first-competing-release",
-        externalAccountId: "coinbase-account-1",
-        occurredAt,
-        payload: {
-          id: "tx-first-competing-release",
-          type: "retail_instant_unstaking",
-          status: "completed",
-          amount: { amount: "-1.00000000", currency: "ETH2" },
-          native_amount: { amount: "-2000.00", currency: "EUR" },
-          created_at: occurredAt.toISOString(),
-          resource_path: "/v2/accounts/coinbase-account-1/transactions/tx-first-competing-release",
-        },
-      }),
-      makeCoinbaseRecord({
-        externalRecordId: "tx-second-competing-release",
-        externalAccountId: "coinbase-account-2",
-        occurredAt,
-        payload: {
-          id: "tx-second-competing-release",
-          type: "retail_instant_unstaking",
-          status: "completed",
-          amount: { amount: "-1.01000000", currency: "ETH2" },
-          native_amount: { amount: "-2020.00", currency: "EUR" },
-          created_at: occurredAt.toISOString(),
-          resource_path: "/v2/accounts/coinbase-account-2/transactions/tx-second-competing-release",
-        },
-      }),
-      makeCoinbaseRecord({
-        externalRecordId: "tx-shared-credit",
-        externalAccountId: "coinbase-account-3",
-        occurredAt,
-        payload: {
-          id: "tx-shared-credit",
-          type: "retail_instant_unstaking",
-          status: "completed",
-          amount: { amount: "0.99000000", currency: "ETH2" },
-          native_amount: { amount: "1980.00", currency: "EUR" },
-          created_at: occurredAt.toISOString(),
-          resource_path: "/v2/accounts/coinbase-account-3/transactions/tx-shared-credit",
-        },
-      }),
-    ]
+  it.effect("does not pair two ungrouped releases with the same positive row", () =>
+    Effect.gen(function* () {
+      const occurredAt = DateTime.toDateUtc(DateTime.makeUnsafe("2025-05-01T10:00:00.000Z"))
+      activeSyncRecords = [
+        makeCoinbaseRecord({
+          recordType: "coinbase_account",
+          externalRecordId: "coinbase-account-1",
+          occurredAt: DateTime.toDateUtc(DateTime.makeUnsafe("2025-01-01T00:00:00.000Z")),
+          payload: {
+            id: "coinbase-account-1",
+            created_at: "2025-01-01T00:00:00.000Z",
+            updated_at: "2025-01-01T00:00:00.000Z",
+          },
+        }),
+        makeCoinbaseRecord({
+          externalRecordId: "tx-first-competing-release",
+          externalAccountId: "coinbase-account-1",
+          occurredAt,
+          payload: {
+            id: "tx-first-competing-release",
+            type: "retail_instant_unstaking",
+            status: "completed",
+            amount: { amount: "-1.00000000", currency: "ETH2" },
+            native_amount: { amount: "-2000.00", currency: "EUR" },
+            created_at: occurredAt.toISOString(),
+            resource_path:
+              "/v2/accounts/coinbase-account-1/transactions/tx-first-competing-release",
+          },
+        }),
+        makeCoinbaseRecord({
+          externalRecordId: "tx-second-competing-release",
+          externalAccountId: "coinbase-account-2",
+          occurredAt,
+          payload: {
+            id: "tx-second-competing-release",
+            type: "retail_instant_unstaking",
+            status: "completed",
+            amount: { amount: "-1.01000000", currency: "ETH2" },
+            native_amount: { amount: "-2020.00", currency: "EUR" },
+            created_at: occurredAt.toISOString(),
+            resource_path:
+              "/v2/accounts/coinbase-account-2/transactions/tx-second-competing-release",
+          },
+        }),
+        makeCoinbaseRecord({
+          externalRecordId: "tx-shared-credit",
+          externalAccountId: "coinbase-account-3",
+          occurredAt,
+          payload: {
+            id: "tx-shared-credit",
+            type: "retail_instant_unstaking",
+            status: "completed",
+            amount: { amount: "0.99000000", currency: "ETH2" },
+            native_amount: { amount: "1980.00", currency: "EUR" },
+            created_at: occurredAt.toISOString(),
+            resource_path: "/v2/accounts/coinbase-account-3/transactions/tx-shared-credit",
+          },
+        }),
+      ]
 
-    await Effect.runPromise(
-      Effect.gen(function* () {
+      yield* Effect.gen(function* () {
         yield* seedCoinbaseSource()
         yield* runSync()
         const state = yield* fetchNormalizationState()
@@ -1349,61 +1421,61 @@ describe("coinbase reference mappings", () => {
         expect(state.transactions.map((row) => row.externalId)).toEqual(["tx-shared-credit"])
         expect(state.legs.filter((leg) => leg.kind === "fee")).toHaveLength(0)
       })
-    )
-  })
+    })
+  )
 
-  it.each([
+  it.effect.each([
     { releaseStatus: "completed", creditStatus: "pending" },
     { releaseStatus: "completed", creditStatus: "failed" },
     { releaseStatus: "pending", creditStatus: "completed" },
     { releaseStatus: "failed", creditStatus: "completed" },
   ] as const)(
     "does not pair a $releaseStatus release with a $creditStatus credit",
-    async ({ releaseStatus, creditStatus }) => {
-      const occurredAt = new Date("2025-05-01T10:00:00.000Z")
-      activeSyncRecords = [
-        makeCoinbaseRecord({
-          recordType: "coinbase_account",
-          externalRecordId: "coinbase-account-1",
-          occurredAt: new Date("2025-01-01T00:00:00.000Z"),
-          payload: {
-            id: "coinbase-account-1",
-            created_at: "2025-01-01T00:00:00.000Z",
-            updated_at: "2025-01-01T00:00:00.000Z",
-          },
-        }),
-        makeCoinbaseRecord({
-          externalRecordId: "tx-status-release",
-          externalParentId: "status-pair-group",
-          occurredAt,
-          payload: {
-            id: "tx-status-release",
-            type: "retail_instant_unstaking",
-            status: releaseStatus,
-            amount: { amount: "-1.00000000", currency: "ETH2" },
-            native_amount: { amount: "-2000.00", currency: "EUR" },
-            created_at: occurredAt.toISOString(),
-            resource_path: "/v2/accounts/coinbase-account-1/transactions/tx-status-release",
-          },
-        }),
-        makeCoinbaseRecord({
-          externalRecordId: "tx-status-credit",
-          externalParentId: "status-pair-group",
-          occurredAt,
-          payload: {
-            id: "tx-status-credit",
-            type: "retail_instant_unstaking",
-            status: creditStatus,
-            amount: { amount: "0.99000000", currency: "ETH2" },
-            native_amount: { amount: "1980.00", currency: "EUR" },
-            created_at: occurredAt.toISOString(),
-            resource_path: "/v2/accounts/coinbase-account-1/transactions/tx-status-credit",
-          },
-        }),
-      ]
+    ({ releaseStatus, creditStatus }) =>
+      Effect.gen(function* () {
+        const occurredAt = DateTime.toDateUtc(DateTime.makeUnsafe("2025-05-01T10:00:00.000Z"))
+        activeSyncRecords = [
+          makeCoinbaseRecord({
+            recordType: "coinbase_account",
+            externalRecordId: "coinbase-account-1",
+            occurredAt: DateTime.toDateUtc(DateTime.makeUnsafe("2025-01-01T00:00:00.000Z")),
+            payload: {
+              id: "coinbase-account-1",
+              created_at: "2025-01-01T00:00:00.000Z",
+              updated_at: "2025-01-01T00:00:00.000Z",
+            },
+          }),
+          makeCoinbaseRecord({
+            externalRecordId: "tx-status-release",
+            externalParentId: "status-pair-group",
+            occurredAt,
+            payload: {
+              id: "tx-status-release",
+              type: "retail_instant_unstaking",
+              status: releaseStatus,
+              amount: { amount: "-1.00000000", currency: "ETH2" },
+              native_amount: { amount: "-2000.00", currency: "EUR" },
+              created_at: occurredAt.toISOString(),
+              resource_path: "/v2/accounts/coinbase-account-1/transactions/tx-status-release",
+            },
+          }),
+          makeCoinbaseRecord({
+            externalRecordId: "tx-status-credit",
+            externalParentId: "status-pair-group",
+            occurredAt,
+            payload: {
+              id: "tx-status-credit",
+              type: "retail_instant_unstaking",
+              status: creditStatus,
+              amount: { amount: "0.99000000", currency: "ETH2" },
+              native_amount: { amount: "1980.00", currency: "EUR" },
+              created_at: occurredAt.toISOString(),
+              resource_path: "/v2/accounts/coinbase-account-1/transactions/tx-status-credit",
+            },
+          }),
+        ]
 
-      await Effect.runPromise(
-        Effect.gen(function* () {
+        yield* Effect.gen(function* () {
           yield* seedCoinbaseSource()
           yield* runSync()
           const state = yield* fetchNormalizationState()
@@ -1420,61 +1492,62 @@ describe("coinbase reference mappings", () => {
           expect(state.transactions.map((row) => row.externalId)).toEqual(["tx-status-credit"])
           expect(state.legs.filter((leg) => leg.kind === "fee")).toHaveLength(0)
         })
-      )
-    }
+      })
   )
 
-  it.each([
+  it.effect.each([
     { releaseStatus: "succeeded", creditStatus: "completed" },
     { releaseStatus: "completed", creditStatus: "succeeded" },
     { releaseStatus: "succeeded", creditStatus: "succeeded" },
   ] as const)(
     "pairs a $releaseStatus release with a $creditStatus credit",
-    async ({ releaseStatus, creditStatus }) => {
-      const occurredAt = new Date("2025-05-01T10:00:00.000Z")
-      activeSyncRecords = [
-        makeCoinbaseRecord({
-          recordType: "coinbase_account",
-          externalRecordId: "coinbase-account-1",
-          occurredAt: new Date("2025-01-01T00:00:00.000Z"),
-          payload: {
-            id: "coinbase-account-1",
-            created_at: "2025-01-01T00:00:00.000Z",
-            updated_at: "2025-01-01T00:00:00.000Z",
-          },
-        }),
-        makeCoinbaseRecord({
-          externalRecordId: "tx-success-status-release",
-          externalParentId: "success-status-pair-group",
-          occurredAt,
-          payload: {
-            id: "tx-success-status-release",
-            type: "retail_instant_unstaking",
-            status: releaseStatus,
-            amount: { amount: "-1.00000000", currency: "ETH2" },
-            native_amount: { amount: "-2000.00", currency: "EUR" },
-            created_at: occurredAt.toISOString(),
-            resource_path: "/v2/accounts/coinbase-account-1/transactions/tx-success-status-release",
-          },
-        }),
-        makeCoinbaseRecord({
-          externalRecordId: "tx-success-status-credit",
-          externalParentId: "success-status-pair-group",
-          occurredAt,
-          payload: {
-            id: "tx-success-status-credit",
-            type: "retail_instant_unstaking",
-            status: creditStatus,
-            amount: { amount: "0.99000000", currency: "ETH2" },
-            native_amount: { amount: "1980.00", currency: "EUR" },
-            created_at: occurredAt.toISOString(),
-            resource_path: "/v2/accounts/coinbase-account-1/transactions/tx-success-status-credit",
-          },
-        }),
-      ]
+    ({ releaseStatus, creditStatus }) =>
+      Effect.gen(function* () {
+        const occurredAt = DateTime.toDateUtc(DateTime.makeUnsafe("2025-05-01T10:00:00.000Z"))
+        activeSyncRecords = [
+          makeCoinbaseRecord({
+            recordType: "coinbase_account",
+            externalRecordId: "coinbase-account-1",
+            occurredAt: DateTime.toDateUtc(DateTime.makeUnsafe("2025-01-01T00:00:00.000Z")),
+            payload: {
+              id: "coinbase-account-1",
+              created_at: "2025-01-01T00:00:00.000Z",
+              updated_at: "2025-01-01T00:00:00.000Z",
+            },
+          }),
+          makeCoinbaseRecord({
+            externalRecordId: "tx-success-status-release",
+            externalParentId: "success-status-pair-group",
+            occurredAt,
+            payload: {
+              id: "tx-success-status-release",
+              type: "retail_instant_unstaking",
+              status: releaseStatus,
+              amount: { amount: "-1.00000000", currency: "ETH2" },
+              native_amount: { amount: "-2000.00", currency: "EUR" },
+              created_at: occurredAt.toISOString(),
+              resource_path:
+                "/v2/accounts/coinbase-account-1/transactions/tx-success-status-release",
+            },
+          }),
+          makeCoinbaseRecord({
+            externalRecordId: "tx-success-status-credit",
+            externalParentId: "success-status-pair-group",
+            occurredAt,
+            payload: {
+              id: "tx-success-status-credit",
+              type: "retail_instant_unstaking",
+              status: creditStatus,
+              amount: { amount: "0.99000000", currency: "ETH2" },
+              native_amount: { amount: "1980.00", currency: "EUR" },
+              created_at: occurredAt.toISOString(),
+              resource_path:
+                "/v2/accounts/coinbase-account-1/transactions/tx-success-status-credit",
+            },
+          }),
+        ]
 
-      await Effect.runPromise(
-        Effect.gen(function* () {
+        yield* Effect.gen(function* () {
           yield* seedCoinbaseSource()
           yield* runSync()
           const state = yield* fetchNormalizationState()
@@ -1491,54 +1564,53 @@ describe("coinbase reference mappings", () => {
             }),
           ])
         })
-      )
-    }
+      })
   )
 
-  it("pairs zero-spread ungrouped unstaking rows", async () => {
-    const occurredAt = new Date("2025-05-01T10:00:00.000Z")
-    activeSyncRecords = [
-      makeCoinbaseRecord({
-        recordType: "coinbase_account",
-        externalRecordId: "coinbase-account-1",
-        occurredAt: new Date("2025-01-01T00:00:00.000Z"),
-        payload: {
-          id: "coinbase-account-1",
-          created_at: "2025-01-01T00:00:00.000Z",
-          updated_at: "2025-01-01T00:00:00.000Z",
-        },
-      }),
-      makeCoinbaseRecord({
-        externalRecordId: "tx-zero-spread-release",
-        occurredAt,
-        payload: {
-          id: "tx-zero-spread-release",
-          type: "retail_instant_unstaking",
-          status: "completed",
-          amount: { amount: "-1.00000000", currency: "ETH2" },
-          native_amount: { amount: "-2000.00", currency: "EUR" },
-          created_at: occurredAt.toISOString(),
-          resource_path: "/v2/accounts/coinbase-account-1/transactions/tx-zero-spread-release",
-        },
-      }),
-      makeCoinbaseRecord({
-        externalRecordId: "tx-zero-spread-credit",
-        externalAccountId: "coinbase-account-2",
-        occurredAt,
-        payload: {
-          id: "tx-zero-spread-credit",
-          type: "retail_instant_unstaking",
-          status: "completed",
-          amount: { amount: "1.00000000", currency: "ETH2" },
-          native_amount: { amount: "2000.00", currency: "EUR" },
-          created_at: occurredAt.toISOString(),
-          resource_path: "/v2/accounts/coinbase-account-2/transactions/tx-zero-spread-credit",
-        },
-      }),
-    ]
+  it.effect("pairs zero-spread ungrouped unstaking rows", () =>
+    Effect.gen(function* () {
+      const occurredAt = DateTime.toDateUtc(DateTime.makeUnsafe("2025-05-01T10:00:00.000Z"))
+      activeSyncRecords = [
+        makeCoinbaseRecord({
+          recordType: "coinbase_account",
+          externalRecordId: "coinbase-account-1",
+          occurredAt: DateTime.toDateUtc(DateTime.makeUnsafe("2025-01-01T00:00:00.000Z")),
+          payload: {
+            id: "coinbase-account-1",
+            created_at: "2025-01-01T00:00:00.000Z",
+            updated_at: "2025-01-01T00:00:00.000Z",
+          },
+        }),
+        makeCoinbaseRecord({
+          externalRecordId: "tx-zero-spread-release",
+          occurredAt,
+          payload: {
+            id: "tx-zero-spread-release",
+            type: "retail_instant_unstaking",
+            status: "completed",
+            amount: { amount: "-1.00000000", currency: "ETH2" },
+            native_amount: { amount: "-2000.00", currency: "EUR" },
+            created_at: occurredAt.toISOString(),
+            resource_path: "/v2/accounts/coinbase-account-1/transactions/tx-zero-spread-release",
+          },
+        }),
+        makeCoinbaseRecord({
+          externalRecordId: "tx-zero-spread-credit",
+          externalAccountId: "coinbase-account-2",
+          occurredAt,
+          payload: {
+            id: "tx-zero-spread-credit",
+            type: "retail_instant_unstaking",
+            status: "completed",
+            amount: { amount: "1.00000000", currency: "ETH2" },
+            native_amount: { amount: "2000.00", currency: "EUR" },
+            created_at: occurredAt.toISOString(),
+            resource_path: "/v2/accounts/coinbase-account-2/transactions/tx-zero-spread-credit",
+          },
+        }),
+      ]
 
-    await Effect.runPromise(
-      Effect.gen(function* () {
+      yield* Effect.gen(function* () {
         yield* seedCoinbaseSource()
         yield* runSync()
         const state = yield* fetchNormalizationState()
@@ -1562,139 +1634,143 @@ describe("coinbase reference mappings", () => {
         )
         expect(state.legs.filter((leg) => leg.kind === "fee")).toHaveLength(0)
       })
-    )
-  })
+    })
+  )
 
-  it("normalizes retail_instant_unstaking and retail_eth2_deprecation with mapping-driven behavior", async () => {
-    await Effect.runPromise(
-      Effect.gen(function* () {
-        yield* seedCoinbaseSource()
-        yield* runSync()
-        const state = yield* fetchNormalizationState()
+  it.effect(
+    "normalizes retail_instant_unstaking and retail_eth2_deprecation with mapping-driven behavior",
+    () =>
+      Effect.asVoid(
+        Effect.gen(function* () {
+          yield* seedCoinbaseSource()
+          yield* runSync()
+          const state = yield* fetchNormalizationState()
 
-        expect(state.rawRows).toHaveLength(7)
-        expect(state.rawRows.every((row) => row.normalizedAt !== null)).toBe(true)
-        expect(state.rawRows.every((row) => row.normalizationError === null)).toBe(true)
+          expect(state.rawRows).toHaveLength(7)
+          expect(state.rawRows.every((row) => row.normalizedAt !== null)).toBe(true)
+          expect(state.rawRows.every((row) => row.normalizationError === null)).toBe(true)
 
-        expect(
-          state.transactions
-            .map((row) => ({
-              externalId: row.externalId,
-              externalGroupId: row.externalGroupId,
-              providerTransactionType: row.providerTransactionType,
-              transactionType: row.transactionType,
-            }))
-            .sort((left, right) => String(left.externalId).localeCompare(String(right.externalId)))
-        ).toEqual([
-          {
-            externalId: "tx-eth2-migration-in",
-            externalGroupId: "eth2-migration-1",
-            providerTransactionType: "retail_eth2_deprecation",
-            transactionType: "token_migration_transfer",
-          },
-          {
-            externalId: "tx-eth2-migration-out",
-            externalGroupId: "eth2-migration-1",
-            providerTransactionType: "retail_eth2_deprecation",
-            transactionType: "token_migration_transfer",
-          },
-          {
-            externalId: "tx-unstake-alt-credit",
-            externalGroupId: "unstake-group-2",
-            providerTransactionType: "retail_instant_unstaking",
-            transactionType: "staking_withdrawal",
-          },
-          {
-            externalId: "tx-unstake-alt-release",
-            externalGroupId: "unstake-group-2",
-            providerTransactionType: "retail_instant_unstaking",
-            transactionType: "staking_withdrawal",
-          },
-          {
-            externalId: "tx-unstake-credit",
-            externalGroupId: "unstake-group-1",
-            providerTransactionType: "retail_instant_unstaking",
-            transactionType: "staking_withdrawal",
-          },
-          {
-            externalId: "tx-unstake-release",
-            externalGroupId: "unstake-group-1",
-            providerTransactionType: "retail_instant_unstaking",
-            transactionType: "staking_withdrawal",
-          },
-        ])
-
-        const sortedLegs = [...state.legs].sort((left, right) =>
-          String(left.externalId).localeCompare(String(right.externalId))
-        )
-        expect(
-          sortedLegs.map((row) => ({
-            externalId: row.externalId,
-            kind: row.kind,
-            derivationRule: row.derivationRule,
-          }))
-        ).toEqual([
-          {
-            externalId: expect.stringContaining("tx-unstake-alt-release"),
-            kind: "fee",
-            derivationRule: "coinbase_retail_instant_unstaking_spread_fee",
-          },
-          {
-            externalId: expect.stringContaining("tx-unstake-release"),
-            kind: "fee",
-            derivationRule: "coinbase_retail_instant_unstaking_spread_fee",
-          },
-        ])
-
-        const [altSpreadFeeLeg, spreadFeeLeg] = sortedLegs
-        expect(Number(spreadFeeLeg?.amount)).toBeCloseTo(0.015, 9)
-        expect(Number(spreadFeeLeg?.fiatAmount)).toBeCloseTo(30, 6)
-        expect(spreadFeeLeg?.fiatCurrency).toBe("EUR")
-        expect(Number(altSpreadFeeLeg?.amount)).toBeCloseTo(0.01, 9)
-        expect(Number(altSpreadFeeLeg?.fiatAmount)).toBeCloseTo(20, 6)
-        expect(altSpreadFeeLeg?.fiatCurrency).toBe("EUR")
-
-        expect(
-          state.transactions.find((row) => row.externalId === "tx-unstake-release")?.metadata
-        ).toEqual(
-          expect.objectContaining({
-            coinbaseReferenceMapping: expect.objectContaining({
-              resolutionStrategy: "paired_spread_fee",
-              transactionType: "staking_withdrawal",
-            }),
-            pairedRecord: expect.objectContaining({
-              externalId: "tx-unstake-credit",
-              pairingRule: "coinbase_unstaking_pair_v1",
-              pairingKind: "provider_group",
-              timestampDistanceMillis: 0,
-            }),
-          })
-        )
-        expect(
-          state.transactions.find((row) => row.externalId === "tx-unstake-alt-release")?.metadata
-        ).toEqual(
-          expect.objectContaining({
-            pairedRecord: expect.objectContaining({
-              externalId: "tx-unstake-alt-credit",
-              pairingRule: "coinbase_unstaking_pair_v1",
-              pairingKind: "provider_group",
-              timestampDistanceMillis: 0,
-            }),
-          })
-        )
-        expect(
-          state.transactions.find((row) => row.externalId === "tx-eth2-migration-out")?.metadata
-        ).toEqual(
-          expect.objectContaining({
-            coinbaseReferenceMapping: expect.objectContaining({
-              resolutionStrategy: "no_leg",
+          expect(
+            state.transactions
+              .map((row) => ({
+                externalId: row.externalId,
+                externalGroupId: row.externalGroupId,
+                providerTransactionType: row.providerTransactionType,
+                transactionType: row.transactionType,
+              }))
+              .sort((left, right) =>
+                String(left.externalId).localeCompare(String(right.externalId))
+              )
+          ).toEqual([
+            {
+              externalId: "tx-eth2-migration-in",
+              externalGroupId: "eth2-migration-1",
+              providerTransactionType: "retail_eth2_deprecation",
               transactionType: "token_migration_transfer",
-            }),
-          })
-        )
-        expect(state.eth2Mapping?.assetRepresentationId).toBeNull()
-        expect(state.eth2Mapping?.canonicalAssetId).toBe(ETH_ASSET_ID)
-      })
-    )
-  })
+            },
+            {
+              externalId: "tx-eth2-migration-out",
+              externalGroupId: "eth2-migration-1",
+              providerTransactionType: "retail_eth2_deprecation",
+              transactionType: "token_migration_transfer",
+            },
+            {
+              externalId: "tx-unstake-alt-credit",
+              externalGroupId: "unstake-group-2",
+              providerTransactionType: "retail_instant_unstaking",
+              transactionType: "staking_withdrawal",
+            },
+            {
+              externalId: "tx-unstake-alt-release",
+              externalGroupId: "unstake-group-2",
+              providerTransactionType: "retail_instant_unstaking",
+              transactionType: "staking_withdrawal",
+            },
+            {
+              externalId: "tx-unstake-credit",
+              externalGroupId: "unstake-group-1",
+              providerTransactionType: "retail_instant_unstaking",
+              transactionType: "staking_withdrawal",
+            },
+            {
+              externalId: "tx-unstake-release",
+              externalGroupId: "unstake-group-1",
+              providerTransactionType: "retail_instant_unstaking",
+              transactionType: "staking_withdrawal",
+            },
+          ])
+
+          const sortedLegs = [...state.legs].sort((left, right) =>
+            String(left.externalId).localeCompare(String(right.externalId))
+          )
+          expect(
+            sortedLegs.map((row) => ({
+              externalId: row.externalId,
+              kind: row.kind,
+              derivationRule: row.derivationRule,
+            }))
+          ).toEqual([
+            {
+              externalId: expect.stringContaining("tx-unstake-alt-release"),
+              kind: "fee",
+              derivationRule: "coinbase_retail_instant_unstaking_spread_fee",
+            },
+            {
+              externalId: expect.stringContaining("tx-unstake-release"),
+              kind: "fee",
+              derivationRule: "coinbase_retail_instant_unstaking_spread_fee",
+            },
+          ])
+
+          const [altSpreadFeeLeg, spreadFeeLeg] = sortedLegs
+          expect(Number(spreadFeeLeg?.amount)).toBeCloseTo(0.015, 9)
+          expect(Number(spreadFeeLeg?.fiatAmount)).toBeCloseTo(30, 6)
+          expect(spreadFeeLeg?.fiatCurrency).toBe("EUR")
+          expect(Number(altSpreadFeeLeg?.amount)).toBeCloseTo(0.01, 9)
+          expect(Number(altSpreadFeeLeg?.fiatAmount)).toBeCloseTo(20, 6)
+          expect(altSpreadFeeLeg?.fiatCurrency).toBe("EUR")
+
+          expect(
+            state.transactions.find((row) => row.externalId === "tx-unstake-release")?.metadata
+          ).toEqual(
+            expect.objectContaining({
+              coinbaseReferenceMapping: expect.objectContaining({
+                resolutionStrategy: "paired_spread_fee",
+                transactionType: "staking_withdrawal",
+              }),
+              pairedRecord: expect.objectContaining({
+                externalId: "tx-unstake-credit",
+                pairingRule: "coinbase_unstaking_pair_v1",
+                pairingKind: "provider_group",
+                timestampDistanceMillis: 0,
+              }),
+            })
+          )
+          expect(
+            state.transactions.find((row) => row.externalId === "tx-unstake-alt-release")?.metadata
+          ).toEqual(
+            expect.objectContaining({
+              pairedRecord: expect.objectContaining({
+                externalId: "tx-unstake-alt-credit",
+                pairingRule: "coinbase_unstaking_pair_v1",
+                pairingKind: "provider_group",
+                timestampDistanceMillis: 0,
+              }),
+            })
+          )
+          expect(
+            state.transactions.find((row) => row.externalId === "tx-eth2-migration-out")?.metadata
+          ).toEqual(
+            expect.objectContaining({
+              coinbaseReferenceMapping: expect.objectContaining({
+                resolutionStrategy: "no_leg",
+                transactionType: "token_migration_transfer",
+              }),
+            })
+          )
+          expect(state.eth2Mapping?.assetRepresentationId).toBeNull()
+          expect(state.eth2Mapping?.canonicalAssetId).toBe(ETH_ASSET_ID)
+        })
+      )
+  )
 })

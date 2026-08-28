@@ -1,6 +1,7 @@
 import type { MouseEvent } from "@opentui/core"
 import { useKeyboard, useRenderer, useTerminalDimensions } from "@opentui/solid"
 import { createSignal, For, Match, Show, Switch } from "solid-js"
+import { Effect } from "effect"
 import type { Source, SourceAssetPnl } from "taxmaxi"
 import type { CliSession } from "../../session.ts"
 import { fetchSourceAssetPnl, type ReportResult } from "../controller.ts"
@@ -58,17 +59,22 @@ export function SourceAssetPnlScreen(props: {
   const [selected, setSelected] = createSignal(0)
   const viewport = createListViewport()
 
-  const refresh = async () => {
-    setState({ _tag: "loading" })
-    const result = await fetchSourceAssetPnl(props.session, props.source.id)
-    if (result._tag === "unauthorized") {
-      props.onSessionExpired()
-      return
-    }
-    setState(result)
-    setSelected(0)
-    viewport.reset()
-  }
+  const refresh = () =>
+    Effect.runPromise(
+      Effect.gen(function* () {
+        setState({ _tag: "loading" })
+        const result = yield* Effect.promise(() =>
+          fetchSourceAssetPnl(props.session, props.source.id)
+        )
+        if (result._tag === "unauthorized") {
+          props.onSessionExpired()
+          return
+        }
+        setState(result)
+        setSelected(0)
+        viewport.reset()
+      })
+    )
   void refresh()
 
   const rows = (): ReadonlyArray<AssetRow> => {

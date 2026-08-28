@@ -1,5 +1,10 @@
-import { describe, expect, it, vi } from "vitest"
+import { describe, expect, it } from "@effect/vitest"
+import { vi } from "vitest"
+import * as Data from "effect/Data"
 import * as Effect from "effect/Effect"
+import * as Exit from "effect/Exit"
+import * as Schema from "effect/Schema"
+import * as Scope from "effect/Scope"
 import {
   DEFAULT_BASE_URL,
   TaxMaxi,
@@ -24,6 +29,20 @@ type CapturedRequest = {
   readonly headers: TaxMaxiHeaders
   readonly url: string
 }
+
+type CaptureRequest = (input: FetchInput, init: FetchInit | undefined) => void
+
+type MakeSequenceFetchOptions = {
+  readonly capture: CaptureRequest
+  readonly fallbackBody: string
+  readonly responseBodies: Array<string>
+}
+
+class UnexpectedPromiseRejection extends Data.TaggedError("UnexpectedPromiseRejection")<{
+  readonly cause: unknown
+}> {}
+
+const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown))
 
 const healthResponseBody = JSON.stringify({
   status: "ok",
@@ -430,20 +449,95 @@ const makeFetch =
     capturedRequests: Array<CapturedRequest>,
     responseBody: string = healthResponseBody
   ): typeof globalThis.fetch =>
-  async (input, init) => {
+  (input, init) => {
     capturedRequests.push({
       credentials: init?.credentials === undefined ? undefined : String(init.credentials),
       headers: toHeaderRecord(init?.headers),
       url: getRequestUrl(input),
     })
 
-    return new Response(responseBody, {
-      headers: {
-        "Content-Type": "application/json",
-      },
-      status: 200,
-    })
+    return Promise.resolve(
+      new Response(responseBody, {
+        headers: {
+          "Content-Type": "application/json",
+        },
+        status: 200,
+      })
+    )
   }
+
+const makeSequenceFetch =
+  ({ capture, fallbackBody, responseBodies }: MakeSequenceFetchOptions): typeof globalThis.fetch =>
+  (input, init) => {
+    capture(input, init)
+
+    return Promise.resolve(
+      new Response(responseBodies.shift() ?? fallbackBody, {
+        headers: { "Content-Type": "application/json" },
+        status: 200,
+      })
+    )
+  }
+
+const makeBodyCapturingFetch =
+  ({
+    capturedRequests,
+    fallbackBody,
+    responseBodies,
+  }: {
+    readonly capturedRequests: Array<CapturedRequest>
+    readonly fallbackBody: string
+    readonly responseBodies: Array<string>
+  }): typeof globalThis.fetch =>
+  (input, init) =>
+    Effect.runPromise(
+      Effect.gen(function* () {
+        const requestBody =
+          init?.body === undefined
+            ? undefined
+            : yield* Effect.promise(() => new Response(init.body).text())
+        capturedRequests.push({
+          ...(requestBody === undefined || requestBody === "" ? {} : { body: requestBody }),
+          credentials: init?.credentials === undefined ? undefined : String(init.credentials),
+          headers: toHeaderRecord(init?.headers),
+          url: getRequestUrl(input),
+        })
+
+        return new Response(responseBodies.shift() ?? fallbackBody, {
+          headers: { "Content-Type": "application/json" },
+          status: 200,
+        })
+      })
+    )
+
+const makeAbortableFetch =
+  (captureSignal: (signal: AbortSignal | undefined) => void): typeof globalThis.fetch =>
+  (_input, init) =>
+    Effect.runPromise(
+      Effect.callback<Response, DOMException>((resume) => {
+        const signal = init?.signal ?? undefined
+        captureSignal(signal)
+
+        if (signal === undefined) {
+          return
+        }
+
+        const onAbort = () => resume(Effect.fail(new DOMException("Request aborted", "AbortError")))
+
+        if (signal.aborted) {
+          onAbort()
+          return
+        }
+
+        signal.addEventListener("abort", onAbort, { once: true })
+        return Effect.sync(() => signal.removeEventListener("abort", onAbort))
+      })
+    )
+
+const makeFailureFetch =
+  (error: unknown): typeof globalThis.fetch =>
+  () =>
+    Promise.reject(error)
 
 describe("normalizeBaseUrl", () => {
   it("defaults to the production API URL", () => {
@@ -459,42 +553,44 @@ describe("normalizeBaseUrl", () => {
 })
 
 describe("TaxMaxi Effect client foundation", () => {
-  it("constructs a TaxMaxiApi HttpApiClient with injected fetch, credentials, and headers", async () => {
-    const capturedRequests: Array<CapturedRequest> = []
+  it.effect(
+    "constructs a TaxMaxiApi HttpApiClient with injected fetch, credentials, and headers",
+    () =>
+      Effect.gen(function* () {
+        const capturedRequests: Array<CapturedRequest> = []
 
-    const client = await Effect.runPromise(
-      TaxMaxi.makeEffectClient({
-        apiKey: "tm_test_phase_1",
-        baseUrl: "https://sdk.example.test/",
-        credentials: "include",
-        fetch: makeFetch(capturedRequests),
-        headers: {
-          Authorization: "Bearer should-be-overridden",
-          "X-TaxMaxi-Client": "phase-1",
-        },
+        const client = yield* TaxMaxi.makeEffectClient({
+          apiKey: "tm_test_phase_1",
+          baseUrl: "https://sdk.example.test/",
+          credentials: "include",
+          fetch: makeFetch(capturedRequests),
+          headers: {
+            Authorization: "Bearer should-be-overridden",
+            "X-TaxMaxi-Client": "phase-1",
+          },
+        })
+
+        yield* client.health.healthCheck(undefined)
+
+        expect(capturedRequests).toEqual([
+          {
+            credentials: "include",
+            headers: expect.objectContaining({
+              authorization: "Bearer tm_test_phase_1",
+              "x-taxmaxi-client": "phase-1",
+            }),
+            url: "https://sdk.example.test/health",
+          },
+        ])
       })
-    )
+  )
 
-    await Effect.runPromise(client.health.healthCheck(undefined))
+  it.effect("resolves dynamic headers for each request", () =>
+    Effect.gen(function* () {
+      const capturedRequests: Array<CapturedRequest> = []
+      let requestCount = 0
 
-    expect(capturedRequests).toEqual([
-      {
-        credentials: "include",
-        headers: expect.objectContaining({
-          authorization: "Bearer tm_test_phase_1",
-          "x-taxmaxi-client": "phase-1",
-        }),
-        url: "https://sdk.example.test/health",
-      },
-    ])
-  })
-
-  it("resolves dynamic headers for each request", async () => {
-    const capturedRequests: Array<CapturedRequest> = []
-    let requestCount = 0
-
-    const client = await Effect.runPromise(
-      TaxMaxi.makeEffectClient({
+      const client = yield* TaxMaxi.makeEffectClient({
         baseUrl: "https://sdk.example.test",
         fetch: makeFetch(capturedRequests),
         headers: () => {
@@ -504,40 +600,42 @@ describe("TaxMaxi Effect client foundation", () => {
           }
         },
       })
-    )
 
-    await Effect.runPromise(client.health.healthCheck(undefined))
-    await Effect.runPromise(client.health.healthCheck(undefined))
+      yield* client.health.healthCheck(undefined)
+      yield* client.health.healthCheck(undefined)
 
-    expect(capturedRequests).toEqual([
-      expect.objectContaining({
-        headers: expect.objectContaining({ "x-request-count": "1" }),
-      }),
-      expect.objectContaining({
-        headers: expect.objectContaining({ "x-request-count": "2" }),
-      }),
-    ])
-  })
-
-  it("exposes the same client construction through TaxMaxi instances", async () => {
-    const capturedRequests: Array<CapturedRequest> = []
-    const taxmaxi = new TaxMaxi({
-      apiKey: "tm_instance",
-      baseUrl: "https://sdk.example.test",
-      fetch: makeFetch(capturedRequests, sourceListResponseBody),
-    })
-
-    await taxmaxi.sources.list()
-
-    expect(capturedRequests).toEqual([
-      expect.objectContaining({
-        headers: expect.objectContaining({
-          authorization: "Bearer tm_instance",
+      expect(capturedRequests).toEqual([
+        expect.objectContaining({
+          headers: expect.objectContaining({ "x-request-count": "1" }),
         }),
-        url: "https://sdk.example.test/v1/sources",
-      }),
-    ])
-  })
+        expect.objectContaining({
+          headers: expect.objectContaining({ "x-request-count": "2" }),
+        }),
+      ])
+    })
+  )
+
+  it.effect("exposes the same client construction through TaxMaxi instances", () =>
+    Effect.gen(function* () {
+      const capturedRequests: Array<CapturedRequest> = []
+      const taxmaxi = new TaxMaxi({
+        apiKey: "tm_instance",
+        baseUrl: "https://sdk.example.test",
+        fetch: makeFetch(capturedRequests, sourceListResponseBody),
+      })
+
+      yield* Effect.promise(() => taxmaxi.sources.list())
+
+      expect(capturedRequests).toEqual([
+        expect.objectContaining({
+          headers: expect.objectContaining({
+            authorization: "Bearer tm_instance",
+          }),
+          url: "https://sdk.example.test/v1/sources",
+        }),
+      ])
+    })
+  )
 
   it("exports the request transform for lower-level Effect composition", () => {
     expect(typeof makeTaxMaxiHttpClientTransform).toBe("function")
@@ -545,615 +643,655 @@ describe("TaxMaxi Effect client foundation", () => {
 })
 
 describe("TaxMaxi Promise client", () => {
-  it("lists canonical transactions through the transactions resource", async () => {
-    const capturedRequests: Array<CapturedRequest> = []
-    const taxmaxi = new TaxMaxi({
-      apiKey: "tm_transactions",
-      baseUrl: "https://sdk.example.test",
-      fetch: makeFetch(capturedRequests, JSON.stringify(transactionListResponse)),
-    })
+  it.effect("lists canonical transactions through the transactions resource", () =>
+    Effect.gen(function* () {
+      const capturedRequests: Array<CapturedRequest> = []
+      const taxmaxi = new TaxMaxi({
+        apiKey: "tm_transactions",
+        baseUrl: "https://sdk.example.test",
+        fetch: makeFetch(capturedRequests, encodeJson(transactionListResponse)),
+      })
 
-    await expect(
-      taxmaxi.transactions.list({ cursor: "transaction-cursor", limit: 10 })
-    ).resolves.toEqual(transactionListResponse)
-    expect(capturedRequests).toEqual([
-      expect.objectContaining({
-        url: "https://sdk.example.test/v1/transactions?cursor=transaction-cursor&limit=10",
-      }),
-    ])
-  })
-
-  it("plumbs successful resource responses through Promise methods", async () => {
-    const capturedRequests: Array<CapturedRequest> = []
-    const taxmaxi = new TaxMaxi({
-      apiKey: "tm_test_phase_2",
-      baseUrl: "https://sdk.example.test",
-      fetch: makeFetch(capturedRequests, sourceListResponseBody),
-    })
-
-    await expect(taxmaxi.sources.list()).resolves.toEqual({
-      sources: [],
-    })
-
-    expect(capturedRequests).toEqual([
-      expect.objectContaining({
-        headers: expect.objectContaining({
-          authorization: "Bearer tm_test_phase_2",
+      yield* Effect.promise(() =>
+        expect(
+          taxmaxi.transactions.list({ cursor: "transaction-cursor", limit: 10 })
+        ).resolves.toEqual(transactionListResponse)
+      )
+      expect(capturedRequests).toEqual([
+        expect.objectContaining({
+          url: "https://sdk.example.test/v1/transactions?cursor=transaction-cursor&limit=10",
         }),
-        url: "https://sdk.example.test/v1/sources",
-      }),
-    ])
-  })
-
-  it("uses the browser session for every billing route and returns encoded responses", async () => {
-    const capturedRequests: Array<{
-      readonly credentials: string | undefined
-      readonly method: string
-      readonly url: string
-    }> = []
-    const responseBodies = [
-      JSON.stringify(billingCatalogResponse),
-      JSON.stringify(billingStatusResponse),
-      JSON.stringify({ url: "https://checkout.stripe.test/annual" }),
-      JSON.stringify({ url: "https://checkout.stripe.test/top-up" }),
-      JSON.stringify({ url: "https://billing.stripe.test/portal" }),
-    ]
-    const taxmaxi = TaxMaxi.fromBrowserSession({
-      baseUrl: "https://sdk.example.test",
-      fetch: async (input, init) => {
-        capturedRequests.push({
-          credentials: init?.credentials === undefined ? undefined : String(init.credentials),
-          method:
-            typeof input === "string" || input instanceof URL
-              ? (init?.method ?? "GET")
-              : input.method,
-          url: getRequestUrl(input),
-        })
-        return new Response(responseBodies.shift(), {
-          headers: { "Content-Type": "application/json" },
-          status: 200,
-        })
-      },
+      ])
     })
+  )
 
-    await expect(taxmaxi.billing.catalog()).resolves.toEqual(billingCatalogResponse)
-    await expect(taxmaxi.billing.status()).resolves.toEqual(billingStatusResponse)
-    await expect(taxmaxi.billing.createAnnualCheckout()).resolves.toEqual({
-      url: "https://checkout.stripe.test/annual",
-    })
-    await expect(taxmaxi.billing.createTopUpCheckout()).resolves.toEqual({
-      url: "https://checkout.stripe.test/top-up",
-    })
-    await expect(taxmaxi.billing.createPortalSession()).resolves.toEqual({
-      url: "https://billing.stripe.test/portal",
-    })
-
-    expect(capturedRequests).toEqual([
-      {
-        credentials: "include",
-        method: "GET",
-        url: "https://sdk.example.test/v1/billing/catalog",
-      },
-      {
-        credentials: "include",
-        method: "GET",
-        url: "https://sdk.example.test/v1/billing/status",
-      },
-      {
-        credentials: "include",
-        method: "POST",
-        url: "https://sdk.example.test/v1/billing/checkout/annual",
-      },
-      {
-        credentials: "include",
-        method: "POST",
-        url: "https://sdk.example.test/v1/billing/checkout/top-up",
-      },
-      {
-        credentials: "include",
-        method: "POST",
-        url: "https://sdk.example.test/v1/billing/portal",
-      },
-    ])
-  })
-
-  it("exposes account details and server-side logout through the public auth resource", async () => {
-    const capturedRequests: Array<{
-      readonly credentials: string | undefined
-      readonly method: string
-      readonly url: string
-    }> = []
-    const responseBodies = [JSON.stringify(accountResponse), JSON.stringify({ success: true })]
-    const taxmaxi = TaxMaxi.fromBrowserSession({
-      baseUrl: "https://sdk.example.test",
-      fetch: async (input, init) => {
-        capturedRequests.push({
-          credentials: init?.credentials === undefined ? undefined : String(init.credentials),
-          method:
-            typeof input === "string" || input instanceof URL
-              ? (init?.method ?? "GET")
-              : input.method,
-          url: getRequestUrl(input),
-        })
-        return new Response(responseBodies.shift(), {
-          headers: { "Content-Type": "application/json" },
-          status: 200,
-        })
-      },
-    })
-
-    const account = await taxmaxi.auth.account()
-
-    expect(account).toEqual(accountResponse)
-    expect(account.loginMethods[0]?.isAvailable).toBe(false)
-    expect(account.loginMethods[0]?.unavailableReason).toBe("provider_disabled")
-    await expect(taxmaxi.auth.logout()).resolves.toEqual({ success: true })
-
-    expect(capturedRequests).toEqual([
-      {
-        credentials: "include",
-        method: "GET",
-        url: "https://sdk.example.test/auth/me",
-      },
-      {
-        credentials: "include",
-        method: "POST",
-        url: "https://sdk.example.test/auth/logout",
-      },
-    ])
-  })
-
-  it("creates paid anonymous sources through the injected fetch implementation", async () => {
-    const capturedRequests: Array<CapturedRequest> = []
-    const taxmaxi = TaxMaxi.fromBrowserSession({
-      baseUrl: "https://sdk.example.test",
-      fetch: makeFetch(capturedRequests, sourceCreateResponseBody),
-    })
-
-    await expect(
-      taxmaxi.sources.create({
-        type: "onchain",
-        walletAddress: "So11111111111111111111111111111111111111112",
-        name: "Demo Solana wallet",
+  it.effect("plumbs successful resource responses through Promise methods", () =>
+    Effect.gen(function* () {
+      const capturedRequests: Array<CapturedRequest> = []
+      const taxmaxi = new TaxMaxi({
+        apiKey: "tm_test_phase_2",
+        baseUrl: "https://sdk.example.test",
+        fetch: makeFetch(capturedRequests, sourceListResponseBody),
       })
-    ).resolves.toMatchObject({
-      created: true,
-      source: {
-        name: "Demo Solana wallet",
-        providerKey: "helius-solana",
-      },
-    })
 
-    expect(capturedRequests).toEqual([
-      expect.objectContaining({
-        credentials: "include",
-        url: "https://sdk.example.test/v1/sources",
-      }),
-    ])
-  })
-
-  it("plumbs anonymous source sync-status methods through browser sessions", async () => {
-    const capturedRequests: Array<CapturedRequest> = []
-    const responseBodies = [anonSourceJobsResponseBody, anonSourceJobResponseBody]
-    const taxmaxi = TaxMaxi.fromBrowserSession({
-      baseUrl: "https://sdk.example.test",
-      fetch: async (input, init) => {
-        capturedRequests.push({
-          credentials: init?.credentials === undefined ? undefined : String(init.credentials),
-          headers: toHeaderRecord(init?.headers),
-          url: getRequestUrl(input),
+      yield* Effect.promise(() =>
+        expect(taxmaxi.sources.list()).resolves.toEqual({
+          sources: [],
         })
+      )
 
-        return new Response(responseBodies.shift() ?? anonSourceJobResponseBody, {
-          headers: {
-            "Content-Type": "application/json",
+      expect(capturedRequests).toEqual([
+        expect.objectContaining({
+          headers: expect.objectContaining({
+            authorization: "Bearer tm_test_phase_2",
+          }),
+          url: "https://sdk.example.test/v1/sources",
+        }),
+      ])
+    })
+  )
+
+  it.effect("uses the browser session for every billing route and returns encoded responses", () =>
+    Effect.gen(function* () {
+      const capturedRequests: Array<{
+        readonly credentials: string | undefined
+        readonly method: string
+        readonly url: string
+      }> = []
+      const responseBodies = [
+        encodeJson(billingCatalogResponse),
+        encodeJson(billingStatusResponse),
+        encodeJson({ url: "https://checkout.stripe.test/annual" }),
+        encodeJson({ url: "https://checkout.stripe.test/top-up" }),
+        encodeJson({ url: "https://billing.stripe.test/portal" }),
+      ]
+      const taxmaxi = TaxMaxi.fromBrowserSession({
+        baseUrl: "https://sdk.example.test",
+        fetch: makeSequenceFetch({
+          capture: (input, init) => {
+            capturedRequests.push({
+              credentials: init?.credentials === undefined ? undefined : String(init.credentials),
+              method:
+                typeof input === "string" || input instanceof URL
+                  ? (init?.method ?? "GET")
+                  : input.method,
+              url: getRequestUrl(input),
+            })
           },
-          status: 200,
-        })
-      },
-    })
-
-    await expect(
-      taxmaxi.anon.sources.listJobs({
-        sourceId: anonSourceJobResponse.sourceId,
+          fallbackBody: responseBodies[responseBodies.length - 1] ?? "{}",
+          responseBodies,
+        }),
       })
-    ).resolves.toEqual({
-      jobs: [anonSourceJobResponse],
-    })
-    await expect(
-      taxmaxi.anon.sources.getJob({
-        sourceId: anonSourceJobResponse.sourceId,
-        jobId: anonSourceJobResponse.jobId,
-      })
-    ).resolves.toEqual(anonSourceJobResponse)
 
-    expect(capturedRequests).toEqual([
-      expect.objectContaining({
-        credentials: "include",
-        url: "https://sdk.example.test/v1/anon/sources/00000000-0000-4000-8000-000000000001/jobs",
-      }),
-      expect.objectContaining({
-        credentials: "include",
-        url: "https://sdk.example.test/v1/anon/sources/00000000-0000-4000-8000-000000000001/jobs/00000000-0000-4000-8000-000000000005",
-      }),
-    ])
-  })
-
-  it("plumbs source report endpoints through the public sources resource", async () => {
-    const capturedRequests: Array<CapturedRequest> = []
-    const sourceId = "00000000-0000-4000-8000-000000000001"
-    const legId = "00000000-0000-4000-8000-000000000006"
-    const responseBodies = [
-      sourceOverviewResponseBody,
-      emptySourceAssetPnlResponseBody,
-      emptySourceTransactionsResponseBody,
-      emptySourceTaxEventsResponseBody,
-      emptySourceFifoLotsResponseBody,
-      sourceDisposalExplanationResponseBody,
-    ]
-    const taxmaxi = new TaxMaxi({
-      apiKey: "tm_report",
-      baseUrl: "https://sdk.example.test",
-      fetch: async (input, init) => {
-        capturedRequests.push({
-          credentials: init?.credentials === undefined ? undefined : String(init.credentials),
-          headers: toHeaderRecord(init?.headers),
-          url: getRequestUrl(input),
+      yield* Effect.promise(() =>
+        expect(taxmaxi.billing.catalog()).resolves.toEqual(billingCatalogResponse)
+      )
+      yield* Effect.promise(() =>
+        expect(taxmaxi.billing.status()).resolves.toEqual(billingStatusResponse)
+      )
+      yield* Effect.promise(() =>
+        expect(taxmaxi.billing.createAnnualCheckout()).resolves.toEqual({
+          url: "https://checkout.stripe.test/annual",
         })
-
-        return new Response(responseBodies.shift() ?? emptySourceAssetPnlResponseBody, {
-          headers: {
-            "Content-Type": "application/json",
-          },
-          status: 200,
+      )
+      yield* Effect.promise(() =>
+        expect(taxmaxi.billing.createTopUpCheckout()).resolves.toEqual({
+          url: "https://checkout.stripe.test/top-up",
         })
-      },
-    })
-
-    await taxmaxi.sources.getOverview({ sourceId })
-    await taxmaxi.sources.listAssetPnl({ sourceId })
-    await taxmaxi.sources.listTransactions({ sourceId, limit: 25 })
-    await taxmaxi.sources.listTaxEvents({ sourceId, cursor: "cursor-value", limit: 10 })
-    await taxmaxi.sources.listFifoLots({ sourceId })
-    await taxmaxi.sources.explainDisposal({ sourceId, legId })
-
-    expect(capturedRequests).toEqual([
-      expect.objectContaining({
-        url: "https://sdk.example.test/v1/sources/00000000-0000-4000-8000-000000000001/overview",
-      }),
-      expect.objectContaining({
-        url: "https://sdk.example.test/v1/sources/00000000-0000-4000-8000-000000000001/assets/pnl",
-      }),
-      expect.objectContaining({
-        url: "https://sdk.example.test/v1/sources/00000000-0000-4000-8000-000000000001/transactions?limit=25",
-      }),
-      expect.objectContaining({
-        url: "https://sdk.example.test/v1/sources/00000000-0000-4000-8000-000000000001/tax-events?cursor=cursor-value&limit=10",
-      }),
-      expect.objectContaining({
-        url: "https://sdk.example.test/v1/sources/00000000-0000-4000-8000-000000000001/fifo-lots",
-      }),
-      expect.objectContaining({
-        url: "https://sdk.example.test/v1/sources/00000000-0000-4000-8000-000000000001/disposals/00000000-0000-4000-8000-000000000006/explanation",
-      }),
-    ])
-  })
-
-  it("lists combined and source-scoped portfolio assets", async () => {
-    const capturedRequests: Array<CapturedRequest> = []
-    const sourceId = "00000000-0000-4000-8000-000000000001"
-    const taxmaxi = new TaxMaxi({
-      apiKey: "tm_portfolio",
-      baseUrl: "https://sdk.example.test",
-      fetch: async (input, init) => {
-        capturedRequests.push({
-          credentials: init?.credentials === undefined ? undefined : String(init.credentials),
-          headers: toHeaderRecord(init?.headers),
-          url: getRequestUrl(input),
+      )
+      yield* Effect.promise(() =>
+        expect(taxmaxi.billing.createPortalSession()).resolves.toEqual({
+          url: "https://billing.stripe.test/portal",
         })
-        return new Response(portfolioAssetsResponseBody, {
-          headers: { "Content-Type": "application/json" },
-          status: 200,
-        })
-      },
-    })
+      )
 
-    await expect(taxmaxi.portfolio.listAssets({ currency: "EUR" })).resolves.toEqual({
-      currency: "EUR",
-      summary: emptyPortfolioSummary,
-      assets: [],
-    })
-    await taxmaxi.portfolio.listAssets({ sourceId, currency: "eur" })
-
-    expect(capturedRequests.map((request) => request.url)).toEqual([
-      "https://sdk.example.test/v1/portfolio/assets?currency=eur",
-      `https://sdk.example.test/v1/portfolio/assets?sourceId=${sourceId}&currency=eur`,
-    ])
-  })
-
-  it("plumbs asset catalog endpoints through the public assets resource as plain objects", async () => {
-    const capturedRequests: Array<CapturedRequest> = []
-    const responseBodies = [
-      assetCatalogListResponseBody,
-      assetCatalogAssetResponseBody,
-      pendingAssetListResponseBody,
-      assetExceptionListResponseBody,
-    ]
-    const taxmaxi = new TaxMaxi({
-      apiKey: "",
-      baseUrl: "https://sdk.example.test",
-      fetch: async (input, init) => {
-        capturedRequests.push({
-          credentials: init?.credentials === undefined ? undefined : String(init.credentials),
-          headers: toHeaderRecord(init?.headers),
-          url: getRequestUrl(input),
-        })
-
-        return new Response(responseBodies.shift() ?? assetCatalogListResponseBody, {
-          headers: {
-            "Content-Type": "application/json",
-          },
-          status: 200,
-        })
-      },
-    })
-
-    const assetList = await taxmaxi.assets.list({
-      query: "usdc",
-      cursor: "00000000-0000-4000-8000-000000000009",
-      limit: 25,
-    })
-    const asset = await taxmaxi.assets.get({ assetId: assetCatalogAssetResponse.id })
-    const pendingAssetList = await taxmaxi.assets.listPending({
-      query: "btc",
-      provider: "coinbase",
-      limit: 10,
-    })
-    const exceptionList = await taxmaxi.assets.listExceptions({
-      query: "spam",
-      cursor: "opaque-start",
-      limit: 5,
-    })
-
-    expect(assetList).toStrictEqual({
-      assets: [assetCatalogAssetResponse],
-      page: {
-        nextCursor: null,
-        hasMore: false,
-      },
-    })
-    expect(asset).toStrictEqual(assetCatalogAssetResponse)
-    expect(pendingAssetList).toStrictEqual({
-      pendingAssets: [pendingAssetResponse],
-      page: {
-        nextCursor: null,
-        hasMore: false,
-      },
-    })
-    expect(exceptionList).toMatchObject({
-      exceptions: [
+      expect(capturedRequests).toEqual([
         {
-          providerAssetRowId: "00000000-0000-4000-8000-000000000020",
-          severity: "critical",
+          credentials: "include",
+          method: "GET",
+          url: "https://sdk.example.test/v1/billing/catalog",
         },
-      ],
-      page: { nextCursor: "opaque-cursor", hasMore: true },
-    })
-
-    expect(capturedRequests).toEqual([
-      expect.objectContaining({
-        url: "https://sdk.example.test/v1/assets?q=usdc&cursor=00000000-0000-4000-8000-000000000009&limit=25",
-      }),
-      expect.objectContaining({
-        url: "https://sdk.example.test/v1/assets/00000000-0000-4000-8000-000000000010",
-      }),
-      expect.objectContaining({
-        url: "https://sdk.example.test/v1/assets/pending?q=btc&provider=coinbase&limit=10",
-      }),
-      expect.objectContaining({
-        url: "https://sdk.example.test/v1/assets/exceptions?q=spam&cursor=opaque-start&limit=5",
-      }),
-    ])
-  })
-
-  it("aborts an asset request when its signal is cancelled", async () => {
-    let requestSignal: AbortSignal | undefined
-    const taxmaxi = new TaxMaxi({
-      apiKey: "",
-      baseUrl: "https://sdk.example.test",
-      fetch: async (_input, init) => {
-        requestSignal = init?.signal ?? undefined
-        return new Promise<Response>((_resolve, reject) => {
-          requestSignal?.addEventListener(
-            "abort",
-            () => reject(new DOMException("Request aborted", "AbortError")),
-            { once: true }
-          )
-        })
-      },
-    })
-    const controller = new AbortController()
-    const request = taxmaxi.assets.list({}, { signal: controller.signal })
-
-    await vi.waitFor(() => expect(requestSignal).toBeDefined())
-    controller.abort()
-
-    await expect(request).rejects.toBeInstanceOf(TaxMaxiError)
-    await vi.waitFor(() => expect(requestSignal?.aborted).toBe(true))
-  })
-
-  it("plumbs asset review endpoints through the internal assets resource", async () => {
-    const capturedRequests: Array<CapturedRequest> = []
-    const providerAssetId = "00000000-0000-4000-8000-000000000009"
-    const responseBodies = [
-      emptyProviderAssetReviewsResponseBody,
-      unresolvedTransferReconciliationsResponseBody,
-      unresolvedTransferReconciliationsResponseBody,
-      assetCanonicalizationResponseBody,
-      approvedProviderAssetResponseBody,
-    ]
-    const taxmaxi = new TaxMaxiInternal({
-      apiKey: "tm_assets",
-      baseUrl: "https://sdk.example.test",
-      fetch: async (input, init) => {
-        const requestBody =
-          init?.body === undefined ? undefined : await new Response(init.body).text()
-        capturedRequests.push({
-          ...(requestBody === undefined || requestBody === "" ? {} : { body: requestBody }),
-          credentials: init?.credentials === undefined ? undefined : String(init.credentials),
-          headers: toHeaderRecord(init?.headers),
-          url: getRequestUrl(input),
-        })
-
-        return new Response(responseBodies.shift() ?? emptyProviderAssetReviewsResponseBody, {
-          headers: {
-            "Content-Type": "application/json",
-          },
-          status: 200,
-        })
-      },
-    })
-
-    await expect(
-      taxmaxi.assets.listProviderAssetReviews({
-        provider: "coinbase",
-        status: "excluded",
-        cursor: "00000000-0000-4000-8000-000000000008",
-        limit: 25,
-      })
-    ).resolves.toEqual({
-      providerAssets: [],
-      page: {
-        nextCursor: null,
-        hasMore: false,
-      },
-    })
-    await expect(
-      taxmaxi.assets.listUnresolvedTransferReconciliations({
-        status: "pending",
-        cursor: "opaque-cursor",
-        limit: 25,
-      })
-    ).resolves.toMatchObject({
-      reconciliations: [
         {
-          status: "pending",
-          matchReason: "asset_representation_review_pending",
+          credentials: "include",
+          method: "GET",
+          url: "https://sdk.example.test/v1/billing/status",
         },
-      ],
+        {
+          credentials: "include",
+          method: "POST",
+          url: "https://sdk.example.test/v1/billing/checkout/annual",
+        },
+        {
+          credentials: "include",
+          method: "POST",
+          url: "https://sdk.example.test/v1/billing/checkout/top-up",
+        },
+        {
+          credentials: "include",
+          method: "POST",
+          url: "https://sdk.example.test/v1/billing/portal",
+        },
+      ])
     })
-    await expect(
-      Effect.runPromise(
-        taxmaxi.effect.assets.listUnresolvedTransferReconciliations({
+  )
+
+  it.effect("exposes account details and server-side logout through the public auth resource", () =>
+    Effect.gen(function* () {
+      const capturedRequests: Array<{
+        readonly credentials: string | undefined
+        readonly method: string
+        readonly url: string
+      }> = []
+      const responseBodies = [encodeJson(accountResponse), encodeJson({ success: true })]
+      const taxmaxi = TaxMaxi.fromBrowserSession({
+        baseUrl: "https://sdk.example.test",
+        fetch: makeSequenceFetch({
+          capture: (input, init) => {
+            capturedRequests.push({
+              credentials: init?.credentials === undefined ? undefined : String(init.credentials),
+              method:
+                typeof input === "string" || input instanceof URL
+                  ? (init?.method ?? "GET")
+                  : input.method,
+              url: getRequestUrl(input),
+            })
+          },
+          fallbackBody: responseBodies[responseBodies.length - 1] ?? "{}",
+          responseBodies,
+        }),
+      })
+
+      const account = yield* Effect.promise(() => taxmaxi.auth.account())
+
+      expect(account).toEqual(accountResponse)
+      expect(account.loginMethods[0]?.isAvailable).toBe(false)
+      expect(account.loginMethods[0]?.unavailableReason).toBe("provider_disabled")
+      yield* Effect.promise(() => expect(taxmaxi.auth.logout()).resolves.toEqual({ success: true }))
+
+      expect(capturedRequests).toEqual([
+        {
+          credentials: "include",
+          method: "GET",
+          url: "https://sdk.example.test/auth/me",
+        },
+        {
+          credentials: "include",
+          method: "POST",
+          url: "https://sdk.example.test/auth/logout",
+        },
+      ])
+    })
+  )
+
+  it.effect("creates paid anonymous sources through the injected fetch implementation", () =>
+    Effect.gen(function* () {
+      const capturedRequests: Array<CapturedRequest> = []
+      const taxmaxi = TaxMaxi.fromBrowserSession({
+        baseUrl: "https://sdk.example.test",
+        fetch: makeFetch(capturedRequests, sourceCreateResponseBody),
+      })
+
+      yield* Effect.promise(() =>
+        expect(
+          taxmaxi.sources.create({
+            type: "onchain",
+            walletAddress: "So11111111111111111111111111111111111111112",
+            name: "Demo Solana wallet",
+          })
+        ).resolves.toMatchObject({
+          created: true,
+          source: {
+            name: "Demo Solana wallet",
+            providerKey: "helius-solana",
+          },
+        })
+      )
+
+      expect(capturedRequests).toEqual([
+        expect.objectContaining({
+          credentials: "include",
+          url: "https://sdk.example.test/v1/sources",
+        }),
+      ])
+    })
+  )
+
+  it.effect("plumbs anonymous source sync-status methods through browser sessions", () =>
+    Effect.gen(function* () {
+      const capturedRequests: Array<CapturedRequest> = []
+      const responseBodies = [anonSourceJobsResponseBody, anonSourceJobResponseBody]
+      const taxmaxi = TaxMaxi.fromBrowserSession({
+        baseUrl: "https://sdk.example.test",
+        fetch: makeSequenceFetch({
+          capture: (input, init) => {
+            capturedRequests.push({
+              credentials: init?.credentials === undefined ? undefined : String(init.credentials),
+              headers: toHeaderRecord(init?.headers),
+              url: getRequestUrl(input),
+            })
+          },
+          fallbackBody: anonSourceJobResponseBody,
+          responseBodies,
+        }),
+      })
+
+      yield* Effect.promise(() =>
+        expect(
+          taxmaxi.anon.sources.listJobs({
+            sourceId: anonSourceJobResponse.sourceId,
+          })
+        ).resolves.toEqual({
+          jobs: [anonSourceJobResponse],
+        })
+      )
+      yield* Effect.promise(() =>
+        expect(
+          taxmaxi.anon.sources.getJob({
+            sourceId: anonSourceJobResponse.sourceId,
+            jobId: anonSourceJobResponse.jobId,
+          })
+        ).resolves.toEqual(anonSourceJobResponse)
+      )
+
+      expect(capturedRequests).toEqual([
+        expect.objectContaining({
+          credentials: "include",
+          url: "https://sdk.example.test/v1/anon/sources/00000000-0000-4000-8000-000000000001/jobs",
+        }),
+        expect.objectContaining({
+          credentials: "include",
+          url: "https://sdk.example.test/v1/anon/sources/00000000-0000-4000-8000-000000000001/jobs/00000000-0000-4000-8000-000000000005",
+        }),
+      ])
+    })
+  )
+
+  it.effect("plumbs source report endpoints through the public sources resource", () =>
+    Effect.gen(function* () {
+      const capturedRequests: Array<CapturedRequest> = []
+      const sourceId = "00000000-0000-4000-8000-000000000001"
+      const legId = "00000000-0000-4000-8000-000000000006"
+      const responseBodies = [
+        sourceOverviewResponseBody,
+        emptySourceAssetPnlResponseBody,
+        emptySourceTransactionsResponseBody,
+        emptySourceTaxEventsResponseBody,
+        emptySourceFifoLotsResponseBody,
+        sourceDisposalExplanationResponseBody,
+      ]
+      const taxmaxi = new TaxMaxi({
+        apiKey: "tm_report",
+        baseUrl: "https://sdk.example.test",
+        fetch: makeSequenceFetch({
+          capture: (input, init) => {
+            capturedRequests.push({
+              credentials: init?.credentials === undefined ? undefined : String(init.credentials),
+              headers: toHeaderRecord(init?.headers),
+              url: getRequestUrl(input),
+            })
+          },
+          fallbackBody: emptySourceAssetPnlResponseBody,
+          responseBodies,
+        }),
+      })
+
+      yield* Effect.promise(() => taxmaxi.sources.getOverview({ sourceId }))
+      yield* Effect.promise(() => taxmaxi.sources.listAssetPnl({ sourceId }))
+      yield* Effect.promise(() => taxmaxi.sources.listTransactions({ sourceId, limit: 25 }))
+      yield* Effect.promise(() =>
+        taxmaxi.sources.listTaxEvents({ sourceId, cursor: "cursor-value", limit: 10 })
+      )
+      yield* Effect.promise(() => taxmaxi.sources.listFifoLots({ sourceId }))
+      yield* Effect.promise(() => taxmaxi.sources.explainDisposal({ sourceId, legId }))
+
+      expect(capturedRequests).toEqual([
+        expect.objectContaining({
+          url: "https://sdk.example.test/v1/sources/00000000-0000-4000-8000-000000000001/overview",
+        }),
+        expect.objectContaining({
+          url: "https://sdk.example.test/v1/sources/00000000-0000-4000-8000-000000000001/assets/pnl",
+        }),
+        expect.objectContaining({
+          url: "https://sdk.example.test/v1/sources/00000000-0000-4000-8000-000000000001/transactions?limit=25",
+        }),
+        expect.objectContaining({
+          url: "https://sdk.example.test/v1/sources/00000000-0000-4000-8000-000000000001/tax-events?cursor=cursor-value&limit=10",
+        }),
+        expect.objectContaining({
+          url: "https://sdk.example.test/v1/sources/00000000-0000-4000-8000-000000000001/fifo-lots",
+        }),
+        expect.objectContaining({
+          url: "https://sdk.example.test/v1/sources/00000000-0000-4000-8000-000000000001/disposals/00000000-0000-4000-8000-000000000006/explanation",
+        }),
+      ])
+    })
+  )
+
+  it.effect("lists combined and source-scoped portfolio assets", () =>
+    Effect.gen(function* () {
+      const capturedRequests: Array<CapturedRequest> = []
+      const sourceId = "00000000-0000-4000-8000-000000000001"
+      const taxmaxi = new TaxMaxi({
+        apiKey: "tm_portfolio",
+        baseUrl: "https://sdk.example.test",
+        fetch: makeSequenceFetch({
+          capture: (input, init) => {
+            capturedRequests.push({
+              credentials: init?.credentials === undefined ? undefined : String(init.credentials),
+              headers: toHeaderRecord(init?.headers),
+              url: getRequestUrl(input),
+            })
+          },
+          fallbackBody: portfolioAssetsResponseBody,
+          responseBodies: [portfolioAssetsResponseBody, portfolioAssetsResponseBody],
+        }),
+      })
+
+      yield* Effect.promise(() =>
+        expect(taxmaxi.portfolio.listAssets({ currency: "EUR" })).resolves.toEqual({
+          currency: "EUR",
+          summary: emptyPortfolioSummary,
+          assets: [],
+        })
+      )
+      yield* Effect.promise(() => taxmaxi.portfolio.listAssets({ sourceId, currency: "eur" }))
+
+      expect(capturedRequests.map((request) => request.url)).toEqual([
+        "https://sdk.example.test/v1/portfolio/assets?currency=eur",
+        `https://sdk.example.test/v1/portfolio/assets?sourceId=${sourceId}&currency=eur`,
+      ])
+    })
+  )
+
+  it.effect(
+    "plumbs asset catalog endpoints through the public assets resource as plain objects",
+    () =>
+      Effect.gen(function* () {
+        const capturedRequests: Array<CapturedRequest> = []
+        const responseBodies = [
+          assetCatalogListResponseBody,
+          assetCatalogAssetResponseBody,
+          pendingAssetListResponseBody,
+          assetExceptionListResponseBody,
+        ]
+        const taxmaxi = new TaxMaxi({
+          apiKey: "",
+          baseUrl: "https://sdk.example.test",
+          fetch: makeSequenceFetch({
+            capture: (input, init) => {
+              capturedRequests.push({
+                credentials: init?.credentials === undefined ? undefined : String(init.credentials),
+                headers: toHeaderRecord(init?.headers),
+                url: getRequestUrl(input),
+              })
+            },
+            fallbackBody: assetCatalogListResponseBody,
+            responseBodies,
+          }),
+        })
+
+        const assetList = yield* Effect.promise(() =>
+          taxmaxi.assets.list({
+            query: "usdc",
+            cursor: "00000000-0000-4000-8000-000000000009",
+            limit: 25,
+          })
+        )
+        const asset = yield* Effect.promise(() =>
+          taxmaxi.assets.get({ assetId: assetCatalogAssetResponse.id })
+        )
+        const pendingAssetList = yield* Effect.promise(() =>
+          taxmaxi.assets.listPending({
+            query: "btc",
+            provider: "coinbase",
+            limit: 10,
+          })
+        )
+        const exceptionList = yield* Effect.promise(() =>
+          taxmaxi.assets.listExceptions({
+            query: "spam",
+            cursor: "opaque-start",
+            limit: 5,
+          })
+        )
+
+        expect(assetList).toStrictEqual({
+          assets: [assetCatalogAssetResponse],
+          page: {
+            nextCursor: null,
+            hasMore: false,
+          },
+        })
+        expect(asset).toStrictEqual(assetCatalogAssetResponse)
+        expect(pendingAssetList).toStrictEqual({
+          pendingAssets: [pendingAssetResponse],
+          page: {
+            nextCursor: null,
+            hasMore: false,
+          },
+        })
+        expect(exceptionList).toMatchObject({
+          exceptions: [
+            {
+              providerAssetRowId: "00000000-0000-4000-8000-000000000020",
+              severity: "critical",
+            },
+          ],
+          page: { nextCursor: "opaque-cursor", hasMore: true },
+        })
+
+        expect(capturedRequests).toEqual([
+          expect.objectContaining({
+            url: "https://sdk.example.test/v1/assets?q=usdc&cursor=00000000-0000-4000-8000-000000000009&limit=25",
+          }),
+          expect.objectContaining({
+            url: "https://sdk.example.test/v1/assets/00000000-0000-4000-8000-000000000010",
+          }),
+          expect.objectContaining({
+            url: "https://sdk.example.test/v1/assets/pending?q=btc&provider=coinbase&limit=10",
+          }),
+          expect.objectContaining({
+            url: "https://sdk.example.test/v1/assets/exceptions?q=spam&cursor=opaque-start&limit=5",
+          }),
+        ])
+      })
+  )
+
+  it.effect("aborts an asset request when its signal is cancelled", () =>
+    Effect.gen(function* () {
+      let requestSignal: AbortSignal | undefined
+      const taxmaxi = new TaxMaxi({
+        apiKey: "",
+        baseUrl: "https://sdk.example.test",
+        fetch: makeAbortableFetch((signal) => {
+          requestSignal = signal
+        }),
+      })
+      const scope = yield* Scope.make()
+      const signal = yield* Effect.abortSignal.pipe(Scope.provide(scope))
+      const request = taxmaxi.assets.list({}, { signal })
+
+      yield* Effect.promise(() => vi.waitFor(() => expect(requestSignal).toBeDefined()))
+      yield* Scope.close(scope, Exit.void)
+
+      yield* Effect.promise(() => expect(request).rejects.toBeInstanceOf(TaxMaxiError))
+      yield* Effect.promise(() => vi.waitFor(() => expect(requestSignal?.aborted).toBe(true)))
+    })
+  )
+
+  it.effect("plumbs asset review endpoints through the internal assets resource", () =>
+    Effect.gen(function* () {
+      const capturedRequests: Array<CapturedRequest> = []
+      const providerAssetId = "00000000-0000-4000-8000-000000000009"
+      const responseBodies = [
+        emptyProviderAssetReviewsResponseBody,
+        unresolvedTransferReconciliationsResponseBody,
+        unresolvedTransferReconciliationsResponseBody,
+        assetCanonicalizationResponseBody,
+        approvedProviderAssetResponseBody,
+      ]
+      const taxmaxi = new TaxMaxiInternal({
+        apiKey: "tm_assets",
+        baseUrl: "https://sdk.example.test",
+        fetch: makeBodyCapturingFetch({
+          capturedRequests,
+          fallbackBody: emptyProviderAssetReviewsResponseBody,
+          responseBodies,
+        }),
+      })
+
+      yield* Effect.promise(() =>
+        expect(
+          taxmaxi.assets.listProviderAssetReviews({
+            provider: "coinbase",
+            status: "excluded",
+            cursor: "00000000-0000-4000-8000-000000000008",
+            limit: 25,
+          })
+        ).resolves.toEqual({
+          providerAssets: [],
+          page: {
+            nextCursor: null,
+            hasMore: false,
+          },
+        })
+      )
+      yield* Effect.promise(() =>
+        expect(
+          taxmaxi.assets.listUnresolvedTransferReconciliations({
+            status: "pending",
+            cursor: "opaque-cursor",
+            limit: 25,
+          })
+        ).resolves.toMatchObject({
+          reconciliations: [
+            {
+              status: "pending",
+              matchReason: "asset_representation_review_pending",
+            },
+          ],
+        })
+      )
+      const effectReconciliations =
+        yield* taxmaxi.effect.assets.listUnresolvedTransferReconciliations({
           status: "needs_review",
           limit: 10,
         })
+      expect(effectReconciliations).toMatchObject({
+        reconciliations: [{ providerAmount: "1.25" }],
+      })
+      yield* Effect.promise(() =>
+        expect(
+          taxmaxi.assets.canonicalizeProviderAsset({
+            id: providerAssetId,
+            reviewerNotes: "Looks correct.",
+          })
+        ).resolves.toMatchObject({
+          providerAsset: {
+            assetRepresentationId: "00000000-0000-4000-8000-000000000012",
+            mappingStatus: "approved",
+          },
+        })
       )
-    ).resolves.toMatchObject({
-      reconciliations: [{ providerAmount: "1.25" }],
-    })
-    await expect(
-      taxmaxi.assets.canonicalizeProviderAsset({
-        id: providerAssetId,
-        reviewerNotes: "Looks correct.",
-      })
-    ).resolves.toMatchObject({
-      providerAsset: {
-        assetRepresentationId: "00000000-0000-4000-8000-000000000012",
-        mappingStatus: "approved",
-      },
-    })
-    await expect(
-      taxmaxi.assets.approveProviderAsset({
-        id: providerAssetId,
-        canonicalAssetId: "00000000-0000-4000-8000-000000000011",
-        assetRepresentationId: "00000000-0000-4000-8000-000000000012",
-        reviewerNotes: "Identity checked.",
-      })
-    ).resolves.toMatchObject({ mappingStatus: "approved" })
+      yield* Effect.promise(() =>
+        expect(
+          taxmaxi.assets.approveProviderAsset({
+            id: providerAssetId,
+            canonicalAssetId: "00000000-0000-4000-8000-000000000011",
+            assetRepresentationId: "00000000-0000-4000-8000-000000000012",
+            reviewerNotes: "Identity checked.",
+          })
+        ).resolves.toMatchObject({ mappingStatus: "approved" })
+      )
 
-    expect(capturedRequests).toEqual([
-      expect.objectContaining({
-        url: "https://sdk.example.test/v1/assets/provider-assets?provider=coinbase&status=excluded&cursor=00000000-0000-4000-8000-000000000008&limit=25",
-      }),
-      expect.objectContaining({
-        url: "https://sdk.example.test/v1/assets/transfer-reconciliations/unresolved?status=pending&cursor=opaque-cursor&limit=25",
-      }),
-      expect.objectContaining({
-        url: "https://sdk.example.test/v1/assets/transfer-reconciliations/unresolved?status=needs_review&limit=10",
-      }),
-      expect.objectContaining({
-        url: "https://sdk.example.test/v1/assets/provider-assets/00000000-0000-4000-8000-000000000009/canonicalize",
-      }),
-      expect.objectContaining({
-        body: JSON.stringify({
-          canonicalAssetId: "00000000-0000-4000-8000-000000000011",
-          assetRepresentationId: "00000000-0000-4000-8000-000000000012",
-          reviewerNotes: "Identity checked.",
+      expect(capturedRequests).toEqual([
+        expect.objectContaining({
+          url: "https://sdk.example.test/v1/assets/provider-assets?provider=coinbase&status=excluded&cursor=00000000-0000-4000-8000-000000000008&limit=25",
         }),
-        url: "https://sdk.example.test/v1/assets/provider-assets/00000000-0000-4000-8000-000000000009/approve",
-      }),
-    ])
-  })
-
-  it("allows browser session callers to omit ambient credentials", async () => {
-    const capturedRequests: Array<CapturedRequest> = []
-    const taxmaxi = TaxMaxi.fromBrowserSession({
-      baseUrl: "https://sdk.example.test",
-      credentials: "omit",
-      fetch: makeFetch(capturedRequests, sourceCreateResponseBody),
+        expect.objectContaining({
+          url: "https://sdk.example.test/v1/assets/transfer-reconciliations/unresolved?status=pending&cursor=opaque-cursor&limit=25",
+        }),
+        expect.objectContaining({
+          url: "https://sdk.example.test/v1/assets/transfer-reconciliations/unresolved?status=needs_review&limit=10",
+        }),
+        expect.objectContaining({
+          url: "https://sdk.example.test/v1/assets/provider-assets/00000000-0000-4000-8000-000000000009/canonicalize",
+        }),
+        expect.objectContaining({
+          body: encodeJson({
+            canonicalAssetId: "00000000-0000-4000-8000-000000000011",
+            assetRepresentationId: "00000000-0000-4000-8000-000000000012",
+            reviewerNotes: "Identity checked.",
+          }),
+          url: "https://sdk.example.test/v1/assets/provider-assets/00000000-0000-4000-8000-000000000009/approve",
+        }),
+      ])
     })
+  )
 
-    await taxmaxi.sources.create({
-      type: "onchain",
-      walletAddress: "So11111111111111111111111111111111111111112",
-    })
-
-    expect(capturedRequests).toEqual([
-      expect.objectContaining({
+  it.effect("allows browser session callers to omit ambient credentials", () =>
+    Effect.gen(function* () {
+      const capturedRequests: Array<CapturedRequest> = []
+      const taxmaxi = TaxMaxi.fromBrowserSession({
+        baseUrl: "https://sdk.example.test",
         credentials: "omit",
-        url: "https://sdk.example.test/v1/sources",
-      }),
-    ])
-  })
+        fetch: makeFetch(capturedRequests, sourceCreateResponseBody),
+      })
 
-  it("keeps Effect-native resource methods available", async () => {
-    const capturedRequests: Array<CapturedRequest> = []
-    const taxmaxi = new TaxMaxi({
-      apiKey: "tm_test_phase_2",
-      baseUrl: "https://sdk.example.test",
-      fetch: makeFetch(capturedRequests, sourceListResponseBody),
+      yield* Effect.promise(() =>
+        taxmaxi.sources.create({
+          type: "onchain",
+          walletAddress: "So11111111111111111111111111111111111111112",
+        })
+      )
+
+      expect(capturedRequests).toEqual([
+        expect.objectContaining({
+          credentials: "omit",
+          url: "https://sdk.example.test/v1/sources",
+        }),
+      ])
     })
+  )
 
-    await expect(Effect.runPromise(taxmaxi.effect.sources.list())).resolves.toEqual({
-      sources: [],
+  it.effect("keeps Effect-native resource methods available", () =>
+    Effect.gen(function* () {
+      const capturedRequests: Array<CapturedRequest> = []
+      const taxmaxi = new TaxMaxi({
+        apiKey: "tm_test_phase_2",
+        baseUrl: "https://sdk.example.test",
+        fetch: makeFetch(capturedRequests, sourceListResponseBody),
+      })
+
+      const sources = yield* taxmaxi.effect.sources.list()
+      expect(sources).toEqual({
+        sources: [],
+      })
     })
-  })
+  )
 
-  it("normalizes Promise method failures into TaxMaxiError", async () => {
-    const taxmaxi = new TaxMaxi({
-      apiKey: "tm_test_phase_2",
-      baseUrl: "https://sdk.example.test",
-      fetch: async () => {
-        throw new TypeError("socket closed")
-      },
-    })
+  it.effect("normalizes Promise method failures into TaxMaxiError", () =>
+    Effect.gen(function* () {
+      const taxmaxi = new TaxMaxi({
+        apiKey: "tm_test_phase_2",
+        baseUrl: "https://sdk.example.test",
+        fetch: makeFailureFetch(new TypeError("socket closed")),
+      })
 
-    try {
-      await taxmaxi.sources.list()
-    } catch (error) {
-      expect(error).toBeInstanceOf(TaxMaxiError)
+      const error = yield* Effect.tryPromise({
+        try: () => taxmaxi.sources.list(),
+        catch: (error) =>
+          Schema.is(TaxMaxiError)(error) ? error : new UnexpectedPromiseRejection({ cause: error }),
+      }).pipe(Effect.flip)
 
-      if (error instanceof TaxMaxiError) {
+      expect(Schema.is(TaxMaxiError)(error)).toBe(true)
+
+      if (Schema.is(TaxMaxiError)(error)) {
         expect(error.status).toBe(0)
         expect(error.message).toContain("Could not reach the TaxMaxi API")
       }
-
-      return
-    }
-
-    expect.unreachable("Expected TaxMaxiError")
-  })
+    })
+  )
 
   it("preserves UnauthorizedError status when Effect wraps the API error code", () => {
     const error = toTaxMaxiError({
@@ -1241,22 +1379,24 @@ describe("TaxMaxi Promise client", () => {
     }
   )
 
-  it("builds explicit first-party request clients with cookie headers", async () => {
-    const capturedRequests: Array<CapturedRequest> = []
-    const taxmaxi = TaxMaxi.fromRequest({
-      baseUrl: "https://sdk.example.test",
-      cookieHeader: "sid=session-value",
-      fetch: makeFetch(capturedRequests, sourceListResponseBody),
-    })
+  it.effect("builds explicit first-party request clients with cookie headers", () =>
+    Effect.gen(function* () {
+      const capturedRequests: Array<CapturedRequest> = []
+      const taxmaxi = TaxMaxi.fromRequest({
+        baseUrl: "https://sdk.example.test",
+        cookieHeader: "sid=session-value",
+        fetch: makeFetch(capturedRequests, sourceListResponseBody),
+      })
 
-    await taxmaxi.sources.list()
+      yield* Effect.promise(() => taxmaxi.sources.list())
 
-    expect(capturedRequests).toEqual([
-      expect.objectContaining({
-        headers: expect.objectContaining({
-          cookie: "sid=session-value",
+      expect(capturedRequests).toEqual([
+        expect.objectContaining({
+          headers: expect.objectContaining({
+            cookie: "sid=session-value",
+          }),
         }),
-      }),
-    ])
-  })
+      ])
+    })
+  )
 })

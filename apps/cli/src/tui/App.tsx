@@ -1,6 +1,7 @@
 import { TextAttributes } from "@opentui/core"
 import { useKeyboard, useRenderer, useTerminalDimensions } from "@opentui/solid"
 import { createSignal, For, Match, Show, Switch } from "solid-js"
+import { Effect } from "effect"
 import type { Source } from "taxmaxi"
 import type { CliSession } from "../session.ts"
 import { clearLocalSession, copyToClipboard, loadSessionState, logout } from "./controller.ts"
@@ -84,26 +85,29 @@ export function App(props: { readonly requestExit: () => void }) {
     route.navigate({ type: tab })
   }
 
-  const boot = async () => {
-    route.navigate({ type: "boot" })
-    setWelcomeNote(undefined)
-    const state = await loadSessionState()
-    if (state._tag === "valid") {
-      setSession(state.session)
-      route.navigate({ type: "sources" })
-      return
-    }
-    if (state._tag === "missing") {
-      route.navigate({ type: "welcome" })
-      return
-    }
-    if (state._tag === "invalid") {
-      setWelcomeNote(state.message)
-      route.navigate({ type: "welcome" })
-      return
-    }
-    route.navigate({ type: "bootError", message: state.message })
-  }
+  const boot = () =>
+    Effect.runPromise(
+      Effect.gen(function* () {
+        route.navigate({ type: "boot" })
+        setWelcomeNote(undefined)
+        const state = yield* Effect.promise(loadSessionState)
+        if (state._tag === "valid") {
+          setSession(state.session)
+          route.navigate({ type: "sources" })
+          return
+        }
+        if (state._tag === "missing") {
+          route.navigate({ type: "welcome" })
+          return
+        }
+        if (state._tag === "invalid") {
+          setWelcomeNote(state.message)
+          route.navigate({ type: "welcome" })
+          return
+        }
+        route.navigate({ type: "bootError", message: state.message })
+      })
+    )
   void boot()
 
   useKeyboard((evt) => {
@@ -157,24 +161,27 @@ export function App(props: { readonly requestExit: () => void }) {
     route.navigate(session() === undefined ? { type: "welcome" } : { type: "sources" })
   }
 
-  const handleLogout = async () => {
-    const currentSession = session()
-    if (currentSession === undefined) {
-      return
-    }
-    dialog.clear()
-    route.navigate({ type: "loggingOut" })
-    const result = await logout(currentSession)
-    if (result._tag === "loggedOut") {
-      setSession(undefined)
-      setWelcomeNote(undefined)
-      route.navigate({ type: "welcome" })
-      return
-    }
-    // The local session file is still there, so the user stays logged in;
-    // [r] re-boots back to the source list.
-    route.navigate({ type: "bootError", message: result.message })
-  }
+  const handleLogout = () =>
+    Effect.runPromise(
+      Effect.gen(function* () {
+        const currentSession = session()
+        if (currentSession === undefined) {
+          return
+        }
+        dialog.clear()
+        route.navigate({ type: "loggingOut" })
+        const result = yield* Effect.promise(() => logout(currentSession))
+        if (result._tag === "loggedOut") {
+          setSession(undefined)
+          setWelcomeNote(undefined)
+          route.navigate({ type: "welcome" })
+          return
+        }
+        // The local session file is still there, so the user stays logged in;
+        // [r] re-boots back to the source list.
+        route.navigate({ type: "bootError", message: result.message })
+      })
+    )
 
   const handleSessionExpired = () => {
     dialog.clear()

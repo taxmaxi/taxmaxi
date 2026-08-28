@@ -118,10 +118,10 @@ describe("makePortfolioAssetRow", () => {
 
 describe("PortfolioCurrency", () => {
   it("normalizes uppercase ISO currency codes", () => {
-    expect(Schema.decodeUnknownSync(PortfolioCurrency)("EUR")).toBe("eur")
+    expect(Schema.decodeSync(PortfolioCurrency)("EUR")).toBe("eur")
   })
 
   it("rejects values that are not three letters", () => {
-    expect(() => Schema.decodeUnknownSync(PortfolioCurrency)("EURO")).toThrow()
+    expect(() => Schema.decodeSync(PortfolioCurrency)("EURO")).toThrow()
   })
 })

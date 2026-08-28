@@ -1,5 +1,5 @@
 import { Config, ConfigProvider, Effect, Layer, Result } from "effect"
-import { describe, expect, it } from "vitest"
+import { describe, expect, it } from "@effect/vitest"
 import {
   makeApiBullMqSourceSyncQueueLive,
   type ApiBullMqSourceSyncQueueConfig,
@@ -141,196 +141,216 @@ const runWithProducer = <A, E>({
   )
 
 describe("ApiBullMqSourceSyncQueueLive", () => {
-  it("uses the DB job id as the BullMQ job id and records queue metadata", async () => {
-    const addCalls: Array<AddCall> = []
-    const attached: Array<AttachSourceSyncQueueMetadataParams> = []
+  it.effect("uses the DB job id as the BullMQ job id and records queue metadata", () =>
+    Effect.gen(function* () {
+      const addCalls: Array<AddCall> = []
+      const attached: Array<AttachSourceSyncQueueMetadataParams> = []
 
-    const queue: BullMqSourceSyncQueue = {
-      add: (name, queuedPayload, options) => {
-        addCalls.push({ name, payload: queuedPayload, options })
-        return Promise.resolve({ id: "bull-job-1" })
-      },
-      close: Effect.void,
-    }
+      const queue: BullMqSourceSyncQueue = {
+        add: (name, queuedPayload, options) => {
+          addCalls.push({ name, payload: queuedPayload, options })
+          return Promise.resolve({ id: "bull-job-1" })
+        },
+        close: Effect.void,
+      }
 
-    await runWithProducer({
-      attached,
-      queue,
-      effect: Effect.gen(function* () {
-        const producer = yield* SourceSyncQueue
-        yield* producer.enqueueSourceSyncJob(payload)
-      }),
-    })
+      yield* Effect.promise(() =>
+        runWithProducer({
+          attached,
+          queue,
+          effect: Effect.gen(function* () {
+            const producer = yield* SourceSyncQueue
+            yield* producer.enqueueSourceSyncJob(payload)
+          }),
+        })
+      )
 
-    expect(addCalls).toHaveLength(1)
-    expect(addCalls[0]).toMatchObject({
-      name: SOURCE_SYNC_JOB_NAME,
-      payload,
-      options: {
+      expect(addCalls).toHaveLength(1)
+      expect(addCalls[0]).toMatchObject({
+        name: SOURCE_SYNC_JOB_NAME,
+        payload,
+        options: {
+          jobId: payload.jobId,
+          attempts: 5,
+          backoff: {
+            type: "exponential",
+            delay: 2500,
+          },
+          removeOnComplete: {
+            count: 25,
+          },
+          removeOnFail: {
+            count: 50,
+          },
+        },
+      })
+      expect(attached).toHaveLength(1)
+      expect(attached[0]).toMatchObject({
         jobId: payload.jobId,
-        attempts: 5,
-        backoff: {
-          type: "exponential",
-          delay: 2500,
-        },
-        removeOnComplete: {
-          count: 25,
-        },
-        removeOnFail: {
-          count: 50,
-        },
-      },
+        queueName: SOURCE_SYNC_QUEUE_NAME,
+        queueJobId: "bull-job-1",
+      })
+      expect(attached[0]?.queuedAt).toBeInstanceOf(Date)
     })
-    expect(attached).toHaveLength(1)
-    expect(attached[0]).toMatchObject({
-      jobId: payload.jobId,
-      queueName: SOURCE_SYNC_QUEUE_NAME,
-      queueJobId: "bull-job-1",
+  )
+
+  it.effect("closes the queue when the scope finalizes", () =>
+    Effect.gen(function* () {
+      const attached: Array<AttachSourceSyncQueueMetadataParams> = []
+      const events: Array<string> = []
+      let closeCount = 0
+
+      const queue: BullMqSourceSyncQueue = {
+        add: () => {
+          events.push("add")
+          return Promise.resolve({ id: payload.jobId })
+        },
+        close: Effect.sync(() => {
+          events.push("close")
+          closeCount += 1
+        }),
+      }
+
+      yield* Effect.promise(() =>
+        runWithProducer({
+          attached,
+          queue,
+          effect: Effect.gen(function* () {
+            const producer = yield* SourceSyncQueue
+            yield* producer.enqueueSourceSyncJob(payload)
+          }),
+        })
+      )
+
+      expect(closeCount).toBe(1)
+      expect(events).toEqual(["add", "close"])
     })
-    expect(attached[0]?.queuedAt).toBeInstanceOf(Date)
-  })
+  )
 
-  it("closes the queue when the scope finalizes", async () => {
-    const attached: Array<AttachSourceSyncQueueMetadataParams> = []
-    const events: Array<string> = []
-    let closeCount = 0
+  it.effect("does not propagate queue close failures during scope finalization", () =>
+    Effect.gen(function* () {
+      const attached: Array<AttachSourceSyncQueueMetadataParams> = []
+      let closeCount = 0
 
-    const queue: BullMqSourceSyncQueue = {
-      add: () => {
-        events.push("add")
-        return Promise.resolve({ id: payload.jobId })
-      },
-      close: Effect.sync(() => {
-        events.push("close")
-        closeCount += 1
-      }),
-    }
-
-    await runWithProducer({
-      attached,
-      queue,
-      effect: Effect.gen(function* () {
-        const producer = yield* SourceSyncQueue
-        yield* producer.enqueueSourceSyncJob(payload)
-      }),
-    })
-
-    expect(closeCount).toBe(1)
-    expect(events).toEqual(["add", "close"])
-  })
-
-  it("does not propagate queue close failures during scope finalization", async () => {
-    const attached: Array<AttachSourceSyncQueueMetadataParams> = []
-    let closeCount = 0
-
-    const queue: BullMqSourceSyncQueue = {
-      add: () => Promise.resolve({ id: payload.jobId }),
-      close: Effect.sync(() => {
-        closeCount += 1
-      }).pipe(
-        Effect.andThen(
-          Effect.fail(
-            new SourceSyncQueueError({
-              operation: "test.close",
-              cause: new Error("close failed"),
-            })
+      const queue: BullMqSourceSyncQueue = {
+        add: () => Promise.resolve({ id: payload.jobId }),
+        close: Effect.sync(() => {
+          closeCount += 1
+        }).pipe(
+          Effect.andThen(
+            Effect.fail(
+              new SourceSyncQueueError({
+                operation: "test.close",
+                cause: new Error("close failed"),
+              })
+            )
           )
-        )
-      ),
-    }
-
-    await runWithProducer({
-      attached,
-      queue,
-      effect: Effect.gen(function* () {
-        const producer = yield* SourceSyncQueue
-        yield* producer.enqueueSourceSyncJob(payload)
-      }),
-    })
-
-    expect(closeCount).toBe(1)
-  })
-
-  it("maps queue.add rejection to a source sync queue error", async () => {
-    const attached: Array<AttachSourceSyncQueueMetadataParams> = []
-
-    const queue: BullMqSourceSyncQueue = {
-      add: () => Promise.reject(new Error("redis unavailable")),
-      close: Effect.void,
-    }
-
-    const result = await runWithProducer({
-      attached,
-      queue,
-      effect: Effect.gen(function* () {
-        const producer = yield* SourceSyncQueue
-        yield* producer.enqueueSourceSyncJob(payload)
-      }).pipe(Effect.result),
-    })
-
-    expect(Result.isFailure(result)).toBe(true)
-    if (Result.isFailure(result)) {
-      expect(result.failure._tag).toBe("SourceSyncQueueError")
-      expect(result.failure.operation).toBe("apiBullMqSourceSyncQueue.enqueue")
-    }
-    expect(attached).toHaveLength(0)
-  })
-
-  it("maps queue metadata persistence failure to a source sync queue error", async () => {
-    const attached: Array<AttachSourceSyncQueueMetadataParams> = []
-
-    const queue: BullMqSourceSyncQueue = {
-      add: () => Promise.resolve({ id: payload.jobId }),
-      close: Effect.void,
-    }
-
-    const result = await runWithProducer({
-      attached,
-      queue,
-      attachQueueMetadata: () =>
-        Effect.fail(
-          new SourceSyncJobExecutionRecordConflictError({
-            jobId: payload.jobId,
-            reason: "Only active jobs can receive queue metadata.",
-          })
         ),
-      effect: Effect.gen(function* () {
-        const producer = yield* SourceSyncQueue
-        yield* producer.enqueueSourceSyncJob(payload)
-      }).pipe(Effect.result),
+      }
+
+      yield* Effect.promise(() =>
+        runWithProducer({
+          attached,
+          queue,
+          effect: Effect.gen(function* () {
+            const producer = yield* SourceSyncQueue
+            yield* producer.enqueueSourceSyncJob(payload)
+          }),
+        })
+      )
+
+      expect(closeCount).toBe(1)
     })
+  )
 
-    expect(Result.isFailure(result)).toBe(true)
-    if (Result.isFailure(result)) {
-      expect(result.failure._tag).toBe("SourceSyncQueueError")
-      expect(result.failure.operation).toBe("apiBullMqSourceSyncQueue.attachQueueMetadata")
-    }
-  })
+  it.effect("maps queue.add rejection to a source sync queue error", () =>
+    Effect.gen(function* () {
+      const attached: Array<AttachSourceSyncQueueMetadataParams> = []
 
-  it("fails layer construction for invalid queue config before acquiring the queue", async () => {
-    const attached: Array<AttachSourceSyncQueueMetadataParams> = []
-    const configCases: Array<{
-      readonly configOverrides: ConfigProviderOptions
-    }> = [
-      {
-        configOverrides: { overrides: { QUEUE_REDIS_URL: "not-a-url" } },
-      },
-      {
-        configOverrides: { overrides: { SOURCE_SYNC_QUEUE_ATTEMPTS: "0" } },
-      },
-      { configOverrides: { omittedKeys: ["QUEUE_REDIS_URL"] } },
-    ]
+      const queue: BullMqSourceSyncQueue = {
+        add: () => Promise.reject(new Error("redis unavailable")),
+        close: Effect.void,
+      }
 
-    for (const { configOverrides } of configCases) {
-      let acquiredConfig: ApiBullMqSourceSyncQueueConfig | null = null
+      const result = yield* Effect.promise(() =>
+        runWithProducer({
+          attached,
+          queue,
+          effect: Effect.gen(function* () {
+            const producer = yield* SourceSyncQueue
+            yield* producer.enqueueSourceSyncJob(payload)
+          }).pipe(Effect.result),
+        })
+      )
+
+      expect(Result.isFailure(result)).toBe(true)
+      if (Result.isFailure(result)) {
+        expect(result.failure._tag).toBe("SourceSyncQueueError")
+        expect(result.failure.operation).toBe("apiBullMqSourceSyncQueue.enqueue")
+      }
+      expect(attached).toHaveLength(0)
+    })
+  )
+
+  it.effect("maps queue metadata persistence failure to a source sync queue error", () =>
+    Effect.gen(function* () {
+      const attached: Array<AttachSourceSyncQueueMetadataParams> = []
 
       const queue: BullMqSourceSyncQueue = {
         add: () => Promise.resolve({ id: payload.jobId }),
         close: Effect.void,
       }
 
-      const result = await Effect.runPromise(
-        Effect.scoped(
+      const result = yield* Effect.promise(() =>
+        runWithProducer({
+          attached,
+          queue,
+          attachQueueMetadata: () =>
+            Effect.fail(
+              new SourceSyncJobExecutionRecordConflictError({
+                jobId: payload.jobId,
+                reason: "Only active jobs can receive queue metadata.",
+              })
+            ),
+          effect: Effect.gen(function* () {
+            const producer = yield* SourceSyncQueue
+            yield* producer.enqueueSourceSyncJob(payload)
+          }).pipe(Effect.result),
+        })
+      )
+
+      expect(Result.isFailure(result)).toBe(true)
+      if (Result.isFailure(result)) {
+        expect(result.failure._tag).toBe("SourceSyncQueueError")
+        expect(result.failure.operation).toBe("apiBullMqSourceSyncQueue.attachQueueMetadata")
+      }
+    })
+  )
+
+  it.effect("fails layer construction for invalid queue config before acquiring the queue", () =>
+    Effect.gen(function* () {
+      const attached: Array<AttachSourceSyncQueueMetadataParams> = []
+      const configCases: Array<{
+        readonly configOverrides: ConfigProviderOptions
+      }> = [
+        {
+          configOverrides: { overrides: { QUEUE_REDIS_URL: "not-a-url" } },
+        },
+        {
+          configOverrides: { overrides: { SOURCE_SYNC_QUEUE_ATTEMPTS: "0" } },
+        },
+        { configOverrides: { omittedKeys: ["QUEUE_REDIS_URL"] } },
+      ]
+
+      for (const { configOverrides } of configCases) {
+        let acquiredConfig: ApiBullMqSourceSyncQueueConfig | null = null
+
+        const queue: BullMqSourceSyncQueue = {
+          add: () => Promise.resolve({ id: payload.jobId }),
+          close: Effect.void,
+        }
+
+        const result = yield* Effect.scoped(
           SourceSyncQueue.pipe(
             Effect.asVoid,
             Effect.provide(
@@ -349,27 +369,27 @@ describe("ApiBullMqSourceSyncQueueLive", () => {
             Effect.result
           )
         )
-      )
 
-      expect(Result.isFailure(result)).toBe(true)
-      expect(acquiredConfig).toBeNull()
-      if (Result.isFailure(result)) {
-        expect(result.failure).toBeInstanceOf(Config.ConfigError)
+        expect(Result.isFailure(result)).toBe(true)
+        expect(acquiredConfig).toBeNull()
+        if (Result.isFailure(result)) {
+          expect(result.failure).toBeInstanceOf(Config.ConfigError)
+        }
       }
-    }
-  })
+    })
+  )
 
-  it("allows zero BullMQ retention counts", async () => {
-    const attached: Array<AttachSourceSyncQueueMetadataParams> = []
-    let acquiredConfig: ApiBullMqSourceSyncQueueConfig | null = null
+  it.effect("allows zero BullMQ retention counts", () =>
+    Effect.gen(function* () {
+      const attached: Array<AttachSourceSyncQueueMetadataParams> = []
+      let acquiredConfig: ApiBullMqSourceSyncQueueConfig | null = null
 
-    const queue: BullMqSourceSyncQueue = {
-      add: () => Promise.resolve({ id: payload.jobId }),
-      close: Effect.void,
-    }
+      const queue: BullMqSourceSyncQueue = {
+        add: () => Promise.resolve({ id: payload.jobId }),
+        close: Effect.void,
+      }
 
-    const result = await Effect.runPromise(
-      Effect.scoped(
+      const result = yield* Effect.scoped(
         SourceSyncQueue.pipe(
           Effect.asVoid,
           Effect.provide(
@@ -393,12 +413,12 @@ describe("ApiBullMqSourceSyncQueueLive", () => {
           Effect.result
         )
       )
-    )
 
-    expect(Result.isSuccess(result)).toBe(true)
-    expect(acquiredConfig).toMatchObject({
-      removeOnCompleteCount: 0,
-      removeOnFailCount: 0,
+      expect(Result.isSuccess(result)).toBe(true)
+      expect(acquiredConfig).toMatchObject({
+        removeOnCompleteCount: 0,
+        removeOnFailCount: 0,
+      })
     })
-  })
+  )
 })

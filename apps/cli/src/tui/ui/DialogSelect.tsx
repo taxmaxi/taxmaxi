@@ -1,6 +1,7 @@
 import { useKeyboard } from "@opentui/solid"
 import { TextAttributes } from "@opentui/core"
 import { createEffect, createMemo, createSignal, For, onCleanup, Show } from "solid-js"
+import { Effect, Fiber } from "effect"
 import { theme } from "../theme.ts"
 import { ListItem, ListItemText } from "./ListItem.tsx"
 
@@ -56,12 +57,19 @@ export function DialogSelect<T>(props: {
 
   createEffect(() => {
     query()
-    props.options
+    void props.options
     setIndex(0)
   })
 
-  const cursorTimer = setInterval(() => setCursorVisible((visible) => !visible), 530)
-  onCleanup(() => clearInterval(cursorTimer))
+  const cursorTimer = Effect.runFork(
+    Effect.sync(() => setCursorVisible((visible) => !visible)).pipe(
+      Effect.delay(530),
+      Effect.forever
+    )
+  )
+  onCleanup(() => {
+    Effect.runFork(Fiber.interrupt(cursorTimer))
+  })
 
   const cursorStyle = () =>
     cursorVisible()

@@ -1,6 +1,7 @@
 import type { MouseEvent } from "@opentui/core"
 import { useKeyboard, useRenderer, useTerminalDimensions } from "@opentui/solid"
 import { createSignal, For, Match, Show, Switch } from "solid-js"
+import { Effect } from "effect"
 import type { Source, SourceFifoLots } from "taxmaxi"
 import type { CliSession } from "../../session.ts"
 import { fetchSourceFifoLots } from "../controller.ts"
@@ -71,34 +72,43 @@ export function SourceFifoLotsScreen(props: {
   // selection survive backing out of it.
   const [explainLegId, setExplainLegId] = createSignal<string | undefined>(undefined)
 
-  const list = createPagedList<FifoLotRow>(async (cursor) => {
-    const result = await fetchSourceFifoLots(props.session, {
-      sourceId: props.source.id,
-      cursor,
-    })
-    if (result._tag === "unauthorized") {
-      props.onSessionExpired()
-      return { _tag: "error", message: result.message }
-    }
-    if (result._tag === "error") {
-      return result
-    }
-    return {
-      _tag: "ok",
-      page: {
-        rows: result.data.fifoLots,
-        nextCursor: result.data.page.nextCursor,
-        hasMore: result.data.page.hasMore,
-      },
-    }
-  })
+  const list = createPagedList<FifoLotRow>((cursor) =>
+    Effect.runPromise(
+      Effect.gen(function* () {
+        const result = yield* Effect.promise(() =>
+          fetchSourceFifoLots(props.session, {
+            sourceId: props.source.id,
+            cursor,
+          })
+        )
+        if (result._tag === "unauthorized") {
+          props.onSessionExpired()
+          return { _tag: "error", message: result.message } as const
+        }
+        if (result._tag === "error") {
+          return result
+        }
+        return {
+          _tag: "ok",
+          page: {
+            rows: result.data.fifoLots,
+            nextCursor: result.data.page.nextCursor,
+            hasMore: result.data.page.hasMore,
+          },
+        } as const
+      })
+    )
+  )
 
-  const reload = async () => {
-    setSelected(0)
-    setSelectedMatch(0)
-    viewport.reset()
-    await list.reload()
-  }
+  const reload = () =>
+    Effect.runPromise(
+      Effect.gen(function* () {
+        setSelected(0)
+        setSelectedMatch(0)
+        viewport.reset()
+        yield* Effect.promise(list.reload)
+      })
+    )
 
   const rows = (): ReadonlyArray<FifoLotRow> => {
     const current = list.state()

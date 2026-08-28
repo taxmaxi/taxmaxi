@@ -1,7 +1,8 @@
+import * as DateTime from "effect/DateTime"
 import { eq } from "drizzle-orm"
 import * as Deferred from "effect/Deferred"
 import * as Effect from "effect/Effect"
-import { beforeEach, describe, expect, it } from "vitest"
+import { beforeEach, describe, expect, it } from "@effect/vitest"
 import { drizzle } from "../../src/layers/PgClientLive.ts"
 import { SourceNormalizationRepositoryLive } from "../../src/layers/SourceNormalizationRepositoryLive.ts"
 import { SourceRawRecordRepositoryLive } from "../../src/layers/SourceRawRecordRepositoryLive.ts"
@@ -60,11 +61,11 @@ const seedReplayRawRecord = () =>
       externalAccountId: "coinbase-account-1",
       externalRecordId: "raw-replay-1",
       externalParentId: null,
-      occurredAt: new Date("2025-01-01T10:00:00.000Z"),
+      occurredAt: DateTime.toDateUtc(DateTime.makeUnsafe("2025-01-01T10:00:00.000Z")),
       payload: { id: "raw-replay-1" },
-      importedAt: new Date("2025-01-01T10:00:00.000Z"),
-      createdAt: new Date("2025-01-01T10:00:00.000Z"),
-      updatedAt: new Date("2025-01-01T10:00:00.000Z"),
+      importedAt: DateTime.toDateUtc(DateTime.makeUnsafe("2025-01-01T10:00:00.000Z")),
+      createdAt: DateTime.toDateUtc(DateTime.makeUnsafe("2025-01-01T10:00:00.000Z")),
+      updatedAt: DateTime.toDateUtc(DateTime.makeUnsafe("2025-01-01T10:00:00.000Z")),
     })
   })
 
@@ -239,19 +240,19 @@ const seedFifoOwnerLockScenario = () => {
         id: ownerTransactionId,
         sourceId: ownerSourceId,
         externalId: "owner-acquisition",
-        timestamp: new Date("2025-01-01T10:00:00.000Z"),
+        timestamp: DateTime.toDateUtc(DateTime.makeUnsafe("2025-01-01T10:00:00.000Z")),
       })
       yield* seedTransaction({
         id: replayTransactionId,
         sourceId: TEST_SOURCE_ID,
         externalId: "replay-consumption",
-        timestamp: new Date("2025-01-02T10:00:00.000Z"),
+        timestamp: DateTime.toDateUtc(DateTime.makeUnsafe("2025-01-02T10:00:00.000Z")),
       })
       const ownerLegId = yield* seedLeg({
         sourceId: ownerSourceId,
         transactionId: ownerTransactionId,
         externalId: "owner-acquisition-leg",
-        timestamp: new Date("2025-01-01T10:00:00.000Z"),
+        timestamp: DateTime.toDateUtc(DateTime.makeUnsafe("2025-01-01T10:00:00.000Z")),
         amount: "1.00000000",
         kind: "acquisition",
       })
@@ -259,14 +260,14 @@ const seedFifoOwnerLockScenario = () => {
         sourceId: TEST_SOURCE_ID,
         transactionId: replayTransactionId,
         externalId: "replay-consumption-leg",
-        timestamp: new Date("2025-01-02T10:00:00.000Z"),
+        timestamp: DateTime.toDateUtc(DateTime.makeUnsafe("2025-01-02T10:00:00.000Z")),
         amount: "0.40000000",
         kind: "fee",
       })
       const lotId = yield* seedFifoLot({
         sourceId: ownerSourceId,
         sourceLegId: ownerLegId,
-        acquiredAt: new Date("2025-01-01T10:00:00.000Z"),
+        acquiredAt: DateTime.toDateUtc(DateTime.makeUnsafe("2025-01-01T10:00:00.000Z")),
         originalAmount: "1.00000000",
         remainingAmount: "0.60000000",
         costBasisPerToken: "10000.00",
@@ -275,7 +276,7 @@ const seedFifoOwnerLockScenario = () => {
         sourceId: TEST_SOURCE_ID,
         transactionId: replayTransactionId,
         transactionLegId: replayLegId,
-        timestamp: new Date("2025-01-02T10:00:00.000Z"),
+        timestamp: DateTime.toDateUtc(DateTime.makeUnsafe("2025-01-02T10:00:00.000Z")),
         amount: "0.40000000",
       })
       yield* db.insert(schema.inventoryMovementAllocations).values({
@@ -334,25 +335,25 @@ const seedReplayDependencyScenario = ({
         id: replayTransactionId,
         sourceId: TEST_SOURCE_ID,
         externalId: "replay-lot-origin",
-        timestamp: new Date("2025-01-01T10:00:00.000Z"),
+        timestamp: DateTime.toDateUtc(DateTime.makeUnsafe("2025-01-01T10:00:00.000Z")),
       })
       yield* seedTransaction({
         id: dependentTransactionId,
         sourceId: dependentSourceId,
         externalId: "dependent-movement-origin",
-        timestamp: new Date("2025-01-02T10:00:00.000Z"),
+        timestamp: DateTime.toDateUtc(DateTime.makeUnsafe("2025-01-02T10:00:00.000Z")),
       })
       yield* seedTransaction({
         id: downstreamTransactionId,
         sourceId: downstreamSourceId,
         externalId: "downstream-movement-origin",
-        timestamp: new Date("2025-01-03T10:00:00.000Z"),
+        timestamp: DateTime.toDateUtc(DateTime.makeUnsafe("2025-01-03T10:00:00.000Z")),
       })
       const acquisitionLegId = yield* seedLeg({
         sourceId: TEST_SOURCE_ID,
         transactionId: replayTransactionId,
         externalId: "replay-lot-origin-leg",
-        timestamp: new Date("2025-01-01T10:00:00.000Z"),
+        timestamp: DateTime.toDateUtc(DateTime.makeUnsafe("2025-01-01T10:00:00.000Z")),
         amount: "1.00000000",
         kind: "acquisition",
       })
@@ -360,7 +361,7 @@ const seedReplayDependencyScenario = ({
         sourceId: dependentSourceId,
         transactionId: dependentTransactionId,
         externalId: "dependent-consumption-leg",
-        timestamp: new Date("2025-01-02T10:00:00.000Z"),
+        timestamp: DateTime.toDateUtc(DateTime.makeUnsafe("2025-01-02T10:00:00.000Z")),
         amount: dependentLegKind === "disposal" ? "-0.40000000" : "0.40000000",
         kind: dependentLegKind,
       })
@@ -368,7 +369,7 @@ const seedReplayDependencyScenario = ({
         sourceId: dependentSourceId,
         transactionId: dependentTransactionId,
         externalId: "dependent-acquisition-leg",
-        timestamp: new Date("2025-01-02T10:00:00.000Z"),
+        timestamp: DateTime.toDateUtc(DateTime.makeUnsafe("2025-01-02T10:00:00.000Z")),
         amount: "0.50000000",
         kind: "acquisition",
       })
@@ -376,14 +377,14 @@ const seedReplayDependencyScenario = ({
         sourceId: downstreamSourceId,
         transactionId: downstreamTransactionId,
         externalId: "downstream-consumption-leg",
-        timestamp: new Date("2025-01-03T10:00:00.000Z"),
+        timestamp: DateTime.toDateUtc(DateTime.makeUnsafe("2025-01-03T10:00:00.000Z")),
         amount: "0.20000000",
         kind: "fee",
       })
       const lotId = yield* seedFifoLot({
         sourceId: TEST_SOURCE_ID,
         sourceLegId: acquisitionLegId,
-        acquiredAt: new Date("2025-01-01T10:00:00.000Z"),
+        acquiredAt: DateTime.toDateUtc(DateTime.makeUnsafe("2025-01-01T10:00:00.000Z")),
         originalAmount: "1.00000000",
         remainingAmount: "0.60000000",
         costBasisPerToken: "10000.00",
@@ -391,7 +392,7 @@ const seedReplayDependencyScenario = ({
       const dependentLotId = yield* seedFifoLot({
         sourceId: dependentSourceId,
         sourceLegId: dependentAcquisitionLegId,
-        acquiredAt: new Date("2025-01-02T10:00:00.000Z"),
+        acquiredAt: DateTime.toDateUtc(DateTime.makeUnsafe("2025-01-02T10:00:00.000Z")),
         originalAmount: "0.50000000",
         remainingAmount: "0.30000000",
         costBasisPerToken: "11000.00",
@@ -400,7 +401,7 @@ const seedReplayDependencyScenario = ({
         sourceId: downstreamSourceId,
         transactionId: downstreamTransactionId,
         transactionLegId: downstreamLegId,
-        timestamp: new Date("2025-01-03T10:00:00.000Z"),
+        timestamp: DateTime.toDateUtc(DateTime.makeUnsafe("2025-01-03T10:00:00.000Z")),
         amount: "0.20000000",
       })
       yield* db.insert(schema.inventoryMovementAllocations).values({
@@ -414,7 +415,7 @@ const seedReplayDependencyScenario = ({
           sourceId: dependentSourceId,
           transactionId: dependentTransactionId,
           transactionLegId: dependentLegId,
-          timestamp: new Date("2025-01-02T10:00:00.000Z"),
+          timestamp: DateTime.toDateUtc(DateTime.makeUnsafe("2025-01-02T10:00:00.000Z")),
           amount: "0.40000000",
         })
         yield* db.insert(schema.inventoryMovementAllocations).values({
@@ -441,470 +442,536 @@ const seedReplayDependencyScenario = ({
 describe("SourceReplayRepositoryLive", () => {
   let fixture: SyncEngineRepositoryFixture
 
-  beforeEach(async () => {
-    await Effect.runPromise(context.recreateTestDatabase())
-    fixture = await runPg(seedSyncEngineRepositoryFixture())
-    await runPg(
-      seedSyncEngineAssets({
-        baseBlockchainId: fixture.baseBlockchainId,
-        bitcoinBlockchainId: fixture.bitcoinBlockchainId,
-      })
-    )
-    await runPg(seedReplayRawRecord())
-  })
-
-  it("persists replay prerequisites and keeps the earliest rebuild boundary", async () => {
-    const [firstPrerequisiteJob, secondPrerequisiteJob, replayJob] = await runPg(
+  beforeEach(() =>
+    Effect.runPromise(
       Effect.gen(function* () {
-        const db = yield* drizzle
-        return yield* db
-          .insert(schema.processingJobs)
-          .values([
-            {
-              sourceId: TEST_SOURCE_ID,
-              principalId: TEST_PRINCIPAL_ID,
-              mode: "replay",
-              status: "completed",
-            },
-            {
-              sourceId: TEST_SOURCE_ID,
-              principalId: TEST_PRINCIPAL_ID,
-              mode: "replay",
-              status: "completed",
-            },
-            {
-              sourceId: TEST_SOURCE_ID,
-              principalId: TEST_PRINCIPAL_ID,
-              mode: "replay",
-              status: "pending",
-            },
-          ])
-          .returning({ id: schema.processingJobs.id })
+        yield* context.recreateTestDatabase()
+        fixture = yield* Effect.promise(() => runPg(seedSyncEngineRepositoryFixture()))
+        yield* Effect.promise(() =>
+          runPg(
+            seedSyncEngineAssets({
+              baseBlockchainId: fixture.baseBlockchainId,
+              bitcoinBlockchainId: fixture.bitcoinBlockchainId,
+            })
+          )
+        )
+        yield* Effect.promise(() => runPg(seedReplayRawRecord()))
       })
     )
+  )
 
-    if (
-      firstPrerequisiteJob === undefined ||
-      secondPrerequisiteJob === undefined ||
-      replayJob === undefined
-    ) {
-      throw new Error("Failed to create replay plan jobs")
-    }
-
-    const earliestBoundary = new Date("2025-01-01T00:00:00.000Z")
-    await runReplayPlanRepository(
-      Effect.flatMap(SourceReplayPlanRepository, (repository) =>
-        repository.recordReplayPlan({
-          jobId: replayJob.id,
-          prerequisiteJobIds: [firstPrerequisiteJob.id],
-          rebuildFrom: earliestBoundary,
-        })
-      )
-    )
-
-    const plan = await runReplayPlanRepository(
-      Effect.flatMap(SourceReplayPlanRepository, (repository) =>
-        repository.recordReplayPlan({
-          jobId: replayJob.id,
-          prerequisiteJobIds: [secondPrerequisiteJob.id],
-          rebuildFrom: new Date("2025-01-03T00:00:00.000Z"),
-        })
-      )
-    )
-
-    expect(plan).toEqual({
-      jobId: replayJob.id,
-      prerequisiteJobIds: [firstPrerequisiteJob.id, secondPrerequisiteJob.id].sort(),
-      rebuildFrom: earliestBoundary,
-    })
-  })
-
-  it("returns a typed error for a missing prerequisite without changing the replay plan", async () => {
-    const existingPrerequisiteJobId = "00000000-0000-0000-0000-000000000403"
-    const missingPrerequisiteJobId = "00000000-0000-0000-0000-000000000404"
-    const replayJobId = "00000000-0000-0000-0000-000000000405"
-    await runPg(
-      Effect.gen(function* () {
-        const db = yield* drizzle
-        yield* db.insert(schema.processingJobs).values([
-          {
-            id: existingPrerequisiteJobId,
-            sourceId: TEST_SOURCE_ID,
-            principalId: TEST_PRINCIPAL_ID,
-            mode: "replay",
-            status: "completed",
-          },
-          {
-            id: replayJobId,
-            sourceId: TEST_SOURCE_ID,
-            principalId: TEST_PRINCIPAL_ID,
-            mode: "replay",
-            status: "pending",
-          },
-        ])
-      })
-    )
-
-    const failedPlan = await runReplayPlanRepository(
-      Effect.flatMap(SourceReplayPlanRepository, (repository) =>
-        repository
-          .recordReplayPlan({
-            jobId: replayJobId,
-            prerequisiteJobIds: [missingPrerequisiteJobId],
-            rebuildFrom: new Date("2025-01-01T00:00:00.000Z"),
+  it.effect("persists replay prerequisites and keeps the earliest rebuild boundary", () =>
+    Effect.gen(function* () {
+      const [firstPrerequisiteJob, secondPrerequisiteJob, replayJob] = yield* Effect.promise(() =>
+        runPg(
+          Effect.gen(function* () {
+            const db = yield* drizzle
+            return yield* db
+              .insert(schema.processingJobs)
+              .values([
+                {
+                  sourceId: TEST_SOURCE_ID,
+                  principalId: TEST_PRINCIPAL_ID,
+                  mode: "replay",
+                  status: "completed",
+                },
+                {
+                  sourceId: TEST_SOURCE_ID,
+                  principalId: TEST_PRINCIPAL_ID,
+                  mode: "replay",
+                  status: "completed",
+                },
+                {
+                  sourceId: TEST_SOURCE_ID,
+                  principalId: TEST_PRINCIPAL_ID,
+                  mode: "replay",
+                  status: "pending",
+                },
+              ])
+              .returning({ id: schema.processingJobs.id })
           })
-          .pipe(Effect.result)
+        )
       )
-    )
 
-    expect(failedPlan).toMatchObject({
-      _tag: "Failure",
-      failure: {
-        _tag: "SourceReplayPlanJobNotFoundError",
-        jobId: missingPrerequisiteJobId,
-      },
+      if (
+        firstPrerequisiteJob === undefined ||
+        secondPrerequisiteJob === undefined ||
+        replayJob === undefined
+      ) {
+        throw new Error("Failed to create replay plan jobs")
+      }
+
+      const earliestBoundary = DateTime.toDateUtc(DateTime.makeUnsafe("2025-01-01T00:00:00.000Z"))
+      yield* Effect.promise(() =>
+        runReplayPlanRepository(
+          Effect.flatMap(SourceReplayPlanRepository, (repository) =>
+            repository.recordReplayPlan({
+              jobId: replayJob.id,
+              prerequisiteJobIds: [firstPrerequisiteJob.id],
+              rebuildFrom: earliestBoundary,
+            })
+          )
+        )
+      )
+
+      const plan = yield* Effect.promise(() =>
+        runReplayPlanRepository(
+          Effect.flatMap(SourceReplayPlanRepository, (repository) =>
+            repository.recordReplayPlan({
+              jobId: replayJob.id,
+              prerequisiteJobIds: [secondPrerequisiteJob.id],
+              rebuildFrom: DateTime.toDateUtc(DateTime.makeUnsafe("2025-01-03T00:00:00.000Z")),
+            })
+          )
+        )
+      )
+
+      expect(plan).toEqual({
+        jobId: replayJob.id,
+        prerequisiteJobIds: [firstPrerequisiteJob.id, secondPrerequisiteJob.id].sort(),
+        rebuildFrom: earliestBoundary,
+      })
     })
+  )
 
-    const acceptedBoundary = new Date("2025-01-03T00:00:00.000Z")
-    const acceptedPlan = await runReplayPlanRepository(
-      Effect.flatMap(SourceReplayPlanRepository, (repository) =>
-        repository.recordReplayPlan({
+  it.effect(
+    "returns a typed error for a missing prerequisite without changing the replay plan",
+    () =>
+      Effect.gen(function* () {
+        const existingPrerequisiteJobId = "00000000-0000-0000-0000-000000000403"
+        const missingPrerequisiteJobId = "00000000-0000-0000-0000-000000000404"
+        const replayJobId = "00000000-0000-0000-0000-000000000405"
+        yield* Effect.promise(() =>
+          runPg(
+            Effect.gen(function* () {
+              const db = yield* drizzle
+              yield* db.insert(schema.processingJobs).values([
+                {
+                  id: existingPrerequisiteJobId,
+                  sourceId: TEST_SOURCE_ID,
+                  principalId: TEST_PRINCIPAL_ID,
+                  mode: "replay",
+                  status: "completed",
+                },
+                {
+                  id: replayJobId,
+                  sourceId: TEST_SOURCE_ID,
+                  principalId: TEST_PRINCIPAL_ID,
+                  mode: "replay",
+                  status: "pending",
+                },
+              ])
+            })
+          )
+        )
+
+        const failedPlan = yield* Effect.promise(() =>
+          runReplayPlanRepository(
+            Effect.flatMap(SourceReplayPlanRepository, (repository) =>
+              repository
+                .recordReplayPlan({
+                  jobId: replayJobId,
+                  prerequisiteJobIds: [missingPrerequisiteJobId],
+                  rebuildFrom: DateTime.toDateUtc(DateTime.makeUnsafe("2025-01-01T00:00:00.000Z")),
+                })
+                .pipe(Effect.result)
+            )
+          )
+        )
+
+        expect(failedPlan).toMatchObject({
+          _tag: "Failure",
+          failure: {
+            _tag: "SourceReplayPlanJobNotFoundError",
+            jobId: missingPrerequisiteJobId,
+          },
+        })
+
+        const acceptedBoundary = DateTime.toDateUtc(DateTime.makeUnsafe("2025-01-03T00:00:00.000Z"))
+        const acceptedPlan = yield* Effect.promise(() =>
+          runReplayPlanRepository(
+            Effect.flatMap(SourceReplayPlanRepository, (repository) =>
+              repository.recordReplayPlan({
+                jobId: replayJobId,
+                prerequisiteJobIds: [existingPrerequisiteJobId],
+                rebuildFrom: acceptedBoundary,
+              })
+            )
+          )
+        )
+
+        expect(acceptedPlan).toEqual({
           jobId: replayJobId,
           prerequisiteJobIds: [existingPrerequisiteJobId],
           rebuildFrom: acceptedBoundary,
         })
-      )
-    )
+      })
+  )
 
-    expect(acceptedPlan).toEqual({
-      jobId: replayJobId,
-      prerequisiteJobIds: [existingPrerequisiteJobId],
-      rebuildFrom: acceptedBoundary,
+  it.effect("rejects replay plans that attach an unsuccessful terminal prerequisite", () =>
+    Effect.gen(function* () {
+      const failedPrerequisiteJobId = "00000000-0000-0000-0000-000000000406"
+      const replayJobId = "00000000-0000-0000-0000-000000000407"
+      yield* Effect.promise(() =>
+        runPg(
+          Effect.flatMap(drizzle, (db) =>
+            db.insert(schema.processingJobs).values([
+              {
+                id: failedPrerequisiteJobId,
+                sourceId: TEST_SOURCE_ID,
+                principalId: TEST_PRINCIPAL_ID,
+                mode: "replay",
+                status: "failed",
+              },
+              {
+                id: replayJobId,
+                sourceId: TEST_SOURCE_ID,
+                principalId: TEST_PRINCIPAL_ID,
+                mode: "replay",
+                status: "pending",
+              },
+            ])
+          )
+        )
+      )
+
+      const result = yield* Effect.promise(() =>
+        runReplayPlanRepository(
+          Effect.flatMap(SourceReplayPlanRepository, (repository) =>
+            repository
+              .recordReplayPlan({
+                jobId: replayJobId,
+                prerequisiteJobIds: [failedPrerequisiteJobId],
+                rebuildFrom: DateTime.toDateUtc(DateTime.makeUnsafe("2025-01-01T00:00:00.000Z")),
+              })
+              .pipe(Effect.result)
+          )
+        )
+      )
+
+      expect(result).toMatchObject({
+        _tag: "Failure",
+        failure: {
+          _tag: "SourceReplayPlanConflictError",
+          jobId: replayJobId,
+        },
+      })
     })
-  })
+  )
 
-  it("rejects replay plans that attach an unsuccessful terminal prerequisite", async () => {
-    const failedPrerequisiteJobId = "00000000-0000-0000-0000-000000000406"
-    const replayJobId = "00000000-0000-0000-0000-000000000407"
-    await runPg(
-      Effect.flatMap(drizzle, (db) =>
-        db.insert(schema.processingJobs).values([
-          {
-            id: failedPrerequisiteJobId,
-            sourceId: TEST_SOURCE_ID,
-            principalId: TEST_PRINCIPAL_ID,
-            mode: "replay",
-            status: "failed",
-          },
-          {
-            id: replayJobId,
-            sourceId: TEST_SOURCE_ID,
-            principalId: TEST_PRINCIPAL_ID,
-            mode: "replay",
-            status: "pending",
-          },
-        ])
+  it.effect("waits for FIFO owner inventory locks before resetting replay state", () =>
+    Effect.gen(function* () {
+      const { ownerSourceId, replayJobId } = yield* Effect.promise(() =>
+        seedFifoOwnerLockScenario()
       )
-    )
 
-    const result = await runReplayPlanRepository(
-      Effect.flatMap(SourceReplayPlanRepository, (repository) =>
-        repository
-          .recordReplayPlan({
-            jobId: replayJobId,
-            prerequisiteJobIds: [failedPrerequisiteJobId],
-            rebuildFrom: new Date("2025-01-01T00:00:00.000Z"),
-          })
-          .pipe(Effect.result)
+      const sourceLockAcquired = yield* Deferred.make<void>()
+      const releaseSourceLock = yield* Deferred.make<void>()
+      const heldSourceLock = runPg(
+        Effect.gen(function* () {
+          const db = yield* drizzle
+          yield* db.transaction((tx) =>
+            Effect.gen(function* () {
+              yield* tx
+                .select({ id: schema.sources.id })
+                .from(schema.sources)
+                .where(eq(schema.sources.id, ownerSourceId))
+                .for("update")
+              yield* Deferred.succeed(sourceLockAcquired, undefined)
+              yield* Deferred.await(releaseSourceLock)
+            })
+          )
+        })
       )
-    )
 
-    expect(result).toMatchObject({
-      _tag: "Failure",
-      failure: {
-        _tag: "SourceReplayPlanConflictError",
-        jobId: replayJobId,
-      },
+      yield* Deferred.await(sourceLockAcquired)
+
+      const replayWaitingForSource = runReplayRepository(
+        Effect.flatMap(SourceReplayRepository, (repository) =>
+          repository.resetSourceDerivedState({ jobId: replayJobId, sourceId: TEST_SOURCE_ID })
+        )
+      ).then(() => "completed" as const)
+
+      // Phase 1: replay must remain blocked while another transaction owns the source lock.
+      const replayBeforeSourceRelease = yield* Effect.promise(() =>
+        context
+          .waitForQueryBlockedOnLock({ queryIncludes: "sources" })
+          .then(() => "blocked" as const)
+      )
+
+      expect(replayBeforeSourceRelease).toBe("blocked")
+
+      // Phase 2: replay must finish after the source lock is released.
+      yield* Deferred.succeed(releaseSourceLock, undefined)
+      const [, laterOutcome] = yield* Effect.promise(() =>
+        Promise.all([heldSourceLock, replayWaitingForSource])
+      )
+
+      expect(laterOutcome).toBe("completed")
     })
-  })
+  )
 
-  it("waits for FIFO owner inventory locks before resetting replay state", async () => {
-    const { ownerSourceId, replayJobId } = await seedFifoOwnerLockScenario()
+  it.effect("clears canonical source-derived rows while keeping cached raw rows reusable", () =>
+    Effect.gen(function* () {
+      yield* Effect.promise(() =>
+        runNormalization(
+          Effect.flatMap(SourceNormalizationRepository, (repository) =>
+            repository.persistNormalizedArtifacts({
+              transaction: {
+                sourceId: TEST_SOURCE_ID,
+                sourceRawRecordId: TEST_RAW_RECORD_ID,
+                externalId: "tx-replay-1",
+                externalGroupId: "group-replay-1",
+                timestamp: DateTime.toDateUtc(DateTime.makeUnsafe("2025-01-01T10:00:00.000Z")),
+                transactionType: "buy_fiat",
+                providerTransactionType: "buy",
+                providerStatus: "completed",
+                providerResourcePath: "/v2/accounts/coinbase-account-1/transactions/tx-replay-1",
+                providerDescription: "Replay seed buy",
+                providerCreatedAt: DateTime.toDateUtc(
+                  DateTime.makeUnsafe("2025-01-01T10:00:00.000Z")
+                ),
+                providerUpdatedAt: DateTime.toDateUtc(
+                  DateTime.makeUnsafe("2025-01-01T10:00:00.000Z")
+                ),
+                metadata: { provider: "coinbase" },
+                providerFiatAmount: null,
+                providerFiatCurrency: null,
+                principalId: TEST_PRINCIPAL_ID,
+              },
+              venueContext: {
+                venueType: "cex",
+                cexAccountId: fixture.cexAccountId,
+                externalAccountId: "coinbase-account-1",
+                externalOrderId: "order-replay-1",
+                externalFillId: "fill-replay-1",
+                side: "buy",
+                instrument: "BTC-EUR",
+                fillPrice: "10000.00",
+                commissionAmount: null,
+                commissionCurrency: null,
+                metadata: { provider: "coinbase" },
+              },
+              providerTransfers: [],
+              canonicalTransfers: [],
+              providerAssetRowIds: [],
+              legs: [
+                {
+                  sourceId: TEST_SOURCE_ID,
+                  sourceRawRecordId: TEST_RAW_RECORD_ID,
+                  externalId: "leg-replay-1",
+                  txHash: null,
+                  timestamp: DateTime.toDateUtc(DateTime.makeUnsafe("2025-01-01T10:00:00.000Z")),
+                  principalId: TEST_PRINCIPAL_ID,
+                  addressId: null,
+                  assetId: TEST_BTC_ASSET_ID,
+                  amount: "1.00000000",
+                  kind: "acquisition",
+                  provenance: "deterministic",
+                  derivationRule: "spot_buy",
+                  metadata: { provider: "coinbase" },
+                  transactionId: null,
+                  sourceTransferId: null,
+                  fiatAmount: "10000.00000000",
+                  fiatCurrency: "EUR",
+                  feeForTransactionId: null,
+                },
+              ],
+              transactionReview: {
+                principalId: TEST_PRINCIPAL_ID,
+                reviewStatus: "needs_review",
+                originalTypeKey: "buy_fiat",
+                originalConfidence: "0.80",
+                currentTypeKey: "buy_fiat",
+                legalRuleSetVersion: "de-2025-01",
+                categorizationReason: "Replay fixture review",
+                matchedLayer: "fixture",
+                needsReview: true,
+                userNotes: null,
+                reviewedAt: null,
+              },
+              resolvedTransactionType: {
+                providerTransactionType: "buy",
+                transactionType: "buy_fiat",
+                inventoryEffect: "acquisition",
+                taxTreatment: "non_taxable_by_default",
+                resolutionStrategy: "static",
+                pairedRecordRequired: false,
+                mappingStatus: "approved",
+              },
+            })
+          )
+        )
+      )
 
-    const sourceLockAcquired = await Effect.runPromise(Deferred.make<void>())
-    const releaseSourceLock = await Effect.runPromise(Deferred.make<void>())
-    const heldSourceLock = runPg(
-      Effect.gen(function* () {
-        const db = yield* drizzle
-        yield* db.transaction((tx) =>
+      yield* Effect.promise(() =>
+        runRawRepository(
+          Effect.flatMap(SourceRawRecordRepository, (repository) =>
+            repository.markRawRecordNormalized({
+              rawRecordId: TEST_RAW_RECORD_ID,
+            })
+          )
+        )
+      )
+
+      yield* Effect.promise(() =>
+        runReplayRepository(
+          Effect.flatMap(SourceReplayRepository, (repository) =>
+            repository.resetSourceDerivedState({
+              jobId: "00000000-0000-0000-0000-000000000270",
+              sourceId: TEST_SOURCE_ID,
+            })
+          )
+        )
+      )
+
+      yield* Effect.promise(() =>
+        runRawRepository(
+          Effect.flatMap(SourceRawRecordRepository, (repository) =>
+            repository.resetNormalizationStateForSource({
+              sourceId: TEST_SOURCE_ID,
+            })
+          )
+        )
+      )
+
+      const snapshot = yield* Effect.promise(() =>
+        runPg(
           Effect.gen(function* () {
-            yield* tx
-              .select({ id: schema.sources.id })
-              .from(schema.sources)
-              .where(eq(schema.sources.id, ownerSourceId))
-              .for("update")
-            yield* Deferred.succeed(sourceLockAcquired, undefined)
-            yield* Deferred.await(releaseSourceLock)
+            const db = yield* drizzle
+            const transactions = yield* db
+              .select()
+              .from(schema.transactions)
+              .where(eq(schema.transactions.sourceId, TEST_SOURCE_ID))
+            const transfers = yield* db
+              .select()
+              .from(schema.transfers)
+              .where(eq(schema.transfers.sourceId, TEST_SOURCE_ID))
+            const legs = yield* db
+              .select()
+              .from(schema.transactionLegs)
+              .where(eq(schema.transactionLegs.sourceId, TEST_SOURCE_ID))
+            const reviews = yield* db.select().from(schema.transactionReviews)
+            const fifoLots = yield* db
+              .select()
+              .from(schema.fifoLots)
+              .where(eq(schema.fifoLots.sourceId, TEST_SOURCE_ID))
+            const rawRows = yield* db
+              .select()
+              .from(schema.sourceRecordsRaw)
+              .where(eq(schema.sourceRecordsRaw.sourceId, TEST_SOURCE_ID))
+            return {
+              transactions,
+              transfers,
+              legs,
+              reviews,
+              fifoLots,
+              rawRows,
+            }
           })
         )
-      })
-    )
-
-    await Effect.runPromise(Deferred.await(sourceLockAcquired))
-
-    const replayWaitingForSource = runReplayRepository(
-      Effect.flatMap(SourceReplayRepository, (repository) =>
-        repository.resetSourceDerivedState({ jobId: replayJobId, sourceId: TEST_SOURCE_ID })
       )
-    ).then(() => "completed" as const)
 
-    // Phase 1: replay must remain blocked while another transaction owns the source lock.
-    const replayBeforeSourceRelease = await context
-      .waitForQueryBlockedOnLock({ queryIncludes: "sources" })
-      .then(() => "blocked" as const)
+      expect(snapshot.transactions).toHaveLength(0)
+      expect(snapshot.transfers).toHaveLength(0)
+      expect(snapshot.legs).toHaveLength(0)
+      expect(snapshot.reviews).toHaveLength(0)
+      expect(snapshot.fifoLots).toHaveLength(0)
+      expect(snapshot.rawRows).toHaveLength(1)
+      expect(snapshot.rawRows[0]?.externalRecordId).toBe("raw-replay-1")
+      expect(snapshot.rawRows[0]?.normalizedAt).toBeNull()
+      expect(snapshot.rawRows[0]?.normalizationError).toBeNull()
+    })
+  )
 
-    expect(replayBeforeSourceRelease).toBe("blocked")
-
-    // Phase 2: replay must finish after the source lock is released.
-    await Effect.runPromise(Deferred.succeed(releaseSourceLock, undefined))
-    const [, laterOutcome] = await Promise.all([heldSourceLock, replayWaitingForSource])
-
-    expect(laterOutcome).toBe("completed")
-  })
-
-  it("clears canonical source-derived rows while keeping cached raw rows reusable", async () => {
-    await runNormalization(
-      Effect.flatMap(SourceNormalizationRepository, (repository) =>
-        repository.persistNormalizedArtifacts({
-          transaction: {
-            sourceId: TEST_SOURCE_ID,
-            sourceRawRecordId: TEST_RAW_RECORD_ID,
-            externalId: "tx-replay-1",
-            externalGroupId: "group-replay-1",
-            timestamp: new Date("2025-01-01T10:00:00.000Z"),
-            transactionType: "buy_fiat",
-            providerTransactionType: "buy",
-            providerStatus: "completed",
-            providerResourcePath: "/v2/accounts/coinbase-account-1/transactions/tx-replay-1",
-            providerDescription: "Replay seed buy",
-            providerCreatedAt: new Date("2025-01-01T10:00:00.000Z"),
-            providerUpdatedAt: new Date("2025-01-01T10:00:00.000Z"),
-            metadata: { provider: "coinbase" },
-            providerFiatAmount: null,
-            providerFiatCurrency: null,
-            principalId: TEST_PRINCIPAL_ID,
-          },
-          venueContext: {
-            venueType: "cex",
-            cexAccountId: fixture.cexAccountId,
-            externalAccountId: "coinbase-account-1",
-            externalOrderId: "order-replay-1",
-            externalFillId: "fill-replay-1",
-            side: "buy",
-            instrument: "BTC-EUR",
-            fillPrice: "10000.00",
-            commissionAmount: null,
-            commissionCurrency: null,
-            metadata: { provider: "coinbase" },
-          },
-          providerTransfers: [],
-          canonicalTransfers: [],
-          providerAssetRowIds: [],
-          legs: [
-            {
-              sourceId: TEST_SOURCE_ID,
-              sourceRawRecordId: TEST_RAW_RECORD_ID,
-              externalId: "leg-replay-1",
-              txHash: null,
-              timestamp: new Date("2025-01-01T10:00:00.000Z"),
-              principalId: TEST_PRINCIPAL_ID,
-              addressId: null,
-              assetId: TEST_BTC_ASSET_ID,
-              amount: "1.00000000",
-              kind: "acquisition",
-              provenance: "deterministic",
-              derivationRule: "spot_buy",
-              metadata: { provider: "coinbase" },
-              transactionId: null,
-              sourceTransferId: null,
-              fiatAmount: "10000.00000000",
-              fiatCurrency: "EUR",
-              feeForTransactionId: null,
-            },
-          ],
-          transactionReview: {
-            principalId: TEST_PRINCIPAL_ID,
-            reviewStatus: "needs_review",
-            originalTypeKey: "buy_fiat",
-            originalConfidence: "0.80",
-            currentTypeKey: "buy_fiat",
-            legalRuleSetVersion: "de-2025-01",
-            categorizationReason: "Replay fixture review",
-            matchedLayer: "fixture",
-            needsReview: true,
-            userNotes: null,
-            reviewedAt: null,
-          },
-          resolvedTransactionType: {
-            providerTransactionType: "buy",
-            transactionType: "buy_fiat",
-            inventoryEffect: "acquisition",
-            taxTreatment: "non_taxable_by_default",
-            resolutionStrategy: "static",
-            pairedRecordRequired: false,
-            mappingStatus: "approved",
-          },
-        })
-      )
-    )
-
-    await runRawRepository(
-      Effect.flatMap(SourceRawRecordRepository, (repository) =>
-        repository.markRawRecordNormalized({
-          rawRecordId: TEST_RAW_RECORD_ID,
-        })
-      )
-    )
-
-    await runReplayRepository(
-      Effect.flatMap(SourceReplayRepository, (repository) =>
-        repository.resetSourceDerivedState({
-          jobId: "00000000-0000-0000-0000-000000000270",
-          sourceId: TEST_SOURCE_ID,
-        })
-      )
-    )
-
-    await runRawRepository(
-      Effect.flatMap(SourceRawRecordRepository, (repository) =>
-        repository.resetNormalizationStateForSource({
-          sourceId: TEST_SOURCE_ID,
-        })
-      )
-    )
-
-    const snapshot = await runPg(
-      Effect.gen(function* () {
-        const db = yield* drizzle
-        const transactions = yield* db
-          .select()
-          .from(schema.transactions)
-          .where(eq(schema.transactions.sourceId, TEST_SOURCE_ID))
-        const transfers = yield* db
-          .select()
-          .from(schema.transfers)
-          .where(eq(schema.transfers.sourceId, TEST_SOURCE_ID))
-        const legs = yield* db
-          .select()
-          .from(schema.transactionLegs)
-          .where(eq(schema.transactionLegs.sourceId, TEST_SOURCE_ID))
-        const reviews = yield* db.select().from(schema.transactionReviews)
-        const fifoLots = yield* db
-          .select()
-          .from(schema.fifoLots)
-          .where(eq(schema.fifoLots.sourceId, TEST_SOURCE_ID))
-        const rawRows = yield* db
-          .select()
-          .from(schema.sourceRecordsRaw)
-          .where(eq(schema.sourceRecordsRaw.sourceId, TEST_SOURCE_ID))
-        return {
-          transactions,
-          transfers,
-          legs,
-          reviews,
-          fifoLots,
-          rawRows,
-        }
-      })
-    )
-
-    expect(snapshot.transactions).toHaveLength(0)
-    expect(snapshot.transfers).toHaveLength(0)
-    expect(snapshot.legs).toHaveLength(0)
-    expect(snapshot.reviews).toHaveLength(0)
-    expect(snapshot.fifoLots).toHaveLength(0)
-    expect(snapshot.rawRows).toHaveLength(1)
-    expect(snapshot.rawRows[0]?.externalRecordId).toBe("raw-replay-1")
-    expect(snapshot.rawRows[0]?.normalizedAt).toBeNull()
-    expect(snapshot.rawRows[0]?.normalizationError).toBeNull()
-  })
-
-  it.each([
+  it.effect.each([
     { dependencyKind: "inventory allocation", dependentLegKind: "fee" },
     { dependencyKind: "disposal match", dependentLegKind: "disposal" },
   ] as const)(
     "plans and gates dependent replay when another source has a $dependencyKind consuming one of its FIFO lots",
-    async ({ dependencyKind, dependentLegKind }) => {
-      const { dependentSourceId, downstreamSourceId, replayJobId } =
-        await seedReplayDependencyScenario({ dependencyKind, dependentLegKind })
-
-      const replayResult = await runReplayRepository(
-        Effect.flatMap(SourceReplayRepository, (repository) =>
-          repository.resetSourceDerivedState({ sourceId: TEST_SOURCE_ID, jobId: replayJobId })
+    ({ dependencyKind, dependentLegKind }) =>
+      Effect.gen(function* () {
+        const { dependentSourceId, downstreamSourceId, replayJobId } = yield* Effect.promise(() =>
+          seedReplayDependencyScenario({ dependencyKind, dependentLegKind })
         )
-      )
 
-      const dependentReplay = replayResult.dependentReplays.find(
-        (replay) => replay.sourceId === dependentSourceId
-      )
-      const downstreamReplay = replayResult.dependentReplays.find(
-        (replay) => replay.sourceId === downstreamSourceId
-      )
-
-      expect(dependentReplay).toMatchObject({
-        sourceId: dependentSourceId,
-        prerequisiteJobIds: [replayJobId],
-        rebuildFrom: new Date("2025-01-01T10:00:00.000Z"),
-      })
-      expect(downstreamReplay).toMatchObject({
-        sourceId: downstreamSourceId,
-        prerequisiteJobIds: [dependentReplay?.jobId],
-        rebuildFrom: new Date("2025-01-02T10:00:00.000Z"),
-      })
-
-      expect(dependentReplay).toBeDefined()
-      if (dependentReplay === undefined) return
-
-      const blockedDispatch = await runSyncJobRepository(
-        Effect.flatMap(SourceSyncJobRepository, (repository) =>
-          repository.getExecutionJob({ jobId: dependentReplay.jobId }).pipe(Effect.result)
+        const replayResult = yield* Effect.promise(() =>
+          runReplayRepository(
+            Effect.flatMap(SourceReplayRepository, (repository) =>
+              repository.resetSourceDerivedState({ sourceId: TEST_SOURCE_ID, jobId: replayJobId })
+            )
+          )
         )
-      )
-      expect(blockedDispatch).toMatchObject({
-        _tag: "Failure",
-        failure: { _tag: "SourceSyncJobPrerequisitesPendingError" },
-      })
 
-      await runPg(
-        Effect.flatMap(drizzle, (db) =>
-          db
-            .update(schema.processingJobs)
-            .set({ status: "completed", progressDetails: { failedRecords: 0 } })
-            .where(eq(schema.processingJobs.id, replayJobId))
+        const dependentReplay = replayResult.dependentReplays.find(
+          (replay) => replay.sourceId === dependentSourceId
         )
-      )
-      const readyDispatch = await runSyncJobRepository(
-        Effect.flatMap(SourceSyncJobRepository, (repository) =>
-          repository.getExecutionJob({ jobId: dependentReplay.jobId })
+        const downstreamReplay = replayResult.dependentReplays.find(
+          (replay) => replay.sourceId === downstreamSourceId
         )
-      )
-      expect(readyDispatch).toMatchObject({ id: dependentReplay.jobId, status: "pending" })
 
-      const state = await runPg(
-        Effect.gen(function* () {
-          const db = yield* drizzle
-          const lots = yield* db.select().from(schema.fifoLots)
-          const movements = yield* db.select().from(schema.inventoryMovements)
-          const allocations = yield* db.select().from(schema.inventoryMovementAllocations)
-          const matches = yield* db.select().from(schema.disposalMatches)
-          return { lots, movements, allocations, matches }
+        expect(dependentReplay).toMatchObject({
+          sourceId: dependentSourceId,
+          prerequisiteJobIds: [replayJobId],
+          rebuildFrom: DateTime.toDateUtc(DateTime.makeUnsafe("2025-01-01T10:00:00.000Z")),
         })
-      )
+        expect(downstreamReplay).toMatchObject({
+          sourceId: downstreamSourceId,
+          prerequisiteJobIds: [dependentReplay?.jobId],
+          rebuildFrom: DateTime.toDateUtc(DateTime.makeUnsafe("2025-01-02T10:00:00.000Z")),
+        })
 
-      expect(state.lots).toHaveLength(1)
-      expect(state.movements).toHaveLength(dependencyKind === "inventory allocation" ? 2 : 1)
-      expect(state.allocations).toHaveLength(1)
-      expect(state.matches).toHaveLength(0)
-    }
+        expect(dependentReplay).toBeDefined()
+        if (dependentReplay === undefined) return
+
+        const blockedDispatch = yield* Effect.promise(() =>
+          runSyncJobRepository(
+            Effect.flatMap(SourceSyncJobRepository, (repository) =>
+              repository.getExecutionJob({ jobId: dependentReplay.jobId }).pipe(Effect.result)
+            )
+          )
+        )
+        expect(blockedDispatch).toMatchObject({
+          _tag: "Failure",
+          failure: { _tag: "SourceSyncJobPrerequisitesPendingError" },
+        })
+
+        yield* Effect.promise(() =>
+          runPg(
+            Effect.flatMap(drizzle, (db) =>
+              db
+                .update(schema.processingJobs)
+                .set({ status: "completed", progressDetails: { failedRecords: 0 } })
+                .where(eq(schema.processingJobs.id, replayJobId))
+            )
+          )
+        )
+        const readyDispatch = yield* Effect.promise(() =>
+          runSyncJobRepository(
+            Effect.flatMap(SourceSyncJobRepository, (repository) =>
+              repository.getExecutionJob({ jobId: dependentReplay.jobId })
+            )
+          )
+        )
+        expect(readyDispatch).toMatchObject({ id: dependentReplay.jobId, status: "pending" })
+
+        const state = yield* Effect.promise(() =>
+          runPg(
+            Effect.gen(function* () {
+              const db = yield* drizzle
+              const lots = yield* db.select().from(schema.fifoLots)
+              const movements = yield* db.select().from(schema.inventoryMovements)
+              const allocations = yield* db.select().from(schema.inventoryMovementAllocations)
+              const matches = yield* db.select().from(schema.disposalMatches)
+              return { lots, movements, allocations, matches }
+            })
+          )
+        )
+
+        expect(state.lots).toHaveLength(1)
+        expect(state.movements).toHaveLength(dependencyKind === "inventory allocation" ? 2 : 1)
+        expect(state.allocations).toHaveLength(1)
+        expect(state.matches).toHaveLength(0)
+      })
   )
 })

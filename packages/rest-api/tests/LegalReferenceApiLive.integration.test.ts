@@ -12,7 +12,7 @@ import * as ConfigProvider from "effect/ConfigProvider"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import * as Schema from "effect/Schema"
-import { describe, expect, it } from "vitest"
+import { describe, expect, it } from "@effect/vitest"
 import {
   SourceSyncRunService,
   type SourceSyncRunServiceShape,
@@ -135,7 +135,7 @@ const postJson = <Response, Requirements>({
       HttpClient.execute
     )
     const body = yield* response.json
-    const decodedBody = yield* Schema.decodeUnknownEffect(responseSchema)(body)
+    const decodedBody = yield* Schema.decodeEffect(responseSchema)(body)
 
     return {
       status: response.status,
@@ -165,19 +165,17 @@ const resolveQuestionViaService = ({
 await Effect.runPromise(context.recreateTestDatabase())
 
 describe("LegalReferenceApiLive", () => {
-  it("returns question-level DE legal references from the active fresh-DB ruleset", async () => {
-    const serviceResponse = await Effect.runPromise(
-      resolveQuestionViaService({
+  it.effect("returns question-level DE legal references from the active fresh-DB ruleset", () =>
+    Effect.gen(function* () {
+      const serviceResponse = yield* resolveQuestionViaService({
         question: "Ist ein Tausch von ETH in einen anderen Coin steuerpflichtig?",
         maxClauses: 5,
       })
-    )
 
-    expect(serviceResponse.ruleSet?.version).toBe(ACTIVE_DE_RULESET_VERSION)
-    expect(serviceResponse.references.length).toBeGreaterThan(0)
+      expect(serviceResponse.ruleSet?.version).toBe(ACTIVE_DE_RULESET_VERSION)
+      expect(serviceResponse.references.length).toBeGreaterThan(0)
 
-    const response = await Effect.runPromise(
-      postJson({
+      const response = yield* postJson({
         path: "/v1/legal/references/question",
         payload: {
           jurisdictionCode: "DE",
@@ -186,88 +184,94 @@ describe("LegalReferenceApiLive", () => {
         },
         responseSchema: QuestionLegalReferencesResponse,
       }).pipe(Effect.provide(HttpLive), Effect.scoped)
-    )
 
-    expect(response.status, JSON.stringify(response.body)).toBe(200)
-    expect(response.body.ruleSetVersion).toBe(ACTIVE_DE_RULESET_VERSION)
-    expect(response.body.ruleSetName).toBe("DE Crypto Income Tax Ruleset (BMF 2025-03-06)")
-    expect(response.body.insufficiencyText).toBeNull()
-    expect(response.body.references.length).toBeGreaterThan(0)
-    expect(
-      response.body.references.every((reference: { clauseKey: string }) =>
-        DE_CITATION_KEY_PATTERN.test(reference.clauseKey)
-      )
-    ).toBe(true)
-    expect(
-      response.body.references.every(
-        (reference: { clauseKey: string }) => !reference.clauseKey.startsWith("chunk-")
-      )
-    ).toBe(true)
-  })
-
-  it("returns transaction-type references with configured DE citation keys and ruleset version", async () => {
-    const response = await Effect.runPromise(
-      postJson({
-        path: "/v1/legal/references/transaction-type",
-        payload: {
-          jurisdictionCode: "DE",
-          transactionTypeKey: "swap_crypto_to_crypto",
-          maxReferences: 5,
-          maxCitationsPerReference: 5,
-        },
-        responseSchema: TransactionTypeLegalReferencesResponse,
-      }).pipe(Effect.provide(HttpLive), Effect.scoped)
-    )
-
-    expect(response.status, JSON.stringify(response.body)).toBe(200)
-    expect(response.body.ruleSetVersion).toBe(ACTIVE_DE_RULESET_VERSION)
-    expect(response.body.ruleSetName).toBe("DE Crypto Income Tax Ruleset (BMF 2025-03-06)")
-    expect(response.body.references.length).toBeGreaterThan(0)
-    expect(
-      response.body.references.every(
-        (reference: { citations: ReadonlyArray<unknown> }) => reference.citations.length > 0
-      )
-    ).toBe(true)
-    expect(
-      response.body.references
-        .flatMap(
-          (reference: { citations: ReadonlyArray<{ clauseKey: string }> }) => reference.citations
+      expect(response.status).toBe(200)
+      expect(response.body.ruleSetVersion).toBe(ACTIVE_DE_RULESET_VERSION)
+      expect(response.body.ruleSetName).toBe("DE Crypto Income Tax Ruleset (BMF 2025-03-06)")
+      expect(response.body.insufficiencyText).toBeNull()
+      expect(response.body.references.length).toBeGreaterThan(0)
+      expect(
+        response.body.references.every((reference: { clauseKey: string }) =>
+          DE_CITATION_KEY_PATTERN.test(reference.clauseKey)
         )
-        .every((citation: { clauseKey: string }) =>
-          DE_CITATION_KEY_PATTERN.test(citation.clauseKey)
+      ).toBe(true)
+      expect(
+        response.body.references.every(
+          (reference: { clauseKey: string }) => !reference.clauseKey.startsWith("chunk-")
         )
-    ).toBe(true)
-    expect(
-      response.body.references
-        .flatMap(
-          (reference: { citations: ReadonlyArray<{ clauseKey: string }> }) => reference.citations
-        )
-        .every((citation: { clauseKey: string }) => !citation.clauseKey.startsWith("chunk-"))
-    ).toBe(true)
-  })
+      ).toBe(true)
+    })
+  )
 
-  it("returns insufficiency text for unsupported questions without inventing references", async () => {
-    const response = await Effect.runPromise(
-      postJson({
-        path: "/v1/legal/references/question",
-        payload: {
-          jurisdictionCode: "DE",
-          question: "Blorptax quantum toaster carry rule for Martian NFTs?",
-          maxClauses: 5,
-        },
-        responseSchema: QuestionLegalReferencesResponse,
-      }).pipe(Effect.provide(HttpLive), Effect.scoped)
-    )
-
-    expect(response.status, JSON.stringify(response.body)).toBe(200)
-    expect(response.body.ruleSetVersion).toBe(ACTIVE_DE_RULESET_VERSION)
-    expect(response.body.references).toEqual([])
-    expect(response.body.insufficiencyText).toBe(INSUFFICIENT_CITED_BASIS_TEXT)
-  })
-
-  it("seeds exactly one active DE ruleset on a fresh migrated database", async () => {
-    const activeRuleSets = await Effect.runPromise(
+  it.effect(
+    "returns transaction-type references with configured DE citation keys and ruleset version",
+    () =>
       Effect.gen(function* () {
+        const response = yield* postJson({
+          path: "/v1/legal/references/transaction-type",
+          payload: {
+            jurisdictionCode: "DE",
+            transactionTypeKey: "swap_crypto_to_crypto",
+            maxReferences: 5,
+            maxCitationsPerReference: 5,
+          },
+          responseSchema: TransactionTypeLegalReferencesResponse,
+        }).pipe(Effect.provide(HttpLive), Effect.scoped)
+
+        expect(response.status).toBe(200)
+        expect(response.body.ruleSetVersion).toBe(ACTIVE_DE_RULESET_VERSION)
+        expect(response.body.ruleSetName).toBe("DE Crypto Income Tax Ruleset (BMF 2025-03-06)")
+        expect(response.body.references.length).toBeGreaterThan(0)
+        expect(
+          response.body.references.every(
+            (reference: { citations: ReadonlyArray<unknown> }) => reference.citations.length > 0
+          )
+        ).toBe(true)
+        expect(
+          response.body.references
+            .flatMap(
+              (reference: { citations: ReadonlyArray<{ clauseKey: string }> }) =>
+                reference.citations
+            )
+            .every((citation: { clauseKey: string }) =>
+              DE_CITATION_KEY_PATTERN.test(citation.clauseKey)
+            )
+        ).toBe(true)
+        expect(
+          response.body.references
+            .flatMap(
+              (reference: { citations: ReadonlyArray<{ clauseKey: string }> }) =>
+                reference.citations
+            )
+            .every((citation: { clauseKey: string }) => !citation.clauseKey.startsWith("chunk-"))
+        ).toBe(true)
+      })
+  )
+
+  it.effect(
+    "returns insufficiency text for unsupported questions without inventing references",
+    () =>
+      Effect.gen(function* () {
+        const response = yield* postJson({
+          path: "/v1/legal/references/question",
+          payload: {
+            jurisdictionCode: "DE",
+            question: "Blorptax quantum toaster carry rule for Martian NFTs?",
+            maxClauses: 5,
+          },
+          responseSchema: QuestionLegalReferencesResponse,
+        }).pipe(Effect.provide(HttpLive), Effect.scoped)
+
+        expect(response.status).toBe(200)
+        expect(response.body.ruleSetVersion).toBe(ACTIVE_DE_RULESET_VERSION)
+        expect(response.body.references).toEqual([])
+        expect(response.body.insufficiencyText).toBe(INSUFFICIENT_CITED_BASIS_TEXT)
+      })
+  )
+
+  it.effect("seeds exactly one active DE ruleset on a fresh migrated database", () =>
+    Effect.gen(function* () {
+      const activeRuleSets = yield* Effect.gen(function* () {
         const db = yield* drizzle
         return yield* db
           .select({
@@ -277,18 +281,18 @@ describe("LegalReferenceApiLive", () => {
           })
           .from(schema.jurisdictionRuleSets)
       }).pipe(Effect.provide(TestPgClientLive), Effect.scoped)
-    )
 
-    const activeDeRuleSets = activeRuleSets.filter(
-      (ruleSet) => ruleSet.jurisdictionCode === "DE" && ruleSet.isActive
-    )
+      const activeDeRuleSets = activeRuleSets.filter(
+        (ruleSet) => ruleSet.jurisdictionCode === "DE" && ruleSet.isActive
+      )
 
-    expect(activeDeRuleSets).toEqual([
-      {
-        jurisdictionCode: "DE",
-        version: ACTIVE_DE_RULESET_VERSION,
-        isActive: true,
-      },
-    ])
-  })
+      expect(activeDeRuleSets).toEqual([
+        {
+          jurisdictionCode: "DE",
+          version: ACTIVE_DE_RULESET_VERSION,
+          isActive: true,
+        },
+      ])
+    })
+  )
 })

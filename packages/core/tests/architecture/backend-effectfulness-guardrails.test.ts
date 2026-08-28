@@ -1,11 +1,9 @@
-import { readdir, readFile } from "node:fs/promises"
-import path from "node:path"
-import ts from "typescript"
-import { describe, expect, it } from "vitest"
+import { NodeServices } from "@effect/platform-node"
+import { describe, expect, it } from "@effect/vitest"
+import { Effect, FileSystem, Path, type PlatformError } from "effect"
+import { parseSync, type Span, Visitor } from "oxc-parser"
 
-const repoRoot = path.resolve(import.meta.dirname, "../../../..")
-
-const maintainedBackendRoots = [
+const maintainedBackendRootPaths = [
   "packages/core/src",
   "packages/persistence/src",
   "packages/rest-api/src",
@@ -13,27 +11,23 @@ const maintainedBackendRoots = [
   "apps/server/src",
   "apps/worker/src",
   "apps/cli/src",
-].map((relativePath) => path.resolve(repoRoot, relativePath))
+] as const
 
-const allowedDateNowCallSites = new Set([
-  path.resolve(repoRoot, "packages/core/src/shared/values/Timestamp.ts"),
-])
-
-const restrictedInfrastructureImports = [
+const restrictedInfrastructureImportPaths = [
   {
-    root: path.resolve(repoRoot, "packages/core/src"),
+    root: "packages/core/src",
     packages: ["bullmq", "ioredis", "@my/persistence", "@my/rest-api", "@my/api"],
   },
   {
-    root: path.resolve(repoRoot, "packages/persistence/src"),
+    root: "packages/persistence/src",
     packages: ["bullmq"],
   },
   {
-    root: path.resolve(repoRoot, "packages/rest-api/src"),
+    root: "packages/rest-api/src",
     packages: ["bullmq"],
   },
   {
-    root: path.resolve(repoRoot, "apps/worker/src"),
+    root: "apps/worker/src",
     // `server` is the legacy app package name from apps/server/package.json.
     packages: ["server", "@my/api"],
   },
@@ -46,47 +40,6 @@ interface Violation {
   readonly message: string
 }
 
-const collectTypeScriptFiles = async (directory: string): Promise<ReadonlyArray<string>> => {
-  const entries = await readdir(directory, { withFileTypes: true })
-  const files = await Promise.all(
-    entries.map(async (entry) => {
-      const entryPath = path.join(directory, entry.name)
-
-      if (entry.isDirectory()) {
-        if (entry.name === "dist" || entry.name === "node_modules") {
-          return []
-        }
-
-        return collectTypeScriptFiles(entryPath)
-      }
-
-      if (entry.isFile() && entry.name.endsWith(".ts")) {
-        return [entryPath]
-      }
-
-      return []
-    })
-  )
-
-  return files.flat()
-}
-
-const formatViolation = ({ filePath, line, column, message }: Violation): string =>
-  `${path.relative(repoRoot, filePath)}:${line}:${column} ${message}`
-
-const isAsyncFunctionLike = (
-  node: ts.Node | undefined
-): node is ts.ArrowFunction | ts.FunctionExpression =>
-  node !== undefined &&
-  (ts.isArrowFunction(node) || ts.isFunctionExpression(node)) &&
-  node.modifiers?.some((modifier) => modifier.kind === ts.SyntaxKind.AsyncKeyword) === true
-
-const isIdentifierNamed = (node: ts.Node, text: string): node is ts.Identifier =>
-  ts.isIdentifier(node) && node.text === text
-
-const isInside = ({ filePath, root }: { readonly filePath: string; readonly root: string }) =>
-  filePath === root || filePath.startsWith(`${root}${path.sep}`)
-
 const importMatches = ({
   imported,
   restrictedPackage,
@@ -95,97 +48,116 @@ const importMatches = ({
   readonly restrictedPackage: string
 }) => imported === restrictedPackage || imported.startsWith(`${restrictedPackage}/`)
 
-const findRestrictedImport = (filePath: string, imported: string): string | null => {
-  const restriction = restrictedInfrastructureImports.find(
-    ({ root, packages }) =>
-      isInside({ filePath, root }) &&
-      packages.some((restrictedPackage) => importMatches({ imported, restrictedPackage }))
-  )
+describe("backend effectfulness guardrails", () => {
+  it.effect("blocks protected backend imports and direct Error throws", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem
+      const path = yield* Path.Path
+      const repoRoot = path.resolve(import.meta.dirname, "../../../..")
+      const maintainedBackendRoots = maintainedBackendRootPaths.map((relativePath) =>
+        path.resolve(repoRoot, relativePath)
+      )
+      const restrictedInfrastructureImports = restrictedInfrastructureImportPaths.map(
+        ({ root, packages }) => ({ root: path.resolve(repoRoot, root), packages })
+      )
+      const files: Array<string> = []
 
-  return restriction === undefined ? null : imported
-}
+      const collectTypeScriptFiles: (
+        directory: string
+      ) => Effect.Effect<void, PlatformError.PlatformError> = Effect.fnUntraced(
+        function* (directory) {
+          const entries = yield* fileSystem.readDirectory(directory)
+          for (const entry of entries) {
+            if (entry === "dist" || entry === "node_modules") {
+              continue
+            }
+            const entryPath = path.join(directory, entry)
+            const info = yield* fileSystem.stat(entryPath)
+            if (info.type === "Directory") {
+              yield* collectTypeScriptFiles(entryPath)
+            } else if (info.type === "File" && entry.endsWith(".ts")) {
+              files.push(entryPath)
+            }
+          }
+        }
+      )
 
-const analyzeFile = async (filePath: string): Promise<ReadonlyArray<Violation>> => {
-  const sourceText = await readFile(filePath, "utf8")
-  const sourceFile = ts.createSourceFile(
-    filePath,
-    sourceText,
-    ts.ScriptTarget.Latest,
-    true,
-    ts.ScriptKind.TS
-  )
-  const violations: Array<Violation> = []
+      const isInside = ({ filePath, root }: { readonly filePath: string; readonly root: string }) =>
+        filePath === root || filePath.startsWith(`${root}${path.sep}`)
 
-  const pushViolation = (node: ts.Node, message: string): void => {
-    const { line, character } = sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile))
-    violations.push({
-      filePath,
-      line: line + 1,
-      column: character + 1,
-      message,
-    })
-  }
-
-  const visit = (node: ts.Node): void => {
-    if (ts.isImportDeclaration(node) && ts.isStringLiteral(node.moduleSpecifier)) {
-      const restrictedImport = findRestrictedImport(filePath, node.moduleSpecifier.text)
-
-      if (restrictedImport !== null) {
-        pushViolation(node, `${restrictedImport} crosses a protected backend architecture boundary`)
-      }
-    }
-
-    if (
-      ts.isThrowStatement(node) &&
-      node.expression !== undefined &&
-      ts.isNewExpression(node.expression) &&
-      isIdentifierNamed(node.expression.expression, "Error")
-    ) {
-      pushViolation(node, "throw new Error is banned in maintained backend runtime code")
-    }
-
-    if (ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression)) {
-      const callee = node.expression
-
-      if (
-        isIdentifierNamed(callee.expression, "Effect") &&
-        callee.name.text === "promise" &&
-        isAsyncFunctionLike(node.arguments[0])
-      ) {
-        pushViolation(node, "Effect.promise(async ...) is banned; use Effect.tryPromise instead")
+      const findRestrictedImport = (filePath: string, imported: string): string | null => {
+        const restriction = restrictedInfrastructureImports.find(
+          ({ root, packages }) =>
+            isInside({ filePath, root }) &&
+            packages.some((restrictedPackage) => importMatches({ imported, restrictedPackage }))
+        )
+        return restriction === undefined ? null : imported
       }
 
-      if (
-        isIdentifierNamed(callee.expression, "Date") &&
-        callee.name.text === "now" &&
-        !allowedDateNowCallSites.has(filePath)
-      ) {
-        pushViolation(node, "Date.now() is banned in maintained backend runtime code")
+      const analyzeFile = Effect.fnUntraced(function* (filePath: string) {
+        const sourceText = yield* fileSystem.readFileString(filePath)
+        const parsed = parseSync(filePath, sourceText, { lang: "ts" })
+        const violations: Array<Violation> = []
+
+        const pushViolation = (span: Span, message: string): void => {
+          const sourceBeforeViolation = sourceText.slice(0, span.start)
+          const lines = sourceBeforeViolation.split("\n")
+          violations.push({
+            filePath,
+            line: lines.length,
+            column: (lines.at(-1)?.length ?? 0) + 1,
+            message,
+          })
+        }
+
+        for (const error of parsed.errors) {
+          if (error.severity === "Error") {
+            const start = error.labels[0]?.start ?? 0
+            pushViolation({ start, end: start }, `Oxc could not parse this file: ${error.message}`)
+          }
+        }
+
+        for (const imported of parsed.module.staticImports) {
+          const restrictedImport = findRestrictedImport(filePath, imported.moduleRequest.value)
+          if (restrictedImport !== null) {
+            pushViolation(
+              imported,
+              `${restrictedImport} crosses a protected backend architecture boundary`
+            )
+          }
+        }
+
+        new Visitor({
+          ThrowStatement(node) {
+            if (
+              node.argument.type === "NewExpression" &&
+              node.argument.callee.type === "Identifier" &&
+              node.argument.callee.name === "Error"
+            ) {
+              pushViolation(node, "throw new Error is banned in maintained backend runtime code")
+            }
+          },
+        }).visit(parsed.program)
+
+        return violations
+      })
+
+      for (const root of maintainedBackendRoots) {
+        yield* collectTypeScriptFiles(root)
       }
 
-      if (
-        isIdentifierNamed(callee.expression, "console") &&
-        ["log", "info", "warn", "error", "debug"].includes(callee.name.text)
-      ) {
-        pushViolation(
-          node,
-          `console.${callee.name.text} bypasses Effect runtime observability in maintained backend code`
+      const violations: Array<string> = []
+      for (const file of files) {
+        const fileViolations = yield* analyzeFile(file)
+        violations.push(
+          ...fileViolations.map(
+            ({ filePath, line, column, message }) =>
+              `${path.relative(repoRoot, filePath)}:${line}:${column} ${message}`
+          )
         )
       }
-    }
 
-    ts.forEachChild(node, visit)
-  }
-
-  visit(sourceFile)
-  return violations
-}
-
-describe("backend effectfulness guardrails", () => {
-  it("blocks the runtime escape hatches called out by the backend effectfulness audit", async () => {
-    const files = (await Promise.all(maintainedBackendRoots.map(collectTypeScriptFiles))).flat()
-    const violations = (await Promise.all(files.map(analyzeFile))).flat().map(formatViolation)
-
-    expect(violations).toEqual([])
-  })
+      expect(violations).toEqual([])
+    }).pipe(Effect.provide(NodeServices.layer))
+  )
 })

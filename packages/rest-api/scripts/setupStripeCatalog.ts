@@ -208,7 +208,7 @@ const findProduct = ({
 }
 
 /** Creates missing catalog objects and replaces immutable price mismatches. */
-export const reconcileStripeCatalog = async ({
+export const reconcileStripeCatalog = ({
   client,
   catalog = TAXMAXI_STRIPE_CATALOG,
   onChange = () => undefined,
@@ -216,134 +216,148 @@ export const reconcileStripeCatalog = async ({
   readonly client: StripeCatalogClient
   readonly catalog?: ReadonlyArray<TaxMaxiStripeCatalogItem>
   readonly onChange?: (message: string) => void
-}): Promise<StripeCatalogSetupResult> => {
-  const catalogLookupKeys = new Set(catalog.map(({ lookupKey }) => lookupKey))
-  if (catalogLookupKeys.size !== catalog.length) {
-    throw new Error("TaxMaxi Stripe catalog lookup keys must be unique")
-  }
-
-  const [loadedProducts, loadedPrices] = await Promise.all([
-    client.listProducts(),
-    client.listPrices(),
-  ])
-  const products = [...loadedProducts]
-  const prices = [...loadedPrices]
-  let productsCreated = 0
-  let productsUpdated = 0
-  let pricesCreated = 0
-  let pricesActivated = 0
-  let pricesMetadataUpdated = 0
-  let pricesArchived = 0
-  let pricesUnchanged = 0
-
-  for (const spec of catalog) {
-    const existingPrice = prices.find(({ lookupKey }) => lookupKey === spec.lookupKey)
-    const desired = desiredProduct(spec)
-    const productSelection = findProduct({
-      products,
-      prices,
-      existingPrice,
-      spec,
-    })
-    const existingProduct = productSelection.product
-    let product: StripeCatalogProductRecord
-
-    if (existingProduct === undefined) {
-      product = await client.createProduct({
-        ...desired,
-        lookupKey: spec.lookupKey,
-        replacedProductId: productSelection.replacedProductId,
-      })
-      products.push(product)
-      productsCreated += 1
-      onChange(`Created product: ${spec.name}`)
-    } else if (productNeedsUpdate({ product: existingProduct, desired })) {
-      product = await client.updateProduct(existingProduct.id, desired)
-      const index = products.findIndex(({ id }) => id === product.id)
-      if (index >= 0) products[index] = product
-      productsUpdated += 1
-      onChange(`Updated product: ${spec.name}`)
-    } else {
-      product = existingProduct
-    }
-
-    let canonicalPrice: StripeCatalogPriceRecord
-
-    if (
-      existingPrice !== undefined &&
-      priceMatches({ price: existingPrice, productId: product.id, spec })
-    ) {
-      if (existingPrice.active) {
-        pricesUnchanged += 1
-        onChange(`Kept price: ${spec.lookupKey}`)
-        canonicalPrice = existingPrice
-      } else {
-        canonicalPrice = await client.updatePrice(existingPrice.id, { active: true })
-        const index = prices.findIndex(({ id }) => id === canonicalPrice.id)
-        if (index >= 0) prices[index] = canonicalPrice
-        pricesActivated += 1
-        onChange(`Activated price: ${spec.lookupKey}`)
+}): Promise<StripeCatalogSetupResult> =>
+  Effect.runPromise(
+    Effect.gen(function* () {
+      const catalogLookupKeys = new Set(catalog.map(({ lookupKey }) => lookupKey))
+      if (catalogLookupKeys.size !== catalog.length) {
+        throw new Error("TaxMaxi Stripe catalog lookup keys must be unique")
       }
-    } else {
-      if (existingPrice !== undefined) {
-        const markedPrice = await client.updatePrice(existingPrice.id, {
-          metadata: { [STRIPE_CATALOG_PRODUCT_METADATA_KEY]: spec.lookupKey },
+
+      const [loadedProducts, loadedPrices] = yield* Effect.promise(() =>
+        Promise.all([client.listProducts(), client.listPrices()])
+      )
+      const products = [...loadedProducts]
+      const prices = [...loadedPrices]
+      let productsCreated = 0
+      let productsUpdated = 0
+      let pricesCreated = 0
+      let pricesActivated = 0
+      let pricesMetadataUpdated = 0
+      let pricesArchived = 0
+      let pricesUnchanged = 0
+
+      for (const spec of catalog) {
+        const existingPrice = prices.find(({ lookupKey }) => lookupKey === spec.lookupKey)
+        const desired = desiredProduct(spec)
+        const productSelection = findProduct({
+          products,
+          prices,
+          existingPrice,
+          spec,
         })
-        const index = prices.findIndex(({ id }) => id === markedPrice.id)
-        if (index >= 0) prices[index] = markedPrice
+        const existingProduct = productSelection.product
+        let product: StripeCatalogProductRecord
+
+        if (existingProduct === undefined) {
+          product = yield* Effect.promise(() =>
+            client.createProduct({
+              ...desired,
+              lookupKey: spec.lookupKey,
+              replacedProductId: productSelection.replacedProductId,
+            })
+          )
+          products.push(product)
+          productsCreated += 1
+          onChange(`Created product: ${spec.name}`)
+        } else if (productNeedsUpdate({ product: existingProduct, desired })) {
+          product = yield* Effect.promise(() => client.updateProduct(existingProduct.id, desired))
+          const index = products.findIndex(({ id }) => id === product.id)
+          if (index >= 0) products[index] = product
+          productsUpdated += 1
+          onChange(`Updated product: ${spec.name}`)
+        } else {
+          product = existingProduct
+        }
+
+        let canonicalPrice: StripeCatalogPriceRecord
+
+        if (
+          existingPrice !== undefined &&
+          priceMatches({ price: existingPrice, productId: product.id, spec })
+        ) {
+          if (existingPrice.active) {
+            pricesUnchanged += 1
+            onChange(`Kept price: ${spec.lookupKey}`)
+            canonicalPrice = existingPrice
+          } else {
+            canonicalPrice = yield* Effect.promise(() =>
+              client.updatePrice(existingPrice.id, { active: true })
+            )
+            const index = prices.findIndex(({ id }) => id === canonicalPrice.id)
+            if (index >= 0) prices[index] = canonicalPrice
+            pricesActivated += 1
+            onChange(`Activated price: ${spec.lookupKey}`)
+          }
+        } else {
+          if (existingPrice !== undefined) {
+            const markedPrice = yield* Effect.promise(() =>
+              client.updatePrice(existingPrice.id, {
+                metadata: { [STRIPE_CATALOG_PRODUCT_METADATA_KEY]: spec.lookupKey },
+              })
+            )
+            const index = prices.findIndex(({ id }) => id === markedPrice.id)
+            if (index >= 0) prices[index] = markedPrice
+          }
+
+          canonicalPrice = yield* Effect.promise(() =>
+            client.createPrice({
+              lookupKey: spec.lookupKey,
+              productId: product.id,
+              currency: spec.currency,
+              unitAmount: spec.unitAmount,
+              taxBehavior: spec.taxBehavior,
+              recurringInterval: spec.recurringInterval,
+              transferLookupKey: existingPrice !== undefined,
+              replacedPriceId: existingPrice?.id ?? null,
+            })
+          )
+          prices.push(canonicalPrice)
+          pricesCreated += 1
+          onChange(`Created price: ${spec.lookupKey}`)
+        }
+
+        if (canonicalPrice.metadata[STRIPE_CATALOG_PRODUCT_METADATA_KEY] !== spec.lookupKey) {
+          canonicalPrice = yield* Effect.promise(() =>
+            client.updatePrice(canonicalPrice.id, {
+              metadata: { [STRIPE_CATALOG_PRODUCT_METADATA_KEY]: spec.lookupKey },
+            })
+          )
+          const index = prices.findIndex(({ id }) => id === canonicalPrice.id)
+          if (index >= 0) prices[index] = canonicalPrice
+          pricesMetadataUpdated += 1
+          onChange(`Updated price metadata: ${spec.lookupKey}`)
+        }
+
+        const stalePrices = prices.filter(
+          (price) =>
+            price.id !== canonicalPrice.id &&
+            price.active &&
+            (price.lookupKey === null || price.id === existingPrice?.id) &&
+            price.metadata[STRIPE_CATALOG_PRODUCT_METADATA_KEY] === spec.lookupKey
+        )
+        for (const stalePrice of stalePrices) {
+          const archivedPrice = yield* Effect.promise(() =>
+            client.updatePrice(stalePrice.id, { active: false })
+          )
+          const index = prices.findIndex(({ id }) => id === archivedPrice.id)
+          if (index >= 0) prices[index] = archivedPrice
+          pricesArchived += 1
+          onChange(`Archived replaced price: ${stalePrice.id}`)
+        }
       }
 
-      canonicalPrice = await client.createPrice({
-        lookupKey: spec.lookupKey,
-        productId: product.id,
-        currency: spec.currency,
-        unitAmount: spec.unitAmount,
-        taxBehavior: spec.taxBehavior,
-        recurringInterval: spec.recurringInterval,
-        transferLookupKey: existingPrice !== undefined,
-        replacedPriceId: existingPrice?.id ?? null,
-      })
-      prices.push(canonicalPrice)
-      pricesCreated += 1
-      onChange(`Created price: ${spec.lookupKey}`)
-    }
-
-    if (canonicalPrice.metadata[STRIPE_CATALOG_PRODUCT_METADATA_KEY] !== spec.lookupKey) {
-      canonicalPrice = await client.updatePrice(canonicalPrice.id, {
-        metadata: { [STRIPE_CATALOG_PRODUCT_METADATA_KEY]: spec.lookupKey },
-      })
-      const index = prices.findIndex(({ id }) => id === canonicalPrice.id)
-      if (index >= 0) prices[index] = canonicalPrice
-      pricesMetadataUpdated += 1
-      onChange(`Updated price metadata: ${spec.lookupKey}`)
-    }
-
-    const stalePrices = prices.filter(
-      (price) =>
-        price.id !== canonicalPrice.id &&
-        price.active &&
-        (price.lookupKey === null || price.id === existingPrice?.id) &&
-        price.metadata[STRIPE_CATALOG_PRODUCT_METADATA_KEY] === spec.lookupKey
-    )
-    for (const stalePrice of stalePrices) {
-      const archivedPrice = await client.updatePrice(stalePrice.id, { active: false })
-      const index = prices.findIndex(({ id }) => id === archivedPrice.id)
-      if (index >= 0) prices[index] = archivedPrice
-      pricesArchived += 1
-      onChange(`Archived replaced price: ${stalePrice.id}`)
-    }
-  }
-
-  return {
-    productsCreated,
-    productsUpdated,
-    pricesCreated,
-    pricesActivated,
-    pricesMetadataUpdated,
-    pricesArchived,
-    pricesUnchanged,
-  }
-}
+      return {
+        productsCreated,
+        productsUpdated,
+        pricesCreated,
+        pricesActivated,
+        pricesMetadataUpdated,
+        pricesArchived,
+        pricesUnchanged,
+      }
+    })
+  )
 
 const StripeReferenceSchema = Schema.Union([Schema.String, Schema.Struct({ id: Schema.String })])
 const StripeMetadataSchema = Schema.Record(Schema.String, Schema.String)
@@ -362,152 +376,187 @@ const StripePricePayloadSchema = Schema.Struct({
   lookup_key: Schema.NullOr(Schema.String),
   product: StripeReferenceSchema,
   currency: Schema.String,
-  unit_amount: Schema.NullOr(Schema.Number),
+  unit_amount: Schema.NullOr(Schema.Finite),
   tax_behavior: Schema.NullOr(Schema.String),
   recurring: Schema.NullOr(
     Schema.Struct({
       interval: Schema.String,
-      interval_count: Schema.Number,
+      interval_count: Schema.Finite,
       usage_type: Schema.String,
-      trial_period_days: Schema.NullOr(Schema.Number),
+      trial_period_days: Schema.NullOr(Schema.Finite),
     })
   ),
   transform_quantity: Schema.NullOr(
     Schema.Struct({
-      divide_by: Schema.Number,
+      divide_by: Schema.Finite,
       round: Schema.String,
     })
   ),
   metadata: StripeMetadataSchema,
 })
 
-export const decodeStripeProductRecord = async (
-  input: unknown
-): Promise<StripeCatalogProductRecord> => {
-  const product = await Effect.runPromise(
-    Schema.decodeUnknownEffect(StripeProductPayloadSchema)(input)
+export const decodeStripeProductRecord = (input: unknown): Promise<StripeCatalogProductRecord> =>
+  Effect.runPromise(
+    Effect.gen(function* () {
+      const product = yield* Schema.decodeUnknownEffect(StripeProductPayloadSchema)(input)
+      return {
+        id: product.id,
+        active: product.active,
+        name: product.name,
+        description: product.description,
+        taxCode:
+          typeof product.tax_code === "string" ? product.tax_code : (product.tax_code?.id ?? null),
+        metadata: product.metadata,
+      }
+    })
   )
-  return {
-    id: product.id,
-    active: product.active,
-    name: product.name,
-    description: product.description,
-    taxCode:
-      typeof product.tax_code === "string" ? product.tax_code : (product.tax_code?.id ?? null),
-    metadata: product.metadata,
-  }
-}
 
-export const decodeStripePriceRecord = async (
-  input: unknown
-): Promise<StripeCatalogPriceRecord> => {
-  const price = await Effect.runPromise(Schema.decodeUnknownEffect(StripePricePayloadSchema)(input))
-  return {
-    id: price.id,
-    active: price.active,
-    billingScheme: price.billing_scheme,
-    lookupKey: price.lookup_key,
-    productId: typeof price.product === "string" ? price.product : price.product.id,
-    currency: price.currency,
-    unitAmount: price.unit_amount,
-    taxBehavior: price.tax_behavior,
-    recurringInterval: price.recurring?.interval ?? null,
-    recurringIntervalCount: price.recurring?.interval_count ?? null,
-    recurringUsageType: price.recurring?.usage_type ?? null,
-    recurringTrialPeriodDays: price.recurring?.trial_period_days ?? null,
-    transformQuantity:
-      price.transform_quantity === null
-        ? null
-        : {
-            divideBy: price.transform_quantity.divide_by,
-            round: price.transform_quantity.round,
-          },
-    metadata: price.metadata,
-  }
-}
+export const decodeStripePriceRecord = (input: unknown): Promise<StripeCatalogPriceRecord> =>
+  Effect.runPromise(
+    Effect.gen(function* () {
+      const price = yield* Schema.decodeUnknownEffect(StripePricePayloadSchema)(input)
+      return {
+        id: price.id,
+        active: price.active,
+        billingScheme: price.billing_scheme,
+        lookupKey: price.lookup_key,
+        productId: typeof price.product === "string" ? price.product : price.product.id,
+        currency: price.currency,
+        unitAmount: price.unit_amount,
+        taxBehavior: price.tax_behavior,
+        recurringInterval: price.recurring?.interval ?? null,
+        recurringIntervalCount: price.recurring?.interval_count ?? null,
+        recurringUsageType: price.recurring?.usage_type ?? null,
+        recurringTrialPeriodDays: price.recurring?.trial_period_days ?? null,
+        transformQuantity:
+          price.transform_quantity === null
+            ? null
+            : {
+                divideBy: price.transform_quantity.divide_by,
+                round: price.transform_quantity.round,
+              },
+        metadata: price.metadata,
+      }
+    })
+  )
 
-export const loadAllStripeListItems = async <A>(
+export const loadAllStripeListItems = <A>(
   page: Pick<Stripe.ApiListPromise<A>, "autoPagingEach">
-): Promise<ReadonlyArray<A>> => {
-  const items: Array<A> = []
-  await page.autoPagingEach((item) => {
-    items.push(item)
-  })
-  return items
-}
+): Promise<ReadonlyArray<A>> =>
+  Effect.runPromise(
+    Effect.gen(function* () {
+      const items: Array<A> = []
+      yield* Effect.promise(() =>
+        page.autoPagingEach((item) => {
+          items.push(item)
+        })
+      )
+      return items
+    })
+  )
 
 export const makeStripeCatalogClient = (stripe: Stripe): StripeCatalogClient => ({
-  listProducts: async () => {
-    const products = await loadAllStripeListItems(stripe.products.list({ limit: 100 }))
-    return Promise.all(products.map(decodeStripeProductRecord))
-  },
-  listPrices: async () => {
-    const activePrices = await loadAllStripeListItems(
-      stripe.prices.list({ active: true, limit: 100 })
-    )
-    const inactivePrices = await loadAllStripeListItems(
-      stripe.prices.list({ active: false, limit: 100 })
-    )
-    return Promise.all([...activePrices, ...inactivePrices].map(decodeStripePriceRecord))
-  },
-  createProduct: async (input) => {
-    const product = await stripe.products.create(
-      {
-        active: input.active,
-        name: input.name,
-        description: input.description,
-        tax_code: input.taxCode,
-        metadata: { ...input.metadata },
-      },
-      {
-        idempotencyKey: stripeCatalogProductIdempotencyKey(input),
-      }
-    )
-    return decodeStripeProductRecord(product)
-  },
-  updateProduct: async (id, input) => {
-    const product = await stripe.products.update(id, {
-      active: input.active,
-      name: input.name,
-      description: input.description,
-      tax_code: input.taxCode,
-      metadata: { ...input.metadata },
-    })
-    return decodeStripeProductRecord(product)
-  },
-  createPrice: async (input) => {
-    const price = await stripe.prices.create(
-      {
-        billing_scheme: "per_unit",
-        currency: input.currency,
-        lookup_key: input.lookupKey,
-        nickname: input.lookupKey,
-        product: input.productId,
-        tax_behavior: input.taxBehavior,
-        transfer_lookup_key: input.transferLookupKey,
-        unit_amount: input.unitAmount,
-        metadata: { [STRIPE_CATALOG_PRODUCT_METADATA_KEY]: input.lookupKey },
-        ...(input.recurringInterval === null
-          ? {}
-          : {
-              recurring: {
-                interval: input.recurringInterval,
-                interval_count: 1,
-                usage_type: "licensed",
-              },
-            }),
-      },
-      {
-        idempotencyKey: stripeCatalogPriceIdempotencyKey(input),
-      }
-    )
-    return decodeStripePriceRecord(price)
-  },
-  updatePrice: async (id, input) =>
-    decodeStripePriceRecord(
-      await stripe.prices.update(id, {
-        ...(input.active === undefined ? {} : { active: input.active }),
-        ...(input.metadata === undefined ? {} : { metadata: { ...input.metadata } }),
+  listProducts: () =>
+    Effect.runPromise(
+      Effect.gen(function* () {
+        const products = yield* Effect.promise(() =>
+          loadAllStripeListItems(stripe.products.list({ limit: 100 }))
+        )
+        return yield* Effect.promise(() => Promise.all(products.map(decodeStripeProductRecord)))
+      })
+    ),
+  listPrices: () =>
+    Effect.runPromise(
+      Effect.gen(function* () {
+        const activePrices = yield* Effect.promise(() =>
+          loadAllStripeListItems(stripe.prices.list({ active: true, limit: 100 }))
+        )
+        const inactivePrices = yield* Effect.promise(() =>
+          loadAllStripeListItems(stripe.prices.list({ active: false, limit: 100 }))
+        )
+        return yield* Effect.promise(() =>
+          Promise.all([...activePrices, ...inactivePrices].map(decodeStripePriceRecord))
+        )
+      })
+    ),
+  createProduct: (input) =>
+    Effect.runPromise(
+      Effect.gen(function* () {
+        const product = yield* Effect.promise(() =>
+          stripe.products.create(
+            {
+              active: input.active,
+              name: input.name,
+              description: input.description,
+              tax_code: input.taxCode,
+              metadata: { ...input.metadata },
+            },
+            {
+              idempotencyKey: stripeCatalogProductIdempotencyKey(input),
+            }
+          )
+        )
+        return yield* Effect.promise(() => decodeStripeProductRecord(product))
+      })
+    ),
+  updateProduct: (id, input) =>
+    Effect.runPromise(
+      Effect.gen(function* () {
+        const product = yield* Effect.promise(() =>
+          stripe.products.update(id, {
+            active: input.active,
+            name: input.name,
+            description: input.description,
+            tax_code: input.taxCode,
+            metadata: { ...input.metadata },
+          })
+        )
+        return yield* Effect.promise(() => decodeStripeProductRecord(product))
+      })
+    ),
+  createPrice: (input) =>
+    Effect.runPromise(
+      Effect.gen(function* () {
+        const price = yield* Effect.promise(() =>
+          stripe.prices.create(
+            {
+              billing_scheme: "per_unit",
+              currency: input.currency,
+              lookup_key: input.lookupKey,
+              nickname: input.lookupKey,
+              product: input.productId,
+              tax_behavior: input.taxBehavior,
+              transfer_lookup_key: input.transferLookupKey,
+              unit_amount: input.unitAmount,
+              metadata: { [STRIPE_CATALOG_PRODUCT_METADATA_KEY]: input.lookupKey },
+              ...(input.recurringInterval === null
+                ? {}
+                : {
+                    recurring: {
+                      interval: input.recurringInterval,
+                      interval_count: 1,
+                      usage_type: "licensed",
+                    },
+                  }),
+            },
+            {
+              idempotencyKey: stripeCatalogPriceIdempotencyKey(input),
+            }
+          )
+        )
+        return yield* Effect.promise(() => decodeStripePriceRecord(price))
+      })
+    ),
+  updatePrice: (id, input) =>
+    Effect.runPromise(
+      Effect.gen(function* () {
+        const price = yield* Effect.promise(() =>
+          stripe.prices.update(id, {
+            ...(input.active === undefined ? {} : { active: input.active }),
+            ...(input.metadata === undefined ? {} : { metadata: { ...input.metadata } }),
+          })
+        )
+        return yield* Effect.promise(() => decodeStripePriceRecord(price))
       })
     ),
 })
@@ -543,58 +592,63 @@ export const assertKeyMatchesEnvironment = (
   }
 }
 
-const promptForEnvironment = async (
+const promptForEnvironment = (
   question: (prompt: string) => Promise<string>,
   onMessage: (message: string) => void
-): Promise<StripeEnvironment> => {
-  while (true) {
-    const answer = (
-      await question("Choose Stripe environment: [1] sandbox (default), [2] production: ")
-    )
-      .trim()
-      .toLowerCase()
-    if (answer === "" || answer === "1" || answer === "s" || answer === "sandbox") {
-      return "sandbox"
-    }
-    if (answer === "2" || answer === "p" || answer === "production" || answer === "prod") {
-      return "production"
-    }
-    onMessage("Enter 1 for sandbox or 2 for production.")
-  }
-}
+): Promise<StripeEnvironment> =>
+  Effect.runPromise(
+    Effect.gen(function* () {
+      while (true) {
+        const answer = (yield* Effect.promise(() =>
+          question("Choose Stripe environment: [1] sandbox (default), [2] production: ")
+        ))
+          .trim()
+          .toLowerCase()
+        if (answer === "" || answer === "1" || answer === "s" || answer === "sandbox") {
+          return "sandbox"
+        }
+        if (answer === "2" || answer === "p" || answer === "production" || answer === "prod") {
+          return "production"
+        }
+        onMessage("Enter 1 for sandbox or 2 for production.")
+      }
+    })
+  )
 
-export const loadStripeCatalogRestrictedKey = async ({
+export const loadStripeCatalogRestrictedKey = ({
   environment,
   provider,
 }: {
   readonly environment: StripeEnvironment
   readonly provider: ConfigProvider.ConfigProvider
-}): Promise<string> => {
-  const variableName =
-    environment === "production" ? "STRIPE_PRODUCTION_CATALOG_KEY" : "STRIPE_SANDBOX_CATALOG_KEY"
-  const configured = await Effect.runPromise(
-    Config.option(Config.redacted(variableName)).pipe(
-      Effect.provide(ConfigProvider.layer(provider))
-    )
+}): Promise<string> =>
+  Effect.runPromise(
+    Effect.gen(function* () {
+      const variableName =
+        environment === "production"
+          ? "STRIPE_PRODUCTION_CATALOG_KEY"
+          : "STRIPE_SANDBOX_CATALOG_KEY"
+      const configured = yield* Config.option(Config.redacted(variableName)).pipe(
+        Effect.provide(ConfigProvider.layer(provider))
+      )
+      if (Option.isNone(configured)) {
+        throw new Error(`Set ${variableName} to the restricted key before running this command`)
+      }
+
+      const restrictedKey = Redacted.value(configured.value).trim()
+      if (restrictedKey === "") {
+        throw new Error(`${variableName} must not be empty`)
+      }
+      assertKeyMatchesEnvironment(environment, restrictedKey)
+      return restrictedKey
+    })
   )
-  if (Option.isNone(configured)) {
-    throw new Error(`Set ${variableName} to the restricted key before running this command`)
-  }
 
-  const restrictedKey = Redacted.value(configured.value).trim()
-  if (restrictedKey === "") {
-    throw new Error(`${variableName} must not be empty`)
-  }
-  assertKeyMatchesEnvironment(environment, restrictedKey)
-  return restrictedKey
-}
-
-const loadRestrictedKey = async (environment: StripeEnvironment): Promise<string> => {
-  return loadStripeCatalogRestrictedKey({
+const loadRestrictedKey = (environment: StripeEnvironment): Promise<string> =>
+  loadStripeCatalogRestrictedKey({
     environment,
     provider: ConfigProvider.fromEnv(),
   })
-}
 
 const formatPermissions = (
   permissions: ReadonlyArray<{ readonly resource: string; readonly access: "read" | "write" }>
@@ -608,7 +662,7 @@ export type StripeCatalogInteractiveResult =
       readonly result: StripeCatalogSetupResult
     }
 
-export const runStripeCatalogSetup = async ({
+export const runStripeCatalogSetup = ({
   question,
   loadKey,
   setup,
@@ -621,61 +675,82 @@ export const runStripeCatalogSetup = async ({
     readonly restrictedKey: string
   }) => Promise<StripeCatalogSetupResult>
   readonly onMessage?: (message: string) => void
-}): Promise<StripeCatalogInteractiveResult> => {
-  const environment = await promptForEnvironment(question, onMessage)
-  if (environment === "production") {
-    const confirmation = await question(
-      "This will change the live Stripe catalog. Type production to continue: "
-    )
-    if (confirmation.trim() !== "production") {
-      onMessage("Cancelled without changing Stripe.")
-      return { status: "cancelled" }
-    }
-  }
+}): Promise<StripeCatalogInteractiveResult> =>
+  Effect.runPromise(
+    Effect.gen(function* () {
+      const environment = yield* Effect.promise(() => promptForEnvironment(question, onMessage))
+      if (environment === "production") {
+        const confirmation = yield* Effect.promise(() =>
+          question("This will change the live Stripe catalog. Type production to continue: ")
+        )
+        if (confirmation.trim() !== "production") {
+          onMessage("Cancelled without changing Stripe.")
+          return { status: "cancelled" }
+        }
+      }
 
-  const restrictedKey = await loadKey(environment)
-  const result = await setup({ environment, restrictedKey })
-  return { status: "completed", environment, result }
+      const restrictedKey = yield* Effect.promise(() => loadKey(environment))
+      const result = yield* Effect.promise(() => setup({ environment, restrictedKey }))
+      return { status: "completed", environment, result }
+    })
+  )
+
+const logCatalogMessage = (message: string): void => {
+  Effect.runSync(Effect.logInfo({ message }, "Stripe catalog update"))
 }
 
-const main = async (): Promise<void> => {
-  console.log(
-    `Catalog setup key permissions: ${formatPermissions(STRIPE_CATALOG_SETUP_KEY_PERMISSIONS)}; everything else: none.`
+const setupStripeCatalog = ({ restrictedKey }: { readonly restrictedKey: string }) => {
+  const stripe = new Stripe(restrictedKey, {
+    apiVersion: "2026-07-29.dahlia",
+    maxNetworkRetries: 2,
+    typescript: true,
+  })
+  return reconcileStripeCatalog({
+    client: makeStripeCatalogClient(stripe),
+    onChange: logCatalogMessage,
+  })
+}
+
+const main = Effect.gen(function* () {
+  yield* Effect.logInfo(
+    { permissions: formatPermissions(STRIPE_CATALOG_SETUP_KEY_PERMISSIONS) },
+    "Stripe catalog setup key permissions"
   )
-  console.log(
-    `TaxMaxi runtime key permissions: ${formatPermissions(STRIPE_RUNTIME_KEY_PERMISSIONS)}.`
+  yield* Effect.logInfo(
+    { permissions: formatPermissions(STRIPE_RUNTIME_KEY_PERMISSIONS) },
+    "TaxMaxi runtime key permissions"
   )
 
   const terminal = createInterface({ input: process.stdin, output: process.stdout })
   try {
-    const outcome = await runStripeCatalogSetup({
-      question: (prompt) => terminal.question(prompt),
-      loadKey: loadRestrictedKey,
-      setup: async ({ restrictedKey }) => {
-        const stripe = new Stripe(restrictedKey, {
-          apiVersion: "2026-07-29.dahlia",
-          maxNetworkRetries: 2,
-          typescript: true,
-        })
-        return reconcileStripeCatalog({
-          client: makeStripeCatalogClient(stripe),
-          onChange: (message) => console.log(message),
-        })
-      },
-      onMessage: (message) => console.log(message),
-    })
+    const outcome = yield* Effect.promise(() =>
+      runStripeCatalogSetup({
+        question: (prompt) => terminal.question(prompt),
+        loadKey: loadRestrictedKey,
+        setup: setupStripeCatalog,
+        onMessage: logCatalogMessage,
+      })
+    )
     if (outcome.status === "completed") {
-      console.log(`Stripe ${outcome.environment} catalog is complete.`)
-      console.log(outcome.result)
+      yield* Effect.logInfo(
+        { environment: outcome.environment, result: outcome.result },
+        "Stripe catalog is complete"
+      )
     }
   } finally {
     terminal.close()
   }
-}
+})
 
 if (import.meta.main) {
-  main().catch((error: unknown) => {
-    console.error(error instanceof Error ? error.message : "Stripe catalog setup failed")
-    process.exitCode = 1
-  })
+  void Effect.runPromise(
+    main.pipe(
+      Effect.catchCause((cause) =>
+        Effect.gen(function* () {
+          yield* Effect.logError({ cause }, "Stripe catalog setup failed")
+          process.exitCode = 1
+        })
+      )
+    )
+  )
 }

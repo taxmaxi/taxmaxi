@@ -3,6 +3,7 @@
  * pagination and selection-following windowing for height-bound lists.
  */
 import { createSignal, type Accessor } from "solid-js"
+import { Effect } from "effect"
 
 export type PageData<Row> = {
   readonly rows: ReadonlyArray<Row>
@@ -43,51 +44,57 @@ export const createPagedList = <Row>(
   // Bumped on every reload so a slow in-flight page cannot clobber newer state.
   let generation = 0
 
-  const reload = async () => {
-    const requested = ++generation
-    setState({ _tag: "loading" })
-    const result = await fetchPage(null)
-    if (generation !== requested) {
-      return
-    }
-    setState(
-      result._tag === "ok"
-        ? {
-            _tag: "ok",
-            rows: result.page.rows,
-            nextCursor: result.page.nextCursor,
-            hasMore: result.page.hasMore,
-            loadingMore: false,
-            loadMoreError: undefined,
-          }
-        : result
+  const reload = () =>
+    Effect.runPromise(
+      Effect.gen(function* () {
+        const requested = ++generation
+        setState({ _tag: "loading" })
+        const result = yield* Effect.promise(() => fetchPage(null))
+        if (generation !== requested) {
+          return
+        }
+        setState(
+          result._tag === "ok"
+            ? {
+                _tag: "ok",
+                rows: result.page.rows,
+                nextCursor: result.page.nextCursor,
+                hasMore: result.page.hasMore,
+                loadingMore: false,
+                loadMoreError: undefined,
+              }
+            : result
+        )
+      })
     )
-  }
 
-  const loadMore = async () => {
-    const current = state()
-    if (current._tag !== "ok" || !current.hasMore || current.loadingMore) {
-      return
-    }
-    const requested = generation
-    setState({ ...current, loadingMore: true, loadMoreError: undefined })
-    const result = await fetchPage(current.nextCursor)
-    if (generation !== requested) {
-      return
-    }
-    if (result._tag === "error") {
-      setState({ ...current, loadingMore: false, loadMoreError: result.message })
-      return
-    }
-    setState({
-      _tag: "ok",
-      rows: [...current.rows, ...result.page.rows],
-      nextCursor: result.page.nextCursor,
-      hasMore: result.page.hasMore,
-      loadingMore: false,
-      loadMoreError: undefined,
-    })
-  }
+  const loadMore = () =>
+    Effect.runPromise(
+      Effect.gen(function* () {
+        const current = state()
+        if (current._tag !== "ok" || !current.hasMore || current.loadingMore) {
+          return
+        }
+        const requested = generation
+        setState({ ...current, loadingMore: true, loadMoreError: undefined })
+        const result = yield* Effect.promise(() => fetchPage(current.nextCursor))
+        if (generation !== requested) {
+          return
+        }
+        if (result._tag === "error") {
+          setState({ ...current, loadingMore: false, loadMoreError: result.message })
+          return
+        }
+        setState({
+          _tag: "ok",
+          rows: [...current.rows, ...result.page.rows],
+          nextCursor: result.page.nextCursor,
+          hasMore: result.page.hasMore,
+          loadingMore: false,
+          loadMoreError: undefined,
+        })
+      })
+    )
 
   void reload()
   return { state, reload, loadMore }

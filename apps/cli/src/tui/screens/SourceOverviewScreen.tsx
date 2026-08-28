@@ -1,5 +1,6 @@
 import { useKeyboard } from "@opentui/solid"
 import { createSignal, For, Match, Show, Switch } from "solid-js"
+import { DateTime, Effect } from "effect"
 import type { Source, SourceOverview } from "taxmaxi"
 import type { CliSession } from "../../session.ts"
 import { fetchSourceOverview, type ReportResult } from "../controller.ts"
@@ -14,7 +15,7 @@ type OverviewState = { readonly _tag: "loading" } | ReportResult<SourceOverview>
 const MAX_REVIEW_ISSUES = 3
 
 const formatSourceCreatedAt = (epochMillis: number): string =>
-  formatDate(new Date(epochMillis).toISOString())
+  formatDate(DateTime.formatIso(DateTime.makeUnsafe(epochMillis)))
 
 const syncStatusColor = (status: string | null): string => {
   if (status === "completed") {
@@ -63,15 +64,20 @@ export function SourceOverviewScreen(props: {
 }) {
   const [state, setState] = createSignal<OverviewState>({ _tag: "loading" })
 
-  const refresh = async () => {
-    setState({ _tag: "loading" })
-    const result = await fetchSourceOverview(props.session, props.source.id)
-    if (result._tag === "unauthorized") {
-      props.onSessionExpired()
-      return
-    }
-    setState(result)
-  }
+  const refresh = () =>
+    Effect.runPromise(
+      Effect.gen(function* () {
+        setState({ _tag: "loading" })
+        const result = yield* Effect.promise(() =>
+          fetchSourceOverview(props.session, props.source.id)
+        )
+        if (result._tag === "unauthorized") {
+          props.onSessionExpired()
+          return
+        }
+        setState(result)
+      })
+    )
   void refresh()
 
   const overview = (): SourceOverview | undefined => {

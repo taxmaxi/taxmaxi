@@ -1,7 +1,8 @@
+import * as DateTime from "effect/DateTime"
 import { eq } from "drizzle-orm"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
-import { beforeEach, describe, expect, it } from "vitest"
+import { beforeEach, describe, expect, it } from "@effect/vitest"
 import { TaxCalculationServiceLive } from "../src/layers/TaxCalculationServiceLive.ts"
 import { drizzle } from "../src/layers/PgClientLive.ts"
 import { schema } from "../src/schema/index.ts"
@@ -71,7 +72,7 @@ const seedTaxFixtures = () =>
         providerAccountId: "coinbase-tax-account",
         accessToken: "test-access-token",
         refreshToken: "test-refresh-token",
-        expiresAt: new Date(Date.now() + 60 * 60 * 1000),
+        expiresAt: DateTime.toDateUtc(DateTime.addDuration(yield* DateTime.now, "1 hour")),
         scopes: "wallet:accounts:read wallet:transactions:read",
       })
       .returning({ id: schema.cexAccount.id })
@@ -134,7 +135,7 @@ const seedTaxFixtures = () =>
         id: shortTermAcquisitionLegId,
         sourceId,
         externalId: "short-term-acquisition",
-        timestamp: new Date("2025-01-01T10:00:00.000Z"),
+        timestamp: DateTime.toDateUtc(DateTime.makeUnsafe("2025-01-01T10:00:00.000Z")),
         principalId,
         assetId: btcAsset.id,
         amount: "100000000",
@@ -147,7 +148,7 @@ const seedTaxFixtures = () =>
         id: longTermAcquisitionLegId,
         sourceId,
         externalId: "long-term-acquisition",
-        timestamp: new Date("2023-12-01T10:00:00.000Z"),
+        timestamp: DateTime.toDateUtc(DateTime.makeUnsafe("2023-12-01T10:00:00.000Z")),
         principalId,
         assetId: btcAsset.id,
         amount: "20000000",
@@ -160,7 +161,7 @@ const seedTaxFixtures = () =>
         id: shortTermDisposalLegId,
         sourceId,
         externalId: "short-term-disposal",
-        timestamp: new Date("2025-02-01T10:00:00.000Z"),
+        timestamp: DateTime.toDateUtc(DateTime.makeUnsafe("2025-02-01T10:00:00.000Z")),
         principalId,
         assetId: btcAsset.id,
         amount: "40000000",
@@ -173,7 +174,7 @@ const seedTaxFixtures = () =>
         id: longTermDisposalLegId,
         sourceId,
         externalId: "long-term-disposal",
-        timestamp: new Date("2025-04-01T10:00:00.000Z"),
+        timestamp: DateTime.toDateUtc(DateTime.makeUnsafe("2025-04-01T10:00:00.000Z")),
         principalId,
         assetId: btcAsset.id,
         amount: "10000000",
@@ -186,7 +187,7 @@ const seedTaxFixtures = () =>
         id: incomeLegId,
         sourceId,
         externalId: "income-leg",
-        timestamp: new Date("2025-03-01T10:00:00.000Z"),
+        timestamp: DateTime.toDateUtc(DateTime.makeUnsafe("2025-03-01T10:00:00.000Z")),
         principalId,
         assetId: btcAsset.id,
         amount: "5000000",
@@ -203,7 +204,7 @@ const seedTaxFixtures = () =>
         principalId,
         sourceId,
         assetId: btcAsset.id,
-        acquiredAt: new Date("2025-01-01T10:00:00.000Z"),
+        acquiredAt: DateTime.toDateUtc(DateTime.makeUnsafe("2025-01-01T10:00:00.000Z")),
         originalAmount: "100000000",
         remainingAmount: "60000000",
         costBasisPerToken: "0.000100000000000000",
@@ -216,7 +217,7 @@ const seedTaxFixtures = () =>
         principalId,
         sourceId,
         assetId: btcAsset.id,
-        acquiredAt: new Date("2023-12-01T10:00:00.000Z"),
+        acquiredAt: DateTime.toDateUtc(DateTime.makeUnsafe("2023-12-01T10:00:00.000Z")),
         originalAmount: "20000000",
         remainingAmount: "10000000",
         costBasisPerToken: "0.000050000000000000",
@@ -264,7 +265,7 @@ const insertIncompleteIncomeLeg = () =>
       id: "00000000-0000-0000-0000-000000000306",
       sourceId,
       externalId: "income-leg-missing-valuation",
-      timestamp: new Date("2025-05-01T10:00:00.000Z"),
+      timestamp: DateTime.toDateUtc(DateTime.makeUnsafe("2025-05-01T10:00:00.000Z")),
       principalId,
       assetId: asset.id,
       amount: "1000000",
@@ -300,7 +301,7 @@ const insertUnresolvedProviderAssetSourceUse = ({
         provider: "coinbase",
         naturalKey: "coinbase-unresolved-asset",
         currencyCode: "XYZ",
-        retrievedAt: new Date("2025-01-01T00:00:00.000Z"),
+        retrievedAt: DateTime.toDateUtc(DateTime.makeUnsafe("2025-01-01T00:00:00.000Z")),
       })
       .returning({ id: schema.providerAssets.id })
 
@@ -334,7 +335,7 @@ const insertExcludedProviderAssetSourceUseWithRematerialization = () =>
         provider: "coinbase",
         naturalKey: "coinbase-excluded-asset",
         currencyCode: "EXCLUDED",
-        retrievedAt: new Date("2025-01-01T00:00:00.000Z"),
+        retrievedAt: DateTime.toDateUtc(DateTime.makeUnsafe("2025-01-01T00:00:00.000Z")),
       })
       .returning({ id: schema.providerAssets.id })
 
@@ -405,22 +406,24 @@ describe("TaxCalculationServiceLive", () => {
     }).pipe(Effect.runPromise)
   )
 
-  it("returns deterministic yearly tax totals for taxable, tax-free, and income events", async () => {
-    await Effect.runPromise(
-      Effect.gen(function* () {
-        const tax = yield* calculateTax()
-        expect(tax.year).toBe(2025)
-        expect(tax.currency).toBe("EUR")
-        expect(tax.taxableGains).toBe(2000)
-        expect(tax.taxableLosses).toBe(0)
-        expect(tax.taxFreeGains).toBe(400)
-        expect(tax.incomeTotal).toBe(700)
-      })
-    )
-  })
+  it.effect(
+    "returns deterministic yearly tax totals for taxable, tax-free, and income events",
+    () =>
+      Effect.asVoid(
+        Effect.gen(function* () {
+          const tax = yield* calculateTax()
+          expect(tax.year).toBe(2025)
+          expect(tax.currency).toBe("EUR")
+          expect(tax.taxableGains).toBe(2000)
+          expect(tax.taxableLosses).toBe(0)
+          expect(tax.taxFreeGains).toBe(400)
+          expect(tax.incomeTotal).toBe(700)
+        })
+      )
+  )
 
-  it("fails with an actionable typed error when income valuation data is incomplete", async () => {
-    await Effect.runPromise(
+  it.effect("fails with an actionable typed error when income valuation data is incomplete", () =>
+    Effect.asVoid(
       Effect.gen(function* () {
         yield* insertIncompleteIncomeLeg()
         const error = yield* calculateTax().pipe(Effect.flip)
@@ -431,10 +434,10 @@ describe("TaxCalculationServiceLive", () => {
         }
       })
     )
-  })
+  )
 
-  it("fails with a typed error when the jurisdiction is unsupported", async () => {
-    await Effect.runPromise(
+  it.effect("fails with a typed error when the jurisdiction is unsupported", () =>
+    Effect.asVoid(
       Effect.gen(function* () {
         const error = yield* calculateTax({
           jurisdiction: "united-states",
@@ -446,10 +449,10 @@ describe("TaxCalculationServiceLive", () => {
         }
       })
     )
-  })
+  )
 
-  it("fails with a typed error when tax-visible values use an unsupported currency", async () => {
-    await Effect.runPromise(
+  it.effect("fails with a typed error when tax-visible values use an unsupported currency", () =>
+    Effect.asVoid(
       Effect.gen(function* () {
         yield* updateIncomeLegCurrency("USD")
         const error = yield* calculateTax().pipe(Effect.flip)
@@ -462,10 +465,10 @@ describe("TaxCalculationServiceLive", () => {
         }
       })
     )
-  })
+  )
 
-  it("fails with SourceNotFoundError for an unknown source", async () => {
-    await Effect.runPromise(
+  it.effect("fails with SourceNotFoundError for an unknown source", () =>
+    Effect.asVoid(
       Effect.gen(function* () {
         const error = yield* calculateTax({
           sourceId: "00000000-0000-0000-0000-000000000999",
@@ -477,28 +480,30 @@ describe("TaxCalculationServiceLive", () => {
         }
       })
     )
-  })
+  )
 
-  it("fails with a pending error instead of a zero total when a provider observation is unresolved", async () => {
-    await Effect.runPromise(
-      Effect.gen(function* () {
-        yield* insertUnresolvedProviderAssetSourceUse()
-        const error = yield* calculateTax().pipe(Effect.flip)
+  it.effect(
+    "fails with a pending error instead of a zero total when a provider observation is unresolved",
+    () =>
+      Effect.asVoid(
+        Effect.gen(function* () {
+          yield* insertUnresolvedProviderAssetSourceUse()
+          const error = yield* calculateTax().pipe(Effect.flip)
 
-        expect(error._tag).toBe("TaxCalculationPendingObservationsError")
-        if (error._tag === "TaxCalculationPendingObservationsError") {
-          expect(error.sourceId).toBe(sourceId)
-          expect(error.pendingObservationCount).toBe(1)
-          expect(error.blockingObservations).toEqual([
-            { provider: "coinbase", currencyCode: "XYZ" },
-          ])
-        }
-      })
-    )
-  })
+          expect(error._tag).toBe("TaxCalculationPendingObservationsError")
+          if (error._tag === "TaxCalculationPendingObservationsError") {
+            expect(error.sourceId).toBe(sourceId)
+            expect(error.pendingObservationCount).toBe(1)
+            expect(error.blockingObservations).toEqual([
+              { provider: "coinbase", currencyCode: "XYZ" },
+            ])
+          }
+        })
+      )
+  )
 
-  it("fails with a pending error when an observation's mapping was rejected", async () => {
-    await Effect.runPromise(
+  it.effect("fails with a pending error when an observation's mapping was rejected", () =>
+    Effect.asVoid(
       Effect.gen(function* () {
         // A rejected mapping still keeps its transactions out of legs and
         // FIFO, so totals without it would be silently short.
@@ -514,10 +519,10 @@ describe("TaxCalculationServiceLive", () => {
         }
       })
     )
-  })
+  )
 
-  it("blocks an excluded observation until its rematerialization replay completes", async () => {
-    await Effect.runPromise(
+  it.effect("blocks an excluded observation until its rematerialization replay completes", () =>
+    Effect.asVoid(
       Effect.gen(function* () {
         const fixture = yield* insertExcludedProviderAssetSourceUseWithRematerialization()
         const db = yield* drizzle
@@ -720,10 +725,10 @@ describe("TaxCalculationServiceLive", () => {
         expect(advancedPolicyReplayError._tag).toBe("TaxCalculationPendingObservationsError")
       }).pipe(Effect.provide(context.TestPgClientLive))
     )
-  })
+  )
 
-  it("returns zero totals when the selected year has no disposals or income", async () => {
-    await Effect.runPromise(
+  it.effect("returns zero totals when the selected year has no disposals or income", () =>
+    Effect.asVoid(
       Effect.gen(function* () {
         const tax = yield* calculateTax({
           year: 2024,
@@ -737,5 +742,5 @@ describe("TaxCalculationServiceLive", () => {
         expect(tax.incomeTotal).toBe(0)
       })
     )
-  })
+  )
 })

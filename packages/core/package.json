@@ -88,8 +88,11 @@
     "effect": "4.0.0-rc.109"
   },
   "devDependencies": {
+    "@effect/platform-node": "4.0.0-rc.109",
+    "@effect/vitest": "4.0.0-rc.109",
     "@my/typescript-config": "workspace:*",
     "@types/node": "26.0.1",
+    "oxc-parser": "0.120.0",
     "typescript": "7.0.2"
   }
 }

@@ -1,3 +1,4 @@
+import * as DateTime from "effect/DateTime"
 import { describe, expect, it } from "vitest"
 import * as Effect from "effect/Effect"
 import {
@@ -26,8 +27,8 @@ describe("AssetCanonicalizationService", () => {
     providerType: "crypto",
     rawProviderPayload: {},
     evidenceRevision: 1,
-    discoveredAt: new Date("2025-01-01T00:00:00.000Z"),
-    retrievedAt: new Date("2025-01-01T00:00:00.000Z"),
+    discoveredAt: DateTime.toDateUtc(DateTime.makeUnsafe("2025-01-01T00:00:00.000Z")),
+    retrievedAt: DateTime.toDateUtc(DateTime.makeUnsafe("2025-01-01T00:00:00.000Z")),
     ...overrides,
   })
 

@@ -1,6 +1,7 @@
+import * as DateTime from "effect/DateTime"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
-import { describe, expect, it } from "vitest"
+import { describe, expect, it } from "@effect/vitest"
 import { SourceProviderRegistryLive } from "../../src/layers/SourceProviderRegistryLive.ts"
 import { CoinbaseSourceSyncProvider } from "../../src/providers/coinbase/services/CoinbaseSourceSyncProvider.ts"
 import {
@@ -34,13 +35,13 @@ const sourceRecord: SourceRawRecord = {
   externalAccountId: source.walletAddress,
   externalRecordId: "solana-signature-1",
   externalParentId: null,
-  occurredAt: new Date("2026-01-01T00:00:00.000Z"),
+  occurredAt: DateTime.toDateUtc(DateTime.makeUnsafe("2026-01-01T00:00:00.000Z")),
   payload: { transaction: { signatures: ["solana-signature-1"] } },
-  importedAt: new Date("2026-01-01T00:00:00.000Z"),
+  importedAt: DateTime.toDateUtc(DateTime.makeUnsafe("2026-01-01T00:00:00.000Z")),
   normalizedAt: null,
   normalizationError: null,
-  createdAt: new Date("2026-01-01T00:00:00.000Z"),
-  updatedAt: new Date("2026-01-01T00:00:00.000Z"),
+  createdAt: DateTime.toDateUtc(DateTime.makeUnsafe("2026-01-01T00:00:00.000Z")),
+  updatedAt: DateTime.toDateUtc(DateTime.makeUnsafe("2026-01-01T00:00:00.000Z")),
 }
 
 const CoinbaseSourceSyncProviderTestLive = Layer.succeed(
@@ -68,12 +69,12 @@ const HeliusSolanaSourceSyncProviderTestLive = Layer.succeed(
               externalRecordId: "solana-signature-1",
               externalAccountId: "So11111111111111111111111111111111111111112",
               externalParentId: null,
-              occurredAt: new Date("2026-01-01T00:00:00.000Z"),
+              occurredAt: DateTime.toDateUtc(DateTime.makeUnsafe("2026-01-01T00:00:00.000Z")),
               payload: { transaction: { signatures: ["solana-signature-1"] } },
             }),
           ],
           cursorPayload: { paginationToken: null },
-          highWatermark: new Date("2026-01-01T00:00:00.000Z"),
+          highWatermark: DateTime.toDateUtc(DateTime.makeUnsafe("2026-01-01T00:00:00.000Z")),
           done: true,
         })
       ),
@@ -95,13 +96,13 @@ const HeliusSolanaSourceSyncProviderTestLive = Layer.succeed(
           sourceRawRecordId: sourceRecord.id,
           externalId: "solana-signature-1",
           externalGroupId: "solana-signature-1",
-          timestamp: new Date("2026-01-01T00:00:00.000Z"),
+          timestamp: DateTime.toDateUtc(DateTime.makeUnsafe("2026-01-01T00:00:00.000Z")),
           transactionType: null,
           providerTransactionType: "unknown",
           providerStatus: "succeeded",
           providerResourcePath: null,
           providerDescription: null,
-          providerCreatedAt: new Date("2026-01-01T00:00:00.000Z"),
+          providerCreatedAt: DateTime.toDateUtc(DateTime.makeUnsafe("2026-01-01T00:00:00.000Z")),
           providerUpdatedAt: null,
           metadata: { provider: HELIUS_SOLANA_PROVIDER_KEY },
           providerFiatAmount: null,
@@ -165,11 +166,13 @@ const RegistryLive = SourceProviderRegistryLive.pipe(
 )
 
 describe("SourceProviderRegistryLive", () => {
-  it("resolves the production Solana provider key to the Helius provider module", async () => {
-    const result = await Effect.runPromise(
-      Effect.gen(function* () {
+  it.effect("resolves the production Solana provider key to the Helius provider module", () =>
+    Effect.gen(function* () {
+      const result = yield* Effect.gen(function* () {
         const registry = yield* SourceProviderRegistry
-        const provider = yield* registry.resolveProviderModule({ providerKey: "helius-solana" })
+        const provider = yield* registry.resolveProviderModule({
+          providerKey: "helius-solana",
+        })
         yield* provider.refreshReferenceData
         return yield* provider.fetchRawBatch(
           FetchProviderRawBatchParams.make({
@@ -183,29 +186,33 @@ describe("SourceProviderRegistryLive", () => {
           })
         )
       }).pipe(Effect.provide(RegistryLive))
-    )
 
-    expect(result.records.map((record) => record.externalRecordId)).toEqual(["solana-signature-1"])
-    expect(result.done).toBe(true)
-  })
+      expect(result.records.map((record) => record.externalRecordId)).toEqual([
+        "solana-signature-1",
+      ])
+      expect(result.done).toBe(true)
+    })
+  )
 
-  it("forwards Helius onchain context through prepared normalization", async () => {
-    const result = await Effect.runPromise(
-      Effect.gen(function* () {
+  it.effect("forwards Helius onchain context through prepared normalization", () =>
+    Effect.gen(function* () {
+      const result = yield* Effect.gen(function* () {
         const registry = yield* SourceProviderRegistry
-        const provider = yield* registry.resolveProviderModule({ providerKey: "helius-solana" })
+        const provider = yield* registry.resolveProviderModule({
+          providerKey: "helius-solana",
+        })
         const normalize = yield* provider.makeRawRecordNormalizer
         return yield* normalize({ source, sourceRecord })
       }).pipe(Effect.provide(RegistryLive))
-    )
 
-    expect(result.kind).toBe("prepared")
-    if (result.kind === "prepared") {
-      expect(result.onchainContext).toMatchObject({
-        chainTxId: "solana-signature-1",
-        blockHeight: "123",
-        positionInBlock: "4",
-      })
-    }
-  })
+      expect(result.kind).toBe("prepared")
+      if (result.kind === "prepared") {
+        expect(result.onchainContext).toMatchObject({
+          chainTxId: "solana-signature-1",
+          blockHeight: "123",
+          positionInBlock: "4",
+        })
+      }
+    })
+  )
 })

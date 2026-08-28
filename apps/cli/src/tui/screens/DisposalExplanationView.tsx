@@ -1,5 +1,6 @@
 import { useKeyboard } from "@opentui/solid"
 import { createSignal, For, Match, Show, Switch } from "solid-js"
+import { Effect } from "effect"
 import type { SourceDisposalExplanation } from "taxmaxi"
 import type { CliSession } from "../../session.ts"
 import { fetchDisposalExplanation, type ReportResult } from "../controller.ts"
@@ -38,18 +39,23 @@ export function DisposalExplanationView(props: {
 }) {
   const [state, setState] = createSignal<ExplanationState>({ _tag: "loading" })
 
-  const refresh = async () => {
-    setState({ _tag: "loading" })
-    const result = await fetchDisposalExplanation(props.session, {
-      sourceId: props.sourceId,
-      legId: props.legId,
-    })
-    if (result._tag === "unauthorized") {
-      props.onSessionExpired()
-      return
-    }
-    setState(result)
-  }
+  const refresh = () =>
+    Effect.runPromise(
+      Effect.gen(function* () {
+        setState({ _tag: "loading" })
+        const result = yield* Effect.promise(() =>
+          fetchDisposalExplanation(props.session, {
+            sourceId: props.sourceId,
+            legId: props.legId,
+          })
+        )
+        if (result._tag === "unauthorized") {
+          props.onSessionExpired()
+          return
+        }
+        setState(result)
+      })
+    )
   void refresh()
 
   const explanation = (): SourceDisposalExplanation | undefined => {

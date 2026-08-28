@@ -1,5 +1,6 @@
+import * as DateTime from "effect/DateTime"
 import { ConfigProvider, Effect, Layer } from "effect"
-import { describe, expect, it } from "vitest"
+import { describe, expect, it } from "@effect/vitest"
 import {
   makeWorkerSourceSyncStartupRepairLive,
   WorkerSourceSyncStartupRepair,
@@ -34,7 +35,7 @@ const makeConfigProvider = (overrides: Record<string, string> = {}) =>
     ...overrides,
   })
 
-const baseUpdatedAt = new Date("2026-01-01T00:00:00.000Z")
+const baseUpdatedAt = DateTime.toDateUtc(DateTime.makeUnsafe("2026-01-01T00:00:00.000Z"))
 
 const isPendingDispatchJob = (
   job: SourceSyncRepairableActiveJob
@@ -163,15 +164,18 @@ const makeQueue = (
     readonly returnedJobIds?: ReadonlyMap<string, string>
   } = {}
 ): WorkerSourceSyncStartupRepairQueue => ({
-  add: async (name, payload) => {
-    expect(name).toBe(SOURCE_SYNC_JOB_NAME)
-    if (options.rejectJobIds?.has(payload.jobId) === true) {
-      return Promise.reject("queue unavailable")
-    }
+  add: (name, payload) =>
+    Effect.runPromise(
+      Effect.gen(function* () {
+        expect(name).toBe(SOURCE_SYNC_JOB_NAME)
+        if (options.rejectJobIds?.has(payload.jobId) === true) {
+          return yield* Effect.fail("queue unavailable")
+        }
 
-    enqueued.push(payload)
-    return { id: options.returnedJobIds?.get(payload.jobId) ?? payload.jobId }
-  },
+        enqueued.push(payload)
+        return { id: options.returnedJobIds?.get(payload.jobId) ?? payload.jobId }
+      })
+    ),
   close: Effect.void,
 })
 
@@ -323,13 +327,13 @@ const runDispatchFollowUp = ({
 }
 
 describe("WorkerSourceSyncStartupRepairLive", () => {
-  it("reuses one queue connection across pending dispatch passes", async () => {
-    let acquireCount = 0
-    let closeCount = 0
-    const enqueued: Array<SourceSyncQueuePayload> = []
+  it.effect("reuses one queue connection across pending dispatch passes", () =>
+    Effect.gen(function* () {
+      let acquireCount = 0
+      let closeCount = 0
+      const enqueued: Array<SourceSyncQueuePayload> = []
 
-    await Effect.runPromise(
-      Effect.scoped(
+      yield* Effect.scoped(
         Effect.gen(function* () {
           const repair = yield* WorkerSourceSyncStartupRepair
           yield* repair.dispatchPending
@@ -356,380 +360,432 @@ describe("WorkerSourceSyncStartupRepairLive", () => {
           Effect.provideService(ConfigProvider.ConfigProvider, makeConfigProvider())
         )
       )
-    )
 
-    expect(acquireCount).toBe(1)
-    expect(closeCount).toBe(1)
-  })
-
-  it("dispatches pending jobs without recovering processing jobs", async () => {
-    const enqueued: Array<SourceSyncQueuePayload> = []
-    const attached: Array<AttachSourceSyncQueueMetadataParams> = []
-    const recovered: Array<RecoverStaleSourceSyncJobParams> = []
-
-    const summary = await runPendingDispatch({
-      repairableJobs: [
-        makeRepairableJob({ id: "job-pending", status: "pending" }),
-        makeRepairableJob({ id: "job-processing", status: "processing" }),
-      ],
-      enqueued,
-      attached,
-      recovered,
+      expect(acquireCount).toBe(1)
+      expect(closeCount).toBe(1)
     })
+  )
 
-    expect(enqueued.map((payload) => payload.jobId)).toEqual(["job-pending"])
-    expect(attached.map((params) => params.jobId)).toEqual(["job-pending"])
-    expect(recovered).toEqual([])
-    expect(summary).toMatchObject({ scannedJobs: 1, requeuedPending: 1, failedProcessing: 0 })
-  })
+  it.effect("dispatches pending jobs without recovering processing jobs", () =>
+    Effect.gen(function* () {
+      const enqueued: Array<SourceSyncQueuePayload> = []
+      const attached: Array<AttachSourceSyncQueueMetadataParams> = []
+      const recovered: Array<RecoverStaleSourceSyncJobParams> = []
 
-  it("dispatches only the follow-up linked to a completed job", async () => {
-    const enqueued: Array<SourceSyncQueuePayload> = []
-    const attached: Array<AttachSourceSyncQueueMetadataParams> = []
+      const summary = yield* Effect.promise(() =>
+        runPendingDispatch({
+          repairableJobs: [
+            makeRepairableJob({ id: "job-pending", status: "pending" }),
+            makeRepairableJob({ id: "job-processing", status: "processing" }),
+          ],
+          enqueued,
+          attached,
+          recovered,
+        })
+      )
 
-    await runDispatchFollowUp({ enqueued, attached })
+      expect(enqueued.map((payload) => payload.jobId)).toEqual(["job-pending"])
+      expect(attached.map((params) => params.jobId)).toEqual(["job-pending"])
+      expect(recovered).toEqual([])
+      expect(summary).toMatchObject({ scannedJobs: 1, requeuedPending: 1, failedProcessing: 0 })
+    })
+  )
 
-    expect(enqueued).toEqual([
-      {
-        jobId: "job-follow-up",
+  it.effect("dispatches only the follow-up linked to a completed job", () =>
+    Effect.gen(function* () {
+      const enqueued: Array<SourceSyncQueuePayload> = []
+      const attached: Array<AttachSourceSyncQueueMetadataParams> = []
+
+      yield* Effect.promise(() => runDispatchFollowUp({ enqueued, attached }))
+
+      expect(enqueued).toEqual([
+        {
+          jobId: "job-follow-up",
+          sourceId: "source-1",
+          principalId: "principal-1",
+          mode: "replay",
+        },
+      ])
+      expect(attached).toEqual([
+        expect.objectContaining({
+          jobId: "job-follow-up",
+          queueName: SOURCE_SYNC_QUEUE_NAME,
+          queueJobId: "job-follow-up",
+        }),
+      ])
+    })
+  )
+
+  it.effect("requeues a pending job without queue metadata and records durable metadata", () =>
+    Effect.gen(function* () {
+      const enqueued: Array<SourceSyncQueuePayload> = []
+      const attached: Array<AttachSourceSyncQueueMetadataParams> = []
+      const recovered: Array<RecoverStaleSourceSyncJobParams> = []
+
+      const summary = yield* Effect.promise(() =>
+        runRepair({
+          repairableJobs: [makeRepairableJob({ id: "job-pending", status: "pending" })],
+          enqueued,
+          attached,
+          recovered,
+        })
+      )
+
+      expect(enqueued).toHaveLength(1)
+      expect(enqueued[0]).toMatchObject({
+        jobId: "job-pending",
         sourceId: "source-1",
         principalId: "principal-1",
-        mode: "replay",
-      },
-    ])
-    expect(attached).toEqual([
-      expect.objectContaining({
-        jobId: "job-follow-up",
-        queueName: SOURCE_SYNC_QUEUE_NAME,
-        queueJobId: "job-follow-up",
-      }),
-    ])
-  })
-
-  it("requeues a pending job without queue metadata and records durable metadata", async () => {
-    const enqueued: Array<SourceSyncQueuePayload> = []
-    const attached: Array<AttachSourceSyncQueueMetadataParams> = []
-    const recovered: Array<RecoverStaleSourceSyncJobParams> = []
-
-    const summary = await runRepair({
-      repairableJobs: [makeRepairableJob({ id: "job-pending", status: "pending" })],
-      enqueued,
-      attached,
-      recovered,
-    })
-
-    expect(enqueued).toHaveLength(1)
-    expect(enqueued[0]).toMatchObject({
-      jobId: "job-pending",
-      sourceId: "source-1",
-      principalId: "principal-1",
-      mode: "sync",
-    })
-    expect(attached).toEqual([
-      expect.objectContaining({
-        jobId: "job-pending",
-        queueName: SOURCE_SYNC_QUEUE_NAME,
-        queueJobId: "job-pending",
-      }),
-    ])
-    expect(recovered).toEqual([])
-    expect(summary).toMatchObject({
-      scannedJobs: 1,
-      requeuedPending: 1,
-      failedProcessing: 0,
-      skippedJobs: 0,
-      erroredJobs: 0,
-      stoppedAfterErrors: false,
-    })
-  })
-
-  it("uses deterministic job ids when reconciling a pending job that already has metadata", async () => {
-    const enqueued: Array<SourceSyncQueuePayload> = []
-    const attached: Array<AttachSourceSyncQueueMetadataParams> = []
-    const recovered: Array<RecoverStaleSourceSyncJobParams> = []
-
-    await runRepair({
-      repairableJobs: [
-        makeRepairableJob({
-          id: "job-pending-with-metadata",
-          status: "pending",
+        mode: "sync",
+      })
+      expect(attached).toEqual([
+        expect.objectContaining({
+          jobId: "job-pending",
           queueName: SOURCE_SYNC_QUEUE_NAME,
-          queueJobId: "job-pending-with-metadata",
+          queueJobId: "job-pending",
         }),
-      ],
-      enqueued,
-      attached,
-      recovered,
+      ])
+      expect(recovered).toEqual([])
+      expect(summary).toMatchObject({
+        scannedJobs: 1,
+        requeuedPending: 1,
+        failedProcessing: 0,
+        skippedJobs: 0,
+        erroredJobs: 0,
+        stoppedAfterErrors: false,
+      })
     })
+  )
 
-    expect(enqueued.map((payload) => payload.jobId)).toEqual(["job-pending-with-metadata"])
-    expect(attached.map((params) => params.queueJobId)).toEqual(["job-pending-with-metadata"])
-    expect(recovered).toEqual([])
-  })
+  it.effect(
+    "uses deterministic job ids when reconciling a pending job that already has metadata",
+    () =>
+      Effect.gen(function* () {
+        const enqueued: Array<SourceSyncQueuePayload> = []
+        const attached: Array<AttachSourceSyncQueueMetadataParams> = []
+        const recovered: Array<RecoverStaleSourceSyncJobParams> = []
 
-  it("records BullMQ-assigned ids when enqueue returns a different id", async () => {
-    const enqueued: Array<SourceSyncQueuePayload> = []
-    const attached: Array<AttachSourceSyncQueueMetadataParams> = []
-    const recovered: Array<RecoverStaleSourceSyncJobParams> = []
+        yield* Effect.promise(() =>
+          runRepair({
+            repairableJobs: [
+              makeRepairableJob({
+                id: "job-pending-with-metadata",
+                status: "pending",
+                queueName: SOURCE_SYNC_QUEUE_NAME,
+                queueJobId: "job-pending-with-metadata",
+              }),
+            ],
+            enqueued,
+            attached,
+            recovered,
+          })
+        )
 
-    await runRepair({
-      repairableJobs: [makeRepairableJob({ id: "job-pending", status: "pending" })],
-      enqueued,
-      attached,
-      recovered,
-      queueOptions: {
-        returnedJobIds: new Map([["job-pending", "bull-generated-job-id"]]),
-      },
+        expect(enqueued.map((payload) => payload.jobId)).toEqual(["job-pending-with-metadata"])
+        expect(attached.map((params) => params.queueJobId)).toEqual(["job-pending-with-metadata"])
+        expect(recovered).toEqual([])
+      })
+  )
+
+  it.effect("records BullMQ-assigned ids when enqueue returns a different id", () =>
+    Effect.gen(function* () {
+      const enqueued: Array<SourceSyncQueuePayload> = []
+      const attached: Array<AttachSourceSyncQueueMetadataParams> = []
+      const recovered: Array<RecoverStaleSourceSyncJobParams> = []
+
+      yield* Effect.promise(() =>
+        runRepair({
+          repairableJobs: [makeRepairableJob({ id: "job-pending", status: "pending" })],
+          enqueued,
+          attached,
+          recovered,
+          queueOptions: {
+            returnedJobIds: new Map([["job-pending", "bull-generated-job-id"]]),
+          },
+        })
+      )
+
+      expect(attached).toEqual([
+        expect.objectContaining({
+          jobId: "job-pending",
+          queueJobId: "bull-generated-job-id",
+        }),
+      ])
     })
+  )
 
-    expect(attached).toEqual([
-      expect.objectContaining({
-        jobId: "job-pending",
-        queueJobId: "bull-generated-job-id",
-      }),
-    ])
-  })
+  it.effect("logs attach metadata failures and continues repairing later jobs", () =>
+    Effect.gen(function* () {
+      const enqueued: Array<SourceSyncQueuePayload> = []
+      const attached: Array<AttachSourceSyncQueueMetadataParams> = []
+      const recovered: Array<RecoverStaleSourceSyncJobParams> = []
 
-  it("logs attach metadata failures and continues repairing later jobs", async () => {
-    const enqueued: Array<SourceSyncQueuePayload> = []
-    const attached: Array<AttachSourceSyncQueueMetadataParams> = []
-    const recovered: Array<RecoverStaleSourceSyncJobParams> = []
+      const summary = yield* Effect.promise(() =>
+        runRepair({
+          repairableJobs: [
+            makeRepairableJob({ id: "job-attach-fails", status: "pending" }),
+            makeRepairableJob({ id: "job-next", status: "pending" }),
+          ],
+          enqueued,
+          attached,
+          recovered,
+          attachFailureJobId: "job-attach-fails",
+        })
+      )
 
-    const summary = await runRepair({
-      repairableJobs: [
-        makeRepairableJob({ id: "job-attach-fails", status: "pending" }),
-        makeRepairableJob({ id: "job-next", status: "pending" }),
-      ],
-      enqueued,
-      attached,
-      recovered,
-      attachFailureJobId: "job-attach-fails",
+      expect(enqueued.map((payload) => payload.jobId)).toEqual(["job-attach-fails", "job-next"])
+      expect(attached.map((params) => params.jobId)).toEqual(["job-next"])
+      expect(summary).toMatchObject({
+        scannedJobs: 2,
+        requeuedPending: 1,
+        skippedJobs: 1,
+        erroredJobs: 0,
+        stoppedAfterErrors: false,
+      })
     })
+  )
 
-    expect(enqueued.map((payload) => payload.jobId)).toEqual(["job-attach-fails", "job-next"])
-    expect(attached.map((params) => params.jobId)).toEqual(["job-next"])
-    expect(summary).toMatchObject({
-      scannedJobs: 2,
-      requeuedPending: 1,
-      skippedJobs: 1,
-      erroredJobs: 0,
-      stoppedAfterErrors: false,
+  it.effect("logs attach metadata conflicts and continues repairing later jobs", () =>
+    Effect.gen(function* () {
+      const enqueued: Array<SourceSyncQueuePayload> = []
+      const attached: Array<AttachSourceSyncQueueMetadataParams> = []
+      const recovered: Array<RecoverStaleSourceSyncJobParams> = []
+
+      const summary = yield* Effect.promise(() =>
+        runRepair({
+          repairableJobs: [
+            makeRepairableJob({ id: "job-attach-conflict", status: "pending" }),
+            makeRepairableJob({ id: "job-next", status: "pending" }),
+          ],
+          enqueued,
+          attached,
+          recovered,
+          attachFailureJobId: "job-attach-conflict",
+          attachFailureKind: "conflict",
+        })
+      )
+
+      expect(enqueued.map((payload) => payload.jobId)).toEqual(["job-attach-conflict", "job-next"])
+      expect(attached.map((params) => params.jobId)).toEqual(["job-next"])
+      expect(summary).toMatchObject({
+        scannedJobs: 2,
+        requeuedPending: 1,
+        skippedJobs: 1,
+        erroredJobs: 0,
+        stoppedAfterErrors: false,
+      })
     })
-  })
+  )
 
-  it("logs attach metadata conflicts and continues repairing later jobs", async () => {
-    const enqueued: Array<SourceSyncQueuePayload> = []
-    const attached: Array<AttachSourceSyncQueueMetadataParams> = []
-    const recovered: Array<RecoverStaleSourceSyncJobParams> = []
+  it.effect("logs enqueue failures and continues repairing later jobs", () =>
+    Effect.gen(function* () {
+      const enqueued: Array<SourceSyncQueuePayload> = []
+      const attached: Array<AttachSourceSyncQueueMetadataParams> = []
+      const recovered: Array<RecoverStaleSourceSyncJobParams> = []
 
-    const summary = await runRepair({
-      repairableJobs: [
-        makeRepairableJob({ id: "job-attach-conflict", status: "pending" }),
-        makeRepairableJob({ id: "job-next", status: "pending" }),
-      ],
-      enqueued,
-      attached,
-      recovered,
-      attachFailureJobId: "job-attach-conflict",
-      attachFailureKind: "conflict",
+      const summary = yield* Effect.promise(() =>
+        runRepair({
+          repairableJobs: [
+            makeRepairableJob({ id: "job-enqueue-fails", status: "pending" }),
+            makeRepairableJob({ id: "job-next", status: "pending" }),
+          ],
+          enqueued,
+          attached,
+          recovered,
+          queueOptions: {
+            rejectJobIds: new Set(["job-enqueue-fails"]),
+          },
+        })
+      )
+
+      expect(enqueued.map((payload) => payload.jobId)).toEqual(["job-next"])
+      expect(attached.map((params) => params.jobId)).toEqual(["job-next"])
+      expect(summary).toMatchObject({
+        scannedJobs: 2,
+        requeuedPending: 1,
+        skippedJobs: 0,
+        erroredJobs: 1,
+        stoppedAfterErrors: false,
+      })
     })
+  )
 
-    expect(enqueued.map((payload) => payload.jobId)).toEqual(["job-attach-conflict", "job-next"])
-    expect(attached.map((params) => params.jobId)).toEqual(["job-next"])
-    expect(summary).toMatchObject({
-      scannedJobs: 2,
-      requeuedPending: 1,
-      skippedJobs: 1,
-      erroredJobs: 0,
-      stoppedAfterErrors: false,
+  it.effect("fails stale processing jobs instead of enqueueing duplicate work", () =>
+    Effect.gen(function* () {
+      const enqueued: Array<SourceSyncQueuePayload> = []
+      const attached: Array<AttachSourceSyncQueueMetadataParams> = []
+      const recovered: Array<RecoverStaleSourceSyncJobParams> = []
+
+      const summary = yield* Effect.promise(() =>
+        runRepair({
+          repairableJobs: [makeRepairableJob({ id: "job-processing", status: "processing" })],
+          enqueued,
+          attached,
+          recovered,
+        })
+      )
+
+      expect(enqueued).toEqual([])
+      expect(attached).toEqual([])
+      expect(recovered).toEqual([
+        expect.objectContaining({
+          sourceId: "source-1",
+          jobId: "job-processing",
+          message: "Startup repair failed stale processing source sync job.",
+        }),
+      ])
+      expect(summary).toMatchObject({
+        scannedJobs: 1,
+        requeuedPending: 0,
+        failedProcessing: 1,
+        skippedJobs: 0,
+        erroredJobs: 0,
+        stoppedAfterErrors: false,
+      })
     })
-  })
+  )
 
-  it("logs enqueue failures and continues repairing later jobs", async () => {
-    const enqueued: Array<SourceSyncQueuePayload> = []
-    const attached: Array<AttachSourceSyncQueueMetadataParams> = []
-    const recovered: Array<RecoverStaleSourceSyncJobParams> = []
+  it.effect("repairs follow-up work materialized while recovering a stale job", () =>
+    Effect.gen(function* () {
+      const enqueued: Array<SourceSyncQueuePayload> = []
+      const attached: Array<AttachSourceSyncQueueMetadataParams> = []
+      const recovered: Array<RecoverStaleSourceSyncJobParams> = []
 
-    const summary = await runRepair({
-      repairableJobs: [
-        makeRepairableJob({ id: "job-enqueue-fails", status: "pending" }),
-        makeRepairableJob({ id: "job-next", status: "pending" }),
-      ],
-      enqueued,
-      attached,
-      recovered,
-      queueOptions: {
-        rejectJobIds: new Set(["job-enqueue-fails"]),
-      },
+      const summary = yield* Effect.promise(() =>
+        runRepair({
+          repairableJobs: [makeRepairableJob({ id: "job-processing", status: "processing" })],
+          materializedOnRecover: makeRepairableJob({ id: "job-follow-up", status: "pending" }),
+          enqueued,
+          attached,
+          recovered,
+        })
+      )
+
+      expect(enqueued.map((payload) => payload.jobId)).toEqual(["job-follow-up"])
+      expect(attached.map((params) => params.jobId)).toEqual(["job-follow-up"])
+      expect(summary).toMatchObject({
+        scannedJobs: 2,
+        requeuedPending: 1,
+        failedProcessing: 1,
+      })
     })
+  )
 
-    expect(enqueued.map((payload) => payload.jobId)).toEqual(["job-next"])
-    expect(attached.map((params) => params.jobId)).toEqual(["job-next"])
-    expect(summary).toMatchObject({
-      scannedJobs: 2,
-      requeuedPending: 1,
-      skippedJobs: 0,
-      erroredJobs: 1,
-      stoppedAfterErrors: false,
+  it.effect("logs stale processing conflicts and continues repairing later jobs", () =>
+    Effect.gen(function* () {
+      const enqueued: Array<SourceSyncQueuePayload> = []
+      const attached: Array<AttachSourceSyncQueueMetadataParams> = []
+      const recovered: Array<RecoverStaleSourceSyncJobParams> = []
+
+      const summary = yield* Effect.promise(() =>
+        runRepair({
+          repairableJobs: [
+            makeRepairableJob({ id: "job-processing-conflict", status: "processing" }),
+            makeRepairableJob({ id: "job-processing-next", status: "processing" }),
+          ],
+          enqueued,
+          attached,
+          recovered,
+          recoverFailureJobId: "job-processing-conflict",
+          recoverFailureKind: "conflict",
+        })
+      )
+
+      expect(enqueued).toEqual([])
+      expect(attached).toEqual([])
+      expect(recovered.map((params) => params.jobId)).toEqual(["job-processing-next"])
+      expect(summary).toMatchObject({
+        scannedJobs: 2,
+        requeuedPending: 0,
+        failedProcessing: 1,
+        skippedJobs: 1,
+        erroredJobs: 0,
+        stoppedAfterErrors: false,
+      })
     })
-  })
+  )
 
-  it("fails stale processing jobs instead of enqueueing duplicate work", async () => {
-    const enqueued: Array<SourceSyncQueuePayload> = []
-    const attached: Array<AttachSourceSyncQueueMetadataParams> = []
-    const recovered: Array<RecoverStaleSourceSyncJobParams> = []
+  it.effect("drains multiple clean batches until the repair backlog is below batch size", () =>
+    Effect.gen(function* () {
+      const enqueued: Array<SourceSyncQueuePayload> = []
+      const attached: Array<AttachSourceSyncQueueMetadataParams> = []
+      const recovered: Array<RecoverStaleSourceSyncJobParams> = []
+      const jobs = Array.from({ length: 5 }, (_value, index) =>
+        makeRepairableJob({ id: `job-${index + 1}`, status: "pending" })
+      )
 
-    const summary = await runRepair({
-      repairableJobs: [makeRepairableJob({ id: "job-processing", status: "processing" })],
-      enqueued,
-      attached,
-      recovered,
+      const summary = yield* Effect.promise(() =>
+        runRepair({
+          repairableJobs: jobs,
+          enqueued,
+          attached,
+          recovered,
+          configOverrides: {
+            SOURCE_SYNC_REPAIR_BATCH_SIZE: "2",
+          },
+        })
+      )
+
+      expect(enqueued.map((payload) => payload.jobId)).toEqual([
+        "job-1",
+        "job-2",
+        "job-3",
+        "job-4",
+        "job-5",
+      ])
+      expect(attached.map((params) => params.jobId)).toEqual([
+        "job-1",
+        "job-2",
+        "job-3",
+        "job-4",
+        "job-5",
+      ])
+      expect(summary).toEqual({
+        scannedJobs: 5,
+        requeuedPending: 5,
+        failedProcessing: 0,
+        skippedJobs: 0,
+        erroredJobs: 0,
+        stoppedAfterErrors: false,
+      })
     })
+  )
 
-    expect(enqueued).toEqual([])
-    expect(attached).toEqual([])
-    expect(recovered).toEqual([
-      expect.objectContaining({
-        sourceId: "source-1",
-        jobId: "job-processing",
-        message: "Startup repair failed stale processing source sync job.",
-      }),
-    ])
-    expect(summary).toMatchObject({
-      scannedJobs: 1,
-      requeuedPending: 0,
-      failedProcessing: 1,
-      skippedJobs: 0,
-      erroredJobs: 0,
-      stoppedAfterErrors: false,
+  it.effect("stops draining after a full batch has an errored job", () =>
+    Effect.gen(function* () {
+      const enqueued: Array<SourceSyncQueuePayload> = []
+      const attached: Array<AttachSourceSyncQueueMetadataParams> = []
+      const recovered: Array<RecoverStaleSourceSyncJobParams> = []
+
+      const summary = yield* Effect.promise(() =>
+        runRepair({
+          repairableJobs: [
+            makeRepairableJob({ id: "job-enqueue-fails", status: "pending" }),
+            makeRepairableJob({ id: "job-in-first-batch", status: "pending" }),
+            makeRepairableJob({ id: "job-left-for-next-repair", status: "pending" }),
+          ],
+          enqueued,
+          attached,
+          recovered,
+          queueOptions: {
+            rejectJobIds: new Set(["job-enqueue-fails"]),
+          },
+          configOverrides: {
+            SOURCE_SYNC_REPAIR_BATCH_SIZE: "2",
+          },
+        })
+      )
+
+      expect(enqueued.map((payload) => payload.jobId)).toEqual(["job-in-first-batch"])
+      expect(attached.map((params) => params.jobId)).toEqual(["job-in-first-batch"])
+      expect(summary).toEqual({
+        scannedJobs: 2,
+        requeuedPending: 1,
+        failedProcessing: 0,
+        skippedJobs: 0,
+        erroredJobs: 1,
+        stoppedAfterErrors: true,
+      })
     })
-  })
-
-  it("repairs follow-up work materialized while recovering a stale job", async () => {
-    const enqueued: Array<SourceSyncQueuePayload> = []
-    const attached: Array<AttachSourceSyncQueueMetadataParams> = []
-    const recovered: Array<RecoverStaleSourceSyncJobParams> = []
-
-    const summary = await runRepair({
-      repairableJobs: [makeRepairableJob({ id: "job-processing", status: "processing" })],
-      materializedOnRecover: makeRepairableJob({ id: "job-follow-up", status: "pending" }),
-      enqueued,
-      attached,
-      recovered,
-    })
-
-    expect(enqueued.map((payload) => payload.jobId)).toEqual(["job-follow-up"])
-    expect(attached.map((params) => params.jobId)).toEqual(["job-follow-up"])
-    expect(summary).toMatchObject({
-      scannedJobs: 2,
-      requeuedPending: 1,
-      failedProcessing: 1,
-    })
-  })
-
-  it("logs stale processing conflicts and continues repairing later jobs", async () => {
-    const enqueued: Array<SourceSyncQueuePayload> = []
-    const attached: Array<AttachSourceSyncQueueMetadataParams> = []
-    const recovered: Array<RecoverStaleSourceSyncJobParams> = []
-
-    const summary = await runRepair({
-      repairableJobs: [
-        makeRepairableJob({ id: "job-processing-conflict", status: "processing" }),
-        makeRepairableJob({ id: "job-processing-next", status: "processing" }),
-      ],
-      enqueued,
-      attached,
-      recovered,
-      recoverFailureJobId: "job-processing-conflict",
-      recoverFailureKind: "conflict",
-    })
-
-    expect(enqueued).toEqual([])
-    expect(attached).toEqual([])
-    expect(recovered.map((params) => params.jobId)).toEqual(["job-processing-next"])
-    expect(summary).toMatchObject({
-      scannedJobs: 2,
-      requeuedPending: 0,
-      failedProcessing: 1,
-      skippedJobs: 1,
-      erroredJobs: 0,
-      stoppedAfterErrors: false,
-    })
-  })
-
-  it("drains multiple clean batches until the repair backlog is below batch size", async () => {
-    const enqueued: Array<SourceSyncQueuePayload> = []
-    const attached: Array<AttachSourceSyncQueueMetadataParams> = []
-    const recovered: Array<RecoverStaleSourceSyncJobParams> = []
-    const jobs = Array.from({ length: 5 }, (_value, index) =>
-      makeRepairableJob({ id: `job-${index + 1}`, status: "pending" })
-    )
-
-    const summary = await runRepair({
-      repairableJobs: jobs,
-      enqueued,
-      attached,
-      recovered,
-      configOverrides: {
-        SOURCE_SYNC_REPAIR_BATCH_SIZE: "2",
-      },
-    })
-
-    expect(enqueued.map((payload) => payload.jobId)).toEqual([
-      "job-1",
-      "job-2",
-      "job-3",
-      "job-4",
-      "job-5",
-    ])
-    expect(attached.map((params) => params.jobId)).toEqual([
-      "job-1",
-      "job-2",
-      "job-3",
-      "job-4",
-      "job-5",
-    ])
-    expect(summary).toEqual({
-      scannedJobs: 5,
-      requeuedPending: 5,
-      failedProcessing: 0,
-      skippedJobs: 0,
-      erroredJobs: 0,
-      stoppedAfterErrors: false,
-    })
-  })
-
-  it("stops draining after a full batch has an errored job", async () => {
-    const enqueued: Array<SourceSyncQueuePayload> = []
-    const attached: Array<AttachSourceSyncQueueMetadataParams> = []
-    const recovered: Array<RecoverStaleSourceSyncJobParams> = []
-
-    const summary = await runRepair({
-      repairableJobs: [
-        makeRepairableJob({ id: "job-enqueue-fails", status: "pending" }),
-        makeRepairableJob({ id: "job-in-first-batch", status: "pending" }),
-        makeRepairableJob({ id: "job-left-for-next-repair", status: "pending" }),
-      ],
-      enqueued,
-      attached,
-      recovered,
-      queueOptions: {
-        rejectJobIds: new Set(["job-enqueue-fails"]),
-      },
-      configOverrides: {
-        SOURCE_SYNC_REPAIR_BATCH_SIZE: "2",
-      },
-    })
-
-    expect(enqueued.map((payload) => payload.jobId)).toEqual(["job-in-first-batch"])
-    expect(attached.map((params) => params.jobId)).toEqual(["job-in-first-batch"])
-    expect(summary).toEqual({
-      scannedJobs: 2,
-      requeuedPending: 1,
-      failedProcessing: 0,
-      skippedJobs: 0,
-      erroredJobs: 1,
-      stoppedAfterErrors: true,
-    })
-  })
+  )
 })

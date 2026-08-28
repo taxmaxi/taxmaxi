@@ -1,7 +1,8 @@
+import * as DateTime from "effect/DateTime"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import * as Option from "effect/Option"
-import { describe, expect, it } from "vitest"
+import { describe, expect, it } from "@effect/vitest"
 import { SourceSyncRunServiceLive } from "../../src/layers/SourceSyncRunServiceLive.ts"
 import {
   SourceRepository,
@@ -17,7 +18,7 @@ import {
   type SyncRunRecord,
 } from "../../src/services/index.ts"
 
-const now = new Date("2026-01-01T00:00:00.000Z")
+const now = DateTime.toDateUtc(DateTime.makeUnsafe("2026-01-01T00:00:00.000Z"))
 
 const coinbaseSource: SourceSyncSource = {
   id: "source-1",
@@ -226,145 +227,161 @@ const runWithLayer = (layer: Layer.Layer<SourceSyncRunService>) =>
   )
 
 describe("SourceSyncRunService", () => {
-  it("starts one child source job per source and links run items", async () => {
-    const startedSources: Array<string> = []
+  it.effect("starts one child source job per source and links run items", () =>
+    Effect.gen(function* () {
+      const startedSources: Array<string> = []
 
-    const result = await runWithLayer(
-      makeLayer({
-        sourceSyncService: {
-          startSourceSyncJob: ({ sourceId }) =>
-            Effect.sync(() => {
-              startedSources.push(sourceId)
-              return {
-                sourceId,
-                jobId: `job-${sourceId}`,
-                status: "queued",
-                message: null,
-                resumable: false,
-                creditOutcome: null,
-              }
-            }),
-          replaySourceSyncJob: () => Effect.die("replaySourceSyncJob should not be called"),
-          getSourceSyncJob: () => Effect.die("getSourceSyncJob should not be called"),
-        },
-      })
-    )
+      const result = yield* Effect.promise(() =>
+        runWithLayer(
+          makeLayer({
+            sourceSyncService: {
+              startSourceSyncJob: ({ sourceId }) =>
+                Effect.sync(() => {
+                  startedSources.push(sourceId)
+                  return {
+                    sourceId,
+                    jobId: `job-${sourceId}`,
+                    status: "queued",
+                    message: null,
+                    resumable: false,
+                    creditOutcome: null,
+                  }
+                }),
+              replaySourceSyncJob: () => Effect.die("replaySourceSyncJob should not be called"),
+              getSourceSyncJob: () => Effect.die("getSourceSyncJob should not be called"),
+            },
+          })
+        )
+      )
 
-    expect([...startedSources].sort()).toEqual(["source-1", "source-2"])
-    expect(result.items.map((item) => item.processingJobId).sort()).toEqual([
-      "job-source-1",
-      "job-source-2",
-    ])
-  })
-
-  it("returns a completed zero-source run", async () => {
-    const result = await runWithLayer(
-      makeLayer({
-        listedSources: [],
-        sourceSyncService: {
-          startSourceSyncJob: () =>
-            Effect.die("startSourceSyncJob should not be called for zero sources"),
-          replaySourceSyncJob: () => Effect.die("replaySourceSyncJob should not be called"),
-          getSourceSyncJob: () => Effect.die("getSourceSyncJob should not be called"),
-        },
-      })
-    )
-
-    expect(result).toMatchObject({
-      status: "completed",
-      requestedSourceCount: 0,
-      message: "No sources to sync.",
-      items: [],
+      expect([...startedSources].sort()).toEqual(["source-1", "source-2"])
+      expect(result.items.map((item) => item.processingJobId).sort()).toEqual([
+        "job-source-1",
+        "job-source-2",
+      ])
     })
-  })
+  )
 
-  it("links an existing active source job returned by source sync service", async () => {
-    const result = await runWithLayer(
-      makeLayer({
+  it.effect("returns a completed zero-source run", () =>
+    Effect.gen(function* () {
+      const result = yield* Effect.promise(() =>
+        runWithLayer(
+          makeLayer({
+            listedSources: [],
+            sourceSyncService: {
+              startSourceSyncJob: () =>
+                Effect.die("startSourceSyncJob should not be called for zero sources"),
+              replaySourceSyncJob: () => Effect.die("replaySourceSyncJob should not be called"),
+              getSourceSyncJob: () => Effect.die("getSourceSyncJob should not be called"),
+            },
+          })
+        )
+      )
+
+      expect(result).toMatchObject({
+        status: "completed",
+        requestedSourceCount: 0,
+        message: "No sources to sync.",
+        items: [],
+      })
+    })
+  )
+
+  it.effect("links an existing active source job returned by source sync service", () =>
+    Effect.gen(function* () {
+      const result = yield* Effect.promise(() =>
+        runWithLayer(
+          makeLayer({
+            listedSources: [coinbaseSource],
+            sourceSyncService: {
+              startSourceSyncJob: ({ sourceId }) =>
+                Effect.succeed({
+                  sourceId,
+                  jobId: "existing-active-job",
+                  status: "running",
+                  message: null,
+                  resumable: false,
+                  creditOutcome: null,
+                }),
+              replaySourceSyncJob: () => Effect.die("replaySourceSyncJob should not be called"),
+              getSourceSyncJob: () => Effect.die("getSourceSyncJob should not be called"),
+            },
+          })
+        )
+      )
+
+      expect(result.items).toHaveLength(1)
+      expect(result.items[0]?.processingJobId).toBe("existing-active-job")
+    })
+  )
+
+  it.effect("records queue failure from child source job start as a failed run item", () =>
+    Effect.gen(function* () {
+      const result = yield* Effect.promise(() =>
+        runWithLayer(
+          makeLayer({
+            listedSources: [coinbaseSource],
+            sourceSyncService: {
+              startSourceSyncJob: () =>
+                Effect.fail(
+                  new SourceSyncQueueError({
+                    operation: "test.enqueue",
+                    cause: "queue unavailable",
+                  })
+                ),
+              replaySourceSyncJob: () => Effect.die("replaySourceSyncJob should not be called"),
+              getSourceSyncJob: () => Effect.die("getSourceSyncJob should not be called"),
+            },
+          })
+        )
+      )
+
+      expect(result.status).toBe("failed")
+      expect(result.failedSourceCount).toBe(1)
+      expect(result.items).toMatchObject([
+        {
+          processingJobId: null,
+          status: "failed",
+          message: "Failed to enqueue source sync job.",
+        },
+      ])
+    })
+  )
+
+  it.effect("gets a run with aggregate counters and item summaries", () =>
+    Effect.gen(function* () {
+      const completedRun = makeRun({
+        requestedSourceCount: 1,
+        status: "completed",
+        completedSourceCount: 1,
+      })
+      const completedItem = makeItem({
+        source: coinbaseSource,
+        jobId: "job-source-1",
+        status: "completed",
+      })
+
+      const layer = makeLayer({
         listedSources: [coinbaseSource],
         sourceSyncService: {
-          startSourceSyncJob: ({ sourceId }) =>
-            Effect.succeed({
-              sourceId,
-              jobId: "existing-active-job",
-              status: "running",
-              message: null,
-              resumable: false,
-              creditOutcome: null,
-            }),
+          startSourceSyncJob: () => Effect.die("startSourceSyncJob should not be called"),
           replaySourceSyncJob: () => Effect.die("replaySourceSyncJob should not be called"),
           getSourceSyncJob: () => Effect.die("getSourceSyncJob should not be called"),
         },
-      })
-    )
-
-    expect(result.items).toHaveLength(1)
-    expect(result.items[0]?.processingJobId).toBe("existing-active-job")
-  })
-
-  it("records queue failure from child source job start as a failed run item", async () => {
-    const result = await runWithLayer(
-      makeLayer({
-        listedSources: [coinbaseSource],
-        sourceSyncService: {
-          startSourceSyncJob: () =>
-            Effect.fail(
-              new SourceSyncQueueError({
-                operation: "test.enqueue",
-                cause: "queue unavailable",
-              })
-            ),
-          replaySourceSyncJob: () => Effect.die("replaySourceSyncJob should not be called"),
-          getSourceSyncJob: () => Effect.die("getSourceSyncJob should not be called"),
+        repositoryOverrides: {
+          getVisibleRun: () => Effect.succeed(Option.some(completedRun)),
+          refreshRunStatus: () => Effect.succeed(completedRun),
+          listRunItems: () => Effect.succeed([completedItem]),
         },
       })
-    )
 
-    expect(result.status).toBe("failed")
-    expect(result.failedSourceCount).toBe(1)
-    expect(result.items).toMatchObject([
-      {
-        processingJobId: null,
-        status: "failed",
-        message: "Failed to enqueue source sync job.",
-      },
-    ])
-  })
-
-  it("gets a run with aggregate counters and item summaries", async () => {
-    const completedRun = makeRun({
-      requestedSourceCount: 1,
-      status: "completed",
-      completedSourceCount: 1,
-    })
-    const completedItem = makeItem({
-      source: coinbaseSource,
-      jobId: "job-source-1",
-      status: "completed",
-    })
-
-    const layer = makeLayer({
-      listedSources: [coinbaseSource],
-      sourceSyncService: {
-        startSourceSyncJob: () => Effect.die("startSourceSyncJob should not be called"),
-        replaySourceSyncJob: () => Effect.die("replaySourceSyncJob should not be called"),
-        getSourceSyncJob: () => Effect.die("getSourceSyncJob should not be called"),
-      },
-      repositoryOverrides: {
-        getVisibleRun: () => Effect.succeed(Option.some(completedRun)),
-        refreshRunStatus: () => Effect.succeed(completedRun),
-        listRunItems: () => Effect.succeed([completedItem]),
-      },
-    })
-
-    const result: SourceSyncRunDetails = await Effect.runPromise(
-      Effect.flatMap(SourceSyncRunService, (service) =>
+      const result: SourceSyncRunDetails = yield* Effect.flatMap(SourceSyncRunService, (service) =>
         service.getSyncRun({ principalId: "principal-1", runId: "run-1" })
       ).pipe(Effect.provide(layer))
-    )
 
-    expect(result.status).toBe("completed")
-    expect(result.completedSourceCount).toBe(1)
-    expect(result.items).toEqual([completedItem])
-  })
+      expect(result.status).toBe("completed")
+      expect(result.completedSourceCount).toBe(1)
+      expect(result.items).toEqual([completedItem])
+    })
+  )
 })

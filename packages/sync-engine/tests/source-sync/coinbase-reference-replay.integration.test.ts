@@ -1,7 +1,8 @@
+import * as DateTime from "effect/DateTime"
 import { eq } from "drizzle-orm"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
-import { beforeEach, describe, expect, it } from "vitest"
+import { beforeEach, describe, expect, it } from "@effect/vitest"
 import { SourceSyncServiceLive, TransferReconciliationServiceLive } from "@my/sync-engine/layers"
 import { SourceSyncJobExecutorLive } from "../../src/layers/SourceSyncJobExecutorLive.ts"
 import { SourceProviderRegistryLive } from "../../src/layers/SourceProviderRegistryLive.ts"
@@ -61,7 +62,7 @@ const initialSyncRecords = [
   makeCoinbaseRecord({
     recordType: "coinbase_account",
     externalRecordId: "coinbase-account-1",
-    occurredAt: new Date("2025-01-01T00:00:00.000Z"),
+    occurredAt: DateTime.toDateUtc(DateTime.makeUnsafe("2025-01-01T00:00:00.000Z")),
     payload: {
       id: "coinbase-account-1",
       created_at: "2025-01-01T00:00:00.000Z",
@@ -70,7 +71,7 @@ const initialSyncRecords = [
   }),
   makeCoinbaseRecord({
     externalRecordId: "tx-tao-receive-1",
-    occurredAt: new Date("2025-01-02T12:00:00.000Z"),
+    occurredAt: DateTime.toDateUtc(DateTime.makeUnsafe("2025-01-02T12:00:00.000Z")),
     payload: {
       id: "tx-tao-receive-1",
       type: "receive",
@@ -283,8 +284,8 @@ describe("coinbase reference-data replay", () => {
     }).pipe(Effect.runPromise)
   )
 
-  it("keeps missing Coinbase asset bindings reviewable until explicitly approved", async () => {
-    await Effect.runPromise(
+  it.effect("keeps missing Coinbase asset bindings reviewable until explicitly approved", () =>
+    Effect.asVoid(
       Effect.gen(function* () {
         yield* runSync()
         const firstRun = yield* fetchReplayState()
@@ -329,5 +330,5 @@ describe("coinbase reference-data replay", () => {
         expect(secondRun.taoMapping?.canonicalAssetId).toBeNull()
       })
     )
-  })
+  )
 })

@@ -1,7 +1,8 @@
+import * as DateTime from "effect/DateTime"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import * as Option from "effect/Option"
-import { describe, expect, it } from "vitest"
+import { describe, expect, it } from "@effect/vitest"
 import { SourceSyncServiceLive } from "../../src/layers/SourceSyncServiceLive.ts"
 import {
   SourceRepository,
@@ -41,7 +42,7 @@ const makeActiveJob = ({
   id,
   mode = "sync",
   status = "pending",
-  updatedAt = new Date(),
+  updatedAt = DateTime.toDateUtc(DateTime.nowUnsafe()),
   queueName = null,
   queueJobId = null,
 }: {
@@ -172,304 +173,344 @@ const runStart = ({
   )
 
 describe("SourceSyncService queue orchestration", () => {
-  it("creates a fresh sync job and enqueues it once", async () => {
-    const enqueued: Array<SourceSyncQueuePayload> = []
-    const repositoryEvents: Array<string> = []
+  it.effect("creates a fresh sync job and enqueues it once", () =>
+    Effect.gen(function* () {
+      const enqueued: Array<SourceSyncQueuePayload> = []
+      const repositoryEvents: Array<string> = []
 
-    const result = await runStart({
-      mode: "sync",
-      layer: makeServiceLayer({ enqueued, repositoryEvents }),
-    })
-
-    expect(result).toEqual({
-      sourceId: source.id,
-      jobId: "job-sync",
-      status: "queued",
-      message: null,
-      resumable: false,
-      creditOutcome: null,
-    })
-    expect(repositoryEvents).toEqual(["create:sync"])
-    expect(enqueued).toHaveLength(1)
-    expect(enqueued[0]).toMatchObject({
-      jobId: "job-sync",
-      sourceId: source.id,
-      principalId: source.principalId,
-      mode: "sync",
-    })
-  })
-
-  it("creates a fresh replay job and enqueues replay payload", async () => {
-    const enqueued: Array<SourceSyncQueuePayload> = []
-    const repositoryEvents: Array<string> = []
-
-    const result = await runStart({
-      mode: "replay",
-      layer: makeServiceLayer({ enqueued, repositoryEvents }),
-    })
-
-    expect(result.status).toBe("queued")
-    expect(repositoryEvents).toEqual(["create:replay"])
-    expect(enqueued).toHaveLength(1)
-    expect(enqueued[0]).toMatchObject({
-      jobId: "job-replay",
-      mode: "replay",
-    })
-  })
-
-  it("enqueues a reused pending job when queue metadata is missing", async () => {
-    const enqueued: Array<SourceSyncQueuePayload> = []
-    const repositoryEvents: Array<string> = []
-
-    const result = await runStart({
-      mode: "sync",
-      layer: makeServiceLayer({
-        createResult: {
-          _tag: "ReusedSourceSyncJob",
-          id: "job-reused-pending",
-          sourceId: source.id,
-          principalId: source.principalId,
+      const result = yield* Effect.promise(() =>
+        runStart({
           mode: "sync",
-          status: "pending",
-          queueName: null,
-          queueJobId: null,
-        },
-        enqueued,
-        repositoryEvents,
-      }),
-    })
+          layer: makeServiceLayer({ enqueued, repositoryEvents }),
+        })
+      )
 
-    expect(result).toEqual({
-      sourceId: source.id,
-      jobId: "job-reused-pending",
-      status: "queued",
-      message: null,
-      resumable: false,
-      creditOutcome: null,
+      expect(result).toEqual({
+        sourceId: source.id,
+        jobId: "job-sync",
+        status: "queued",
+        message: null,
+        resumable: false,
+        creditOutcome: null,
+      })
+      expect(repositoryEvents).toEqual(["create:sync"])
+      expect(enqueued).toHaveLength(1)
+      expect(enqueued[0]).toMatchObject({
+        jobId: "job-sync",
+        sourceId: source.id,
+        principalId: source.principalId,
+        mode: "sync",
+      })
     })
-    expect(repositoryEvents).toEqual(["create:sync"])
-    expect(enqueued).toHaveLength(1)
-    expect(enqueued[0]).toMatchObject({
-      jobId: "job-reused-pending",
-      sourceId: source.id,
-      principalId: source.principalId,
-      mode: "sync",
-    })
-  })
+  )
 
-  it("leaves a reused replay unqueued until its prerequisites complete", async () => {
-    const enqueued: Array<SourceSyncQueuePayload> = []
-    const repositoryEvents: Array<string> = []
+  it.effect("creates a fresh replay job and enqueues replay payload", () =>
+    Effect.gen(function* () {
+      const enqueued: Array<SourceSyncQueuePayload> = []
+      const repositoryEvents: Array<string> = []
 
-    const result = await runStart({
-      mode: "replay",
-      layer: makeServiceLayer({
-        createResult: {
-          _tag: "ReusedSourceSyncJob",
-          id: "job-dependent-replay",
-          sourceId: source.id,
-          principalId: source.principalId,
+      const result = yield* Effect.promise(() =>
+        runStart({
           mode: "replay",
-          status: "pending",
-          queueName: null,
-          queueJobId: null,
-        },
-        enqueued,
-        repositoryEvents,
-        dispatchBlocked: true,
-      }),
+          layer: makeServiceLayer({ enqueued, repositoryEvents }),
+        })
+      )
+
+      expect(result.status).toBe("queued")
+      expect(repositoryEvents).toEqual(["create:replay"])
+      expect(enqueued).toHaveLength(1)
+      expect(enqueued[0]).toMatchObject({
+        jobId: "job-replay",
+        mode: "replay",
+      })
     })
+  )
 
-    expect(result).toMatchObject({ jobId: "job-dependent-replay", status: "queued" })
-    expect(enqueued).toEqual([])
-  })
+  it.effect("enqueues a reused pending job when queue metadata is missing", () =>
+    Effect.gen(function* () {
+      const enqueued: Array<SourceSyncQueuePayload> = []
+      const repositoryEvents: Array<string> = []
 
-  it("does not enqueue a reused processing job", async () => {
-    const enqueued: Array<SourceSyncQueuePayload> = []
-    const repositoryEvents: Array<string> = []
-
-    const result = await runStart({
-      mode: "sync",
-      layer: makeServiceLayer({
-        createResult: {
-          _tag: "ReusedSourceSyncJob",
-          id: "job-reused-processing",
-          sourceId: source.id,
-          principalId: source.principalId,
+      const result = yield* Effect.promise(() =>
+        runStart({
           mode: "sync",
-          status: "processing",
-          queueName: "source-sync",
-          queueJobId: "job-reused-processing",
-        },
-        enqueued,
-        repositoryEvents,
-      }),
-    })
-
-    expect(result).toEqual({
-      sourceId: source.id,
-      jobId: "job-reused-processing",
-      status: "running",
-      message: null,
-      resumable: false,
-      creditOutcome: null,
-    })
-    expect(repositoryEvents).toEqual(["create:sync"])
-    expect(enqueued).toEqual([])
-  })
-
-  it("returns an active pending job without enqueueing when queue metadata exists", async () => {
-    const enqueued: Array<SourceSyncQueuePayload> = []
-    const repositoryEvents: Array<string> = []
-
-    const result = await runStart({
-      mode: "sync",
-      layer: makeServiceLayer({
-        activeJobs: [
-          makeActiveJob({
-            id: "job-active",
-            queueName: "source-sync",
-            queueJobId: "job-active",
+          layer: makeServiceLayer({
+            createResult: {
+              _tag: "ReusedSourceSyncJob",
+              id: "job-reused-pending",
+              sourceId: source.id,
+              principalId: source.principalId,
+              mode: "sync",
+              status: "pending",
+              queueName: null,
+              queueJobId: null,
+            },
+            enqueued,
+            repositoryEvents,
           }),
-        ],
-        enqueued,
-        repositoryEvents,
-      }),
+        })
+      )
+
+      expect(result).toEqual({
+        sourceId: source.id,
+        jobId: "job-reused-pending",
+        status: "queued",
+        message: null,
+        resumable: false,
+        creditOutcome: null,
+      })
+      expect(repositoryEvents).toEqual(["create:sync"])
+      expect(enqueued).toHaveLength(1)
+      expect(enqueued[0]).toMatchObject({
+        jobId: "job-reused-pending",
+        sourceId: source.id,
+        principalId: source.principalId,
+        mode: "sync",
+      })
     })
+  )
 
-    expect(result).toEqual({
-      sourceId: source.id,
-      jobId: "job-active",
-      status: "queued",
-      message: null,
-      resumable: false,
-      creditOutcome: null,
+  it.effect("leaves a reused replay unqueued until its prerequisites complete", () =>
+    Effect.gen(function* () {
+      const enqueued: Array<SourceSyncQueuePayload> = []
+      const repositoryEvents: Array<string> = []
+
+      const result = yield* Effect.promise(() =>
+        runStart({
+          mode: "replay",
+          layer: makeServiceLayer({
+            createResult: {
+              _tag: "ReusedSourceSyncJob",
+              id: "job-dependent-replay",
+              sourceId: source.id,
+              principalId: source.principalId,
+              mode: "replay",
+              status: "pending",
+              queueName: null,
+              queueJobId: null,
+            },
+            enqueued,
+            repositoryEvents,
+            dispatchBlocked: true,
+          }),
+        })
+      )
+
+      expect(result).toMatchObject({ jobId: "job-dependent-replay", status: "queued" })
+      expect(enqueued).toEqual([])
     })
-    expect(repositoryEvents).toEqual([])
-    expect(enqueued).toEqual([])
-  })
+  )
 
-  it("re-enqueues an active pending job when queue metadata is missing", async () => {
-    const enqueued: Array<SourceSyncQueuePayload> = []
-    const repositoryEvents: Array<string> = []
+  it.effect("does not enqueue a reused processing job", () =>
+    Effect.gen(function* () {
+      const enqueued: Array<SourceSyncQueuePayload> = []
+      const repositoryEvents: Array<string> = []
 
-    const result = await runStart({
-      mode: "sync",
-      layer: makeServiceLayer({
-        activeJobs: [makeActiveJob({ id: "job-pending-unqueued" })],
-        enqueued,
-        repositoryEvents,
-      }),
-    })
-
-    expect(result.status).toBe("queued")
-    expect(repositoryEvents).toEqual([])
-    expect(enqueued).toHaveLength(1)
-    expect(enqueued[0]).toMatchObject({
-      jobId: "job-pending-unqueued",
-      mode: "sync",
-    })
-  })
-
-  it("returns an active processing job without enqueueing", async () => {
-    const enqueued: Array<SourceSyncQueuePayload> = []
-    const repositoryEvents: Array<string> = []
-
-    const result = await runStart({
-      mode: "sync",
-      layer: makeServiceLayer({
-        activeJobs: [makeActiveJob({ id: "job-processing", status: "processing" })],
-        enqueued,
-        repositoryEvents,
-      }),
-    })
-
-    expect(result).toEqual({
-      sourceId: source.id,
-      jobId: "job-processing",
-      status: "running",
-      message: null,
-      resumable: false,
-      creditOutcome: null,
-    })
-    expect(repositoryEvents).toEqual([])
-    expect(enqueued).toEqual([])
-  })
-
-  it("preserves a replay request while a sync job is processing", async () => {
-    const enqueued: Array<SourceSyncQueuePayload> = []
-    const repositoryEvents: Array<string> = []
-    const id = "job-processing"
-
-    const result = await runStart({
-      mode: "replay",
-      layer: makeServiceLayer({
-        activeJobs: [makeActiveJob({ id, status: "processing" })],
-        createResult: {
-          _tag: "ReusedSourceSyncJob",
-          id,
-          sourceId: source.id,
-          principalId: source.principalId,
+      const result = yield* Effect.promise(() =>
+        runStart({
           mode: "sync",
-          status: "processing",
-          queueName: "source-sync",
-          queueJobId: id,
-        },
-        enqueued,
-        repositoryEvents,
-      }),
+          layer: makeServiceLayer({
+            createResult: {
+              _tag: "ReusedSourceSyncJob",
+              id: "job-reused-processing",
+              sourceId: source.id,
+              principalId: source.principalId,
+              mode: "sync",
+              status: "processing",
+              queueName: "source-sync",
+              queueJobId: "job-reused-processing",
+            },
+            enqueued,
+            repositoryEvents,
+          }),
+        })
+      )
+
+      expect(result).toEqual({
+        sourceId: source.id,
+        jobId: "job-reused-processing",
+        status: "running",
+        message: null,
+        resumable: false,
+        creditOutcome: null,
+      })
+      expect(repositoryEvents).toEqual(["create:sync"])
+      expect(enqueued).toEqual([])
     })
+  )
 
-    expect(result).toMatchObject({ jobId: "job-processing", status: "running" })
-    expect(repositoryEvents).toEqual(["create:replay"])
-    expect(enqueued).toEqual([])
-  })
+  it.effect("returns an active pending job without enqueueing when queue metadata exists", () =>
+    Effect.gen(function* () {
+      const enqueued: Array<SourceSyncQueuePayload> = []
+      const repositoryEvents: Array<string> = []
 
-  it("uses the replacement job that owns the replay follow-up", async () => {
-    const enqueued: Array<SourceSyncQueuePayload> = []
-    const repositoryEvents: Array<string> = []
-
-    const result = await runStart({
-      mode: "replay",
-      layer: makeServiceLayer({
-        activeJobs: [makeActiveJob({ id: "job-finished", status: "processing" })],
-        createResult: {
-          _tag: "ReusedSourceSyncJob",
-          id: "job-replacement",
-          sourceId: source.id,
-          principalId: source.principalId,
+      const result = yield* Effect.promise(() =>
+        runStart({
           mode: "sync",
-          status: "pending",
-          queueName: null,
-          queueJobId: null,
-        },
-        enqueued,
-        repositoryEvents,
-      }),
-    })
+          layer: makeServiceLayer({
+            activeJobs: [
+              makeActiveJob({
+                id: "job-active",
+                queueName: "source-sync",
+                queueJobId: "job-active",
+              }),
+            ],
+            enqueued,
+            repositoryEvents,
+          }),
+        })
+      )
 
-    expect(result).toEqual({
-      sourceId: source.id,
-      jobId: "job-replacement",
-      status: "queued",
-      message: null,
-      resumable: false,
-      creditOutcome: null,
+      expect(result).toEqual({
+        sourceId: source.id,
+        jobId: "job-active",
+        status: "queued",
+        message: null,
+        resumable: false,
+        creditOutcome: null,
+      })
+      expect(repositoryEvents).toEqual([])
+      expect(enqueued).toEqual([])
     })
-    expect(repositoryEvents).toEqual(["create:replay"])
-    expect(enqueued).toHaveLength(1)
-    expect(enqueued[0]).toMatchObject({
-      jobId: "job-replacement",
-      mode: "sync",
+  )
+
+  it.effect("re-enqueues an active pending job when queue metadata is missing", () =>
+    Effect.gen(function* () {
+      const enqueued: Array<SourceSyncQueuePayload> = []
+      const repositoryEvents: Array<string> = []
+
+      const result = yield* Effect.promise(() =>
+        runStart({
+          mode: "sync",
+          layer: makeServiceLayer({
+            activeJobs: [makeActiveJob({ id: "job-pending-unqueued" })],
+            enqueued,
+            repositoryEvents,
+          }),
+        })
+      )
+
+      expect(result.status).toBe("queued")
+      expect(repositoryEvents).toEqual([])
+      expect(enqueued).toHaveLength(1)
+      expect(enqueued[0]).toMatchObject({
+        jobId: "job-pending-unqueued",
+        mode: "sync",
+      })
     })
-  })
+  )
 
-  it("reports enqueue failure after creating the pending DB job", async () => {
-    const enqueued: Array<SourceSyncQueuePayload> = []
-    const repositoryEvents: Array<string> = []
+  it.effect("returns an active processing job without enqueueing", () =>
+    Effect.gen(function* () {
+      const enqueued: Array<SourceSyncQueuePayload> = []
+      const repositoryEvents: Array<string> = []
 
-    const result = await Effect.runPromise(
-      Effect.gen(function* () {
+      const result = yield* Effect.promise(() =>
+        runStart({
+          mode: "sync",
+          layer: makeServiceLayer({
+            activeJobs: [makeActiveJob({ id: "job-processing", status: "processing" })],
+            enqueued,
+            repositoryEvents,
+          }),
+        })
+      )
+
+      expect(result).toEqual({
+        sourceId: source.id,
+        jobId: "job-processing",
+        status: "running",
+        message: null,
+        resumable: false,
+        creditOutcome: null,
+      })
+      expect(repositoryEvents).toEqual([])
+      expect(enqueued).toEqual([])
+    })
+  )
+
+  it.effect("preserves a replay request while a sync job is processing", () =>
+    Effect.gen(function* () {
+      const enqueued: Array<SourceSyncQueuePayload> = []
+      const repositoryEvents: Array<string> = []
+      const id = "job-processing"
+
+      const result = yield* Effect.promise(() =>
+        runStart({
+          mode: "replay",
+          layer: makeServiceLayer({
+            activeJobs: [makeActiveJob({ id, status: "processing" })],
+            createResult: {
+              _tag: "ReusedSourceSyncJob",
+              id,
+              sourceId: source.id,
+              principalId: source.principalId,
+              mode: "sync",
+              status: "processing",
+              queueName: "source-sync",
+              queueJobId: id,
+            },
+            enqueued,
+            repositoryEvents,
+          }),
+        })
+      )
+
+      expect(result).toMatchObject({ jobId: "job-processing", status: "running" })
+      expect(repositoryEvents).toEqual(["create:replay"])
+      expect(enqueued).toEqual([])
+    })
+  )
+
+  it.effect("uses the replacement job that owns the replay follow-up", () =>
+    Effect.gen(function* () {
+      const enqueued: Array<SourceSyncQueuePayload> = []
+      const repositoryEvents: Array<string> = []
+
+      const result = yield* Effect.promise(() =>
+        runStart({
+          mode: "replay",
+          layer: makeServiceLayer({
+            activeJobs: [makeActiveJob({ id: "job-finished", status: "processing" })],
+            createResult: {
+              _tag: "ReusedSourceSyncJob",
+              id: "job-replacement",
+              sourceId: source.id,
+              principalId: source.principalId,
+              mode: "sync",
+              status: "pending",
+              queueName: null,
+              queueJobId: null,
+            },
+            enqueued,
+            repositoryEvents,
+          }),
+        })
+      )
+
+      expect(result).toEqual({
+        sourceId: source.id,
+        jobId: "job-replacement",
+        status: "queued",
+        message: null,
+        resumable: false,
+        creditOutcome: null,
+      })
+      expect(repositoryEvents).toEqual(["create:replay"])
+      expect(enqueued).toHaveLength(1)
+      expect(enqueued[0]).toMatchObject({
+        jobId: "job-replacement",
+        mode: "sync",
+      })
+    })
+  )
+
+  it.effect("reports enqueue failure after creating the pending DB job", () =>
+    Effect.gen(function* () {
+      const enqueued: Array<SourceSyncQueuePayload> = []
+      const repositoryEvents: Array<string> = []
+
+      const result = yield* Effect.gen(function* () {
         const service = yield* SourceSyncService
         return yield* service
           .startSourceSyncJob({ principalId: source.principalId, sourceId: source.id })
@@ -483,48 +524,55 @@ describe("SourceSyncService queue orchestration", () => {
           })
         )
       )
-    )
 
-    expect(result._tag).toBe("Failure")
-    if (result._tag === "Failure") {
-      expect(result.failure._tag).toBe("SourceSyncQueueError")
-    }
-    expect(repositoryEvents).toEqual(["create:sync"])
-    expect(enqueued).toEqual([])
-  })
+      expect(result._tag).toBe("Failure")
+      if (result._tag === "Failure") {
+        expect(result.failure._tag).toBe("SourceSyncQueueError")
+      }
+      expect(repositoryEvents).toEqual(["create:sync"])
+      expect(enqueued).toEqual([])
+    })
+  )
 
-  it("recovers a stale processing job before creating and enqueueing a new job", async () => {
-    const enqueued: Array<SourceSyncQueuePayload> = []
-    const repositoryEvents: Array<string> = []
+  it.effect("recovers a stale processing job before creating and enqueueing a new job", () =>
+    Effect.gen(function* () {
+      const enqueued: Array<SourceSyncQueuePayload> = []
+      const repositoryEvents: Array<string> = []
+      const staleUpdatedAt = DateTime.toDateUtc(
+        DateTime.subtractDuration(yield* DateTime.now, "31 seconds")
+      )
 
-    const result = await runStart({
-      mode: "sync",
-      layer: makeServiceLayer({
-        activeJobs: [
-          makeActiveJob({
-            id: "job-stale",
-            status: "processing",
-            updatedAt: new Date(Date.now() - 31_000),
+      const result = yield* Effect.promise(() =>
+        runStart({
+          mode: "sync",
+          layer: makeServiceLayer({
+            activeJobs: [
+              makeActiveJob({
+                id: "job-stale",
+                status: "processing",
+                updatedAt: staleUpdatedAt,
+              }),
+            ],
+            enqueued,
+            repositoryEvents,
           }),
-        ],
-        enqueued,
-        repositoryEvents,
-      }),
-    })
+        })
+      )
 
-    expect(result).toEqual({
-      sourceId: source.id,
-      jobId: "job-sync",
-      status: "queued",
-      message: null,
-      resumable: false,
-      creditOutcome: null,
+      expect(result).toEqual({
+        sourceId: source.id,
+        jobId: "job-sync",
+        status: "queued",
+        message: null,
+        resumable: false,
+        creditOutcome: null,
+      })
+      expect(repositoryEvents).toEqual(["recover:job-stale", "create:sync"])
+      expect(enqueued).toHaveLength(1)
+      expect(enqueued[0]).toMatchObject({
+        jobId: "job-sync",
+        mode: "sync",
+      })
     })
-    expect(repositoryEvents).toEqual(["recover:job-stale", "create:sync"])
-    expect(enqueued).toHaveLength(1)
-    expect(enqueued[0]).toMatchObject({
-      jobId: "job-sync",
-      mode: "sync",
-    })
-  })
+  )
 })

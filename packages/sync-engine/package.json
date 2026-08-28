@@ -99,7 +99,9 @@
     "helius-sdk": "2.2.2"
   },
   "devDependencies": {
+    "@effect/platform-node": "4.0.0-rc.109",
     "@effect/sql-pg": "4.0.0-rc.109",
+    "@effect/vitest": "4.0.0-rc.109",
     "@my/typescript-config": "workspace:*",
     "@types/node": "26.0.1",
     "drizzle-orm": "1.0.0-rc.5-169397b",

@@ -1,5 +1,6 @@
 import { TextAttributes, type MouseEvent } from "@opentui/core"
 import { useKeyboard, useRenderer, useTerminalDimensions } from "@opentui/solid"
+import { Effect } from "effect"
 import * as DateTime from "effect/DateTime"
 import { createSignal, For, Match, Show, Switch } from "solid-js"
 import type { ProtocolCandidateReview, ProtocolCandidateReviewDetail } from "taxmaxi"
@@ -195,44 +196,53 @@ export function ProtocolCandidateDetailScreen(props: {
   const [state, setState] = createSignal<DetailState>({ _tag: "loading" })
   const [selectedObservation, setSelectedObservation] = createSignal(0)
   const viewport = createListViewport()
-  const observationList = createPagedList<ProtocolCandidateObservation>(async (cursor) => {
-    const result = await fetchProtocolCandidateDetail(props.session, props.candidate.id, {
-      observationCursor: cursor,
-    })
-    if (result._tag === "unauthorized") {
-      props.onSessionExpired()
-      return { _tag: "error", message: result.message }
-    }
-    if (result._tag === "error") {
-      if (cursor === null) {
-        setState(result)
-      }
-      return result
-    }
+  const observationList = createPagedList<ProtocolCandidateObservation>((cursor) =>
+    Effect.runPromise(
+      Effect.gen(function* () {
+        const result = yield* Effect.promise(() =>
+          fetchProtocolCandidateDetail(props.session, props.candidate.id, {
+            observationCursor: cursor,
+          })
+        )
+        if (result._tag === "unauthorized") {
+          props.onSessionExpired()
+          return { _tag: "error", message: result.message } as const
+        }
+        if (result._tag === "error") {
+          if (cursor === null) {
+            setState(result)
+          }
+          return result
+        }
 
-    setState({
-      _tag: "ok",
-      data: {
-        candidate: result.data.candidate.candidate,
-        transactionTypes: result.data.transactionTypes,
-      },
-    })
-    return {
-      _tag: "ok",
-      page: {
-        rows: result.data.candidate.observations,
-        nextCursor: result.data.candidate.observationsPage.nextCursor,
-        hasMore: result.data.candidate.observationsPage.hasMore,
-      },
-    }
-  })
+        setState({
+          _tag: "ok",
+          data: {
+            candidate: result.data.candidate.candidate,
+            transactionTypes: result.data.transactionTypes,
+          },
+        })
+        return {
+          _tag: "ok",
+          page: {
+            rows: result.data.candidate.observations,
+            nextCursor: result.data.candidate.observationsPage.nextCursor,
+            hasMore: result.data.candidate.observationsPage.hasMore,
+          },
+        } as const
+      })
+    )
+  )
 
-  const refresh = async () => {
-    setState({ _tag: "loading" })
-    setSelectedObservation(0)
-    viewport.reset()
-    await observationList.reload()
-  }
+  const refresh = () =>
+    Effect.runPromise(
+      Effect.gen(function* () {
+        setState({ _tag: "loading" })
+        setSelectedObservation(0)
+        viewport.reset()
+        yield* Effect.promise(observationList.reload)
+      })
+    )
 
   const data = (): DetailData | undefined => {
     const current = state()

@@ -1,96 +1,53 @@
-import { ConfigProvider, Effect, Schema } from "effect"
-import { createServer } from "node:http"
-import { describe, expect, it } from "vitest"
+import { NodeHttpClient } from "@effect/platform-node"
+import { describe, expect, it } from "@effect/vitest"
+import { ConfigProvider, Effect, Random, Result, Schema } from "effect"
+import { HttpClient } from "effect/unstable/http"
 import {
   WorkerHealthServerError,
   WorkerHealthServerLive,
 } from "../src/layers/WorkerHealthServerLive.ts"
 
-const AddressInUseCause = Schema.Struct({
-  code: Schema.Literal("EADDRINUSE"),
-})
+const isWorkerHealthServerError = Schema.is(WorkerHealthServerError)
 
-const isAddressInUseError = Schema.is(AddressInUseCause)
+const assertHealthServerResponds: (
+  remainingRetries: number
+) => Effect.Effect<void, unknown, HttpClient.HttpClient> = Effect.fnUntraced(
+  function* (remainingRetries) {
+    const port = yield* Random.nextIntBetween(20_000, 60_000)
+    const outcome = yield* Effect.scoped(
+      Effect.gen(function* () {
+        const response = yield* HttpClient.get(`http://127.0.0.1:${port}/health`)
+        const body = yield* response.text
 
-class WorkerHealthTestPromiseRejectionError extends Schema.TaggedError<WorkerHealthTestPromiseRejectionError>()(
-  "WorkerHealthTestPromiseRejectionError",
-  {
-    cause: Schema.Unknown,
-  }
-) {}
-
-const toPromiseRejectionError = (cause: unknown): WorkerHealthTestPromiseRejectionError =>
-  new WorkerHealthTestPromiseRejectionError({ cause })
-
-const getFreePort = () =>
-  new Promise<number>((resolve, reject) => {
-    const server = createServer()
-
-    server.once("error", reject)
-    server.listen(0, "127.0.0.1", () => {
-      const address = server.address()
-
-      if (address === null || typeof address === "string") {
-        server.close(() => reject(new Error("Failed to allocate a TCP port")))
-        return
-      }
-
-      const { port } = address
-      server.close((error) => {
-        if (error === undefined) {
-          resolve(port)
-          return
-        }
-
-        reject(error)
-      })
-    })
-  })
-
-describe("WorkerHealthServerLive", () => {
-  const assertHealthServerResponds = async (remainingRetries: number): Promise<void> => {
-    const port = await getFreePort()
-
-    try {
-      await Effect.runPromise(
-        Effect.scoped(
-          Effect.gen(function* () {
-            const response = yield* Effect.tryPromise({
-              try: () => fetch(`http://127.0.0.1:${port}/health`),
-              catch: toPromiseRejectionError,
-            })
-            const body = yield* Effect.tryPromise({
-              try: () => response.text(),
-              catch: toPromiseRejectionError,
-            })
-
-            expect(response.status).toBe(200)
-            expect(body).toBe("ok")
-          }).pipe(
-            Effect.provide(WorkerHealthServerLive),
-            Effect.provideService(
-              ConfigProvider.ConfigProvider,
-              ConfigProvider.fromEnvRecord({ WORKER_HEALTH_PORT: String(port) })
-            )
-          )
+        expect(response.status).toBe(200)
+        expect(body).toBe("ok")
+      }).pipe(
+        Effect.provide(WorkerHealthServerLive),
+        Effect.provideService(
+          ConfigProvider.ConfigProvider,
+          ConfigProvider.fromEnvRecord({ WORKER_HEALTH_PORT: String(port) })
         )
       )
+    ).pipe(Effect.result)
+
+    if (Result.isSuccess(outcome)) {
       return
-    } catch (cause) {
-      if (
-        remainingRetries > 0 &&
-        cause instanceof WorkerHealthServerError &&
-        isAddressInUseError(cause.cause)
-      ) {
-        await assertHealthServerResponds(remainingRetries - 1)
-        return
-      }
-
-      throw cause
     }
-  }
 
-  it("serves GET /health with 200 ok", async () => {
-    await assertHealthServerResponds(1)
-  })
+    if (
+      remainingRetries > 0 &&
+      isWorkerHealthServerError(outcome.failure) &&
+      Schema.is(Schema.Struct({ code: Schema.Literal("EADDRINUSE") }))(outcome.failure.cause)
+    ) {
+      return yield* assertHealthServerResponds(remainingRetries - 1)
+    }
+
+    return yield* Effect.fail(outcome.failure)
+  }
+)
+
+describe("WorkerHealthServerLive", () => {
+  it.effect("serves GET /health with 200 ok", () =>
+    assertHealthServerResponds(1).pipe(Effect.provide(NodeHttpClient.layerNodeHttp))
+  )
 })

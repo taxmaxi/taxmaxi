@@ -1,3 +1,4 @@
+import { nextTestUuid } from "./support/TestUuid.ts"
 import { HttpApiClient } from "effect/unstable/httpapi"
 import { Cookies, Headers, HttpClient, HttpClientRequest, HttpRouter } from "effect/unstable/http"
 import { NodeHttpServer } from "@effect/platform-node"
@@ -61,7 +62,7 @@ const context = makeIntegrationTestDatabaseContext({
 })
 const TestPgClientLive = context.TestPgClientLive
 
-const queuedAt = new Date("2026-01-01T00:00:00.000Z")
+const queuedAt = DateTime.toDateUtc(DateTime.makeUnsafe("2026-01-01T00:00:00.000Z"))
 const queueEvents: Array<SourceSyncQueuePayload> = []
 const settlementEvents: Array<string> = []
 const validX402PaymentHeader = "valid-test-x402-payment"
@@ -450,7 +451,7 @@ const seedCoinbaseSource = ({
         providerAccountId: `${sourceId}-provider-account`,
         accessToken: "test-access-token",
         refreshToken: "test-refresh-token",
-        expiresAt: new Date(Date.now() + 60 * 60 * 1000),
+        expiresAt: DateTime.toDateUtc(DateTime.addDuration(yield* DateTime.now, "1 hour")),
         scopes: "wallet:accounts:read wallet:transactions:read",
       })
       .returning({ id: schema.cexAccount.id })
@@ -543,7 +544,7 @@ const seedSourceReportRows = ({
         sourceId,
         principalId,
         externalId: "report-buy-1",
-        timestamp: new Date("2025-01-10T12:00:00.000Z"),
+        timestamp: DateTime.toDateUtc(DateTime.makeUnsafe("2025-01-10T12:00:00.000Z")),
         transactionType: "buy_fiat",
         providerTransactionType: "buy",
         providerStatus: "completed",
@@ -554,7 +555,7 @@ const seedSourceReportRows = ({
         sourceId,
         principalId,
         externalId: "report-sell-1",
-        timestamp: new Date("2025-03-10T12:00:00.000Z"),
+        timestamp: DateTime.toDateUtc(DateTime.makeUnsafe("2025-03-10T12:00:00.000Z")),
         transactionType: "sell_fiat",
         providerTransactionType: "sell",
         providerStatus: "completed",
@@ -568,7 +569,7 @@ const seedSourceReportRows = ({
         sourceId,
         principalId,
         externalId: "report-buy-1:btc",
-        timestamp: new Date("2025-01-10T12:00:00.000Z"),
+        timestamp: DateTime.toDateUtc(DateTime.makeUnsafe("2025-01-10T12:00:00.000Z")),
         assetId: TEST_BTC_ASSET_ID,
         amount: "1",
         kind: "acquisition",
@@ -583,7 +584,7 @@ const seedSourceReportRows = ({
         sourceId,
         principalId,
         externalId: "report-sell-1:btc",
-        timestamp: new Date("2025-03-10T12:00:00.000Z"),
+        timestamp: DateTime.toDateUtc(DateTime.makeUnsafe("2025-03-10T12:00:00.000Z")),
         assetId: TEST_BTC_ASSET_ID,
         amount: "0.4",
         kind: "disposal",
@@ -601,7 +602,7 @@ const seedSourceReportRows = ({
         sourceId,
         principalId,
         assetId: TEST_BTC_ASSET_ID,
-        acquiredAt: new Date("2023-01-10T12:00:00.000Z"),
+        acquiredAt: DateTime.toDateUtc(DateTime.makeUnsafe("2023-01-10T12:00:00.000Z")),
         originalAmount: "0.2",
         remainingAmount: "0",
         costBasisPerToken: "5000",
@@ -614,7 +615,7 @@ const seedSourceReportRows = ({
         sourceId,
         principalId,
         assetId: TEST_BTC_ASSET_ID,
-        acquiredAt: new Date("2025-01-10T12:00:00.000Z"),
+        acquiredAt: DateTime.toDateUtc(DateTime.makeUnsafe("2025-01-10T12:00:00.000Z")),
         originalAmount: "0.8",
         remainingAmount: "0.6",
         costBasisPerToken: "15000",
@@ -660,7 +661,7 @@ const seedSourceReportTaxTreatmentRows = ({
         sourceId,
         principalId,
         externalId: "report-fee-1",
-        timestamp: new Date("2025-04-10T12:00:00.000Z"),
+        timestamp: DateTime.toDateUtc(DateTime.makeUnsafe("2025-04-10T12:00:00.000Z")),
         transactionType: "gas_fee",
         providerTransactionType: "fee",
         providerStatus: "completed",
@@ -671,7 +672,7 @@ const seedSourceReportTaxTreatmentRows = ({
         sourceId,
         principalId,
         externalId: "report-transfer-1",
-        timestamp: new Date("2025-04-11T12:00:00.000Z"),
+        timestamp: DateTime.toDateUtc(DateTime.makeUnsafe("2025-04-11T12:00:00.000Z")),
         transactionType: "sell_fiat",
         providerTransactionType: "send",
         providerStatus: "completed",
@@ -682,7 +683,7 @@ const seedSourceReportTaxTreatmentRows = ({
         sourceId,
         principalId,
         externalId: "report-transfer-2",
-        timestamp: new Date("2025-04-12T12:00:00.000Z"),
+        timestamp: DateTime.toDateUtc(DateTime.makeUnsafe("2025-04-12T12:00:00.000Z")),
         transactionType: "buy_fiat",
         providerTransactionType: "receive",
         providerStatus: "completed",
@@ -696,7 +697,7 @@ const seedSourceReportTaxTreatmentRows = ({
         sourceId,
         principalId,
         externalId: "report-fee-1:fee",
-        timestamp: new Date("2025-04-10T12:00:00.000Z"),
+        timestamp: DateTime.toDateUtc(DateTime.makeUnsafe("2025-04-10T12:00:00.000Z")),
         assetId: TEST_BTC_ASSET_ID,
         amount: "0.01",
         kind: "fee",
@@ -711,7 +712,7 @@ const seedSourceReportTaxTreatmentRows = ({
         sourceId,
         principalId,
         externalId: "report-transfer-1:internal_transfer_out",
-        timestamp: new Date("2025-04-11T12:00:00.000Z"),
+        timestamp: DateTime.toDateUtc(DateTime.makeUnsafe("2025-04-11T12:00:00.000Z")),
         assetId: TEST_BTC_ASSET_ID,
         amount: "0.1",
         kind: "disposal",
@@ -726,7 +727,7 @@ const seedSourceReportTaxTreatmentRows = ({
         sourceId,
         principalId,
         externalId: "report-transfer-2:internal_transfer_in",
-        timestamp: new Date("2025-04-12T12:00:00.000Z"),
+        timestamp: DateTime.toDateUtc(DateTime.makeUnsafe("2025-04-12T12:00:00.000Z")),
         assetId: TEST_BTC_ASSET_ID,
         amount: "0.1",
         kind: "acquisition",
@@ -743,7 +744,7 @@ const seedSourceReportTaxTreatmentRows = ({
       sourceId,
       principalId,
       assetId: TEST_BTC_ASSET_ID,
-      acquiredAt: new Date("2025-04-01T12:00:00.000Z"),
+      acquiredAt: DateTime.toDateUtc(DateTime.makeUnsafe("2025-04-01T12:00:00.000Z")),
       originalAmount: "0.1",
       remainingAmount: "0",
       costBasisPerToken: "5000",
@@ -765,11 +766,15 @@ const seedSourceReportTaxTreatmentRows = ({
 await Effect.runPromise(context.recreateTestDatabase())
 
 describe("SourcesApiLive", () => {
-  beforeEach(async () => {
-    queueEvents.length = 0
-    settlementEvents.length = 0
-    await Effect.runPromise(context.recreateTestDatabase())
-  })
+  beforeEach(() =>
+    Effect.runPromise(
+      Effect.gen(function* () {
+        queueEvents.length = 0
+        settlementEvents.length = 0
+        yield* context.recreateTestDatabase()
+      })
+    )
+  )
 
   it.effect("returns source-generic report read projections for a populated source", () =>
     Effect.gen(function* () {
@@ -788,7 +793,7 @@ describe("SourcesApiLive", () => {
         sourceId: fixture.sourceId,
         transactionId: reportFixtureIds.sellTransactionId,
         externalId: "report-custody-outflow-1",
-        timestamp: new Date("2025-03-10T12:00:00.000Z"),
+        timestamp: DateTime.toDateUtc(DateTime.makeUnsafe("2025-03-10T12:00:00.000Z")),
         direction: "outbound",
         processingMode: "accounting_and_evidence",
         fromAccountRef: "coinbase-account-1",
@@ -802,7 +807,7 @@ describe("SourcesApiLive", () => {
         transactionId: reportFixtureIds.sellTransactionId,
         providerTransferId: reportFixtureIds.custodyProviderTransferId,
         assetId: TEST_BTC_ASSET_ID,
-        timestamp: new Date("2025-03-10T12:00:00.000Z"),
+        timestamp: DateTime.toDateUtc(DateTime.makeUnsafe("2025-03-10T12:00:00.000Z")),
         direction: "outbound",
         purpose: "fee",
         taxTreatment: "pending_review",
@@ -1032,7 +1037,7 @@ describe("SourcesApiLive", () => {
         id: transactionId,
         sourceId: fixture.sourceId,
         externalId: "provider-only-receive",
-        timestamp: new Date("2025-03-11T12:00:00.000Z"),
+        timestamp: DateTime.toDateUtc(DateTime.makeUnsafe("2025-03-11T12:00:00.000Z")),
         principalId: fixture.principalId,
       })
       yield* db.insert(schema.providerTransfers).values({
@@ -1040,7 +1045,7 @@ describe("SourcesApiLive", () => {
         sourceId: fixture.sourceId,
         transactionId,
         externalId: "provider-only-receive:principal",
-        timestamp: new Date("2025-03-11T12:00:00.000Z"),
+        timestamp: DateTime.toDateUtc(DateTime.makeUnsafe("2025-03-11T12:00:00.000Z")),
         direction: "inbound",
         processingMode: "accounting_and_evidence",
         fromAddress: "bc1qprovideronlysource",
@@ -1051,7 +1056,7 @@ describe("SourcesApiLive", () => {
         principalId: fixture.principalId,
         sourceId: fixture.sourceId,
         assetId: TEST_BTC_ASSET_ID,
-        acquiredAt: new Date("2025-03-11T12:00:00.000Z"),
+        acquiredAt: DateTime.toDateUtc(DateTime.makeUnsafe("2025-03-11T12:00:00.000Z")),
         originalAmount: "0.25",
         remainingAmount: "0.25",
         costBasisPerToken: "0",
@@ -1153,8 +1158,8 @@ describe("SourcesApiLive", () => {
 
   it.effect("creates an authenticated Solana source without starting sync", () =>
     Effect.gen(function* () {
-      const userId = crypto.randomUUID()
-      const principalId = crypto.randomUUID()
+      const userId = nextTestUuid()
+      const principalId = nextTestUuid()
       const walletAddress = "So11111111111111111111111111111111111111112"
       yield* seedPrincipalUser({ userId, principalId })
 
@@ -1241,7 +1246,9 @@ describe("SourcesApiLive", () => {
         /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u
       )
       expect(response.claim.claimToken.length).toBeGreaterThan(40)
-      expect(new Date(response.claim.expiresAt).getTime()).toBeGreaterThan(Date.now())
+      expect(
+        DateTime.toDateUtc(DateTime.makeUnsafe(response.claim.expiresAt)).getTime()
+      ).toBeGreaterThan(DateTime.toEpochMillis(yield* DateTime.now))
 
       const db = yield* drizzle
       const [principal] = yield* db
@@ -1399,8 +1406,8 @@ describe("SourcesApiLive", () => {
         return yield* Effect.die("Anonymous source creation did not return claim metadata")
       }
 
-      const userId = crypto.randomUUID()
-      const principalId = crypto.randomUUID()
+      const userId = nextTestUuid()
+      const principalId = nextTestUuid()
       yield* seedPrincipalUser({ userId, principalId })
 
       const authenticatedClient = yield* makeAuthenticatedClient({ userId })
@@ -1642,8 +1649,8 @@ describe("SourcesApiLive", () => {
           return yield* Effect.die("Anonymous source creation did not return claim metadata")
         }
 
-        const userId = crypto.randomUUID()
-        const principalId = crypto.randomUUID()
+        const userId = nextTestUuid()
+        const principalId = nextTestUuid()
         yield* seedPrincipalUser({ userId, principalId })
 
         const authenticatedClient = yield* makeAuthenticatedClient({ userId })
@@ -1714,8 +1721,8 @@ describe("SourcesApiLive", () => {
       const beforeClaim = yield* anonSessionClient.anon.listAnonSources()
       expect(beforeClaim.sources.map((source) => source.sourceId)).toContain(created.source.id)
 
-      const userId = crypto.randomUUID()
-      const principalId = crypto.randomUUID()
+      const userId = nextTestUuid()
+      const principalId = nextTestUuid()
       yield* seedPrincipalUser({ userId, principalId })
 
       const authenticatedClient = yield* makeAuthenticatedClient({ userId })
@@ -1798,8 +1805,8 @@ describe("SourcesApiLive", () => {
         return yield* Effect.die("Anonymous source creation did not return claim metadata")
       }
 
-      const userId = crypto.randomUUID()
-      const principalId = crypto.randomUUID()
+      const userId = nextTestUuid()
+      const principalId = nextTestUuid()
       yield* seedPrincipalUser({ userId, principalId })
 
       const authenticatedClient = yield* makeAuthenticatedClient({ userId })
@@ -1852,8 +1859,8 @@ describe("SourcesApiLive", () => {
         return yield* Effect.die("Anonymous source creation did not return claim metadata")
       }
 
-      const userId = crypto.randomUUID()
-      const principalId = crypto.randomUUID()
+      const userId = nextTestUuid()
+      const principalId = nextTestUuid()
       yield* seedPrincipalUser({ userId, principalId })
 
       const authenticatedClient = yield* makeAuthenticatedClient({ userId })
@@ -1880,7 +1887,7 @@ describe("SourcesApiLive", () => {
 
   it.effect("rejects payer-wallet SIWX with invalid domain, nonce, expiry, or chain", () =>
     Effect.gen(function* () {
-      const requestId = crypto.randomUUID()
+      const requestId = nextTestUuid()
       const badProofs = [
         makeTestSiwxProof({
           chainType: "solana",
@@ -1896,7 +1903,7 @@ describe("SourcesApiLive", () => {
         makeTestSiwxProof({
           chainType: "solana",
           walletAddress: TEST_PAYER_WALLET,
-          nonce: crypto.randomUUID(),
+          nonce: nextTestUuid(),
         }),
         makeTestSiwxProof({
           chainType: "solana",
@@ -1953,8 +1960,8 @@ describe("SourcesApiLive", () => {
         return yield* Effect.die("Anonymous source creation did not return claim metadata")
       }
 
-      const userId = crypto.randomUUID()
-      const principalId = crypto.randomUUID()
+      const userId = nextTestUuid()
+      const principalId = nextTestUuid()
       yield* seedPrincipalUser({ userId, principalId })
 
       const authenticatedClient = yield* makeAuthenticatedClient({ userId })
@@ -2015,8 +2022,8 @@ describe("SourcesApiLive", () => {
           return yield* Effect.die("Anonymous source creation did not return claim metadata")
         }
 
-        const claimingUserId = crypto.randomUUID()
-        const claimingPrincipalId = crypto.randomUUID()
+        const claimingUserId = nextTestUuid()
+        const claimingPrincipalId = nextTestUuid()
         yield* seedPrincipalUser({ userId: claimingUserId, principalId: claimingPrincipalId })
 
         const claimingClient = yield* makeAuthenticatedClient({ userId: claimingUserId })
@@ -2031,8 +2038,8 @@ describe("SourcesApiLive", () => {
         })
         expect(claimResponse.sourceId).toBe(created.source.id)
 
-        const otherUserId = crypto.randomUUID()
-        const otherPrincipalId = crypto.randomUUID()
+        const otherUserId = nextTestUuid()
+        const otherPrincipalId = nextTestUuid()
         yield* seedPrincipalUser({ userId: otherUserId, principalId: otherPrincipalId })
 
         const otherClient = yield* makeAuthenticatedClient({ userId: otherUserId })
@@ -2083,10 +2090,10 @@ describe("SourcesApiLive", () => {
       const db = yield* drizzle
       yield* db
         .update(schema.principalClaims)
-        .set({ expiresAt: new Date("2025-01-01T00:00:00.000Z") })
+        .set({ expiresAt: DateTime.toDateUtc(DateTime.makeUnsafe("2025-01-01T00:00:00.000Z")) })
 
-      const userId = crypto.randomUUID()
-      const principalId = crypto.randomUUID()
+      const userId = nextTestUuid()
+      const principalId = nextTestUuid()
       yield* seedPrincipalUser({ userId, principalId })
 
       const authenticatedClient = yield* makeAuthenticatedClient({ userId })
@@ -2127,7 +2134,7 @@ describe("SourcesApiLive", () => {
       const db = yield* drizzle
       yield* db
         .update(schema.principalClaims)
-        .set({ consumedAt: new Date("2026-01-01T00:00:00.000Z") })
+        .set({ consumedAt: DateTime.toDateUtc(DateTime.makeUnsafe("2026-01-01T00:00:00.000Z")) })
         .where(
           and(
             eq(schema.principalClaims.requestId, created.claim.requestId),
@@ -2135,8 +2142,8 @@ describe("SourcesApiLive", () => {
           )
         )
 
-      const userId = crypto.randomUUID()
-      const principalId = crypto.randomUUID()
+      const userId = nextTestUuid()
+      const principalId = nextTestUuid()
       yield* seedPrincipalUser({ userId, principalId })
 
       const authenticatedClient = yield* makeAuthenticatedClient({ userId })
@@ -2174,7 +2181,7 @@ describe("SourcesApiLive", () => {
         return yield* Effect.die("Anonymous source creation did not return claim metadata")
       }
 
-      const claimedUserId = crypto.randomUUID()
+      const claimedUserId = nextTestUuid()
       const db = yield* drizzle
       yield* db.insert(schema.users).values({
         id: claimedUserId,
@@ -2183,8 +2190,8 @@ describe("SourcesApiLive", () => {
       })
       yield* db.update(schema.principals).set({ kind: "user", userId: claimedUserId })
 
-      const userId = crypto.randomUUID()
-      const principalId = crypto.randomUUID()
+      const userId = nextTestUuid()
+      const principalId = nextTestUuid()
       yield* seedPrincipalUser({ userId, principalId })
 
       const authenticatedClient = yield* makeAuthenticatedClient({ userId })
@@ -2227,8 +2234,8 @@ describe("SourcesApiLive", () => {
         .update(schema.addresses)
         .set({ address: "8aPo8eCUhqJ1sUaz8fQAKUSMNnj3YNd19gNMVq7gFi7E" })
 
-      const userId = crypto.randomUUID()
-      const principalId = crypto.randomUUID()
+      const userId = nextTestUuid()
+      const principalId = nextTestUuid()
       yield* seedPrincipalUser({ userId, principalId })
 
       const authenticatedClient = yield* makeAuthenticatedClient({ userId })
@@ -2267,8 +2274,8 @@ describe("SourcesApiLive", () => {
         return yield* Effect.die("Anonymous source creation did not return claim metadata")
       }
 
-      const userId = crypto.randomUUID()
-      const principalId = crypto.randomUUID()
+      const userId = nextTestUuid()
+      const principalId = nextTestUuid()
       yield* seedPrincipalUser({ userId, principalId })
 
       const authenticatedClient = yield* makeAuthenticatedClient({ userId })
@@ -2339,15 +2346,15 @@ describe("SourcesApiLive", () => {
 
   it.effect("returns not found for an unknown authenticated CLI claim token", () =>
     Effect.gen(function* () {
-      const userId = crypto.randomUUID()
-      const principalId = crypto.randomUUID()
+      const userId = nextTestUuid()
+      const principalId = nextTestUuid()
       yield* seedPrincipalUser({ userId, principalId })
 
       const authenticatedClient = yield* makeAuthenticatedClient({ userId })
       const result = yield* authenticatedClient.principals
         .claimPrincipal({
           payload: {
-            requestId: crypto.randomUUID(),
+            requestId: nextTestUuid(),
             claimToken: "unknown-claim-token",
             siwxProof: null,
           },
@@ -2367,7 +2374,7 @@ describe("SourcesApiLive", () => {
       const result = yield* client.principals
         .claimPrincipal({
           payload: {
-            requestId: crypto.randomUUID(),
+            requestId: nextTestUuid(),
             claimToken: "unknown-claim-token",
             siwxProof: null,
           },
@@ -2612,8 +2619,8 @@ describe("SourcesApiLive", () => {
 
   it.effect("reuses an authenticated Solana source for the same wallet", () =>
     Effect.gen(function* () {
-      const userId = crypto.randomUUID()
-      const principalId = crypto.randomUUID()
+      const userId = nextTestUuid()
+      const principalId = nextTestUuid()
       const walletAddress = "So11111111111111111111111111111111111111112"
       yield* seedPrincipalUser({ userId, principalId })
 
@@ -2644,8 +2651,8 @@ describe("SourcesApiLive", () => {
 
   it.effect("infers chain type when creating an authenticated source", () =>
     Effect.gen(function* () {
-      const userId = crypto.randomUUID()
-      const principalId = crypto.randomUUID()
+      const userId = nextTestUuid()
+      const principalId = nextTestUuid()
       const walletAddress = "0x742d35Cc6634C0532925a3b844Bc454e4438f44e"
       yield* seedPrincipalUser({ userId, principalId })
 
@@ -2677,8 +2684,8 @@ describe("SourcesApiLive", () => {
 
   it.effect("rejects source creation when wallet address chain type cannot be inferred", () =>
     Effect.gen(function* () {
-      const userId = crypto.randomUUID()
-      const principalId = crypto.randomUUID()
+      const userId = nextTestUuid()
+      const principalId = nextTestUuid()
       yield* seedPrincipalUser({ userId, principalId })
 
       const client = yield* makeAuthenticatedClient({ userId })
@@ -2701,9 +2708,9 @@ describe("SourcesApiLive", () => {
 
   it.effect("starts a source sync by creating a queued job without provider execution", () =>
     Effect.gen(function* () {
-      const userId = crypto.randomUUID()
-      const principalId = crypto.randomUUID()
-      const sourceId = crypto.randomUUID()
+      const userId = nextTestUuid()
+      const principalId = nextTestUuid()
+      const sourceId = nextTestUuid()
       yield* seedCoinbaseSource({ userId, principalId, sourceId })
       yield* seedUsableCredit({ userId })
 
@@ -2729,9 +2736,9 @@ describe("SourcesApiLive", () => {
 
   it.effect("reads queued status from Postgres after start", () =>
     Effect.gen(function* () {
-      const userId = crypto.randomUUID()
-      const principalId = crypto.randomUUID()
-      const sourceId = crypto.randomUUID()
+      const userId = nextTestUuid()
+      const principalId = nextTestUuid()
+      const sourceId = nextTestUuid()
       yield* seedCoinbaseSource({ userId, principalId, sourceId })
       yield* seedUsableCredit({ userId })
 
@@ -2765,9 +2772,9 @@ describe("SourcesApiLive", () => {
     "reads a resumable credit-required status with its credit outcome, and no internal detail, after a worker stops the job on credit exhaustion",
     () =>
       Effect.gen(function* () {
-        const userId = crypto.randomUUID()
-        const principalId = crypto.randomUUID()
-        const sourceId = crypto.randomUUID()
+        const userId = nextTestUuid()
+        const principalId = nextTestUuid()
+        const sourceId = nextTestUuid()
         yield* seedCoinbaseSource({ userId, principalId, sourceId })
         yield* seedUsableCredit({ userId })
 
@@ -2780,11 +2787,11 @@ describe("SourcesApiLive", () => {
         yield* sourceSyncJobRepository.claimJob({
           jobId: started.jobId,
           workerId: "worker-1",
-          startedAt: new Date("2025-01-02T00:00:00.000Z"),
+          startedAt: DateTime.toDateUtc(DateTime.makeUnsafe("2025-01-02T00:00:00.000Z")),
         })
         yield* sourceSyncJobRepository.failCreditRequiredJob({
           jobId: started.jobId,
-          completedAt: new Date("2025-01-02T00:10:00.000Z"),
+          completedAt: DateTime.toDateUtc(DateTime.makeUnsafe("2025-01-02T00:10:00.000Z")),
           reasonCode: "no_usable_credits",
           availableCredits: 0,
           creditsConsumed: 3,
@@ -2804,7 +2811,10 @@ describe("SourcesApiLive", () => {
           creditsConsumed: 3,
           additionalCreditsRequired: 2,
         })
-        expect(JSON.stringify(status)).not.toMatch(
+        const encodedStatus = yield* EffectSchema.encodeEffect(
+          EffectSchema.fromJsonString(EffectSchema.Unknown)
+        )(status)
+        expect(encodedStatus).not.toMatch(
           /sourceNormalizationRepository|SyncEngineStorageError|SourceSyncCreditExhaustedError|SELECT |INSERT |consumeTransactionCredit/i
         )
       }).pipe(Effect.provide(HttpLive), Effect.scoped)
@@ -2814,9 +2824,9 @@ describe("SourcesApiLive", () => {
     "starts a fresh job that continues a credit-required sync once credits are topped up",
     () =>
       Effect.gen(function* () {
-        const userId = crypto.randomUUID()
-        const principalId = crypto.randomUUID()
-        const sourceId = crypto.randomUUID()
+        const userId = nextTestUuid()
+        const principalId = nextTestUuid()
+        const sourceId = nextTestUuid()
         yield* seedCoinbaseSource({ userId, principalId, sourceId })
         yield* seedUsableCredit({ userId })
 
@@ -2829,11 +2839,11 @@ describe("SourcesApiLive", () => {
         yield* sourceSyncJobRepository.claimJob({
           jobId: pausedJob.jobId,
           workerId: "worker-1",
-          startedAt: new Date("2025-01-02T00:00:00.000Z"),
+          startedAt: DateTime.toDateUtc(DateTime.makeUnsafe("2025-01-02T00:00:00.000Z")),
         })
         yield* sourceSyncJobRepository.failCreditRequiredJob({
           jobId: pausedJob.jobId,
-          completedAt: new Date("2025-01-02T00:10:00.000Z"),
+          completedAt: DateTime.toDateUtc(DateTime.makeUnsafe("2025-01-02T00:10:00.000Z")),
           reasonCode: "no_usable_credits",
           availableCredits: 0,
           creditsConsumed: 1,
@@ -2866,9 +2876,9 @@ describe("SourcesApiLive", () => {
 
   it.effect("returns the same queued job for duplicate start requests", () =>
     Effect.gen(function* () {
-      const userId = crypto.randomUUID()
-      const principalId = crypto.randomUUID()
-      const sourceId = crypto.randomUUID()
+      const userId = nextTestUuid()
+      const principalId = nextTestUuid()
+      const sourceId = nextTestUuid()
       yield* seedCoinbaseSource({ userId, principalId, sourceId })
       yield* seedUsableCredit({ userId })
 
@@ -2888,9 +2898,9 @@ describe("SourcesApiLive", () => {
 
   it.effect("replay enqueues a replay-mode job", () =>
     Effect.gen(function* () {
-      const userId = crypto.randomUUID()
-      const principalId = crypto.randomUUID()
-      const sourceId = crypto.randomUUID()
+      const userId = nextTestUuid()
+      const principalId = nextTestUuid()
+      const sourceId = nextTestUuid()
       yield* seedCoinbaseSource({ userId, principalId, sourceId })
       yield* seedUsableCredit({ userId })
 
@@ -2910,9 +2920,9 @@ describe("SourcesApiLive", () => {
 
   it.effect("returns an internal server error when queue enqueue fails", () =>
     Effect.gen(function* () {
-      const userId = crypto.randomUUID()
-      const principalId = crypto.randomUUID()
-      const sourceId = crypto.randomUUID()
+      const userId = nextTestUuid()
+      const principalId = nextTestUuid()
+      const sourceId = nextTestUuid()
       yield* seedCoinbaseSource({ userId, principalId, sourceId })
       yield* seedUsableCredit({ userId })
 
@@ -2933,9 +2943,9 @@ describe("SourcesApiLive", () => {
 
   it.effect("refuses to start a sync for a registered user with no usable credits", () =>
     Effect.gen(function* () {
-      const userId = crypto.randomUUID()
-      const principalId = crypto.randomUUID()
-      const sourceId = crypto.randomUUID()
+      const userId = nextTestUuid()
+      const principalId = nextTestUuid()
+      const sourceId = nextTestUuid()
       yield* seedCoinbaseSource({ userId, principalId, sourceId })
 
       const client = yield* makeAuthenticatedClient({ userId })
@@ -2966,9 +2976,9 @@ describe("SourcesApiLive", () => {
 
   it.effect("starts a sync for a registered user with at least one usable credit", () =>
     Effect.gen(function* () {
-      const userId = crypto.randomUUID()
-      const principalId = crypto.randomUUID()
-      const sourceId = crypto.randomUUID()
+      const userId = nextTestUuid()
+      const principalId = nextTestUuid()
+      const sourceId = nextTestUuid()
       yield* seedCoinbaseSource({ userId, principalId, sourceId })
       yield* seedUsableCredit({ userId })
 
@@ -2982,9 +2992,9 @@ describe("SourcesApiLive", () => {
 
   it.effect("refuses to replay a sync for a registered user with no usable credits", () =>
     Effect.gen(function* () {
-      const userId = crypto.randomUUID()
-      const principalId = crypto.randomUUID()
-      const sourceId = crypto.randomUUID()
+      const userId = nextTestUuid()
+      const principalId = nextTestUuid()
+      const sourceId = nextTestUuid()
       yield* seedCoinbaseSource({ userId, principalId, sourceId })
 
       const client = yield* makeAuthenticatedClient({ userId })
@@ -3008,8 +3018,8 @@ describe("SourcesApiLive", () => {
     "refuses to start sync during source creation for a registered user with no usable credits",
     () =>
       Effect.gen(function* () {
-        const userId = crypto.randomUUID()
-        const principalId = crypto.randomUUID()
+        const userId = nextTestUuid()
+        const principalId = nextTestUuid()
         const walletAddress = "So11111111111111111111111111111111111111112"
         yield* seedPrincipalUser({ userId, principalId })
 
@@ -3041,8 +3051,8 @@ describe("SourcesApiLive", () => {
     "starts sync during source creation for a registered user with at least one usable credit",
     () =>
       Effect.gen(function* () {
-        const userId = crypto.randomUUID()
-        const principalId = crypto.randomUUID()
+        const userId = nextTestUuid()
+        const principalId = nextTestUuid()
         const walletAddress = "So11111111111111111111111111111111111111112"
         yield* seedPrincipalUser({ userId, principalId })
         yield* seedUsableCredit({ userId })
@@ -3080,8 +3090,8 @@ describe("SourcesApiLive", () => {
         return yield* Effect.die("Anonymous source creation did not return claim metadata")
       }
 
-      const userId = crypto.randomUUID()
-      const principalId = crypto.randomUUID()
+      const userId = nextTestUuid()
+      const principalId = nextTestUuid()
       yield* seedPrincipalUser({ userId, principalId })
 
       const authenticatedClient = yield* makeAuthenticatedClient({ userId })
@@ -3105,9 +3115,9 @@ describe("SourcesApiLive", () => {
     "returns a 422 naming blocking observations when a source has unresolved provider asset observations",
     () =>
       Effect.gen(function* () {
-        const userId = crypto.randomUUID()
-        const principalId = crypto.randomUUID()
-        const sourceId = crypto.randomUUID()
+        const userId = nextTestUuid()
+        const principalId = nextTestUuid()
+        const sourceId = nextTestUuid()
         yield* seedCoinbaseSource({ userId, principalId, sourceId })
 
         const db = yield* drizzle
@@ -3117,7 +3127,7 @@ describe("SourcesApiLive", () => {
             provider: "coinbase",
             naturalKey: `unresolved-${sourceId}`,
             currencyCode: "XYZ",
-            retrievedAt: new Date("2025-01-01T00:00:00.000Z"),
+            retrievedAt: DateTime.toDateUtc(DateTime.makeUnsafe("2025-01-01T00:00:00.000Z")),
           })
           .returning({ id: schema.providerAssets.id })
 
@@ -3159,8 +3169,8 @@ describe("SourcesApiLive", () => {
         namespace: "sns",
         name: "bonfida.sol",
         resolvedAddress: "HKKp49qGWXd639QsuH7JiLijfVW5UtCVY4s1n2HANwEA",
-        resolvedAt: new Date(),
-        expiresAt: new Date(Date.now() + 60 * 60 * 1000),
+        resolvedAt: yield* DateTime.nowAsDate,
+        expiresAt: DateTime.toDateUtc(DateTime.addDuration(yield* DateTime.now, "1 hour")),
       })
 
       const client = yield* makeAuthenticatedClient({ userId: fixture.userId })

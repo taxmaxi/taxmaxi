@@ -1,3 +1,4 @@
+import * as DateTime from "effect/DateTime"
 import { HttpClient, HttpClientRequest, HttpRouter } from "effect/unstable/http"
 import { HttpApiClient } from "effect/unstable/httpapi"
 import { NodeHttpServer } from "@effect/platform-node"
@@ -19,7 +20,7 @@ import * as Chunk from "effect/Chunk"
 import * as ConfigProvider from "effect/ConfigProvider"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
-import { beforeEach, describe, expect, it } from "vitest"
+import { beforeEach, describe, expect, it } from "@effect/vitest"
 import { drizzle } from "../../persistence/src/layers/PgClientLive.ts"
 import { RepositoriesLive } from "../../persistence/src/layers/RepositoriesLive.ts"
 import { schema } from "../../persistence/src/schema/index.ts"
@@ -199,7 +200,7 @@ const seedTransactions = Effect.gen(function* () {
       sourceId: fixture.sourceId,
       principalId: fixture.principalId,
       externalId: "transaction-buy",
-      timestamp: new Date("2025-03-01T12:00:00.000Z"),
+      timestamp: DateTime.toDateUtc(DateTime.makeUnsafe("2025-03-01T12:00:00.000Z")),
       transactionType: "buy_fiat",
       providerDescription: "Buy BTC",
     },
@@ -208,7 +209,7 @@ const seedTransactions = Effect.gen(function* () {
       sourceId: fixture.sourceId,
       principalId: fixture.principalId,
       externalId: "transaction-sell",
-      timestamp: new Date("2025-03-10T12:00:00.000Z"),
+      timestamp: DateTime.toDateUtc(DateTime.makeUnsafe("2025-03-10T12:00:00.000Z")),
       transactionType: "sell_fiat",
       providerDescription: "Sell BTC",
     },
@@ -217,7 +218,7 @@ const seedTransactions = Effect.gen(function* () {
       sourceId: fixture.sourceId,
       principalId: fixture.principalId,
       externalId: "transaction-partial-valuation",
-      timestamp: new Date("2025-03-05T12:00:00.000Z"),
+      timestamp: DateTime.toDateUtc(DateTime.makeUnsafe("2025-03-05T12:00:00.000Z")),
       transactionType: "buy_fiat",
       providerDescription: "Buy BTC with valuation pending",
     },
@@ -226,7 +227,7 @@ const seedTransactions = Effect.gen(function* () {
       sourceId: fixture.sourceId,
       principalId: fixture.principalId,
       externalId: "coinbase-unresolved-asset",
-      timestamp: new Date("2025-04-10T12:00:00.000Z"),
+      timestamp: DateTime.toDateUtc(DateTime.makeUnsafe("2025-04-10T12:00:00.000Z")),
       transactionType: null,
       providerDescription: "Unresolved Coinbase activity",
       metadata: { provider: "coinbase", assetIdentity: "unresolved" },
@@ -236,7 +237,7 @@ const seedTransactions = Effect.gen(function* () {
       sourceId: fixture.sourceId,
       principalId: fixture.principalId,
       externalId: "coinbase-excluded-asset",
-      timestamp: new Date("2025-04-09T12:00:00.000Z"),
+      timestamp: DateTime.toDateUtc(DateTime.makeUnsafe("2025-04-09T12:00:00.000Z")),
       transactionType: null,
       providerDescription: "Excluded Coinbase activity",
       metadata: { provider: "coinbase", inclusion: "excluded" },
@@ -246,7 +247,7 @@ const seedTransactions = Effect.gen(function* () {
       sourceId: otherFixture.sourceId,
       principalId: otherFixture.principalId,
       externalId: "other-principal-transaction",
-      timestamp: new Date("2025-04-10T12:00:00.000Z"),
+      timestamp: DateTime.toDateUtc(DateTime.makeUnsafe("2025-04-10T12:00:00.000Z")),
       transactionType: "buy_fiat",
     },
   ])
@@ -256,7 +257,7 @@ const seedTransactions = Effect.gen(function* () {
       sourceId: fixture.sourceId,
       principalId: fixture.principalId,
       externalId: "transaction-buy:acquisition",
-      timestamp: new Date("2025-03-01T12:00:00.000Z"),
+      timestamp: DateTime.toDateUtc(DateTime.makeUnsafe("2025-03-01T12:00:00.000Z")),
       assetId: TEST_BTC_ASSET_ID,
       amount: "0.5",
       kind: "acquisition",
@@ -270,7 +271,7 @@ const seedTransactions = Effect.gen(function* () {
       sourceId: fixture.sourceId,
       principalId: fixture.principalId,
       externalId: "transaction-sell:disposal",
-      timestamp: new Date("2025-03-10T12:00:00.000Z"),
+      timestamp: DateTime.toDateUtc(DateTime.makeUnsafe("2025-03-10T12:00:00.000Z")),
       assetId: TEST_BTC_ASSET_ID,
       amount: "0.4",
       kind: "disposal",
@@ -284,7 +285,7 @@ const seedTransactions = Effect.gen(function* () {
       sourceId: fixture.sourceId,
       principalId: fixture.principalId,
       externalId: "transaction-partial-valuation:acquisition",
-      timestamp: new Date("2025-03-05T12:00:00.000Z"),
+      timestamp: DateTime.toDateUtc(DateTime.makeUnsafe("2025-03-05T12:00:00.000Z")),
       assetId: TEST_BTC_ASSET_ID,
       amount: "0.1",
       kind: "acquisition",
@@ -299,7 +300,7 @@ const seedTransactions = Effect.gen(function* () {
     sourceId: fixture.sourceId,
     principalId: fixture.principalId,
     assetId: TEST_BTC_ASSET_ID,
-    acquiredAt: new Date("2025-03-01T12:00:00.000Z"),
+    acquiredAt: DateTime.toDateUtc(DateTime.makeUnsafe("2025-03-01T12:00:00.000Z")),
     originalAmount: "0.5",
     remainingAmount: "0.1",
     costBasisPerToken: "10000",
@@ -321,93 +322,93 @@ const seedTransactions = Effect.gen(function* () {
 await Effect.runPromise(context.recreateTestDatabase())
 
 describe("TransactionsApiLive", () => {
-  beforeEach(async () => {
-    await Effect.runPromise(context.recreateTestDatabase())
-  })
+  beforeEach(() => Effect.runPromise(Effect.asVoid(context.recreateTestDatabase())))
 
-  it("lists compact principal-owned transactions with an exact total and stable cursor", async () => {
-    await Effect.runPromise(
-      Effect.gen(function* () {
-        const fixture = yield* seedTransactions
-        const client = yield* makeAuthenticatedClient({ userId: fixture.userId })
-        const first = yield* client.transactions.listTransactions({ query: { limit: 1 } })
+  it.effect(
+    "lists compact principal-owned transactions with an exact total and stable cursor",
+    () =>
+      Effect.asVoid(
+        Effect.gen(function* () {
+          const fixture = yield* seedTransactions
+          const client = yield* makeAuthenticatedClient({ userId: fixture.userId })
+          const first = yield* client.transactions.listTransactions({ query: { limit: 1 } })
 
-        expect(first.totalCount).toBe(3)
-        expect(first.transactions).toMatchObject([
-          {
-            transactionId: fixtureIds.sellTransactionId,
-            timestamp: "2025-03-10T12:00:00.000Z",
-            source: {
-              sourceId: fixture.sourceId,
-              name: `Coinbase Source ${fixture.sourceId}`,
-              kind: "cex",
+          expect(first.totalCount).toBe(3)
+          expect(first.transactions).toMatchObject([
+            {
+              transactionId: fixtureIds.sellTransactionId,
+              timestamp: "2025-03-10T12:00:00.000Z",
+              source: {
+                sourceId: fixture.sourceId,
+                name: `Coinbase Source ${fixture.sourceId}`,
+                kind: "cex",
+              },
+              transactionType: "sell_fiat",
+              description: "Sell BTC",
+              externalId: "transaction-sell",
+              movements: [{ amount: "0.4", assetSymbol: "BTC", kind: "disposal" }],
+              realizedGainLoss: "2000",
+              fiatCurrency: "EUR",
+              calculationState: "complete",
+              needsReview: false,
             },
-            transactionType: "sell_fiat",
-            description: "Sell BTC",
-            externalId: "transaction-sell",
-            movements: [{ amount: "0.4", assetSymbol: "BTC", kind: "disposal" }],
-            realizedGainLoss: "2000",
-            fiatCurrency: "EUR",
-            calculationState: "complete",
-            needsReview: false,
-          },
-        ])
-        expect(first.page.hasMore).toBe(true)
-        expect(first.page.nextCursor).not.toBeNull()
+          ])
+          expect(first.page.hasMore).toBe(true)
+          expect(first.page.nextCursor).not.toBeNull()
 
-        const cursor = first.page.nextCursor
-        if (cursor === null) {
-          return yield* Effect.die("Expected a transaction cursor")
-        }
+          const cursor = first.page.nextCursor
+          if (cursor === null) {
+            return yield* Effect.die("Expected a transaction cursor")
+          }
 
-        const second = yield* client.transactions.listTransactions({
-          query: { cursor, limit: 1 },
-        })
-        expect(second.totalCount).toBe(3)
-        expect(second.transactions.map((transaction) => transaction.transactionId)).toEqual([
-          fixtureIds.partialTransactionId,
-        ])
-        expect(second.transactions[0]).toMatchObject({
-          movements: [{ amount: "0.1", assetSymbol: "BTC", kind: "acquisition" }],
-          realizedGainLoss: null,
-          fiatCurrency: null,
-          calculationState: "partial",
-        })
-        expect(second.page.hasMore).toBe(true)
+          const second = yield* client.transactions.listTransactions({
+            query: { cursor, limit: 1 },
+          })
+          expect(second.totalCount).toBe(3)
+          expect(second.transactions.map((transaction) => transaction.transactionId)).toEqual([
+            fixtureIds.partialTransactionId,
+          ])
+          expect(second.transactions[0]).toMatchObject({
+            movements: [{ amount: "0.1", assetSymbol: "BTC", kind: "acquisition" }],
+            realizedGainLoss: null,
+            fiatCurrency: null,
+            calculationState: "partial",
+          })
+          expect(second.page.hasMore).toBe(true)
 
-        const secondCursor = second.page.nextCursor
-        if (secondCursor === null) {
-          return yield* Effect.die("Expected a second transaction cursor")
-        }
+          const secondCursor = second.page.nextCursor
+          if (secondCursor === null) {
+            return yield* Effect.die("Expected a second transaction cursor")
+          }
 
-        const third = yield* client.transactions.listTransactions({
-          query: { cursor: secondCursor, limit: 1 },
-        })
-        expect(third.totalCount).toBe(3)
-        expect(third.transactions.map((transaction) => transaction.transactionId)).toEqual([
-          fixtureIds.buyTransactionId,
-        ])
-        expect(third.transactions[0]?.calculationState).toBe("complete")
-        expect(third.page).toEqual({ hasMore: false, nextCursor: null })
+          const third = yield* client.transactions.listTransactions({
+            query: { cursor: secondCursor, limit: 1 },
+          })
+          expect(third.totalCount).toBe(3)
+          expect(third.transactions.map((transaction) => transaction.transactionId)).toEqual([
+            fixtureIds.buyTransactionId,
+          ])
+          expect(third.transactions[0]?.calculationState).toBe("complete")
+          expect(third.page).toEqual({ hasMore: false, nextCursor: null })
 
-        const listedIds = [
-          ...first.transactions,
-          ...second.transactions,
-          ...third.transactions,
-        ].map((transaction) => transaction.transactionId)
-        expect(listedIds).not.toContain(fixtureIds.unresolvedTransactionId)
-        expect(listedIds).not.toContain(fixtureIds.excludedTransactionId)
-        expect(listedIds).not.toContain(fixtureIds.hiddenTransactionId)
-      }).pipe(Effect.provide(HttpLive), Effect.scoped)
-    )
-  })
+          const listedIds = [
+            ...first.transactions,
+            ...second.transactions,
+            ...third.transactions,
+          ].map((transaction) => transaction.transactionId)
+          expect(listedIds).not.toContain(fixtureIds.unresolvedTransactionId)
+          expect(listedIds).not.toContain(fixtureIds.excludedTransactionId)
+          expect(listedIds).not.toContain(fixtureIds.hiddenTransactionId)
+        }).pipe(Effect.provide(HttpLive), Effect.scoped)
+      )
+  )
 
-  it("uses the transaction ID as the cursor tie-breaker for equal timestamps", async () => {
-    await Effect.runPromise(
+  it.effect("uses the transaction ID as the cursor tie-breaker for equal timestamps", () =>
+    Effect.asVoid(
       Effect.gen(function* () {
         const fixture = yield* seedTransactions
         const db = yield* drizzle
-        const timestamp = new Date("2025-04-10T12:00:00.000Z")
+        const timestamp = DateTime.toDateUtc(DateTime.makeUnsafe("2025-04-10T12:00:00.000Z"))
 
         yield* db.insert(schema.transactions).values(
           fixtureIds.tieTransactionIds.map((id, index) => ({
@@ -455,24 +456,24 @@ describe("TransactionsApiLive", () => {
         expect(cursor).not.toBeNull()
       }).pipe(Effect.provide(HttpLive), Effect.scoped)
     )
-  })
+  )
 
-  it("returns 400 for a malformed transaction cursor", async () => {
-    const status = await Effect.runPromise(
-      Effect.gen(function* () {
+  it.effect("returns 400 for a malformed transaction cursor", () =>
+    Effect.gen(function* () {
+      const status = yield* Effect.gen(function* () {
         const fixture = yield* seedTransactions
         return yield* getAuthenticatedStatus({
           path: "/v1/transactions?cursor=not-a-cursor",
           userId: fixture.userId,
         })
       }).pipe(Effect.provide(HttpLive), Effect.scoped)
-    )
 
-    expect(status).toBe(400)
-  })
+      expect(status).toBe(400)
+    })
+  )
 
-  it("keeps non-taxable transfers complete and marks unfinished calculations partial", async () => {
-    await Effect.runPromise(
+  it.effect("keeps non-taxable transfers complete and marks unfinished calculations partial", () =>
+    Effect.asVoid(
       Effect.gen(function* () {
         const fixture = yield* seedTransactions
         const db = yield* drizzle
@@ -483,7 +484,7 @@ describe("TransactionsApiLive", () => {
             sourceId: fixture.sourceId,
             principalId: fixture.principalId,
             externalId: "transaction-internal-transfer",
-            timestamp: new Date("2025-03-20T12:00:00.000Z"),
+            timestamp: DateTime.toDateUtc(DateTime.makeUnsafe("2025-03-20T12:00:00.000Z")),
             transactionType: "internal_transfer",
           },
           {
@@ -491,7 +492,7 @@ describe("TransactionsApiLive", () => {
             sourceId: fixture.sourceId,
             principalId: fixture.principalId,
             externalId: "transaction-pending-basis",
-            timestamp: new Date("2025-03-21T12:00:00.000Z"),
+            timestamp: DateTime.toDateUtc(DateTime.makeUnsafe("2025-03-21T12:00:00.000Z")),
             transactionType: "sell_fiat",
           },
           {
@@ -499,7 +500,7 @@ describe("TransactionsApiLive", () => {
             sourceId: fixture.sourceId,
             principalId: fixture.principalId,
             externalId: "transaction-mixed-currency",
-            timestamp: new Date("2025-03-22T12:00:00.000Z"),
+            timestamp: DateTime.toDateUtc(DateTime.makeUnsafe("2025-03-22T12:00:00.000Z")),
             transactionType: "sell_fiat",
           },
           {
@@ -507,7 +508,7 @@ describe("TransactionsApiLive", () => {
             sourceId: fixture.sourceId,
             principalId: fixture.principalId,
             externalId: "transaction-missing-proceeds",
-            timestamp: new Date("2025-03-23T12:00:00.000Z"),
+            timestamp: DateTime.toDateUtc(DateTime.makeUnsafe("2025-03-23T12:00:00.000Z")),
             transactionType: "sell_fiat",
           },
           {
@@ -515,7 +516,7 @@ describe("TransactionsApiLive", () => {
             sourceId: fixture.sourceId,
             principalId: fixture.principalId,
             externalId: "transaction-partial-match",
-            timestamp: new Date("2025-03-24T12:00:00.000Z"),
+            timestamp: DateTime.toDateUtc(DateTime.makeUnsafe("2025-03-24T12:00:00.000Z")),
             transactionType: "sell_fiat",
           },
         ])
@@ -525,7 +526,7 @@ describe("TransactionsApiLive", () => {
             sourceId: fixture.sourceId,
             principalId: fixture.principalId,
             externalId: "transaction-internal-transfer:in",
-            timestamp: new Date("2025-03-20T12:00:00.000Z"),
+            timestamp: DateTime.toDateUtc(DateTime.makeUnsafe("2025-03-20T12:00:00.000Z")),
             assetId: TEST_BTC_ASSET_ID,
             amount: "0.1",
             kind: "acquisition",
@@ -540,7 +541,7 @@ describe("TransactionsApiLive", () => {
             sourceId: fixture.sourceId,
             principalId: fixture.principalId,
             externalId: "transaction-buy:pending-basis-acquisition",
-            timestamp: new Date("2025-03-02T12:00:00.000Z"),
+            timestamp: DateTime.toDateUtc(DateTime.makeUnsafe("2025-03-02T12:00:00.000Z")),
             assetId: TEST_BTC_ASSET_ID,
             amount: "0.1",
             kind: "acquisition",
@@ -554,7 +555,7 @@ describe("TransactionsApiLive", () => {
             sourceId: fixture.sourceId,
             principalId: fixture.principalId,
             externalId: "transaction-pending-basis:disposal",
-            timestamp: new Date("2025-03-21T12:00:00.000Z"),
+            timestamp: DateTime.toDateUtc(DateTime.makeUnsafe("2025-03-21T12:00:00.000Z")),
             assetId: TEST_BTC_ASSET_ID,
             amount: "0.1",
             kind: "disposal",
@@ -568,7 +569,7 @@ describe("TransactionsApiLive", () => {
             sourceId: fixture.sourceId,
             principalId: fixture.principalId,
             externalId: "transaction-internal-transfer:out",
-            timestamp: new Date("2025-03-20T12:00:00.000Z"),
+            timestamp: DateTime.toDateUtc(DateTime.makeUnsafe("2025-03-20T12:00:00.000Z")),
             assetId: TEST_BTC_ASSET_ID,
             amount: "0.1",
             kind: "disposal",
@@ -583,7 +584,7 @@ describe("TransactionsApiLive", () => {
             sourceId: fixture.sourceId,
             principalId: fixture.principalId,
             externalId: "transaction-mixed-currency:usd",
-            timestamp: new Date("2025-03-22T12:00:01.000Z"),
+            timestamp: DateTime.toDateUtc(DateTime.makeUnsafe("2025-03-22T12:00:01.000Z")),
             assetId: TEST_BTC_ASSET_ID,
             amount: "0.1",
             kind: "disposal",
@@ -597,7 +598,7 @@ describe("TransactionsApiLive", () => {
             sourceId: fixture.sourceId,
             principalId: fixture.principalId,
             externalId: "transaction-missing-proceeds:disposal",
-            timestamp: new Date("2025-03-23T12:00:00.000Z"),
+            timestamp: DateTime.toDateUtc(DateTime.makeUnsafe("2025-03-23T12:00:00.000Z")),
             assetId: TEST_BTC_ASSET_ID,
             amount: "0.1",
             kind: "disposal",
@@ -611,7 +612,7 @@ describe("TransactionsApiLive", () => {
             sourceId: fixture.sourceId,
             principalId: fixture.principalId,
             externalId: "transaction-partial-match:disposal",
-            timestamp: new Date("2025-03-24T12:00:00.000Z"),
+            timestamp: DateTime.toDateUtc(DateTime.makeUnsafe("2025-03-24T12:00:00.000Z")),
             assetId: TEST_BTC_ASSET_ID,
             amount: "0.1",
             kind: "disposal",
@@ -626,7 +627,7 @@ describe("TransactionsApiLive", () => {
           sourceId: fixture.sourceId,
           principalId: fixture.principalId,
           assetId: TEST_BTC_ASSET_ID,
-          acquiredAt: new Date("2025-03-02T12:00:00.000Z"),
+          acquiredAt: DateTime.toDateUtc(DateTime.makeUnsafe("2025-03-02T12:00:00.000Z")),
           originalAmount: "0.1",
           remainingAmount: "0",
           costBasisPerToken: "0",
@@ -731,5 +732,5 @@ describe("TransactionsApiLive", () => {
         })
       }).pipe(Effect.provide(HttpLive), Effect.scoped)
     )
-  })
+  )
 })

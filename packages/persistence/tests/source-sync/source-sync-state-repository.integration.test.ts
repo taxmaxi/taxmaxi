@@ -1,6 +1,7 @@
+import * as DateTime from "effect/DateTime"
 import { eq } from "drizzle-orm"
 import * as Effect from "effect/Effect"
-import { beforeEach, describe, expect, it } from "vitest"
+import { beforeEach, describe, expect, it } from "@effect/vitest"
 import { drizzle } from "../../src/layers/PgClientLive.ts"
 import { SourceSyncStateRepositoryLive } from "../../src/layers/SourceSyncStateRepositoryLive.ts"
 import { schema } from "../../src/schema/index.ts"
@@ -43,107 +44,125 @@ const seedProcessingJob = () =>
   })
 
 describe("SourceSyncStateRepositoryLive", () => {
-  beforeEach(async () => {
-    await Effect.runPromise(context.recreateTestDatabase())
-    await runPg(seedSyncEngineRepositoryFixture())
-  })
-
-  it("returns default execution state before any sync row exists", async () => {
-    const executionState = await runRepository(
-      Effect.flatMap(SourceSyncStateRepository, (repository) =>
-        repository.getExecutionState({ sourceId: TEST_SOURCE_ID })
-      )
-    )
-
-    expect(executionState).toEqual({
-      phase: "discovering",
-      processedRecords: 0,
-      totalRecords: null,
-      fetchedRecords: 0,
-      normalizedRecords: 0,
-      failedRecords: 0,
-      cursorPayload: null,
-      highWatermark: null,
-      checkpointExternalId: null,
-      checkpointRawRecordId: null,
-    })
-  })
-
-  it("persists progress and clears replay failure metadata without losing checkpoints", async () => {
-    const jobId = await runPg(seedProcessingJob())
-
-    const state: SourceSyncExecutionState = {
-      phase: "classifying",
-      processedRecords: 5,
-      totalRecords: 7,
-      fetchedRecords: 7,
-      normalizedRecords: 6,
-      failedRecords: 1,
-      cursorPayload: { cursor: "page-2" },
-      highWatermark: new Date("2025-02-01T00:00:00.000Z"),
-      checkpointExternalId: "tx-7",
-      checkpointRawRecordId: null,
-    }
-
-    await runRepository(
-      Effect.flatMap(SourceSyncStateRepository, (repository) =>
-        repository.persistProgress({
-          sourceId: TEST_SOURCE_ID,
-          jobId,
-          state,
-          lastSyncedAt: new Date("2025-02-01T00:10:00.000Z"),
-          lastErrorMessage: null,
-        })
-      )
-    )
-
-    await runRepository(
-      Effect.flatMap(SourceSyncStateRepository, (repository) =>
-        repository.persistFailureMetadata({
-          sourceId: TEST_SOURCE_ID,
-          lastErrorMessage: "Coinbase token refresh failed.",
-        })
-      )
-    )
-
-    await runRepository(
-      Effect.flatMap(SourceSyncStateRepository, (repository) =>
-        repository.clearReplayFailureMetadata({
-          sourceId: TEST_SOURCE_ID,
-        })
-      )
-    )
-
-    const persisted = await runPg(
+  beforeEach(() =>
+    Effect.runPromise(
       Effect.gen(function* () {
-        const db = yield* drizzle
-        const [syncState] = yield* db
-          .select()
-          .from(schema.sourceSyncState)
-          .where(eq(schema.sourceSyncState.sourceId, TEST_SOURCE_ID))
-          .limit(1)
-        const [job] = yield* db
-          .select()
-          .from(schema.processingJobs)
-          .where(eq(schema.processingJobs.id, jobId))
-          .limit(1)
-        return { syncState, job }
+        yield* context.recreateTestDatabase()
+        yield* Effect.promise(() => runPg(seedSyncEngineRepositoryFixture()))
       })
     )
+  )
 
-    expect(persisted.syncState?.checkpointExternalId).toBe("tx-7")
-    expect(persisted.syncState?.checkpointRawRecordId).toBeNull()
-    expect(persisted.syncState?.lastErrorMessage).toBeNull()
-    expect(persisted.job?.checkpointExternalId).toBe("tx-7")
-    expect(persisted.job?.progressDetails).toMatchObject({
-      phase: "classifying",
-      processedRecords: 5,
-      totalRecords: 7,
-      fetchedRecords: 7,
-      normalizedRecords: 6,
-      failedRecords: 1,
-      cursorPayload: { cursor: "page-2" },
-      highWatermark: "2025-02-01T00:00:00.000Z",
+  it.effect("returns default execution state before any sync row exists", () =>
+    Effect.gen(function* () {
+      const executionState = yield* Effect.promise(() =>
+        runRepository(
+          Effect.flatMap(SourceSyncStateRepository, (repository) =>
+            repository.getExecutionState({ sourceId: TEST_SOURCE_ID })
+          )
+        )
+      )
+
+      expect(executionState).toEqual({
+        phase: "discovering",
+        processedRecords: 0,
+        totalRecords: null,
+        fetchedRecords: 0,
+        normalizedRecords: 0,
+        failedRecords: 0,
+        cursorPayload: null,
+        highWatermark: null,
+        checkpointExternalId: null,
+        checkpointRawRecordId: null,
+      })
     })
-  })
+  )
+
+  it.effect("persists progress and clears replay failure metadata without losing checkpoints", () =>
+    Effect.gen(function* () {
+      const jobId = yield* Effect.promise(() => runPg(seedProcessingJob()))
+
+      const state: SourceSyncExecutionState = {
+        phase: "classifying",
+        processedRecords: 5,
+        totalRecords: 7,
+        fetchedRecords: 7,
+        normalizedRecords: 6,
+        failedRecords: 1,
+        cursorPayload: { cursor: "page-2" },
+        highWatermark: DateTime.toDateUtc(DateTime.makeUnsafe("2025-02-01T00:00:00.000Z")),
+        checkpointExternalId: "tx-7",
+        checkpointRawRecordId: null,
+      }
+
+      yield* Effect.promise(() =>
+        runRepository(
+          Effect.flatMap(SourceSyncStateRepository, (repository) =>
+            repository.persistProgress({
+              sourceId: TEST_SOURCE_ID,
+              jobId,
+              state,
+              lastSyncedAt: DateTime.toDateUtc(DateTime.makeUnsafe("2025-02-01T00:10:00.000Z")),
+              lastErrorMessage: null,
+            })
+          )
+        )
+      )
+
+      yield* Effect.promise(() =>
+        runRepository(
+          Effect.flatMap(SourceSyncStateRepository, (repository) =>
+            repository.persistFailureMetadata({
+              sourceId: TEST_SOURCE_ID,
+              lastErrorMessage: "Coinbase token refresh failed.",
+            })
+          )
+        )
+      )
+
+      yield* Effect.promise(() =>
+        runRepository(
+          Effect.flatMap(SourceSyncStateRepository, (repository) =>
+            repository.clearReplayFailureMetadata({
+              sourceId: TEST_SOURCE_ID,
+            })
+          )
+        )
+      )
+
+      const persisted = yield* Effect.promise(() =>
+        runPg(
+          Effect.gen(function* () {
+            const db = yield* drizzle
+            const [syncState] = yield* db
+              .select()
+              .from(schema.sourceSyncState)
+              .where(eq(schema.sourceSyncState.sourceId, TEST_SOURCE_ID))
+              .limit(1)
+            const [job] = yield* db
+              .select()
+              .from(schema.processingJobs)
+              .where(eq(schema.processingJobs.id, jobId))
+              .limit(1)
+            return { syncState, job }
+          })
+        )
+      )
+
+      expect(persisted.syncState?.checkpointExternalId).toBe("tx-7")
+      expect(persisted.syncState?.checkpointRawRecordId).toBeNull()
+      expect(persisted.syncState?.lastErrorMessage).toBeNull()
+      expect(persisted.job?.checkpointExternalId).toBe("tx-7")
+      expect(persisted.job?.progressDetails).toMatchObject({
+        phase: "classifying",
+        processedRecords: 5,
+        totalRecords: 7,
+        fetchedRecords: 7,
+        normalizedRecords: 6,
+        failedRecords: 1,
+        cursorPayload: { cursor: "page-2" },
+        highWatermark: "2025-02-01T00:00:00.000Z",
+      })
+    })
+  )
 })

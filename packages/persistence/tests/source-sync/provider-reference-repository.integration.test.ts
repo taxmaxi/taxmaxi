@@ -1,6 +1,6 @@
 import * as Effect from "effect/Effect"
 import * as Option from "effect/Option"
-import { beforeEach, describe, expect, it } from "vitest"
+import { beforeEach, describe, expect, it } from "@effect/vitest"
 import { ProviderReferenceRepositoryLive } from "../../src/layers/ProviderReferenceRepositoryLive.ts"
 import {
   makeIntegrationTestDatabaseContext,
@@ -20,102 +20,120 @@ const runRepository = <A, E>(effect: Effect.Effect<A, E, ProviderReferenceReposi
   Effect.runPromise(context.runWithLayer({ effect, layer: ProviderReferenceRepositoryLive }))
 
 describe("ProviderReferenceRepositoryLive", () => {
-  beforeEach(async () => {
-    await Effect.runPromise(context.recreateTestDatabase())
-    await runPg(seedSyncEngineRepositoryFixture())
-  })
-
-  it("persists transaction-type catalogs, approved mappings, and pending-review discoveries", async () => {
-    const transactionCatalogCount = await runRepository(
-      Effect.flatMap(ProviderReferenceRepository, (repository) =>
-        repository.upsertTransactionTypeCatalog({
-          providerKey: "coinbase",
-          entries: [
-            {
-              providerKey: "coinbase",
-              providerTransactionType: "buy",
-              displayName: "Buy",
-              payload: { type: "buy" },
-            },
-            {
-              providerKey: "coinbase",
-              providerTransactionType: "send",
-              displayName: "Send",
-              payload: { type: "send" },
-            },
-          ],
-        })
-      )
+  beforeEach(() =>
+    Effect.runPromise(
+      Effect.gen(function* () {
+        yield* context.recreateTestDatabase()
+        yield* Effect.promise(() => runPg(seedSyncEngineRepositoryFixture()))
+      })
     )
+  )
 
-    const ensuredTransactionMappings = await runRepository(
-      Effect.flatMap(ProviderReferenceRepository, (repository) =>
-        repository.ensureTransactionTypeMappings({
-          providerKey: "coinbase",
-          mappings: [
-            {
-              providerKey: "coinbase",
-              providerTransactionType: "buy",
-              transactionType: "buy_fiat",
-              inventoryEffect: "acquisition",
-              taxTreatment: "non_taxable_by_default",
-              resolutionStrategy: "static",
-              pairedRecordRequired: false,
-              mappingStatus: "approved",
-              reviewerNotes: "Reviewed",
-              sourceNotes: null,
-            },
-          ],
+  it.effect(
+    "persists transaction-type catalogs, approved mappings, and pending-review discoveries",
+    () =>
+      Effect.gen(function* () {
+        const transactionCatalogCount = yield* Effect.promise(() =>
+          runRepository(
+            Effect.flatMap(ProviderReferenceRepository, (repository) =>
+              repository.upsertTransactionTypeCatalog({
+                providerKey: "coinbase",
+                entries: [
+                  {
+                    providerKey: "coinbase",
+                    providerTransactionType: "buy",
+                    displayName: "Buy",
+                    payload: { type: "buy" },
+                  },
+                  {
+                    providerKey: "coinbase",
+                    providerTransactionType: "send",
+                    displayName: "Send",
+                    payload: { type: "send" },
+                  },
+                ],
+              })
+            )
+          )
+        )
+
+        const ensuredTransactionMappings = yield* Effect.promise(() =>
+          runRepository(
+            Effect.flatMap(ProviderReferenceRepository, (repository) =>
+              repository.ensureTransactionTypeMappings({
+                providerKey: "coinbase",
+                mappings: [
+                  {
+                    providerKey: "coinbase",
+                    providerTransactionType: "buy",
+                    transactionType: "buy_fiat",
+                    inventoryEffect: "acquisition",
+                    taxTreatment: "non_taxable_by_default",
+                    resolutionStrategy: "static",
+                    pairedRecordRequired: false,
+                    mappingStatus: "approved",
+                    reviewerNotes: "Reviewed",
+                    sourceNotes: null,
+                  },
+                ],
+              })
+            )
+          )
+        )
+
+        yield* Effect.promise(() =>
+          runRepository(
+            Effect.flatMap(ProviderReferenceRepository, (repository) =>
+              repository.recordPendingTransactionTypeMapping({
+                providerKey: "coinbase",
+                providerTransactionType: "mystery_type",
+                transactionType: null,
+                inventoryEffect: "unknown",
+                taxTreatment: "requires_additional_rule_logic",
+                resolutionStrategy: "no_leg",
+                pairedRecordRequired: false,
+                mappingStatus: "pending_review",
+                reviewerNotes: null,
+                sourceNotes: "Observed in fixture payload",
+              })
+            )
+          )
+        )
+
+        const approvedTransactionMapping = yield* Effect.promise(() =>
+          runRepository(
+            Effect.flatMap(ProviderReferenceRepository, (repository) =>
+              repository.findTransactionTypeMapping({
+                providerKey: "coinbase",
+                providerTransactionType: "buy",
+              })
+            )
+          )
+        )
+
+        const pendingTransactionMapping = yield* Effect.promise(() =>
+          runRepository(
+            Effect.flatMap(ProviderReferenceRepository, (repository) =>
+              repository.findTransactionTypeMapping({
+                providerKey: "coinbase",
+                providerTransactionType: "mystery_type",
+              })
+            )
+          )
+        )
+
+        expect(transactionCatalogCount).toBe(2)
+        expect(ensuredTransactionMappings).toBe(1)
+        expect(Option.getOrNull(approvedTransactionMapping)).toMatchObject({
+          providerTransactionType: "buy",
+          transactionType: "buy_fiat",
+          mappingStatus: "approved",
         })
-      )
-    )
-
-    await runRepository(
-      Effect.flatMap(ProviderReferenceRepository, (repository) =>
-        repository.recordPendingTransactionTypeMapping({
-          providerKey: "coinbase",
+        expect(Option.getOrNull(pendingTransactionMapping)).toMatchObject({
           providerTransactionType: "mystery_type",
           transactionType: null,
-          inventoryEffect: "unknown",
-          taxTreatment: "requires_additional_rule_logic",
-          resolutionStrategy: "no_leg",
-          pairedRecordRequired: false,
           mappingStatus: "pending_review",
-          reviewerNotes: null,
-          sourceNotes: "Observed in fixture payload",
         })
-      )
-    )
-
-    const approvedTransactionMapping = await runRepository(
-      Effect.flatMap(ProviderReferenceRepository, (repository) =>
-        repository.findTransactionTypeMapping({
-          providerKey: "coinbase",
-          providerTransactionType: "buy",
-        })
-      )
-    )
-
-    const pendingTransactionMapping = await runRepository(
-      Effect.flatMap(ProviderReferenceRepository, (repository) =>
-        repository.findTransactionTypeMapping({
-          providerKey: "coinbase",
-          providerTransactionType: "mystery_type",
-        })
-      )
-    )
-
-    expect(transactionCatalogCount).toBe(2)
-    expect(ensuredTransactionMappings).toBe(1)
-    expect(Option.getOrNull(approvedTransactionMapping)).toMatchObject({
-      providerTransactionType: "buy",
-      transactionType: "buy_fiat",
-      mappingStatus: "approved",
-    })
-    expect(Option.getOrNull(pendingTransactionMapping)).toMatchObject({
-      providerTransactionType: "mystery_type",
-      transactionType: null,
-      mappingStatus: "pending_review",
-    })
-  })
+      })
+  )
 })

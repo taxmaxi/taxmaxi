@@ -1,8 +1,9 @@
+import * as DateTime from "effect/DateTime"
 import * as ConfigProvider from "effect/ConfigProvider"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import * as Option from "effect/Option"
-import { describe, expect, it } from "vitest"
+import { describe, expect, it } from "@effect/vitest"
 import { SourceSyncJobExecutorLive } from "../../src/layers/SourceSyncJobExecutorLive.ts"
 import {
   FetchProviderRawBatchResult,
@@ -67,13 +68,13 @@ const replayRawRecord: SourceRawRecord = {
   externalAccountId: "account-1",
   externalRecordId: "account-1",
   externalParentId: null,
-  occurredAt: new Date("2026-01-01T00:00:00.000Z"),
+  occurredAt: DateTime.toDateUtc(DateTime.makeUnsafe("2026-01-01T00:00:00.000Z")),
   payload: { id: "account-1" },
-  importedAt: new Date("2026-01-01T00:00:00.000Z"),
+  importedAt: DateTime.toDateUtc(DateTime.makeUnsafe("2026-01-01T00:00:00.000Z")),
   normalizedAt: null,
   normalizationError: null,
-  createdAt: new Date("2026-01-01T00:00:00.000Z"),
-  updatedAt: new Date("2026-01-01T00:00:00.000Z"),
+  createdAt: DateTime.toDateUtc(DateTime.makeUnsafe("2026-01-01T00:00:00.000Z")),
+  updatedAt: DateTime.toDateUtc(DateTime.makeUnsafe("2026-01-01T00:00:00.000Z")),
 }
 
 const makeReplayRawRecord = (index: number): SourceRawRecord => ({
@@ -718,15 +719,15 @@ const makeExecutorLayer = ({
 }
 
 describe("SourceSyncJobExecutor", () => {
-  it("reconciles every principal source before canonicalizing any source", async () => {
-    const events: Array<string> = []
-    const principalSources = ["source-c", "source-b", "source-a"].map((id) => ({
-      ...source,
-      id,
-    }))
+  it.effect("reconciles every principal source before canonicalizing any source", () =>
+    Effect.gen(function* () {
+      const events: Array<string> = []
+      const principalSources = ["source-c", "source-b", "source-a"].map((id) => ({
+        ...source,
+        id,
+      }))
 
-    await Effect.runPromise(
-      Effect.gen(function* () {
+      yield* Effect.gen(function* () {
         const executor = yield* SourceSyncJobExecutor
         return yield* executor.execute({ jobId: "job-1" })
       }).pipe(
@@ -738,56 +739,56 @@ describe("SourceSyncJobExecutor", () => {
           })
         )
       )
-    )
 
-    expect(events.filter((event) => /^(reconcile|canonicalize):/.test(event))).toEqual([
-      "reconcile:source-c",
-      "reconcile:source-b",
-      "reconcile:source-a",
-      "canonicalize:source-c",
-      "canonicalize:source-b",
-      "canonicalize:source-a",
-    ])
-  })
+      expect(events.filter((event) => /^(reconcile|canonicalize):/.test(event))).toEqual([
+        "reconcile:source-c",
+        "reconcile:source-b",
+        "reconcile:source-a",
+        "canonicalize:source-c",
+        "canonicalize:source-b",
+        "canonicalize:source-a",
+      ])
+    })
+  )
 
-  it("runs sync mode and marks the job completed", async () => {
-    const events: Array<string> = []
-    const result = await Effect.runPromise(
-      Effect.gen(function* () {
+  it.effect("runs sync mode and marks the job completed", () =>
+    Effect.gen(function* () {
+      const events: Array<string> = []
+      const result = yield* Effect.gen(function* () {
         const executor = yield* SourceSyncJobExecutor
         return yield* executor.execute({ jobId: "job-1" })
       }).pipe(Effect.provide(makeExecutorLayer({ mode: "sync", events })))
-    )
 
-    expect(result.status).toBe("completed")
-    expect(events).toContain("progress:0:open")
-    expect(events).toContain("heartbeat:source-sync-inline-executor")
-    expect(events).toContain("progress:0:done")
-    expect(events).toContain("complete:0:0")
-  })
-
-  it("runs a non-Coinbase provider module through fetch and normalization hooks", async () => {
-    const events: Array<string> = []
-    const fetchedProviderRecord = ProviderRawRecord.make({
-      providerKey: "stub-chain",
-      recordType: "stub_transaction",
-      externalRecordId: "stub-tx-1",
-      externalAccountId: null,
-      externalParentId: null,
-      occurredAt: new Date("2026-01-01T00:00:00.000Z"),
-      payload: { id: "stub-tx-1" },
+      expect(result.status).toBe("completed")
+      expect(events).toContain("progress:0:open")
+      expect(events).toContain("heartbeat:source-sync-inline-executor")
+      expect(events).toContain("progress:0:done")
+      expect(events).toContain("complete:0:0")
     })
-    const checkpointRawRecord: SourceRawRecord = {
-      ...replayRawRecord,
-      id: "raw-stub-1",
-      provider: "stub-chain",
-      recordType: "stub_transaction",
-      externalRecordId: "stub-tx-1",
-      payload: { id: "stub-tx-1" },
-    }
+  )
 
-    const result = await Effect.runPromise(
-      Effect.gen(function* () {
+  it.effect("runs a non-Coinbase provider module through fetch and normalization hooks", () =>
+    Effect.gen(function* () {
+      const events: Array<string> = []
+      const fetchedProviderRecord = ProviderRawRecord.make({
+        providerKey: "stub-chain",
+        recordType: "stub_transaction",
+        externalRecordId: "stub-tx-1",
+        externalAccountId: null,
+        externalParentId: null,
+        occurredAt: DateTime.toDateUtc(DateTime.makeUnsafe("2026-01-01T00:00:00.000Z")),
+        payload: { id: "stub-tx-1" },
+      })
+      const checkpointRawRecord: SourceRawRecord = {
+        ...replayRawRecord,
+        id: "raw-stub-1",
+        provider: "stub-chain",
+        recordType: "stub_transaction",
+        externalRecordId: "stub-tx-1",
+        payload: { id: "stub-tx-1" },
+      }
+
+      const result = yield* Effect.gen(function* () {
         const executor = yield* SourceSyncJobExecutor
         return yield* executor.execute({ jobId: "job-1" })
       }).pipe(
@@ -801,44 +802,44 @@ describe("SourceSyncJobExecutor", () => {
           })
         )
       )
-    )
 
-    expect(result.status).toBe("completed")
-    expect(events).toContain("stub:fetch-raw-batch")
-    expect(events).toContain("stub:refresh-reference-data")
-    expect(events).toContain("stub:make-normalizer")
-    expect(events).toContain("stub:normalize:stub-chain:stub_transaction")
-    expect(events).toContain("mark-raw-normalized")
-    expect(events).toContain("phase:discovering:0:unknown")
-    expect(events).toContain("phase:classifying:0:1")
-    expect(events).toContain("phase:classifying:1:1")
-    expect(events).toContain("phase:reconciling:0:unknown")
-    expect(events).toContain("phase:completed:1:1")
-    expect(events).toContain("complete:1:1")
-  })
-
-  it("replays rows that failed during the current run before completing the sync", async () => {
-    const events: Array<string> = []
-    const fetchedProviderRecord = ProviderRawRecord.make({
-      providerKey: "stub-chain",
-      recordType: "stub_transaction",
-      externalRecordId: "stub-tx-1",
-      externalAccountId: null,
-      externalParentId: null,
-      occurredAt: new Date("2026-01-01T00:00:00.000Z"),
-      payload: { id: "stub-tx-1" },
+      expect(result.status).toBe("completed")
+      expect(events).toContain("stub:fetch-raw-batch")
+      expect(events).toContain("stub:refresh-reference-data")
+      expect(events).toContain("stub:make-normalizer")
+      expect(events).toContain("stub:normalize:stub-chain:stub_transaction")
+      expect(events).toContain("mark-raw-normalized")
+      expect(events).toContain("phase:discovering:0:unknown")
+      expect(events).toContain("phase:classifying:0:1")
+      expect(events).toContain("phase:classifying:1:1")
+      expect(events).toContain("phase:reconciling:0:unknown")
+      expect(events).toContain("phase:completed:1:1")
+      expect(events).toContain("complete:1:1")
     })
-    const checkpointRawRecord: SourceRawRecord = {
-      ...replayRawRecord,
-      id: "raw-stub-1",
-      provider: "stub-chain",
-      recordType: "stub_transaction",
-      externalRecordId: "stub-tx-1",
-      payload: { id: "stub-tx-1" },
-    }
+  )
 
-    const result = await Effect.runPromise(
-      Effect.gen(function* () {
+  it.effect("replays rows that failed during the current run before completing the sync", () =>
+    Effect.gen(function* () {
+      const events: Array<string> = []
+      const fetchedProviderRecord = ProviderRawRecord.make({
+        providerKey: "stub-chain",
+        recordType: "stub_transaction",
+        externalRecordId: "stub-tx-1",
+        externalAccountId: null,
+        externalParentId: null,
+        occurredAt: DateTime.toDateUtc(DateTime.makeUnsafe("2026-01-01T00:00:00.000Z")),
+        payload: { id: "stub-tx-1" },
+      })
+      const checkpointRawRecord: SourceRawRecord = {
+        ...replayRawRecord,
+        id: "raw-stub-1",
+        provider: "stub-chain",
+        recordType: "stub_transaction",
+        externalRecordId: "stub-tx-1",
+        payload: { id: "stub-tx-1" },
+      }
+
+      const result = yield* Effect.gen(function* () {
         const executor = yield* SourceSyncJobExecutor
         return yield* executor.execute({ jobId: "job-1" })
       }).pipe(
@@ -854,41 +855,41 @@ describe("SourceSyncJobExecutor", () => {
           })
         )
       )
-    )
 
-    expect(result.status).toBe("completed")
-    expect(events).toContain("mark-raw-failed:Paired sibling row is not cached yet.")
-    expect(
-      events.filter((event) => event === "stub:normalize:stub-chain:stub_transaction")
-    ).toHaveLength(2)
-    expect(events).toContain("mark-raw-normalized")
-    expect(events).toContain("complete:1:1")
-    expect(events).toContain("failed:0")
-  })
-
-  it("routes Solana production sources through the Helius provider key", async () => {
-    const events: Array<string> = []
-    const fetchedProviderRecord = ProviderRawRecord.make({
-      providerKey: "helius-solana",
-      recordType: "solana_transaction_full",
-      externalRecordId: "solana-signature-1",
-      externalAccountId: "So11111111111111111111111111111111111111112",
-      externalParentId: null,
-      occurredAt: new Date("2026-01-01T00:00:00.000Z"),
-      payload: { transaction: { signatures: ["solana-signature-1"] } },
+      expect(result.status).toBe("completed")
+      expect(events).toContain("mark-raw-failed:Paired sibling row is not cached yet.")
+      expect(
+        events.filter((event) => event === "stub:normalize:stub-chain:stub_transaction")
+      ).toHaveLength(2)
+      expect(events).toContain("mark-raw-normalized")
+      expect(events).toContain("complete:1:1")
+      expect(events).toContain("failed:0")
     })
-    const checkpointRawRecord: SourceRawRecord = {
-      ...replayRawRecord,
-      id: "raw-solana-1",
-      provider: "helius-solana",
-      recordType: "solana_transaction_full",
-      externalRecordId: "solana-signature-1",
-      externalAccountId: "So11111111111111111111111111111111111111112",
-      payload: { transaction: { signatures: ["solana-signature-1"] } },
-    }
+  )
 
-    const result = await Effect.runPromise(
-      Effect.gen(function* () {
+  it.effect("routes Solana production sources through the Helius provider key", () =>
+    Effect.gen(function* () {
+      const events: Array<string> = []
+      const fetchedProviderRecord = ProviderRawRecord.make({
+        providerKey: "helius-solana",
+        recordType: "solana_transaction_full",
+        externalRecordId: "solana-signature-1",
+        externalAccountId: "So11111111111111111111111111111111111111112",
+        externalParentId: null,
+        occurredAt: DateTime.toDateUtc(DateTime.makeUnsafe("2026-01-01T00:00:00.000Z")),
+        payload: { transaction: { signatures: ["solana-signature-1"] } },
+      })
+      const checkpointRawRecord: SourceRawRecord = {
+        ...replayRawRecord,
+        id: "raw-solana-1",
+        provider: "helius-solana",
+        recordType: "solana_transaction_full",
+        externalRecordId: "solana-signature-1",
+        externalAccountId: "So11111111111111111111111111111111111111112",
+        payload: { transaction: { signatures: ["solana-signature-1"] } },
+      }
+
+      const result = yield* Effect.gen(function* () {
         const executor = yield* SourceSyncJobExecutor
         return yield* executor.execute({ jobId: "job-1" })
       }).pipe(
@@ -902,68 +903,72 @@ describe("SourceSyncJobExecutor", () => {
           })
         )
       )
-    )
 
-    expect(result.status).toBe("completed")
-    expect(events).toContain("helius:fetch-raw-batch")
-    expect(events).toContain("helius:normalize:helius-solana:solana_transaction_full")
-    expect(events).toContain("mark-raw-failed:Helius Solana normalization is not implemented yet.")
-    expect(events).toContain("complete:1:0")
-    expect(events).toContain("failed:1")
-  })
+      expect(result.status).toBe("completed")
+      expect(events).toContain("helius:fetch-raw-batch")
+      expect(events).toContain("helius:normalize:helius-solana:solana_transaction_full")
+      expect(events).toContain(
+        "mark-raw-failed:Helius Solana normalization is not implemented yet."
+      )
+      expect(events).toContain("complete:1:0")
+      expect(events).toContain("failed:1")
+    })
+  )
 
-  it("keeps fetchedRecords and normalizedRecords distinct when every fetched record fails to persist", async () => {
-    const events: Array<string> = []
-    const fetchedProviderRecords = [1, 2, 3].map((index) =>
-      ProviderRawRecord.make({
-        providerKey: "helius-solana",
-        recordType: "solana_transaction_full",
-        externalRecordId: `solana-signature-${index}`,
-        externalAccountId: "So11111111111111111111111111111111111111112",
-        externalParentId: null,
-        occurredAt: new Date("2026-01-01T00:00:00.000Z"),
-        payload: { transaction: { signatures: [`solana-signature-${index}`] } },
-      })
-    )
-    const checkpointRawRecords = [1, 2, 3].map((index) => ({
-      ...replayRawRecord,
-      id: `raw-solana-${index}`,
-      provider: "helius-solana",
-      recordType: "solana_transaction_full",
-      externalRecordId: `solana-signature-${index}`,
-      externalAccountId: "So11111111111111111111111111111111111111112",
-      payload: { transaction: { signatures: [`solana-signature-${index}`] } },
-    }))
-
-    const result = await Effect.runPromise(
+  it.effect(
+    "keeps fetchedRecords and normalizedRecords distinct when every fetched record fails to persist",
+    () =>
       Effect.gen(function* () {
-        const executor = yield* SourceSyncJobExecutor
-        return yield* executor.execute({ jobId: "job-1" })
-      }).pipe(
-        Effect.provide(
-          makeExecutorLayer({
-            mode: "sync",
-            sourceProviderKey: "helius-solana",
-            fetchedProviderRecords,
-            checkpointRawRecords,
-            events,
+        const events: Array<string> = []
+        const fetchedProviderRecords = [1, 2, 3].map((index) =>
+          ProviderRawRecord.make({
+            providerKey: "helius-solana",
+            recordType: "solana_transaction_full",
+            externalRecordId: `solana-signature-${index}`,
+            externalAccountId: "So11111111111111111111111111111111111111112",
+            externalParentId: null,
+            occurredAt: DateTime.toDateUtc(DateTime.makeUnsafe("2026-01-01T00:00:00.000Z")),
+            payload: { transaction: { signatures: [`solana-signature-${index}`] } },
           })
         )
-      )
-    )
+        const checkpointRawRecords = [1, 2, 3].map((index) => ({
+          ...replayRawRecord,
+          id: `raw-solana-${index}`,
+          provider: "helius-solana",
+          recordType: "solana_transaction_full",
+          externalRecordId: `solana-signature-${index}`,
+          externalAccountId: "So11111111111111111111111111111111111111112",
+          payload: { transaction: { signatures: [`solana-signature-${index}`] } },
+        }))
 
-    expect(result.status).toBe("completed")
-    // Every fetched batch is cached during discovery, before normalization runs,
-    // so a run that persists nothing must still report the full fetched count.
-    expect(events).toContain("complete:3:0")
-    expect(events).toContain("failed:3")
-    expect(events).not.toContain("complete:0:0")
-  })
+        const result = yield* Effect.gen(function* () {
+          const executor = yield* SourceSyncJobExecutor
+          return yield* executor.execute({ jobId: "job-1" })
+        }).pipe(
+          Effect.provide(
+            makeExecutorLayer({
+              mode: "sync",
+              sourceProviderKey: "helius-solana",
+              fetchedProviderRecords,
+              checkpointRawRecords,
+              events,
+            })
+          )
+        )
 
-  it("runs replay mode with cached raw rows and marks the job completed", async () => {
-    const events: Array<string> = []
-    const result = await Effect.runPromise(
-      Effect.gen(function* () {
+        expect(result.status).toBe("completed")
+        // Every fetched batch is cached during discovery, before normalization runs,
+        // so a run that persists nothing must still report the full fetched count.
+        expect(events).toContain("complete:3:0")
+        expect(events).toContain("failed:3")
+        expect(events).not.toContain("complete:0:0")
+      })
+  )
+
+  it.effect("runs replay mode with cached raw rows and marks the job completed", () =>
+    Effect.gen(function* () {
+      const events: Array<string> = []
+      const result = yield* Effect.gen(function* () {
         const executor = yield* SourceSyncJobExecutor
         return yield* executor.execute({ jobId: "job-1" })
       }).pipe(
@@ -971,21 +976,21 @@ describe("SourceSyncJobExecutor", () => {
           makeExecutorLayer({ mode: "replay", replayRawRecords: [replayRawRecord], events })
         )
       )
-    )
 
-    expect(result.status).toBe("completed")
-    expect(events).toContain("rollback-reconciliations")
-    expect(events).toContain("reset-derived-state")
-    expect(events).toContain("heartbeat:source-sync-inline-executor")
-    expect(events).toContain("mark-raw-normalized")
-    expect(events).toContain("clear-replay-failure-metadata")
-    expect(events).toContain("complete:1:1")
-  })
+      expect(result.status).toBe("completed")
+      expect(events).toContain("rollback-reconciliations")
+      expect(events).toContain("reset-derived-state")
+      expect(events).toContain("heartbeat:source-sync-inline-executor")
+      expect(events).toContain("mark-raw-normalized")
+      expect(events).toContain("clear-replay-failure-metadata")
+      expect(events).toContain("complete:1:1")
+    })
+  )
 
-  it("heartbeats between replay preparation batches and around destructive work", async () => {
-    const events: Array<string> = []
-    const result = await Effect.runPromise(
-      Effect.gen(function* () {
+  it.effect("heartbeats between replay preparation batches and around destructive work", () =>
+    Effect.gen(function* () {
+      const events: Array<string> = []
+      const result = yield* Effect.gen(function* () {
         const executor = yield* SourceSyncJobExecutor
         return yield* executor.execute({ jobId: "job-1" })
       }).pipe(
@@ -998,37 +1003,37 @@ describe("SourceSyncJobExecutor", () => {
           })
         )
       )
-    )
 
-    expect(result.status).toBe("completed")
-    expect(
-      events
-        .filter(
-          (event) =>
-            event.startsWith("normalize:") ||
-            event.startsWith("heartbeat:") ||
-            event === "reserve-replay-credits" ||
-            event === "rollback-reconciliations" ||
-            event === "reset-derived-state"
-        )
-        .slice(0, 9)
-    ).toEqual([
-      "normalize:raw-1",
-      "heartbeat:source-sync-inline-executor",
-      "normalize:raw-2",
-      "heartbeat:source-sync-inline-executor",
-      "heartbeat:source-sync-inline-executor",
-      "reserve-replay-credits",
-      "heartbeat:source-sync-inline-executor",
-      "rollback-reconciliations",
-      "reset-derived-state",
-    ])
-  })
+      expect(result.status).toBe("completed")
+      expect(
+        events
+          .filter(
+            (event) =>
+              event.startsWith("normalize:") ||
+              event.startsWith("heartbeat:") ||
+              event === "reserve-replay-credits" ||
+              event === "rollback-reconciliations" ||
+              event === "reset-derived-state"
+          )
+          .slice(0, 9)
+      ).toEqual([
+        "normalize:raw-1",
+        "heartbeat:source-sync-inline-executor",
+        "normalize:raw-2",
+        "heartbeat:source-sync-inline-executor",
+        "heartbeat:source-sync-inline-executor",
+        "reserve-replay-credits",
+        "heartbeat:source-sync-inline-executor",
+        "rollback-reconciliations",
+        "reset-derived-state",
+      ])
+    })
+  )
 
-  it("stops a prepared replay before reserving credits when ownership is lost", async () => {
-    const events: Array<string> = []
-    const result = await Effect.runPromise(
-      Effect.gen(function* () {
+  it.effect("stops a prepared replay before reserving credits when ownership is lost", () =>
+    Effect.gen(function* () {
+      const events: Array<string> = []
+      const result = yield* Effect.gen(function* () {
         const executor = yield* SourceSyncJobExecutor
         return yield* executor.execute({ jobId: "job-1" })
       }).pipe(
@@ -1042,18 +1047,18 @@ describe("SourceSyncJobExecutor", () => {
           })
         )
       )
-    )
 
-    expect(result.status).toBe("failed")
-    expect(events).not.toContain("reserve-replay-credits")
-    expect(events).not.toContain("reset-derived-state")
-    expect(events).not.toContain("mark-raw-normalized")
-  })
+      expect(result.status).toBe("failed")
+      expect(events).not.toContain("reserve-replay-credits")
+      expect(events).not.toContain("reset-derived-state")
+      expect(events).not.toContain("mark-raw-normalized")
+    })
+  )
 
-  it("does not reset replay state when ownership is lost during credit reservation", async () => {
-    const events: Array<string> = []
-    const result = await Effect.runPromise(
-      Effect.gen(function* () {
+  it.live("does not reset replay state when ownership is lost during credit reservation", () =>
+    Effect.gen(function* () {
+      const events: Array<string> = []
+      const result = yield* Effect.gen(function* () {
         const executor = yield* SourceSyncJobExecutor
         return yield* executor.execute({ jobId: "job-1" })
       }).pipe(
@@ -1069,19 +1074,19 @@ describe("SourceSyncJobExecutor", () => {
           })
         )
       )
-    )
 
-    expect(result.status).toBe("failed")
-    expect(events).toContain("reserve-replay-credits")
-    expect(events).not.toContain("reset-derived-state")
-    expect(events.some((event) => event.startsWith("release-replay-credits:"))).toBe(false)
-    expect(events).not.toContain("mark-raw-normalized")
-  })
+      expect(result.status).toBe("failed")
+      expect(events).toContain("reserve-replay-credits")
+      expect(events).not.toContain("reset-derived-state")
+      expect(events.some((event) => event.startsWith("release-replay-credits:"))).toBe(false)
+      expect(events).not.toContain("mark-raw-normalized")
+    })
+  )
 
-  it("interrupts replay reset when the active job lease is lost", async () => {
-    const events: Array<string> = []
-    const result = await Effect.runPromise(
-      Effect.gen(function* () {
+  it.live("interrupts replay reset when the active job lease is lost", () =>
+    Effect.gen(function* () {
+      const events: Array<string> = []
+      const result = yield* Effect.gen(function* () {
         const executor = yield* SourceSyncJobExecutor
         return yield* executor.execute({ jobId: "job-1" })
       }).pipe(
@@ -1098,20 +1103,20 @@ describe("SourceSyncJobExecutor", () => {
           })
         )
       )
-    )
 
-    expect(result.status).toBe("failed")
-    expect(events).toContain("reset-derived-state")
-    expect(events).toContain(
-      "release-replay-credits:job-1:reserved-credit:raw-1,reserved-credit:raw-2"
-    )
-    expect(events).not.toContain("mark-raw-normalized")
-  })
+      expect(result.status).toBe("failed")
+      expect(events).toContain("reset-derived-state")
+      expect(events).toContain(
+        "release-replay-credits:job-1:reserved-credit:raw-1,reserved-credit:raw-2"
+      )
+      expect(events).not.toContain("mark-raw-normalized")
+    })
+  )
 
-  it("releases replay credits when the derived-state reset fails", async () => {
-    const events: Array<string> = []
-    const result = await Effect.runPromise(
-      Effect.gen(function* () {
+  it.effect("releases replay credits when the derived-state reset fails", () =>
+    Effect.gen(function* () {
+      const events: Array<string> = []
+      const result = yield* Effect.gen(function* () {
         const executor = yield* SourceSyncJobExecutor
         return yield* executor.execute({ jobId: "job-1" })
       }).pipe(
@@ -1125,17 +1130,17 @@ describe("SourceSyncJobExecutor", () => {
           })
         )
       )
-    )
 
-    expect(result.status).toBe("failed")
-    expect(events).toContain("release-replay-credits:job-1:reserved-credit:raw-1")
-    expect(events).not.toContain("mark-raw-normalized")
-  })
+      expect(result.status).toBe("failed")
+      expect(events).toContain("release-replay-credits:job-1:reserved-credit:raw-1")
+      expect(events).not.toContain("mark-raw-normalized")
+    })
+  )
 
-  it("releases only the replay credit whose prepared persistence fails", async () => {
-    const events: Array<string> = []
-    const result = await Effect.runPromise(
-      Effect.gen(function* () {
+  it.effect("releases only the replay credit whose prepared persistence fails", () =>
+    Effect.gen(function* () {
+      const events: Array<string> = []
+      const result = yield* Effect.gen(function* () {
         const executor = yield* SourceSyncJobExecutor
         return yield* executor.execute({ jobId: "job-1" })
       }).pipe(
@@ -1149,51 +1154,55 @@ describe("SourceSyncJobExecutor", () => {
           })
         )
       )
-    )
 
-    expect(result.status).toBe("completed")
-    expect(events).toContain("persist-normalized:raw-1")
-    expect(events).toContain("persist-normalized:raw-2")
-    expect(events).toContain("release-replay-credits:job-1:reserved-credit:raw-2")
-    expect(events).not.toContain("release-replay-credits:job-1:reserved-credit:raw-1")
-    expect(events).toContain("mark-raw-failed:Prepared replay persistence failed.")
-    expect(events).toContain("complete:2:1")
-    expect(events).toContain("failed:1")
-  })
+      expect(result.status).toBe("completed")
+      expect(events).toContain("persist-normalized:raw-1")
+      expect(events).toContain("persist-normalized:raw-2")
+      expect(events).toContain("release-replay-credits:job-1:reserved-credit:raw-2")
+      expect(events).not.toContain("release-replay-credits:job-1:reserved-credit:raw-1")
+      expect(events).toContain("mark-raw-failed:Prepared replay persistence failed.")
+      expect(events).toContain("complete:2:1")
+      expect(events).toContain("failed:1")
+    })
+  )
 
-  it("defers cleanup of a shared replay credit until every referencing row is processed", async () => {
-    const events: Array<string> = []
-    const result = await Effect.runPromise(
+  it.effect(
+    "defers cleanup of a shared replay credit until every referencing row is processed",
+    () =>
       Effect.gen(function* () {
-        const executor = yield* SourceSyncJobExecutor
-        return yield* executor.execute({ jobId: "job-1" })
-      }).pipe(
-        Effect.provide(
-          makeExecutorLayer({
-            mode: "replay",
-            replayRawRecords: [makeReplayRawRecord(1), makeReplayRawRecord(2)],
-            prepareReplayTransactions: true,
-            failReplayPersistenceRawRecordId: "raw-1",
-            replayCreditReference: () => "reserved-credit:shared",
-            events,
-          })
+        const events: Array<string> = []
+        const result = yield* Effect.gen(function* () {
+          const executor = yield* SourceSyncJobExecutor
+          return yield* executor.execute({ jobId: "job-1" })
+        }).pipe(
+          Effect.provide(
+            makeExecutorLayer({
+              mode: "replay",
+              replayRawRecords: [makeReplayRawRecord(1), makeReplayRawRecord(2)],
+              prepareReplayTransactions: true,
+              failReplayPersistenceRawRecordId: "raw-1",
+              replayCreditReference: () => "reserved-credit:shared",
+              events,
+            })
+          )
         )
-      )
-    )
 
-    const siblingPersistenceIndex = events.indexOf("persist-normalized:raw-2")
-    const sharedCleanupIndex = events.indexOf("cleanup-replay-credits:job-1:reserved-credit:shared")
+        const siblingPersistenceIndex = events.indexOf("persist-normalized:raw-2")
+        const sharedCleanupIndex = events.indexOf(
+          "cleanup-replay-credits:job-1:reserved-credit:shared"
+        )
 
-    expect(result.status).toBe("completed")
-    expect(siblingPersistenceIndex).toBeGreaterThan(-1)
-    expect(sharedCleanupIndex).toBeGreaterThan(siblingPersistenceIndex)
-    expect(events).not.toContain("release-replay-credits:job-1:reserved-credit:shared")
-  })
+        expect(result.status).toBe("completed")
+        expect(siblingPersistenceIndex).toBeGreaterThan(-1)
+        expect(sharedCleanupIndex).toBeGreaterThan(siblingPersistenceIndex)
+        expect(events).not.toContain("release-replay-credits:job-1:reserved-credit:shared")
+      })
+  )
 
-  it("releases all still-owned replay credits when persistence fails", async () => {
-    const events: Array<string> = []
-    const result = await Effect.runPromise(
-      Effect.gen(function* () {
+  it.effect("releases all still-owned replay credits when persistence fails", () =>
+    Effect.gen(function* () {
+      const events: Array<string> = []
+      const result = yield* Effect.gen(function* () {
         const executor = yield* SourceSyncJobExecutor
         return yield* executor.execute({ jobId: "job-1" })
       }).pipe(
@@ -1207,20 +1216,20 @@ describe("SourceSyncJobExecutor", () => {
           })
         )
       )
-    )
 
-    expect(result.status).toBe("failed")
-    expect(events).toContain("persist-normalized:raw-1")
-    expect(events).toContain("persist-normalized:raw-2")
-    expect(events).toContain("release-replay-credits:job-1:reserved-credit:raw-2")
-    expect(events).not.toContain("release-replay-credits:job-1:reserved-credit:raw-1")
-    expect(events).not.toContain("mark-raw-failed:Replay persistence failed")
-  })
+      expect(result.status).toBe("failed")
+      expect(events).toContain("persist-normalized:raw-1")
+      expect(events).toContain("persist-normalized:raw-2")
+      expect(events).toContain("release-replay-credits:job-1:reserved-credit:raw-2")
+      expect(events).not.toContain("release-replay-credits:job-1:reserved-credit:raw-1")
+      expect(events).not.toContain("mark-raw-failed:Replay persistence failed")
+    })
+  )
 
-  it("checks replay ownership before resetting an empty source", async () => {
-    const events: Array<string> = []
-    const result = await Effect.runPromise(
-      Effect.gen(function* () {
+  it.effect("checks replay ownership before resetting an empty source", () =>
+    Effect.gen(function* () {
+      const events: Array<string> = []
+      const result = yield* Effect.gen(function* () {
         const executor = yield* SourceSyncJobExecutor
         return yield* executor.execute({ jobId: "job-1" })
       }).pipe(
@@ -1232,150 +1241,156 @@ describe("SourceSyncJobExecutor", () => {
           })
         )
       )
-    )
 
-    expect(result.status).toBe("failed")
-    expect(events).not.toContain("reserve-replay-credits")
-    expect(events).not.toContain("reset-derived-state")
-  })
+      expect(result.status).toBe("failed")
+      expect(events).not.toContain("reserve-replay-credits")
+      expect(events).not.toContain("reset-derived-state")
+    })
+  )
 
-  it("marks the job credit-required, not failed, when transaction credits cannot be reserved", async () => {
-    const events: Array<string> = []
-    const result = await Effect.runPromise(
+  it.effect(
+    "marks the job credit-required, not failed, when transaction credits cannot be reserved",
+    () =>
       Effect.gen(function* () {
-        const executor = yield* SourceSyncJobExecutor
-        return yield* executor.execute({ jobId: "job-1" })
-      }).pipe(
-        Effect.provide(
-          makeExecutorLayer({
-            mode: "replay",
-            replayRawRecords: [replayRawRecord],
-            failReplayCreditReservation: true,
-            events,
-          })
+        const events: Array<string> = []
+        const result = yield* Effect.gen(function* () {
+          const executor = yield* SourceSyncJobExecutor
+          return yield* executor.execute({ jobId: "job-1" })
+        }).pipe(
+          Effect.provide(
+            makeExecutorLayer({
+              mode: "replay",
+              replayRawRecords: [replayRawRecord],
+              failReplayCreditReservation: true,
+              events,
+            })
+          )
         )
-      )
-    )
 
-    expect(result.status).toBe("credit_required")
-    expect(result.resumable).toBe(true)
-    expect(result.creditOutcome).toEqual({
-      reasonCode: "no_usable_credits",
-      availableCredits: 0,
-      creditsConsumed: 0,
-      additionalCreditsRequired: null,
-    })
-    expect(events).not.toContain("reset-derived-state")
-    expect(events).not.toContain("mark-raw-normalized")
-    expect(events.some((event) => event.startsWith("fail:"))).toBe(false)
-    expect(events.some((event) => event.startsWith("credit-required:"))).toBe(true)
-  })
+        expect(result.status).toBe("credit_required")
+        expect(result.resumable).toBe(true)
+        expect(result.creditOutcome).toEqual({
+          reasonCode: "no_usable_credits",
+          availableCredits: 0,
+          creditsConsumed: 0,
+          additionalCreditsRequired: null,
+        })
+        expect(events).not.toContain("reset-derived-state")
+        expect(events).not.toContain("mark-raw-normalized")
+        expect(events.some((event) => event.startsWith("fail:"))).toBe(false)
+        expect(events.some((event) => event.startsWith("credit-required:"))).toBe(true)
+      })
+  )
 
-  it("keeps earlier transactions committed and reports a resumable credit-required outcome for a sync run", async () => {
-    const events: Array<string> = []
-    const rawRecordOne = makeReplayRawRecord(1)
-    const rawRecordTwo = makeReplayRawRecord(2)
-
-    const result = await Effect.runPromise(
+  it.effect(
+    "keeps earlier transactions committed and reports a resumable credit-required outcome for a sync run",
+    () =>
       Effect.gen(function* () {
-        const executor = yield* SourceSyncJobExecutor
-        return yield* executor.execute({ jobId: "job-1" })
-      }).pipe(
-        Effect.provide(
-          makeExecutorLayer({
-            mode: "sync",
-            checkpointRawRecords: [rawRecordOne, rawRecordTwo],
-            prepareReplayTransactions: true,
-            failCreditRawRecordId: rawRecordTwo.id,
-            failCreditAvailableCredits: 0,
-            pageSize: 1,
-            events,
-          })
+        const events: Array<string> = []
+        const rawRecordOne = makeReplayRawRecord(1)
+        const rawRecordTwo = makeReplayRawRecord(2)
+
+        const result = yield* Effect.gen(function* () {
+          const executor = yield* SourceSyncJobExecutor
+          return yield* executor.execute({ jobId: "job-1" })
+        }).pipe(
+          Effect.provide(
+            makeExecutorLayer({
+              mode: "sync",
+              checkpointRawRecords: [rawRecordOne, rawRecordTwo],
+              prepareReplayTransactions: true,
+              failCreditRawRecordId: rawRecordTwo.id,
+              failCreditAvailableCredits: 0,
+              pageSize: 1,
+              events,
+            })
+          )
         )
-      )
-    )
 
-    expect(result.status).toBe("credit_required")
-    expect(result.resumable).toBe(true)
-    // No server-authored message: clients localize from the credit outcome.
-    expect(result.message).toBeNull()
-    expect(result.creditOutcome).toEqual({
-      reasonCode: "no_usable_credits",
-      availableCredits: 0,
-      creditsConsumed: 1,
-      additionalCreditsRequired: 1,
-    })
-    expect(Object.keys(result)).toEqual([
-      "sourceId",
-      "jobId",
-      "status",
-      "message",
-      "resumable",
-      "creditOutcome",
-    ])
+        expect(result.status).toBe("credit_required")
+        expect(result.resumable).toBe(true)
+        // No server-authored message: clients localize from the credit outcome.
+        expect(result.message).toBeNull()
+        expect(result.creditOutcome).toEqual({
+          reasonCode: "no_usable_credits",
+          availableCredits: 0,
+          creditsConsumed: 1,
+          additionalCreditsRequired: 1,
+        })
+        expect(Object.keys(result)).toEqual([
+          "sourceId",
+          "jobId",
+          "status",
+          "message",
+          "resumable",
+          "creditOutcome",
+        ])
 
-    // Record 1 already committed and must not be replayed away by the credit-required outcome.
-    expect(events).toContain(`persist-normalized:${rawRecordOne.id}`)
-    expect(events).toContain(`persist-normalized:${rawRecordTwo.id}`)
-    expect(events.some((event) => event.startsWith("fail:"))).toBe(false)
-    expect(events.some((event) => event.startsWith("credit-required:"))).toBe(true)
-  })
+        // Record 1 already committed and must not be replayed away by the credit-required outcome.
+        expect(events).toContain(`persist-normalized:${rawRecordOne.id}`)
+        expect(events).toContain(`persist-normalized:${rawRecordTwo.id}`)
+        expect(events.some((event) => event.startsWith("fail:"))).toBe(false)
+        expect(events.some((event) => event.startsWith("credit-required:"))).toBe(true)
+      })
+  )
 
-  it("continues after a credit top-up reusing cached history without refetching or re-charging", async () => {
-    const events: Array<string> = []
-    const rawRecordOne = makeReplayRawRecord(1)
-    const rawRecordTwo = makeReplayRawRecord(2)
-    const watermark = new Date("2026-01-02T00:00:00.000Z")
-
-    const executorLayer = makeExecutorLayer({
-      mode: "sync",
-      checkpointRawRecords: [rawRecordOne, rawRecordTwo],
-      prepareReplayTransactions: true,
-      failCreditRawRecordId: rawRecordTwo.id,
-      failCreditOnce: true,
-      fetchHighWatermark: watermark,
-      pageSize: 1,
-      events,
-    })
-
-    const [paused, continued, repeated] = await Effect.runPromise(
+  it.effect(
+    "continues after a credit top-up reusing cached history without refetching or re-charging",
+    () =>
       Effect.gen(function* () {
-        const executor = yield* SourceSyncJobExecutor
-        const pausedRun = yield* executor.execute({ jobId: "job-1" })
-        const continuedRun = yield* executor.execute({ jobId: "job-1" })
-        const repeatedRun = yield* executor.execute({ jobId: "job-1" })
-        return [pausedRun, continuedRun, repeatedRun] as const
-      }).pipe(Effect.provide(executorLayer))
-    )
+        const events: Array<string> = []
+        const rawRecordOne = makeReplayRawRecord(1)
+        const rawRecordTwo = makeReplayRawRecord(2)
+        const watermark = DateTime.toDateUtc(DateTime.makeUnsafe("2026-01-02T00:00:00.000Z"))
 
-    expect(paused.status).toBe("credit_required")
-    expect(continued.status).toBe("completed")
-    expect(repeated.status).toBe("completed")
+        const executorLayer = makeExecutorLayer({
+          mode: "sync",
+          checkpointRawRecords: [rawRecordOne, rawRecordTwo],
+          prepareReplayTransactions: true,
+          failCreditRawRecordId: rawRecordTwo.id,
+          failCreditOnce: true,
+          fetchHighWatermark: watermark,
+          pageSize: 1,
+          events,
+        })
 
-    // The continue run resumes provider fetching from the stored high watermark
-    // instead of refetching the history cached before the pause.
-    expect(events.filter((event) => event.startsWith("fetch:"))).toEqual([
-      "fetch:none",
-      `fetch:${watermark.toISOString()}`,
-      `fetch:${watermark.toISOString()}`,
-    ])
+        const [paused, continued, repeated] = yield* Effect.gen(function* () {
+          const executor = yield* SourceSyncJobExecutor
+          const pausedRun = yield* executor.execute({ jobId: "job-1" })
+          const continuedRun = yield* executor.execute({ jobId: "job-1" })
+          const repeatedRun = yield* executor.execute({ jobId: "job-1" })
+          return [pausedRun, continuedRun, repeatedRun] as const
+        }).pipe(Effect.provide(executorLayer))
 
-    // The transaction covered before the pause is not persisted or charged again;
-    // only the paused record is retried once credits exist.
-    expect(
-      events.filter((event) => event === `persist-normalized:${rawRecordOne.id}`)
-    ).toHaveLength(1)
-    expect(
-      events.filter((event) => event === `persist-normalized:${rawRecordTwo.id}`)
-    ).toHaveLength(2)
-  })
+        expect(paused.status).toBe("credit_required")
+        expect(continued.status).toBe("completed")
+        expect(repeated.status).toBe("completed")
 
-  it("records retry metadata and returns a retryable error before the final attempt", async () => {
-    const events: Array<string> = []
-    const nextRetryAt = new Date("2026-01-01T00:05:00.000Z")
+        // The continue run resumes provider fetching from the stored high watermark
+        // instead of refetching the history cached before the pause.
+        expect(events.filter((event) => event.startsWith("fetch:"))).toEqual([
+          "fetch:none",
+          `fetch:${watermark.toISOString()}`,
+          `fetch:${watermark.toISOString()}`,
+        ])
 
-    const result = await Effect.runPromise(
-      Effect.gen(function* () {
+        // The transaction covered before the pause is not persisted or charged again;
+        // only the paused record is retried once credits exist.
+        expect(
+          events.filter((event) => event === `persist-normalized:${rawRecordOne.id}`)
+        ).toHaveLength(1)
+        expect(
+          events.filter((event) => event === `persist-normalized:${rawRecordTwo.id}`)
+        ).toHaveLength(2)
+      })
+  )
+
+  it.effect("records retry metadata and returns a retryable error before the final attempt", () =>
+    Effect.gen(function* () {
+      const events: Array<string> = []
+      const nextRetryAt = DateTime.toDateUtc(DateTime.makeUnsafe("2026-01-01T00:05:00.000Z"))
+
+      const result = yield* Effect.gen(function* () {
         const executor = yield* SourceSyncJobExecutor
         return yield* executor.execute({
           jobId: "job-1",
@@ -1390,36 +1405,36 @@ describe("SourceSyncJobExecutor", () => {
         Effect.result,
         Effect.provide(makeExecutorLayer({ mode: "sync", failFetch: true, events }))
       )
-    )
 
-    expect(result._tag).toBe("Failure")
-    if (result._tag === "Failure") {
-      expect(result.failure._tag).toBe("SourceSyncJobRetryableExecutionError")
-    }
-    expect(events).toContain("failure-metadata:provider unavailable")
-    expect(events).toContain("retry:provider unavailable:1:2026-01-01T00:05:00.000Z")
-    expect(events).not.toContain("fail:provider unavailable")
-  })
+      expect(result._tag).toBe("Failure")
+      if (result._tag === "Failure") {
+        expect(result.failure._tag).toBe("SourceSyncJobRetryableExecutionError")
+      }
+      expect(events).toContain("failure-metadata:provider unavailable")
+      expect(events).toContain("retry:provider unavailable:1:2026-01-01T00:05:00.000Z")
+      expect(events).not.toContain("fail:provider unavailable")
+    })
+  )
 
-  it("maps provider failure into persisted failed job metadata", async () => {
-    const events: Array<string> = []
-    const result = await Effect.runPromise(
-      Effect.gen(function* () {
+  it.effect("maps provider failure into persisted failed job metadata", () =>
+    Effect.gen(function* () {
+      const events: Array<string> = []
+      const result = yield* Effect.gen(function* () {
         const executor = yield* SourceSyncJobExecutor
         return yield* executor.execute({ jobId: "job-1" })
       }).pipe(Effect.provide(makeExecutorLayer({ mode: "sync", failFetch: true, events })))
-    )
 
-    expect(result.status).toBe("failed")
-    expect(result.message).toBe("provider unavailable")
-    expect(events).toContain("failure-metadata:provider unavailable")
-    expect(events).toContain("fail:provider unavailable")
-  })
+      expect(result.status).toBe("failed")
+      expect(result.message).toBe("provider unavailable")
+      expect(events).toContain("failure-metadata:provider unavailable")
+      expect(events).toContain("fail:provider unavailable")
+    })
+  )
 
-  it("records a readable message for unsupported sync providers", async () => {
-    const events: Array<string> = []
-    const result = await Effect.runPromise(
-      Effect.gen(function* () {
+  it.effect("records a readable message for unsupported sync providers", () =>
+    Effect.gen(function* () {
+      const events: Array<string> = []
+      const result = yield* Effect.gen(function* () {
         const executor = yield* SourceSyncJobExecutor
         return yield* executor.execute({ jobId: "job-1" })
       }).pipe(
@@ -1427,18 +1442,18 @@ describe("SourceSyncJobExecutor", () => {
           makeExecutorLayer({ mode: "sync", sourceProviderKey: "unknown-provider", events })
         )
       )
-    )
 
-    expect(result.status).toBe("failed")
-    expect(result.message).toBe("Unsupported sync provider: unknown-provider")
-    expect(events).toContain("failure-metadata:Unsupported sync provider: unknown-provider")
-    expect(events).toContain("fail:Unsupported sync provider: unknown-provider")
-  })
+      expect(result.status).toBe("failed")
+      expect(result.message).toBe("Unsupported sync provider: unknown-provider")
+      expect(events).toContain("failure-metadata:Unsupported sync provider: unknown-provider")
+      expect(events).toContain("fail:Unsupported sync provider: unknown-provider")
+    })
+  )
 
-  it("marks retryable provider failure failed on the final attempt", async () => {
-    const events: Array<string> = []
-    const result = await Effect.runPromise(
-      Effect.gen(function* () {
+  it.effect("marks retryable provider failure failed on the final attempt", () =>
+    Effect.gen(function* () {
+      const events: Array<string> = []
+      const result = yield* Effect.gen(function* () {
         const executor = yield* SourceSyncJobExecutor
         return yield* executor.execute({
           jobId: "job-1",
@@ -1446,25 +1461,25 @@ describe("SourceSyncJobExecutor", () => {
           retryPolicy: {
             attemptNumber: 3,
             maxAttempts: 3,
-            nextRetryAt: new Date("2026-01-01T00:05:00.000Z"),
+            nextRetryAt: DateTime.toDateUtc(DateTime.makeUnsafe("2026-01-01T00:05:00.000Z")),
           },
         })
       }).pipe(Effect.provide(makeExecutorLayer({ mode: "sync", failFetch: true, events })))
-    )
 
-    expect(result.status).toBe("failed")
-    expect(result.message).toBe("provider unavailable")
-    expect(events).toContain("failure-metadata:provider unavailable")
-    expect(events).toContain("fail:provider unavailable")
-    expect(events).not.toContain("retry:provider unavailable:3:2026-01-01T00:05:00.000Z")
-  })
+      expect(result.status).toBe("failed")
+      expect(result.message).toBe("provider unavailable")
+      expect(events).toContain("failure-metadata:provider unavailable")
+      expect(events).toContain("fail:provider unavailable")
+      expect(events).not.toContain("retry:provider unavailable:3:2026-01-01T00:05:00.000Z")
+    })
+  )
 
-  it("returns replay scheduling to the dispatcher after the final queue attempt", async () => {
-    const events: Array<string> = []
-    const nextRetryAt = new Date("2026-01-01T00:05:00.000Z")
+  it.effect("returns replay scheduling to the dispatcher after the final queue attempt", () =>
+    Effect.gen(function* () {
+      const events: Array<string> = []
+      const nextRetryAt = DateTime.toDateUtc(DateTime.makeUnsafe("2026-01-01T00:05:00.000Z"))
 
-    const result = await Effect.runPromise(
-      Effect.gen(function* () {
+      const result = yield* Effect.gen(function* () {
         const executor = yield* SourceSyncJobExecutor
         return yield* executor.execute({
           jobId: "job-1",
@@ -1478,35 +1493,35 @@ describe("SourceSyncJobExecutor", () => {
       }).pipe(
         Effect.provide(makeExecutorLayer({ mode: "replay", waitForDependentReplay: true, events }))
       )
-    )
 
-    expect(result).toMatchObject({ jobId: "job-1", status: "queued" })
-    expect(events).toContain(
-      "retry:Replay source source-1 after the active job finishes for dependent source dependent-source-1.:3:2026-01-01T00:05:00.000Z"
-    )
-    expect(events.some((event) => event.startsWith("fail:"))).toBe(false)
-  })
+      expect(result).toMatchObject({ jobId: "job-1", status: "queued" })
+      expect(events).toContain(
+        "retry:Replay source source-1 after the active job finishes for dependent source dependent-source-1.:3:2026-01-01T00:05:00.000Z"
+      )
+      expect(events.some((event) => event.startsWith("fail:"))).toBe(false)
+    })
+  )
 
-  it("returns jobs with active prerequisites to the queue without failing them", async () => {
-    const events: Array<string> = []
+  it.effect("returns jobs with active prerequisites to the queue without failing them", () =>
+    Effect.gen(function* () {
+      const events: Array<string> = []
 
-    const result = await Effect.runPromise(
-      Effect.gen(function* () {
+      const result = yield* Effect.gen(function* () {
         const executor = yield* SourceSyncJobExecutor
         return yield* executor.execute({ jobId: "job-1", workerId: "worker-1" })
       }).pipe(
         Effect.provide(makeExecutorLayer({ mode: "replay", waitForPrerequisites: true, events }))
       )
-    )
 
-    expect(result).toMatchObject({ sourceId: source.id, jobId: "job-1", status: "queued" })
-    expect(events.some((event) => event.startsWith("fail:"))).toBe(false)
-    expect(events.some((event) => event.startsWith("retry:"))).toBe(false)
-  })
+      expect(result).toMatchObject({ sourceId: source.id, jobId: "job-1", status: "queued" })
+      expect(events.some((event) => event.startsWith("fail:"))).toBe(false)
+      expect(events.some((event) => event.startsWith("retry:"))).toBe(false)
+    })
+  )
 
-  it("maps execution job load failures to executor errors", async () => {
-    const notFound = await Effect.runPromise(
-      Effect.gen(function* () {
+  it.effect("maps execution job load failures to executor errors", () =>
+    Effect.gen(function* () {
+      const notFound = yield* Effect.gen(function* () {
         const executor = yield* SourceSyncJobExecutor
         return yield* executor.execute({ jobId: "job-1" })
       }).pipe(
@@ -1515,9 +1530,7 @@ describe("SourceSyncJobExecutor", () => {
           makeExecutorLayer({ mode: "sync", executionJobFailure: "not-found", events: [] })
         )
       )
-    )
-    const conflict = await Effect.runPromise(
-      Effect.gen(function* () {
+      const conflict = yield* Effect.gen(function* () {
         const executor = yield* SourceSyncJobExecutor
         return yield* executor.execute({ jobId: "job-1" })
       }).pipe(
@@ -1526,9 +1539,7 @@ describe("SourceSyncJobExecutor", () => {
           makeExecutorLayer({ mode: "sync", executionJobFailure: "conflict", events: [] })
         )
       )
-    )
-    const payload = await Effect.runPromise(
-      Effect.gen(function* () {
+      const payload = yield* Effect.gen(function* () {
         const executor = yield* SourceSyncJobExecutor
         return yield* executor.execute({ jobId: "job-1" })
       }).pipe(
@@ -1537,19 +1548,19 @@ describe("SourceSyncJobExecutor", () => {
           makeExecutorLayer({ mode: "sync", executionJobFailure: "payload", events: [] })
         )
       )
-    )
 
-    expect(notFound._tag).toBe("Failure")
-    if (notFound._tag === "Failure") {
-      expect(notFound.failure._tag).toBe("SourceSyncJobExecutionNotFoundError")
-    }
-    expect(conflict._tag).toBe("Failure")
-    if (conflict._tag === "Failure") {
-      expect(conflict.failure._tag).toBe("SourceSyncJobExecutionConflictError")
-    }
-    expect(payload._tag).toBe("Failure")
-    if (payload._tag === "Failure") {
-      expect(payload.failure._tag).toBe("SourceSyncJobExecutionPayloadError")
-    }
-  })
+      expect(notFound._tag).toBe("Failure")
+      if (notFound._tag === "Failure") {
+        expect(notFound.failure._tag).toBe("SourceSyncJobExecutionNotFoundError")
+      }
+      expect(conflict._tag).toBe("Failure")
+      if (conflict._tag === "Failure") {
+        expect(conflict.failure._tag).toBe("SourceSyncJobExecutionConflictError")
+      }
+      expect(payload._tag).toBe("Failure")
+      if (payload._tag === "Failure") {
+        expect(payload.failure._tag).toBe("SourceSyncJobExecutionPayloadError")
+      }
+    })
+  )
 })

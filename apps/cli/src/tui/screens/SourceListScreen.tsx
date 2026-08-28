@@ -1,6 +1,7 @@
 import { TextAttributes, type MouseEvent } from "@opentui/core"
 import { useKeyboard, useRenderer, useTerminalDimensions } from "@opentui/solid"
 import { createSignal, For, Match, Switch } from "solid-js"
+import { DateTime, Effect } from "effect"
 import type { Source } from "taxmaxi"
 import type { CliSession } from "../../session.ts"
 import { fetchSources, type SourcesResult } from "../controller.ts"
@@ -16,7 +17,7 @@ type ListState = { readonly _tag: "loading" } | SourcesResult
 const RESERVED_ROWS = 11
 
 const formatSourceDate = (epochMillis: number): string =>
-  new Date(epochMillis).toISOString().slice(0, 10)
+  DateTime.formatIso(DateTime.makeUnsafe(epochMillis)).slice(0, 10)
 
 function SourceRow(props: {
   readonly source: Source
@@ -57,17 +58,20 @@ export function SourceListScreen(props: {
   const [selected, setSelected] = createSignal(0)
   const viewport = createListViewport()
 
-  const refresh = async () => {
-    setState({ _tag: "loading" })
-    const result = await fetchSources(props.session)
-    if (result._tag === "unauthorized") {
-      props.onSessionExpired()
-      return
-    }
-    setState(result)
-    setSelected(0)
-    viewport.reset()
-  }
+  const refresh = () =>
+    Effect.runPromise(
+      Effect.gen(function* () {
+        setState({ _tag: "loading" })
+        const result = yield* Effect.promise(() => fetchSources(props.session))
+        if (result._tag === "unauthorized") {
+          props.onSessionExpired()
+          return
+        }
+        setState(result)
+        setSelected(0)
+        viewport.reset()
+      })
+    )
   void refresh()
 
   const sources = (): ReadonlyArray<Source> => {

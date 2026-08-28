@@ -1,4 +1,5 @@
-import { describe, expect, it } from "vitest"
+import { describe, expect, it } from "@effect/vitest"
+import * as DateTime from "effect/DateTime"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import {
@@ -41,7 +42,7 @@ const makeClause = ({
     shortTitle: "BMF 2025-03-06",
     sourceType: "administrative_guidance",
     authority: "Bundesministerium der Finanzen",
-    publishedAt: new Date("2025-03-06T00:00:00.000Z"),
+    publishedAt: DateTime.toDateUtc(DateTime.makeUnsafe("2025-03-06T00:00:00.000Z")),
     sourceUrl:
       "https://www.bundesfinanzministerium.de/Content/DE/Downloads/BMF_Schreiben/Steuerarten/Einkommensteuer/2025-03-06-einzelfragen-kryptowerte-bmf-schreiben.pdf",
   },
@@ -131,77 +132,81 @@ const createRepository = (): LegalReferenceRepositoryShape => ({
 })
 
 const runWithService = <A>(effect: Effect.Effect<A, unknown, LegalReferenceService>) =>
-  Effect.runPromise(
-    effect.pipe(
-      Effect.provide(
-        LegalReferenceServiceLive.pipe(
-          Layer.provide(Layer.succeed(LegalReferenceRepository, createRepository()))
-        )
+  effect.pipe(
+    Effect.provide(
+      LegalReferenceServiceLive.pipe(
+        Layer.provide(Layer.succeed(LegalReferenceRepository, createRepository()))
       )
     )
   )
 
 describe("LegalReferenceService", () => {
-  it("ranks question-level clauses for a known DE swap question", async () => {
-    const result = await runWithService(
-      Effect.gen(function* () {
-        const service = yield* LegalReferenceService
-        return yield* service.getRelevantClausesForQuestion({
-          question: "Ist ein Tausch von ETH in einen anderen Coin steuerpflichtig?",
-          jurisdictionCode: "DE",
-          maxClauses: 2,
+  it.effect("ranks question-level clauses for a known DE swap question", () =>
+    Effect.gen(function* () {
+      const result = yield* runWithService(
+        Effect.gen(function* () {
+          const service = yield* LegalReferenceService
+          return yield* service.getRelevantClausesForQuestion({
+            question: "Ist ein Tausch von ETH in einen anderen Coin steuerpflichtig?",
+            jurisdictionCode: "DE",
+            maxClauses: 2,
+          })
         })
-      })
-    )
-
-    expect(result.ruleSet?.version).toBe(ruleSet.version)
-    expect(result.insufficiencyText).toBeNull()
-    expect(result.references).toHaveLength(2)
-    expect(result.references[0]?.clauseKey).toBe("DE.BMF.2025-03-06.RN54")
-    expect(
-      result.references.every((reference) =>
-        /^DE\.BMF\.2025-03-06\.RN[0-9A-Z]+$/.test(reference.clauseKey)
       )
-    ).toBe(true)
-  })
 
-  it("returns insufficiency text when no relevant clause is found", async () => {
-    const result = await runWithService(
-      Effect.gen(function* () {
-        const service = yield* LegalReferenceService
-        return yield* service.getRelevantClausesForQuestion({
-          question: "Blorptax quantum toaster carry rule for Martian NFTs?",
-          jurisdictionCode: "DE",
-          maxClauses: 5,
+      expect(result.ruleSet?.version).toBe(ruleSet.version)
+      expect(result.insufficiencyText).toBeNull()
+      expect(result.references).toHaveLength(2)
+      expect(result.references[0]?.clauseKey).toBe("DE.BMF.2025-03-06.RN54")
+      expect(
+        result.references.every((reference) =>
+          /^DE\.BMF\.2025-03-06\.RN[0-9A-Z]+$/.test(reference.clauseKey)
+        )
+      ).toBe(true)
+    })
+  )
+
+  it.effect("returns insufficiency text when no relevant clause is found", () =>
+    Effect.gen(function* () {
+      const result = yield* runWithService(
+        Effect.gen(function* () {
+          const service = yield* LegalReferenceService
+          return yield* service.getRelevantClausesForQuestion({
+            question: "Blorptax quantum toaster carry rule for Martian NFTs?",
+            jurisdictionCode: "DE",
+            maxClauses: 5,
+          })
         })
-      })
-    )
+      )
 
-    expect(result.ruleSet?.version).toBe(ruleSet.version)
-    expect(result.references).toEqual([])
-    expect(result.insufficiencyText).toBe(INSUFFICIENT_CITED_BASIS_TEXT)
-  })
+      expect(result.ruleSet?.version).toBe(ruleSet.version)
+      expect(result.references).toEqual([])
+      expect(result.insufficiencyText).toBe(INSUFFICIENT_CITED_BASIS_TEXT)
+    })
+  )
 
-  it("bounds transaction-type references and citations deterministically", async () => {
-    const result = await runWithService(
-      Effect.gen(function* () {
-        const service = yield* LegalReferenceService
-        return yield* service.getReferencesForTransactionTypeWithRuleSet({
-          transactionTypeKey: "swap_crypto_to_crypto",
-          jurisdictionCode: "DE",
-          maxReferences: 1,
-          maxCitationsPerReference: 2,
+  it.effect("bounds transaction-type references and citations deterministically", () =>
+    Effect.gen(function* () {
+      const result = yield* runWithService(
+        Effect.gen(function* () {
+          const service = yield* LegalReferenceService
+          return yield* service.getReferencesForTransactionTypeWithRuleSet({
+            transactionTypeKey: "swap_crypto_to_crypto",
+            jurisdictionCode: "DE",
+            maxReferences: 1,
+            maxCitationsPerReference: 2,
+          })
         })
-      })
-    )
+      )
 
-    expect(result.ruleSet?.version).toBe(ruleSet.version)
-    expect(result.references).toHaveLength(1)
-    expect(result.references[0]?.ruleKey).toBe("de.private.section23.disposal-within-one-year")
-    expect(result.references[0]?.citations).toHaveLength(2)
-    expect(result.references[0]?.citations.map((citation) => citation.clauseKey)).toEqual([
-      "DE.BMF.2025-03-06.RN53",
-      "DE.BMF.2025-03-06.RN54",
-    ])
-  })
+      expect(result.ruleSet?.version).toBe(ruleSet.version)
+      expect(result.references).toHaveLength(1)
+      expect(result.references[0]?.ruleKey).toBe("de.private.section23.disposal-within-one-year")
+      expect(result.references[0]?.citations).toHaveLength(2)
+      expect(result.references[0]?.citations.map((citation) => citation.clauseKey)).toEqual([
+        "DE.BMF.2025-03-06.RN53",
+        "DE.BMF.2025-03-06.RN54",
+      ])
+    })
+  )
 })

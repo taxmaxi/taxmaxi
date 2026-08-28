@@ -18,7 +18,8 @@ import * as Chunk from "effect/Chunk"
 import * as ConfigProvider from "effect/ConfigProvider"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
-import { describe, expect, it, vi } from "vitest"
+import { describe, expect, it } from "@effect/vitest"
+import { vi } from "vitest"
 
 import { drizzle } from "../../persistence/src/layers/PgClientLive.ts"
 import { RepositoriesLive } from "../../persistence/src/layers/RepositoriesLive.ts"
@@ -364,15 +365,15 @@ await context.runPg(
 )
 
 describe("BillingApiLive", () => {
-  it("enforces billing auth and forwards the raw signed Stripe webhook", async () => {
-    stripeHttpMockState.prices = catalogPrices()
-    stripeHttpMockState.subscriptions = []
-    stripeHttpMockState.checkoutModes = []
-    stripeHttpMockState.webhookInputs = []
-    stripeHttpMockState.webhookError = null
+  it.effect("enforces billing auth and forwards the raw signed Stripe webhook", () =>
+    Effect.gen(function* () {
+      stripeHttpMockState.prices = catalogPrices()
+      stripeHttpMockState.subscriptions = []
+      stripeHttpMockState.checkoutModes = []
+      stripeHttpMockState.webhookInputs = []
+      stripeHttpMockState.webhookError = null
 
-    await Effect.runPromise(
-      Effect.gen(function* () {
+      yield* Effect.gen(function* () {
         const catalog = yield* execute(HttpClientRequest.get("/v1/billing/catalog"))
         expect(catalog.status).toBe(200)
         expect(yield* catalog.json).toEqual({
@@ -499,6 +500,6 @@ describe("BillingApiLive", () => {
         expect(providerFailureBody).not.toContain("Expired API Key")
         expect(providerFailureBody).not.toContain("rk_live_http_secret")
       }).pipe(Effect.provide(HttpLive), Effect.scoped)
-    )
-  })
+    })
+  )
 })

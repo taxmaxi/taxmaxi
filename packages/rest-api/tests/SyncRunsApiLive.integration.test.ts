@@ -1,3 +1,5 @@
+import { nextTestUuid } from "./support/TestUuid.ts"
+import * as DateTime from "effect/DateTime"
 import { HttpApiClient } from "effect/unstable/httpapi"
 import { HttpClient, HttpClientRequest, HttpRouter } from "effect/unstable/http"
 import { NodeHttpServer } from "@effect/platform-node"
@@ -39,7 +41,7 @@ const context = makeIntegrationTestDatabaseContext({
 })
 const TestPgClientLive = context.TestPgClientLive
 
-const queuedAt = new Date("2026-01-01T00:00:00.000Z")
+const queuedAt = DateTime.toDateUtc(DateTime.makeUnsafe("2026-01-01T00:00:00.000Z"))
 const queueEvents: Array<SourceSyncQueuePayload> = []
 const X402PaymentValidatorTestLive = makeX402PaymentValidatorTestLive({
   validPaymentHeader: "valid-test-x402-payment",
@@ -202,7 +204,7 @@ const seedCoinbaseSources = ({
             providerAccountId: `${sourceId}-provider-account`,
             accessToken: "test-access-token",
             refreshToken: "test-refresh-token",
-            expiresAt: new Date(Date.now() + 60 * 60 * 1000),
+            expiresAt: DateTime.toDateUtc(DateTime.addDuration(yield* DateTime.now, "1 hour")),
             scopes: "wallet:accounts:read wallet:transactions:read",
           })
           .returning({ id: schema.cexAccount.id })
@@ -264,7 +266,7 @@ const markJobTerminal = ({
     `,
     params: [
       status,
-      new Date("2026-01-01T00:05:00.000Z"),
+      DateTime.toDateUtc(DateTime.makeUnsafe("2026-01-01T00:05:00.000Z")),
       status === "failed" ? "Provider failed" : null,
       JSON.stringify({
         fetchedRecords: status === "completed" ? 4 : 0,
@@ -278,16 +280,20 @@ const markJobTerminal = ({
 await Effect.runPromise(context.recreateTestDatabase())
 
 describe("SyncRunsApiLive", () => {
-  beforeEach(async () => {
-    queueEvents.length = 0
-    await Effect.runPromise(context.recreateTestDatabase())
-  })
+  beforeEach(() =>
+    Effect.runPromise(
+      Effect.gen(function* () {
+        queueEvents.length = 0
+        yield* context.recreateTestDatabase()
+      })
+    )
+  )
 
   it.effect("starts a user-wide run with one queued child item per source", () =>
     Effect.gen(function* () {
-      const userId = crypto.randomUUID()
-      const principalId = crypto.randomUUID()
-      const sourceIds = [crypto.randomUUID(), crypto.randomUUID()]
+      const userId = nextTestUuid()
+      const principalId = nextTestUuid()
+      const sourceIds = [nextTestUuid(), nextTestUuid()]
       yield* seedCoinbaseSources({ userId, principalId, sourceIds })
 
       const client = yield* makeAuthenticatedClient({ userId })
@@ -306,9 +312,9 @@ describe("SyncRunsApiLive", () => {
 
   it.effect("returns the current user's run", () =>
     Effect.gen(function* () {
-      const userId = crypto.randomUUID()
-      const principalId = crypto.randomUUID()
-      const sourceIds = [crypto.randomUUID()]
+      const userId = nextTestUuid()
+      const principalId = nextTestUuid()
+      const sourceIds = [nextTestUuid()]
       yield* seedCoinbaseSources({ userId, principalId, sourceIds })
 
       const client = yield* makeAuthenticatedClient({ userId })
@@ -329,14 +335,14 @@ describe("SyncRunsApiLive", () => {
 
   it.effect("rejects another user's run", () =>
     Effect.gen(function* () {
-      const userId = crypto.randomUUID()
-      const otherUserId = crypto.randomUUID()
+      const userId = nextTestUuid()
+      const otherUserId = nextTestUuid()
       yield* seedCoinbaseSources({
         userId,
-        principalId: crypto.randomUUID(),
-        sourceIds: [crypto.randomUUID()],
+        principalId: nextTestUuid(),
+        sourceIds: [nextTestUuid()],
       })
-      yield* seedPrincipalUser({ userId: otherUserId, principalId: crypto.randomUUID() })
+      yield* seedPrincipalUser({ userId: otherUserId, principalId: nextTestUuid() })
 
       const ownerClient = yield* makeAuthenticatedClient({ userId })
       const started = yield* ownerClient.syncRuns.startSyncRun(undefined)
@@ -356,9 +362,9 @@ describe("SyncRunsApiLive", () => {
 
   it.effect("refreshes child completion into aggregate API status", () =>
     Effect.gen(function* () {
-      const userId = crypto.randomUUID()
-      const principalId = crypto.randomUUID()
-      const sourceIds = [crypto.randomUUID(), crypto.randomUUID()]
+      const userId = nextTestUuid()
+      const principalId = nextTestUuid()
+      const sourceIds = [nextTestUuid(), nextTestUuid()]
       yield* seedCoinbaseSources({ userId, principalId, sourceIds })
 
       const client = yield* makeAuthenticatedClient({ userId })

@@ -1,3 +1,4 @@
+import * as DateTime from "effect/DateTime"
 import type { SqlClient } from "effect/unstable/sql/SqlClient"
 import { PgClient } from "@effect/sql-pg"
 import { eq } from "drizzle-orm"
@@ -344,7 +345,7 @@ export const seedSyncEngineRepositoryFixture = ({
         providerAccountId: "coinbase-account-1",
         accessToken: "test-access-token",
         refreshToken: "test-refresh-token",
-        expiresAt: new Date(Date.now() + 60 * 60 * 1000),
+        expiresAt: DateTime.toDateUtc(DateTime.addDuration(yield* DateTime.now, "1 hour")),
         scopes: "wallet:accounts:read wallet:transactions:read",
       })
       .returning({ id: schema.cexAccount.id })
@@ -361,8 +362,8 @@ export const seedSyncEngineRepositoryFixture = ({
       sourceableType: "cex",
       cexAccountId: createdAccount.id,
       addressId: null,
-      createdAt: new Date("2025-01-01T00:00:00.000Z"),
-      updatedAt: new Date("2025-01-01T00:00:00.000Z"),
+      createdAt: DateTime.toDateUtc(DateTime.makeUnsafe("2025-01-01T00:00:00.000Z")),
+      updatedAt: DateTime.toDateUtc(DateTime.makeUnsafe("2025-01-01T00:00:00.000Z")),
     })
 
     const baseBlockchainId = yield* requireBlockchainId({ name: "base" })

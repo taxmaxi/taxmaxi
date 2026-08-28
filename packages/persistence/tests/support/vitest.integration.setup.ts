@@ -61,92 +61,101 @@ export const cleanupIntegrationTestDatabases = <E, R>({
     concurrency: TEST_DATABASE_DROP_CONCURRENCY,
   })
 
-export const setup = async (project: TestProject) => {
-  const testRunId = randomUUID()
-  const integrationTestDatabaseRunMarker = makeIntegrationTestDatabaseRunMarker({ testRunId })
-  const migratedTestDatabaseTemplateName = makeTestDatabaseTemplateName({ testRunId })
-  project.provide("integrationTestRunId", testRunId)
+const prepareIntegrationTestDatabase = (project: TestProject) =>
+  Effect.gen(function* () {
+    const testRunId = randomUUID()
+    const integrationTestDatabaseRunMarker = makeIntegrationTestDatabaseRunMarker({ testRunId })
+    const migratedTestDatabaseTemplateName = makeTestDatabaseTemplateName({ testRunId })
+    project.provide("integrationTestRunId", testRunId)
 
-  const { host, port, user, password } = Effect.runSync(getDatabaseConfig)
-  const passwordValue = Redacted.value(password)
-  const adminDatabaseUrl = Redacted.make(
-    `postgresql://${user}:${passwordValue}@${host}:${port}/postgres`
-  )
-  const templateDatabaseUrl = Redacted.make(
-    `postgresql://${user}:${passwordValue}@${host}:${port}/${migratedTestDatabaseTemplateName}`
-  )
-  const AdminPgClientLive = makePgClientLayerForTests({
-    url: adminDatabaseUrl,
-    maxConnections: TEST_DATABASE_DROP_CONCURRENCY,
-  })
-  const TemplatePgClientLive = makePgClientLayerForTests({
-    url: templateDatabaseUrl,
-  })
+    const { host, port, user, password } = yield* getDatabaseConfig
+    const passwordValue = Redacted.value(password)
+    const adminDatabaseUrl = Redacted.make(
+      `postgresql://${user}:${passwordValue}@${host}:${port}/postgres`
+    )
+    const templateDatabaseUrl = Redacted.make(
+      `postgresql://${user}:${passwordValue}@${host}:${port}/${migratedTestDatabaseTemplateName}`
+    )
+    const AdminPgClientLive = makePgClientLayerForTests({
+      url: adminDatabaseUrl,
+      maxConnections: TEST_DATABASE_DROP_CONCURRENCY,
+    })
+    const TemplatePgClientLive = makePgClientLayerForTests({
+      url: templateDatabaseUrl,
+    })
 
-  const executeAdminSql = ({
-    statement,
-    params,
-  }: {
-    readonly statement: string
-    readonly params?: ReadonlyArray<unknown>
-  }) =>
-    runSqlUnsafe(params === undefined ? { statement } : { statement, params }).pipe(Effect.asVoid)
+    const executeAdminSql = ({
+      statement,
+      params,
+    }: {
+      readonly statement: string
+      readonly params?: ReadonlyArray<unknown>
+    }) =>
+      runSqlUnsafe(params === undefined ? { statement } : { statement, params }).pipe(Effect.asVoid)
 
-  const terminateDatabaseConnections = ({ databaseName }: { readonly databaseName: string }) =>
-    executeAdminSql({
-      statement: `
+    const terminateDatabaseConnections = ({ databaseName }: { readonly databaseName: string }) =>
+      executeAdminSql({
+        statement: `
         SELECT pg_terminate_backend(pid)
         FROM pg_stat_activity
         WHERE datname = $1
           AND pid <> pg_backend_pid()
       `,
-      params: [databaseName],
-    })
+        params: [databaseName],
+      })
 
-  // WITH (FORCE) disconnects remaining sessions, so no separate terminate step is needed.
-  const cleanupDatabase = (databaseName: string) =>
-    executeAdminSql({
-      statement: `DROP DATABASE IF EXISTS ${quoteIdentifier(databaseName)} WITH (FORCE)`,
-    })
+    // WITH (FORCE) disconnects remaining sessions, so no separate terminate step is needed.
+    const cleanupDatabase = (databaseName: string) =>
+      executeAdminSql({
+        statement: `DROP DATABASE IF EXISTS ${quoteIdentifier(databaseName)} WITH (FORCE)`,
+      })
 
-  const listIntegrationTestDatabaseNames = Effect.gen(function* () {
-    const sql = yield* PgClient.PgClient
-    const rows = yield* sql<{ readonly databaseName: string }>`
+    const listIntegrationTestDatabaseNames = Effect.gen(function* () {
+      const sql = yield* PgClient.PgClient
+      const rows = yield* sql<{ readonly databaseName: string }>`
       SELECT datname AS "databaseName"
       FROM pg_database
       WHERE strpos(datname, ${integrationTestDatabaseRunMarker}) > 0
       ORDER BY datname
     `
 
-    return rows.map((row) => row.databaseName)
-  })
-
-  const cleanupTemplate = cleanupDatabase(migratedTestDatabaseTemplateName).pipe(Effect.orDie)
-
-  const prepareTemplate = Effect.gen(function* () {
-    yield* cleanupDatabase(migratedTestDatabaseTemplateName)
-    yield* executeAdminSql({
-      statement: `CREATE DATABASE ${quoteIdentifier(migratedTestDatabaseTemplateName)}`,
+      return rows.map((row) => row.databaseName)
     })
-    yield* runDrizzleMigrations().pipe(Effect.provide(TemplatePgClientLive), Effect.scoped)
-    yield* seedData.pipe(Effect.provide(TemplatePgClientLive), Effect.scoped)
-    yield* terminateDatabaseConnections({ databaseName: migratedTestDatabaseTemplateName })
-  })
 
-  await Effect.runPromise(
-    prepareTemplateDatabase({ cleanupTemplate, prepareTemplate }).pipe(
+    const cleanupTemplate = cleanupDatabase(migratedTestDatabaseTemplateName).pipe(Effect.orDie)
+
+    const prepareTemplate = Effect.gen(function* () {
+      yield* cleanupDatabase(migratedTestDatabaseTemplateName)
+      yield* executeAdminSql({
+        statement: `CREATE DATABASE ${quoteIdentifier(migratedTestDatabaseTemplateName)}`,
+      })
+      yield* runDrizzleMigrations().pipe(Effect.provide(TemplatePgClientLive), Effect.scoped)
+      yield* seedData.pipe(Effect.provide(TemplatePgClientLive), Effect.scoped)
+      yield* terminateDatabaseConnections({ databaseName: migratedTestDatabaseTemplateName })
+    })
+
+    yield* prepareTemplateDatabase({ cleanupTemplate, prepareTemplate }).pipe(
       Effect.provide(AdminPgClientLive),
       Effect.scoped
     )
-  )
 
-  return async () => {
-    await Effect.runPromise(
-      Effect.gen(function* () {
-        const databaseNames = yield* listIntegrationTestDatabaseNames
-        yield* cleanupIntegrationTestDatabases({ databaseNames, cleanupDatabase })
-        yield* cleanupTemplate
-      }).pipe(Effect.provide(AdminPgClientLive), Effect.scoped)
-    )
-  }
-}
+    return {
+      AdminPgClientLive,
+      cleanupDatabase,
+      cleanupTemplate,
+      listIntegrationTestDatabaseNames,
+    } as const
+  })
+
+export const setup = (project: TestProject) =>
+  Effect.runPromise(prepareIntegrationTestDatabase(project)).then(
+    ({ AdminPgClientLive, cleanupDatabase, cleanupTemplate, listIntegrationTestDatabaseNames }) =>
+      () =>
+        Effect.runPromise(
+          Effect.gen(function* () {
+            const databaseNames = yield* listIntegrationTestDatabaseNames
+            yield* cleanupIntegrationTestDatabases({ databaseNames, cleanupDatabase })
+            yield* cleanupTemplate
+          }).pipe(Effect.provide(AdminPgClientLive), Effect.scoped)
+        )
+  )
