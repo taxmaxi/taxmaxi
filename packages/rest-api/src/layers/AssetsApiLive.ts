@@ -41,6 +41,8 @@ import {
   AssetExceptionListRowResponse,
   AssetExceptionPreviewResponse,
   AssetExceptionRematerializationResponse,
+  AssetLookupNotFoundError,
+  AssetLookupValidationError,
   AssetStaleRevisionError,
   AssetCanonicalizationEvidenceResponse,
   AssetCanonicalizationResponse,
@@ -86,11 +88,13 @@ const AssetExceptionValueEur = Schema.String.check(
 )
 
 const AssetExceptionCursorPayload = Schema.Struct({
-  version: Schema.Literal(1),
+  version: Schema.Literal(2),
   blockedReports: Schema.Number,
   affectedPrincipals: Schema.Number,
   affectedTransactions: Schema.Number,
   affectedSources: Schema.Number,
+  affectedCalculations: Schema.Number,
+  existingGeneratedReportSnapshots: Schema.Number,
   affectedTransactionValueEur: Schema.NullOr(AssetExceptionValueEur),
   severity: Schema.Literals(["critical", "high", "medium", "low"]),
   oldestAt: Schema.DateTimeUtcFromString,
@@ -146,6 +150,8 @@ const decodeAssetExceptionCursor = (cursor: string | undefined) =>
       affectedPrincipals: value.affectedPrincipals,
       affectedTransactions: value.affectedTransactions,
       affectedSources: value.affectedSources,
+      affectedCalculations: value.affectedCalculations,
+      existingGeneratedReportSnapshots: value.existingGeneratedReportSnapshots,
       affectedTransactionValueEur: value.affectedTransactionValueEur,
       severity: value.severity,
       oldestAt: DateTime.toDateUtc(value.oldestAt),
@@ -173,11 +179,13 @@ const transferReconciliationCursorFor = (reconciliationId: string): string =>
 
 const assetExceptionCursorFor = (row: AssetExceptionListRow): string =>
   encodeCursor({
-    version: 1,
+    version: 2,
     blockedReports: row.blockedReports,
     affectedPrincipals: row.affectedPrincipals,
     affectedTransactions: row.affectedTransactions,
     affectedSources: row.affectedSources,
+    affectedCalculations: row.affectedCalculations,
+    existingGeneratedReportSnapshots: row.existingGeneratedReportSnapshots,
     affectedTransactionValueEur: row.affectedTransactionValueEur,
     severity: row.severity,
     oldestAt: row.oldestAt.toISOString(),
@@ -273,14 +281,17 @@ const toAssetExceptionDetailResponse = (detail: AssetExceptionDetail) =>
     providerType: detail.providerType,
     rawProviderPayload: detail.rawProviderPayload,
     evidenceRevision: detail.evidenceRevision,
-    policyRevision: detail.policyRevision,
-    activeDecisionRevision: detail.activeDecisionRevision,
+    currentConclusionRevision: detail.currentConclusionRevision,
+    currentPolicyEvaluationRevision: detail.currentPolicyEvaluationRevision,
     reviewStatus: detail.reviewStatus,
-    policyOutput: detail.policyOutput,
-    activeDecision:
-      detail.activeDecision === null
+    currentConclusion:
+      detail.currentConclusion === null
         ? null
-        : toAssetExceptionDecisionHistoryResponse(detail.activeDecision),
+        : toAssetExceptionDecisionHistoryResponse(detail.currentConclusion),
+    currentPolicyEvaluation:
+      detail.currentPolicyEvaluation === null
+        ? null
+        : toAssetExceptionDecisionHistoryResponse(detail.currentPolicyEvaluation),
     decisionHistory: detail.decisionHistory.map(toAssetExceptionDecisionHistoryResponse),
     evidence: detail.evidence.map((evidence) =>
       AssetExceptionEvidenceResponse.make({
@@ -294,15 +305,18 @@ const toAssetExceptionDetailResponse = (detail: AssetExceptionDetail) =>
 
 const staleRevisionError = ({
   evidenceRevision,
-  activeDecisionRevision,
+  currentConclusionRevision,
+  currentPolicyEvaluationRevision,
 }: {
   readonly evidenceRevision: number
-  readonly activeDecisionRevision: string
+  readonly currentConclusionRevision: string
+  readonly currentPolicyEvaluationRevision: string
 }) =>
   new AssetStaleRevisionError({
     code: "stale_revision",
     evidenceRevision,
-    activeDecisionRevision,
+    currentConclusionRevision,
+    currentPolicyEvaluationRevision,
   })
 
 const mapDecisionResultError = (
@@ -311,7 +325,8 @@ const mapDecisionResultError = (
     | {
         readonly _tag: "stale_revision"
         readonly evidenceRevision: number
-        readonly activeDecisionRevision: string
+        readonly currentConclusionRevision: string
+        readonly currentPolicyEvaluationRevision: string
       }
     | { readonly _tag: "ambiguous_identity" }
     | { readonly _tag: "identity_changed" }
@@ -440,27 +455,30 @@ export const AssetsApiLive = HttpApiBuilder.group(TaxMaxiApi, "assets", (handler
       )
       .handle("lookupAssetException", ({ query: urlParams }) =>
         Effect.gen(function* () {
+          // Blank keys are validation failures, not lookups: direct API and
+          // SDK callers must get the typed invalid_lookup code instead of a
+          // not-found answer for a key that was never usable.
+          const provider = urlParams.provider.trim()
+          const providerAssetId = urlParams.providerAssetId?.trim()
+          const naturalKey = urlParams.naturalKey?.trim()
           const lookup = (() => {
-            if (urlParams.providerAssetId !== undefined && urlParams.naturalKey === undefined) {
-              return {
-                _tag: "provider_asset_id" as const,
-                provider: urlParams.provider,
-                providerAssetId: urlParams.providerAssetId,
-              }
+            if (provider.length === 0) {
+              return null
             }
-            if (urlParams.naturalKey !== undefined && urlParams.providerAssetId === undefined) {
-              return {
-                _tag: "natural_key" as const,
-                provider: urlParams.provider,
-                naturalKey: urlParams.naturalKey,
-              }
+            if (providerAssetId !== undefined && naturalKey === undefined) {
+              return providerAssetId.length === 0
+                ? null
+                : { _tag: "provider_asset_id" as const, provider, providerAssetId }
+            }
+            if (naturalKey !== undefined && providerAssetId === undefined) {
+              return naturalKey.length === 0
+                ? null
+                : { _tag: "natural_key" as const, provider, naturalKey }
             }
             return null
           })()
           if (lookup === null) {
-            return yield* new AssetBadRequestError({
-              message: "Provide exactly one of providerAssetId or naturalKey.",
-            })
+            return yield* new AssetLookupValidationError({ code: "invalid_lookup" })
           }
 
           const detail = yield* assetExceptionRepository
@@ -470,7 +488,7 @@ export const AssetsApiLive = HttpApiBuilder.group(TaxMaxiApi, "assets", (handler
             )
           return yield* Option.match(detail, {
             onNone: () =>
-              Effect.fail(new AssetNotFoundError({ message: "Asset observation not found." })),
+              Effect.fail(new AssetLookupNotFoundError({ code: "observation_not_found" })),
             onSome: (value) => Effect.succeed(toAssetExceptionDetailResponse(value)),
           })
         })
@@ -493,7 +511,8 @@ export const AssetsApiLive = HttpApiBuilder.group(TaxMaxiApi, "assets", (handler
             providerAssetRowId: path.id,
             claim: payload.claim,
             evidenceRevision: payload.evidenceRevision,
-            activeDecisionRevision: payload.activeDecisionRevision,
+            currentConclusionRevision: payload.currentConclusionRevision,
+            currentPolicyEvaluationRevision: payload.currentPolicyEvaluationRevision,
             evidenceSnapshotIds: payload.evidenceSnapshotIds,
             rationale: payload.rationale,
           })
@@ -506,10 +525,12 @@ export const AssetsApiLive = HttpApiBuilder.group(TaxMaxiApi, "assets", (handler
               return Effect.succeed(
                 AssetExceptionPreviewResponse.make({
                   ...result.preview,
-                  supersededDecision:
-                    result.preview.supersededDecision === null
+                  supersededConclusion:
+                    result.preview.supersededConclusion === null
                       ? null
-                      : toAssetExceptionDecisionHistoryResponse(result.preview.supersededDecision),
+                      : toAssetExceptionDecisionHistoryResponse(
+                          result.preview.supersededConclusion
+                        ),
                   impact: toAssetExceptionImpactResponse(result.preview.impact),
                 })
               )
@@ -525,12 +546,14 @@ export const AssetsApiLive = HttpApiBuilder.group(TaxMaxiApi, "assets", (handler
                 providerAssetRowId: path.id,
                 claim: payload.claim,
                 evidenceRevision: payload.evidenceRevision,
-                activeDecisionRevision: payload.activeDecisionRevision,
+                currentConclusionRevision: payload.currentConclusionRevision,
+                currentPolicyEvaluationRevision: payload.currentPolicyEvaluationRevision,
                 evidenceSnapshotIds: payload.evidenceSnapshotIds,
                 rationale: payload.rationale,
                 expectedResultingAssetId: payload.expectedResultingAssetId,
                 expectedAssetOutcome: payload.expectedAssetOutcome,
                 expectedRepresentationOutcome: payload.expectedRepresentationOutcome,
+                expectedAffectedObservationRevisions: payload.expectedAffectedObservationRevisions,
               },
               actorId: currentUser.userId,
             })

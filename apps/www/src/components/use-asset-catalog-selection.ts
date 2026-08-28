@@ -14,6 +14,10 @@ export function useAssetCatalogSelection({
 }: {
   readonly visibleItems: ReadonlyArray<CatalogItem>
 }) {
+  const [exactLookupOpen, setExactLookupOpen] = useState(false)
+  // Remount key for the lookup pane: every "open exact lookup" action starts
+  // a fresh lookup, even when the pane already shows a previous result.
+  const [exactLookupKey, setExactLookupKey] = useState(0)
   const [mobileDetailOpen, setMobileDetailOpen] = useState(false)
   const mobileBackButtonRef = useRef<HTMLButtonElement>(null)
   const [selectedKey, setSelectedKey] = useState(() => getCatalogItemKey(visibleItems[0]))
@@ -23,6 +27,10 @@ export function useAssetCatalogSelection({
   const selectedItemKey = getCatalogItemKey(selectedItem)
 
   useEffect(() => {
+    if (exactLookupOpen) {
+      return
+    }
+
     if (selectedKey.length === 0) {
       if (selectedItemKey.length > 0) {
         setSelectedKey(selectedItemKey)
@@ -46,7 +54,7 @@ export function useAssetCatalogSelection({
         document.getElementById(focusTargetId)?.focus()
       })
     }
-  }, [mobileDetailOpen, selectedItem, selectedItemKey, selectedKey, visibleItems])
+  }, [exactLookupOpen, mobileDetailOpen, selectedItem, selectedItemKey, selectedKey, visibleItems])
 
   useEffect(() => {
     if (mobileDetailOpen) {
@@ -55,6 +63,7 @@ export function useAssetCatalogSelection({
   }, [mobileDetailOpen])
 
   const selectItem = useCallback((item: CatalogItem) => {
+    setExactLookupOpen(false)
     setSelectedKey(getCatalogItemKey(item))
 
     if (!window.matchMedia(ASSET_CATALOG_DESKTOP_MEDIA_QUERY).matches) {
@@ -63,6 +72,7 @@ export function useAssetCatalogSelection({
   }, [])
 
   const showMobileList = useCallback(() => {
+    setExactLookupOpen(false)
     setMobileDetailOpen(false)
 
     if (selectedItem === undefined) {
@@ -76,6 +86,23 @@ export function useAssetCatalogSelection({
       document.getElementById(getCatalogItemDomId(selectedItem))?.focus()
     })
   }, [selectedItem])
+
+  const openExactLookup = useCallback(() => {
+    setExactLookupOpen(true)
+    setExactLookupKey((key) => key + 1)
+
+    // Only mobile needs the detail pane state; on desktop it would trigger
+    // the media-query effect, which pulls focus back into the catalog list.
+    if (!window.matchMedia(ASSET_CATALOG_DESKTOP_MEDIA_QUERY).matches) {
+      setMobileDetailOpen(true)
+    }
+  }, [])
+
+  // A scope change leaves the lookup context behind; keeping the pane open
+  // would also keep selection repair disabled in the new scope.
+  const closeExactLookup = useCallback(() => {
+    setExactLookupOpen(false)
+  }, [])
 
   useEffect(() => {
     const desktopQuery = window.matchMedia(ASSET_CATALOG_DESKTOP_MEDIA_QUERY)
@@ -170,8 +197,12 @@ export function useAssetCatalogSelection({
   }, [mobileDetailOpen, selectItem, selectedItem, selectedItemKey, visibleItems])
 
   return {
+    closeExactLookup,
+    exactLookupKey,
+    exactLookupOpen,
     mobileBackButtonRef,
     mobileDetailOpen,
+    openExactLookup,
     selectedItem,
     selectedItemKey,
     selectItem,

@@ -78,6 +78,7 @@ If a command fails after switching branches, make a safe attempt to return to th
    ```
 
    Stop if the build fails. Do not generate a migration from stale or failing package output.
+
 4. Run:
 
    ```bash

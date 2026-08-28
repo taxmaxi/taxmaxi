@@ -1095,7 +1095,6 @@ export const seedData = Effect.gen(function* () {
       .where(representationFilter)
       .limit(1)
     const referenceValues = {
-      assetId,
       blockchainId,
       type: representation.type,
       contractAddress: representation.contractAddress,
@@ -1106,6 +1105,7 @@ export const seedData = Effect.gen(function* () {
 
     if (existingRepresentation === undefined) {
       yield* db.insert(schema.assetRepresentations).values({
+        assetId,
         ...referenceValues,
         logoUrl: null,
         isSpam: false,
@@ -1117,6 +1117,8 @@ export const seedData = Effect.gen(function* () {
         createdAt: seedTimestamp,
       })
     } else {
+      // The reference catalog may rediscover metadata, but it must not undo a
+      // human ownership correction recorded after the initial seed.
       yield* db
         .update(schema.assetRepresentations)
         .set(referenceValues)

@@ -27,24 +27,14 @@ export const assetResolutionOutcomeEnum = pgEnum("asset_resolution_outcome", [
 
 export type AssetResolutionOutcome = (typeof assetResolutionOutcomeEnum.enumValues)[number]
 
-export const assetResolutionDecisionStatusEnum = pgEnum("asset_resolution_decision_status", [
-  "active",
-  "superseded",
-])
-
-export type AssetResolutionDecisionStatus =
-  (typeof assetResolutionDecisionStatusEnum.enumValues)[number]
-
 /**
  * Append-only automatic policy decision history for one provider
  * observation and evidence revision.
  *
- * Decision content is never edited. A correction appends a new active row
- * that names the row it replaces through supersedes_decision_id, and the
- * replaced row's status flips to superseded. At most one decision is active
- * per (providerAssetRowId, evidenceRevision), enforced by a partial unique
- * index, so replaying a resolution job never rewrites history and concurrent
- * recorders cannot both win.
+ * Decision content is never edited. Automatic policy evaluations are unique
+ * per evidence revision. A human correction appends a conclusion that names
+ * the conclusion it replaces; current conclusion and policy-evaluation roles
+ * are stored separately in asset_resolution_current_state.
  */
 export const assetResolutionDecisions = pgTable(
   "asset_resolution_decisions",
@@ -56,7 +46,6 @@ export const assetResolutionDecisions = pgTable(
     evidenceRevision: integer("evidence_revision").notNull(),
     policyRevision: text("policy_revision").notNull(),
     outcome: assetResolutionOutcomeEnum("outcome").notNull(),
-    status: assetResolutionDecisionStatusEnum("status").notNull().default("active"),
     supersedesDecisionId: uuid("supersedes_decision_id"),
     assetId: uuid("asset_id").references(() => assets.id),
     assetRepresentationId: uuid("asset_representation_id").references(
@@ -74,16 +63,20 @@ export const assetResolutionDecisions = pgTable(
     createdAt: timestamp("created_at").notNull().defaultNow(),
   },
   (table) => [
-    uniqueIndex("asset_resolution_decisions_active_observation_revision_unique")
-      .on(table.providerAssetRowId, table.evidenceRevision)
-      .where(sql`${table.status} = 'active'`),
+    uniqueIndex("asset_resolution_decisions_policy_evaluation_unique")
+      .on(table.providerAssetRowId, table.evidenceRevision, table.policyRevision)
+      .where(sql`${table.humanClaim} is null and ${table.supersedesDecisionId} is null`),
     uniqueIndex("asset_resolution_decisions_supersedes_unique")
       .on(table.supersedesDecisionId)
       .where(sql`${table.supersedesDecisionId} is not null`),
+    uniqueIndex("asset_resolution_decisions_provider_id_unique").on(
+      table.providerAssetRowId,
+      table.id
+    ),
     index("idx_asset_resolution_decisions_asset_id").on(table.assetId),
     foreignKey({
-      columns: [table.supersedesDecisionId],
-      foreignColumns: [table.id],
+      columns: [table.providerAssetRowId, table.supersedesDecisionId],
+      foreignColumns: [table.providerAssetRowId, table.id],
       name: "asset_resolution_decisions_supersedes_decision_id_fk",
     }),
     check(
@@ -92,7 +85,7 @@ export const assetResolutionDecisions = pgTable(
     ),
     check(
       "asset_resolution_decisions_approval_requires_target",
-      sql`${table.outcome}::text not in ('attach', 'create_standalone') or (${table.assetId} is not null and (${table.blockchain} is null or ${table.assetRepresentationId} is not null))`
+      sql`${table.outcome}::text not in ('attach', 'create_standalone') or (${table.assetId} is not null and (${table.blockchain} is null or ${table.assetRepresentationId} is not null)) or (${table.humanClaim} is null and ${table.actor} = 'system:asset-resolution-policy')`
     ),
   ]
 )

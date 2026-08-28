@@ -92,7 +92,7 @@ export function useAssetExceptionDetail(
   useEffect(() => {
     requestId.current += 1
     if (exceptionRowId === undefined) {
-      setDetail(null)
+      setDetail((current) => (current?.reviewStatus === "unresolved" ? null : current))
       setLoading(false)
       setLoadError(null)
       return
@@ -167,7 +167,7 @@ export function exclusionReasonText(reason: ExclusionReason): {
 export function availableExclusionReasons(
   detail: AssetExceptionDetail
 ): ReadonlyArray<ExclusionReason> {
-  const policyReason = detail.policyOutput?.reason
+  const policyReason = detail.currentPolicyEvaluation?.reason
   const hasBannedClaim = detail.evidence.some((evidence) => {
     const claim = EvidenceClaimSchema.safeParse(evidence.decodedClaim)
     return claim.success && claim.data.verdict === "banned"
@@ -283,10 +283,27 @@ export function useDecisionDraft({
   readonly detail: AssetExceptionDetail
   readonly onDetailChange: (detail: AssetExceptionDetail) => void
 }) {
-  const policyReason = detail.policyOutput?.reason ?? null
-  const activeAssetId = detail.activeDecision?.assetId ?? ""
+  const evaluation = detail.currentPolicyEvaluation
+  const policyReason = evaluation?.reason ?? null
+  // A conclusive evaluation is the policy's concrete recommendation: it names
+  // the mode and, for attach, the exact asset. The conclusion it disagrees
+  // with is only a fallback when the policy has no conclusive answer.
+  const recommendedMode: DraftMode | null =
+    evaluation?.outcome === "attach"
+      ? "existing"
+      : evaluation?.outcome === "create_standalone"
+        ? "new"
+        : evaluation?.outcome === "excluded"
+          ? "exclusion"
+          : null
+  const recommendedAssetId = (evaluation?.outcome === "attach" ? evaluation.assetId : null) ?? ""
+  const activeAssetId =
+    recommendedAssetId.length > 0 ? recommendedAssetId : (detail.currentConclusion?.assetId ?? "")
   const observed = observedRepresentation(detail)
-  const suggestedMode = activeAssetId.length > 0 ? "existing" : suggestedModeForReason(policyReason)
+  const suggestedMode =
+    recommendedMode ??
+    suggestedModeForReason(policyReason) ??
+    (activeAssetId.length > 0 ? "existing" : null)
 
   const [mode, setModeState] = useState<DraftMode | null>(suggestedMode)
   const [assetId, setAssetId] = useState(activeAssetId)
@@ -413,7 +430,8 @@ export function useDecisionDraft({
       id: detail.providerAssetRowId,
       claim,
       evidenceRevision: detail.evidenceRevision,
-      activeDecisionRevision: detail.activeDecisionRevision,
+      currentConclusionRevision: detail.currentConclusionRevision,
+      currentPolicyEvaluationRevision: detail.currentPolicyEvaluationRevision,
       // All current snapshots are linked to the decision — the full picture
       // (including "authority had no claim") is what the reviewer judged.
       evidenceSnapshotIds: detail.evidence.map((evidence) => evidence.id),
@@ -490,12 +508,14 @@ export function useDecisionDraft({
         id: preview.request.id,
         claim: preview.request.claim,
         evidenceRevision: preview.request.evidenceRevision,
-        activeDecisionRevision: preview.request.activeDecisionRevision,
+        currentConclusionRevision: preview.request.currentConclusionRevision,
+        currentPolicyEvaluationRevision: preview.request.currentPolicyEvaluationRevision,
         evidenceSnapshotIds: preview.request.evidenceSnapshotIds,
         rationale: preview.request.rationale,
         expectedResultingAssetId: preview.response.resultingAssetId,
         expectedAssetOutcome: preview.response.assetOutcome,
         expectedRepresentationOutcome: preview.response.representationOutcome,
+        expectedAffectedObservationRevisions: preview.response.affectedObservationRevisions,
       })
       onDetailChange(nextDetail)
       setPreview(null)
@@ -664,6 +684,8 @@ export function reasonText(reason: string | null | undefined): string {
       return m["assetCatalog.exceptions.reviewUi.exclusion.artifactLabel"]()
     case "manual_exclusion_reversal":
       return m["assetCatalog.exceptions.labels.reason.manualExclusionReversal"]()
+    case "conclusion_disagreement":
+      return m["assetCatalog.exceptions.labels.reason.conclusionDisagreement"]()
     default:
       return m["assetCatalog.exceptions.unknown"]()
   }
@@ -807,7 +829,7 @@ export function MessageLine({ message }: { readonly message: DraftMessage | null
 /** Plain-English answer to "why is this here and what should I do about it". */
 export function caseExplainer(detail: AssetExceptionDetail): string {
   const symbol = getAssetExceptionDisplaySymbol(detail)
-  switch (detail.policyOutput?.reason) {
+  switch (detail.currentPolicyEvaluation?.reason) {
     case "display_collision":
       return m["assetCatalog.exceptions.reviewUi.case.displayCollision"]({ symbol })
     case "ownership_conflict":
@@ -994,7 +1016,7 @@ function recommendationText(detail: AssetExceptionDetail): {
   readonly explanation: string
   readonly tone: "danger" | "neutral" | "warning"
 } {
-  switch (detail.policyOutput?.reason) {
+  switch (detail.currentPolicyEvaluation?.reason) {
     case "spam_evidence":
       return {
         action: m["assetCatalog.exceptions.reviewUi.case.recommendSpam"](),
@@ -1102,11 +1124,34 @@ export function TechnicalIds({ detail }: { readonly detail: AssetExceptionDetail
         </div>
         <div className="grid gap-0.5">
           <span className="text-muted-foreground">
+            {m["assetCatalog.exceptions.reviewUi.technical.currentConclusionRevision"]()}
+          </span>
+          <CopyText
+            label={m["assetCatalog.exceptions.reviewUi.technical.currentConclusionRevisionLabel"]()}
+            value={detail.currentConclusionRevision}
+          />
+        </div>
+        <div className="grid gap-0.5">
+          <span className="text-muted-foreground">
+            {m["assetCatalog.exceptions.reviewUi.technical.currentPolicyEvaluationRevision"]()}
+          </span>
+          <CopyText
+            label={m[
+              "assetCatalog.exceptions.reviewUi.technical.currentPolicyEvaluationRevisionLabel"
+            ]()}
+            value={detail.currentPolicyEvaluationRevision}
+          />
+        </div>
+        <div className="grid gap-0.5">
+          <span className="text-muted-foreground">
             {m["assetCatalog.exceptions.reviewUi.technical.policyRevision"]()}
           </span>
           <CopyText
             label={m["assetCatalog.exceptions.reviewUi.technical.policyRevisionLabel"]()}
-            value={detail.policyRevision}
+            value={
+              detail.currentPolicyEvaluation?.policyRevision ??
+              m["assetCatalog.exceptions.reviewUi.technical.policyRevisionMissing"]()
+            }
           />
         </div>
       </div>
@@ -1210,6 +1255,20 @@ export function impactParts(detail: AssetExceptionDetail): ReadonlyArray<string>
         })
       : m["assetCatalog.exceptions.reviewUi.impact.sources"]({
           count: impact.affectedSources,
+        }),
+    impact.affectedCalculations === 1
+      ? m["assetCatalog.exceptions.reviewUi.impact.calculation"]({
+          count: impact.affectedCalculations,
+        })
+      : m["assetCatalog.exceptions.reviewUi.impact.calculations"]({
+          count: impact.affectedCalculations,
+        }),
+    impact.existingGeneratedReportSnapshots === 1
+      ? m["assetCatalog.exceptions.reviewUi.impact.generatedReportSnapshot"]({
+          count: impact.existingGeneratedReportSnapshots,
+        })
+      : m["assetCatalog.exceptions.reviewUi.impact.generatedReportSnapshots"]({
+          count: impact.existingGeneratedReportSnapshots,
         }),
     impact.affectedTransactionValueEur === null
       ? m["assetCatalog.exceptions.reviewUi.impact.unknownValue"]()

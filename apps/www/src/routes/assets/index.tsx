@@ -153,6 +153,9 @@ function AssetsIndexRoute() {
       isAdmin
         ? {
             get: (id: string) => taxmaxi().assets.getException({ id }),
+            lookup: (
+              input: Parameters<ReturnType<typeof taxmaxi>["assets"]["lookupException"]>[0]
+            ) => taxmaxi().assets.lookupException(input),
             preview: (
               input: Parameters<ReturnType<typeof taxmaxi>["assets"]["previewExceptionDecision"]>[0]
             ) => taxmaxi().assets.previewExceptionDecision(input),

@@ -4,6 +4,7 @@
  * @module SyncEngineRepositorySupport
  */
 
+import { ASSET_RESOLUTION_POLICY_ACTOR, ASSET_RESOLUTION_POLICY_REVISION } from "@my/core/assets"
 import * as Timestamp from "@my/core/shared/values/Timestamp"
 import { eq, inArray, sql } from "drizzle-orm"
 import * as Effect from "effect/Effect"
@@ -13,7 +14,7 @@ import {
   SourceSyncJobModeSchema,
   SourceSyncPhaseSchema,
   SyncEngineStorageError,
-  type AssetResolutionDecisionRecord,
+  type AssetResolutionPolicyEvaluationRecord,
   type SourceSyncJobProgressSnapshot,
 } from "@my/sync-engine/services"
 import { drizzle } from "./PgClientLive.ts"
@@ -92,14 +93,19 @@ type SyncEngineDb = Effect.Success<typeof drizzle>
 /** One drizzle transaction handle as passed to `db.transaction` callbacks. */
 export type SyncEngineDbTransaction = Parameters<Parameters<SyncEngineDb["transaction"]>[0]>[0]
 
-/** Mapping status of an observation that still needs resolution; null means no mapping row. */
-export type UnresolvedMappingStatus = "pending_review" | null
+/** Mapping status considered when scheduling an asset-resolution job. */
+export type ResolutionJobMappingStatus =
+  | "approved"
+  | "pending_review"
+  | "rejected"
+  | "excluded"
+  | null
 
 /**
  * An observed asset with no mapping row or a pending_review mapping is
  * unresolved; approved and rejected are not.
  */
-export const OBSERVED_UNRESOLVED_STATUSES: ReadonlyArray<UnresolvedMappingStatus> = [
+export const OBSERVED_UNRESOLVED_STATUSES: ReadonlyArray<ResolutionJobMappingStatus> = [
   null,
   "pending_review",
 ]
@@ -107,30 +113,35 @@ export const OBSERVED_UNRESOLVED_STATUSES: ReadonlyArray<UnresolvedMappingStatus
 /**
  * The catalog path deliberately skips assets with no mapping row: a mapping
  * row appears once an asset is actually observed, so a bare catalog entry
- * has never been seen in a transaction and must not trigger research.
+ * has never been seen in a transaction and must not trigger research. Settled
+ * mappings are reevaluated at later evidence revisions without replacing the
+ * current conclusion, so actionable evidence can reopen review.
  */
-export const CATALOG_REVIEWABLE_STATUSES: ReadonlyArray<UnresolvedMappingStatus> = [
+export const CATALOG_REVIEWABLE_STATUSES: ReadonlyArray<ResolutionJobMappingStatus> = [
   "pending_review",
+  "approved",
+  "excluded",
 ]
 
 /**
- * Insert one pending resolution job per unresolved provider asset at its
- * current evidence revision, inside the caller's transaction. Existing jobs
- * for the same (observation, revision) pair are left untouched. Shared by
+ * Insert one pending resolution job per eligible provider asset at its current
+ * evidence revision and the current policy revision, inside the caller's
+ * transaction. Existing jobs for the same (observation, evidence revision,
+ * policy revision) triple are left untouched. Shared by
  * AssetResolutionJobRepositoryLive (the standalone scheduling API) and
  * ProviderAssetRepositoryLive (scheduling inside observation transactions)
  * so both paths follow the same unresolved-status and conflict rules.
  */
-export const insertUnresolvedResolutionJobs = ({
+export const insertResolutionJobsForMappings = ({
   tx,
   providerAssetRowIds,
   now,
-  unresolvedStatuses,
+  mappingStatuses,
 }: {
   readonly tx: SyncEngineDbTransaction
   readonly providerAssetRowIds: ReadonlyArray<string>
   readonly now: Date
-  readonly unresolvedStatuses: ReadonlyArray<UnresolvedMappingStatus>
+  readonly mappingStatuses: ReadonlyArray<ResolutionJobMappingStatus>
 }) =>
   Effect.gen(function* () {
     if (providerAssetRowIds.length === 0) {
@@ -144,29 +155,71 @@ export const insertUnresolvedResolutionJobs = ({
       .select({
         providerAssetRowId: schema.providerAssets.id,
         evidenceRevision: schema.providerAssets.evidenceRevision,
+        providerType: schema.providerAssets.providerType,
+        mappingKind: schema.providerAssetMappings.mappingKind,
         mappingStatus: schema.providerAssetMappings.mappingStatus,
+        currentPolicyEvidenceRevision: schema.assetResolutionDecisions.evidenceRevision,
+        currentPolicyRevision: schema.assetResolutionDecisions.policyRevision,
+        currentPolicyActor: schema.assetResolutionDecisions.actor,
       })
       .from(schema.providerAssets)
       .leftJoin(
         schema.providerAssetMappings,
         eq(schema.providerAssetMappings.providerAssetRowId, schema.providerAssets.id)
       )
+      .leftJoin(
+        schema.assetResolutionCurrentState,
+        eq(schema.assetResolutionCurrentState.providerAssetRowId, schema.providerAssets.id)
+      )
+      .leftJoin(
+        schema.assetResolutionDecisions,
+        eq(
+          schema.assetResolutionDecisions.id,
+          schema.assetResolutionCurrentState.currentPolicyEvaluationId
+        )
+      )
       .where(inArray(schema.providerAssets.id, providerAssetRowIds))
       .pipe(wrapSyncEngineSqlError("assetResolutionJobScheduling.load"))
 
-    const unresolved = candidates.filter((candidate) =>
-      unresolvedStatuses.some((status) => status === candidate.mappingStatus)
-    )
-    if (unresolved.length === 0) {
+    const eligible = candidates.filter((candidate) => {
+      if (!mappingStatuses.some((status) => status === candidate.mappingStatus)) {
+        return false
+      }
+      const settled =
+        candidate.mappingStatus === "approved" || candidate.mappingStatus === "excluded"
+      if (!settled) {
+        return true
+      }
+      // A policy-revision change only makes automatic evaluations stale.
+      // Trusted seeds, canonicalization, and human decisions carry their own
+      // policy revisions and are not redone when the resolution policy ships
+      // a new revision.
+      const evaluationCurrent =
+        candidate.currentPolicyEvidenceRevision === candidate.evidenceRevision &&
+        (candidate.currentPolicyActor !== ASSET_RESOLUTION_POLICY_ACTOR ||
+          candidate.currentPolicyRevision === ASSET_RESOLUTION_POLICY_REVISION)
+      if (evaluationCurrent) {
+        return false
+      }
+      // A settled fiat mapping stays settled while the provider still reports
+      // the currency as fiat; the resolution policy only answers questions
+      // about crypto assets. When the provider reclassifies the currency, the
+      // old fiat approval must not keep deciding accounting, so the
+      // observation is reevaluated. A null provider type is no report at all.
+      const reportedFiat = candidate.providerType?.trim().toLowerCase() === "fiat"
+      return candidate.mappingKind === "asset" || (candidate.providerType !== null && !reportedFiat)
+    })
+    if (eligible.length === 0) {
       return []
     }
 
     const inserted = yield* tx
       .insert(schema.assetResolutionJobs)
       .values(
-        unresolved.map((candidate) => ({
+        eligible.map((candidate) => ({
           providerAssetRowId: candidate.providerAssetRowId,
           evidenceRevision: candidate.evidenceRevision,
+          policyRevision: ASSET_RESOLUTION_POLICY_REVISION,
           status: "pending" as const,
           createdAt: now,
           updatedAt: now,
@@ -176,6 +229,7 @@ export const insertUnresolvedResolutionJobs = ({
         target: [
           schema.assetResolutionJobs.providerAssetRowId,
           schema.assetResolutionJobs.evidenceRevision,
+          schema.assetResolutionJobs.policyRevision,
         ],
       })
       .returning({
@@ -188,37 +242,54 @@ export const insertUnresolvedResolutionJobs = ({
   })
 
 /**
- * Insert one automatic resolution decision and its evidence snapshots as the
- * active decision for its provider asset and evidence revision, inside the
- * caller's transaction. Shared by ProviderAssetRepositoryLive (decision
- * recording and supersession) and AssetRepositoryLive (standalone asset
- * creation, which records its decision in the same transaction) so every
- * writer follows the same row shape and active-decision rules.
+ * Insert one immutable automatic policy evaluation and its evidence snapshots
+ * inside the caller's transaction. Shared by ProviderAssetRepositoryLive and
+ * AssetRepositoryLive so every automatic writer follows the same history and
+ * current-role rules.
  *
- * With skipOnActiveConflict, an existing active decision for the pair leaves
- * history untouched and returns null, so replays never rewrite it. Without
- * it, a conflicting active decision fails the caller's transaction.
+ * The idempotency key is provider asset, evidence revision, and policy
+ * revision. With skipOnEvaluationConflict, an existing evaluation for that key
+ * leaves history untouched and returns null. A late evaluation is retained in
+ * history but cannot move either current pointer backward.
+ *
+ * With policyEvaluationOnly, the write may advance the current
+ * policy-evaluation pointer but never fills the conclusion pointer, even when
+ * it is empty. Writers re-evaluating a settled mapping use this so a policy
+ * disagreement stays visible for human review instead of becoming the
+ * conclusion of a mapping that never had one.
  */
 export const insertAssetResolutionDecision = ({
   tx,
   decision,
   supersedesDecisionId = null,
-  skipOnActiveConflict = false,
+  skipOnEvaluationConflict = false,
+  policyEvaluationOnly = false,
   operation,
 }: {
   readonly tx: SyncEngineDbTransaction
-  readonly decision: AssetResolutionDecisionRecord
+  readonly decision: AssetResolutionPolicyEvaluationRecord
   readonly supersedesDecisionId?: string | null
-  readonly skipOnActiveConflict?: boolean
+  readonly skipOnEvaluationConflict?: boolean
+  readonly policyEvaluationOnly?: boolean
   readonly operation: string
 }): Effect.Effect<{ readonly id: string } | null, SyncEngineStorageError> =>
   Effect.gen(function* () {
+    // Serialize decision writers and mapping approvals before inserting rows
+    // that take a provider-asset FK lock. NO KEY UPDATE is compatible with
+    // source-use FK writes while still preventing stale policy pointer moves.
+    const [providerAsset] = yield* tx
+      .select({ evidenceRevision: schema.providerAssets.evidenceRevision })
+      .from(schema.providerAssets)
+      .where(eq(schema.providerAssets.id, decision.providerAssetRowId))
+      .for("no key update")
+      .limit(1)
+      .pipe(wrapSyncEngineSqlError(operation))
+
     const insert = tx.insert(schema.assetResolutionDecisions).values({
       providerAssetRowId: decision.providerAssetRowId,
       evidenceRevision: decision.evidenceRevision,
       policyRevision: decision.policyRevision,
       outcome: decision.outcome,
-      status: "active" as const,
       supersedesDecisionId,
       assetId: decision.assetId,
       assetRepresentationId: decision.assetRepresentationId,
@@ -230,13 +301,14 @@ export const insertAssetResolutionDecision = ({
       reason: decision.reason,
       actor: decision.actor,
     })
-    const conflictAwareInsert = skipOnActiveConflict
+    const conflictAwareInsert = skipOnEvaluationConflict
       ? insert.onConflictDoNothing({
           target: [
             schema.assetResolutionDecisions.providerAssetRowId,
             schema.assetResolutionDecisions.evidenceRevision,
+            schema.assetResolutionDecisions.policyRevision,
           ],
-          where: sql`${schema.assetResolutionDecisions.status} = 'active'`,
+          where: sql`${schema.assetResolutionDecisions.humanClaim} is null and ${schema.assetResolutionDecisions.supersedesDecisionId} is null`,
         })
       : insert
 
@@ -245,7 +317,7 @@ export const insertAssetResolutionDecision = ({
       .pipe(wrapSyncEngineSqlError(operation))
 
     if (inserted === undefined) {
-      if (skipOnActiveConflict) {
+      if (skipOnEvaluationConflict) {
         return null
       }
 
@@ -277,7 +349,88 @@ export const insertAssetResolutionDecision = ({
         .pipe(wrapSyncEngineSqlError(operation))
     }
 
+    if (providerAsset?.evidenceRevision !== decision.evidenceRevision) {
+      return inserted
+    }
+
+    const establishesConclusion =
+      !policyEvaluationOnly &&
+      (decision.outcome === "excluded" ||
+        (!["pending", "fail_closed"].includes(decision.outcome) &&
+          decision.assetId !== null &&
+          (decision.blockchain === null || decision.assetRepresentationId !== null)))
+    yield* tx
+      .insert(schema.assetResolutionCurrentState)
+      .values({
+        providerAssetRowId: decision.providerAssetRowId,
+        currentConclusionId: establishesConclusion ? inserted.id : null,
+        currentPolicyEvaluationId: inserted.id,
+      })
+      .onConflictDoUpdate({
+        target: schema.assetResolutionCurrentState.providerAssetRowId,
+        set: {
+          ...(establishesConclusion
+            ? {
+                currentConclusionId: sql`coalesce(
+                  ${schema.assetResolutionCurrentState.currentConclusionId},
+                  ${inserted.id}::uuid
+                )`,
+              }
+            : {}),
+          currentPolicyEvaluationId: inserted.id,
+          updatedAt: nowDate(),
+        },
+      })
+      .pipe(wrapSyncEngineSqlError(operation))
+
     return inserted
+  })
+
+/**
+ * Insert an automatic policy evaluation only while its evidence revision is
+ * still current. The provider-row lock keeps the revision check and decision
+ * insert in one transaction, so evidence cannot advance between them.
+ */
+export const insertCurrentAssetResolutionDecision = ({
+  tx,
+  decision,
+  policyEvaluationOnly = false,
+  operation,
+}: {
+  readonly tx: SyncEngineDbTransaction
+  readonly decision: AssetResolutionPolicyEvaluationRecord
+  readonly policyEvaluationOnly?: boolean
+  readonly operation: string
+}): Effect.Effect<
+  | { readonly _tag: "inserted"; readonly id: string }
+  | { readonly _tag: "duplicate" }
+  | { readonly _tag: "stale" },
+  SyncEngineStorageError
+> =>
+  Effect.gen(function* () {
+    const [providerAsset] = yield* tx
+      .select({ evidenceRevision: schema.providerAssets.evidenceRevision })
+      .from(schema.providerAssets)
+      .where(eq(schema.providerAssets.id, decision.providerAssetRowId))
+      .for("no key update")
+      .limit(1)
+      .pipe(wrapSyncEngineSqlError(operation))
+
+    if (providerAsset?.evidenceRevision !== decision.evidenceRevision) {
+      return { _tag: "stale" as const }
+    }
+
+    const inserted = yield* insertAssetResolutionDecision({
+      tx,
+      decision,
+      skipOnEvaluationConflict: true,
+      policyEvaluationOnly,
+      operation,
+    })
+
+    return inserted === null
+      ? { _tag: "duplicate" as const }
+      : { _tag: "inserted" as const, id: inserted.id }
   })
 
 /**

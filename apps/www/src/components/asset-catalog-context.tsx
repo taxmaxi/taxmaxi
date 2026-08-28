@@ -20,6 +20,7 @@ import type {
   AssetExceptionDecisionInput,
   AssetExceptionDecisionConfirmationInput,
   AssetExceptionDetail,
+  AssetExceptionLookupInput,
   AssetExceptionPreview,
 } from "taxmaxi"
 
@@ -40,6 +41,7 @@ export type AssetCatalogFeeds = {
 
 export type AssetExceptionActions = {
   readonly get: (id: string) => Promise<AssetExceptionDetail>
+  readonly lookup: (input: AssetExceptionLookupInput) => Promise<AssetExceptionDetail>
   readonly preview: (input: AssetExceptionDecisionInput) => Promise<AssetExceptionPreview>
   readonly submit: (input: AssetExceptionDecisionConfirmationInput) => Promise<AssetExceptionDetail>
   readonly searchAssets: (query: string) => Promise<AssetCatalogList>
@@ -146,9 +148,10 @@ function useAssetCatalogController({
   const changeScope = useCallback(
     (nextScope: CatalogScope) => {
       setScope(nextScope)
+      selection.closeExactLookup()
       paging.resetVisibleItems()
     },
-    [paging.resetVisibleItems]
+    [paging.resetVisibleItems, selection.closeExactLookup]
   )
 
   return useMemo(
@@ -161,9 +164,12 @@ function useAssetCatalogController({
       hasLoadError: paging.hasLoadError,
       hasMoreItems: paging.hasMoreItems,
       isLoading: paging.isLoadingVisibleFeed,
+      exactLookupKey: selection.exactLookupKey,
+      exactLookupOpen: selection.exactLookupOpen,
       mobileBackButtonRef: selection.mobileBackButtonRef,
       mobileDetailOpen: selection.mobileDetailOpen,
       onLoadMore: paging.loadMore,
+      onOpenExactLookup: selection.openExactLookup,
       onQueryChange: changeQuery,
       onRetry: paging.retryLoad,
       onScopeChange: changeScope,
@@ -198,8 +204,11 @@ function useAssetCatalogController({
       paging.visibleItems,
       query,
       scope,
+      selection.exactLookupKey,
+      selection.exactLookupOpen,
       selection.mobileBackButtonRef,
       selection.mobileDetailOpen,
+      selection.openExactLookup,
       selection.selectItem,
       selection.selectedItem,
       selection.selectedItemKey,

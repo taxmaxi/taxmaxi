@@ -181,22 +181,40 @@ function CandidatePicker({ draft }: { readonly draft: DecisionDraft }) {
   // previous request settles; only the latest request may update the list.
   const latestSearchId = useRef(0)
 
-  const runSearch = (value: string) => {
+  const runSearch = (value: string, clearSelection = true) => {
     if (value.trim().length === 0) {
       return
     }
-    draft.setAssetId("")
+    if (clearSelection) {
+      draft.setAssetId("")
+    }
     const searchId = ++latestSearchId.current
     setBusy(true)
     search(value.trim())
       .then((result) => {
         if (latestSearchId.current === searchId) {
           setCandidates(result.assets)
+          // A recommended asset prefilled into the draft can be missing from
+          // the search results, because the search runs on the observation's
+          // display text. Keeping the hidden ID would enable preview with no
+          // visible selection, so drop it when no candidate row can show it.
+          if (
+            !clearSelection &&
+            draft.assetId.length > 0 &&
+            !result.assets.some((asset) => asset.id === draft.assetId)
+          ) {
+            draft.setAssetId("")
+          }
         }
       })
       .catch(() => {
         if (latestSearchId.current === searchId) {
           setCandidates([])
+          // A failed search renders an empty candidate list; a preserved
+          // prefilled ID would still enable preview with no visible pick.
+          if (!clearSelection && draft.assetId.length > 0) {
+            draft.setAssetId("")
+          }
         }
       })
       .finally(() => {
@@ -207,7 +225,7 @@ function CandidatePicker({ draft }: { readonly draft: DecisionDraft }) {
   }
 
   useEffect(() => {
-    runSearch(initialQuery)
+    runSearch(initialQuery, false)
     // Initial search only — later searches are user-driven.
   }, [])
 
@@ -594,6 +612,11 @@ function representationDescription({
   }
   if (outcome === "reuse") {
     return m["assetCatalog.exceptions.reviewUi.preview.reuseRepresentation"]({
+      representation: label,
+    })
+  }
+  if (outcome === "reassign") {
+    return m["assetCatalog.exceptions.reviewUi.preview.reassignRepresentation"]({
       representation: label,
     })
   }

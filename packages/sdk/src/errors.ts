@@ -1,6 +1,8 @@
 import {
   AssetDecisionConflictError,
   AssetDecisionValidationError,
+  AssetLookupNotFoundError,
+  AssetLookupValidationError,
   AssetStaleRevisionError,
   AuthValidationError,
   SourceCreditRequiredError,
@@ -169,6 +171,24 @@ export type TaxMaxiAssetDecisionErrorCode =
 const decodeAssetDecisionError = Schema.decodeUnknownExit(
   Schema.Union([AssetStaleRevisionError, AssetDecisionConflictError, AssetDecisionValidationError])
 )
+
+export type TaxMaxiAssetLookupErrorCode = "invalid_lookup" | "observation_not_found"
+
+const decodeAssetLookupError = Schema.decodeUnknownExit(
+  Schema.Union([AssetLookupValidationError, AssetLookupNotFoundError])
+)
+
+/** Extract the machine-readable code from an asset observation lookup failure. */
+export const getTaxMaxiAssetLookupErrorCode = (
+  error: unknown
+): TaxMaxiAssetLookupErrorCode | null => {
+  const candidate = error instanceof TaxMaxiError ? error.cause : error
+
+  return Exit.match(decodeAssetLookupError(candidate), {
+    onFailure: () => null,
+    onSuccess: ({ code }) => code,
+  })
+}
 
 /** Extract the machine-readable code from an asset exception decision failure. */
 export const getTaxMaxiAssetDecisionErrorCode = (

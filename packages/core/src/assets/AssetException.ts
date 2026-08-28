@@ -10,8 +10,11 @@ import { AssetDecimals, EconomicAssetType, RepresentationType } from "./AssetRes
 const NonEmptyString = Schema.String.check(Schema.isNonEmpty())
 const NonEmptyTrimmedString = Schema.Trimmed.check(Schema.isNonEmpty())
 
-/** Stable token used when an observation has no active decision. */
-export const NO_ACTIVE_ASSET_DECISION = "no_active_decision" as const
+/** Stable token used when an observation has no current global conclusion. */
+export const NO_CURRENT_ASSET_CONCLUSION = "no_current_conclusion" as const
+
+/** Stable token used when an observation has no current policy evaluation. */
+export const NO_CURRENT_ASSET_POLICY_EVALUATION = "no_current_policy_evaluation" as const
 
 /** Reasons that require a domain conclusion from an administrator. */
 export const AssetExceptionReason = Schema.Literals([
@@ -24,6 +27,10 @@ export const AssetExceptionReason = Schema.Literals([
   "spam_evidence",
   "unsupported_representation_type",
   "unverified_asset",
+  // The current policy evaluation reached a conclusive answer that differs
+  // from the current global conclusion. The queue synthesizes this reason;
+  // the policy itself never emits it.
+  "conclusion_disagreement",
 ])
 
 export type AssetExceptionReason = typeof AssetExceptionReason.Type
@@ -43,6 +50,7 @@ const ASSET_EXCEPTION_SEVERITY_BY_REASON = {
   spam_evidence: "low",
   unsupported_representation_type: "low",
   unverified_asset: "low",
+  conclusion_disagreement: "high",
 } as const satisfies Readonly<Record<AssetExceptionReason, AssetExceptionSeverity>>
 
 /** Return the versioned severity for one actionable resolver reason. */

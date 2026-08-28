@@ -1926,7 +1926,7 @@ describe("coinbase normalization persistence", () => {
           )
         ).toBe(false)
         expect(providerAssetState.mapping).toMatchObject({ mappingStatus: "excluded" })
-        expect(resolutionJobsAfter).toHaveLength(jobsBefore.length)
+        expect(resolutionJobsAfter).toHaveLength(jobsBefore.length + 1)
 
         const btcUsage = yield* Effect.gen(function* () {
           const db = yield* drizzle
@@ -1966,7 +1966,6 @@ describe("coinbase normalization persistence", () => {
               evidenceRevision: btcUsage.btcProviderAsset.evidenceRevision,
               policyRevision: "test:approved-fee",
               outcome: "attach",
-              status: "active",
               assetId: BTC_ASSET_ID,
               assetRepresentationId: null,
               actor: "policy:test:approved-fee",
@@ -1991,6 +1990,20 @@ describe("coinbase normalization persistence", () => {
           if (evidence === undefined) {
             return yield* Effect.die("Failed to seed BTC fee evidence")
           }
+          yield* db
+            .insert(schema.assetResolutionCurrentState)
+            .values({
+              providerAssetRowId: btcUsage.btcProviderAsset.id,
+              currentConclusionId: decision.id,
+              currentPolicyEvaluationId: decision.id,
+            })
+            .onConflictDoUpdate({
+              target: schema.assetResolutionCurrentState.providerAssetRowId,
+              set: {
+                currentConclusionId: decision.id,
+                currentPolicyEvaluationId: decision.id,
+              },
+            })
           return { decisionId: decision.id, evidenceId: evidence.id }
         }).pipe(Effect.provide(TestPgClientLive))
 
@@ -2002,7 +2015,8 @@ describe("coinbase normalization persistence", () => {
               providerAssetRowId: btcUsage.btcProviderAsset.id,
               claim: { _tag: "exclusion", reason: "confirmed_spam" },
               evidenceRevision: btcUsage.btcProviderAsset.evidenceRevision,
-              activeDecisionRevision: exclusionFixture.decisionId,
+              currentConclusionRevision: exclusionFixture.decisionId,
+              currentPolicyEvaluationRevision: exclusionFixture.decisionId,
               evidenceSnapshotIds: [exclusionFixture.evidenceId],
               rationale: "The approved fee observation was later confirmed as excluded.",
               expectedResultingAssetId: null,
@@ -2029,7 +2043,7 @@ describe("coinbase normalization persistence", () => {
     )
   })
 
-  it("does not create mapping review work for an excluded secondary currency", async () => {
+  it("reevaluates an excluded secondary currency without reopening mapping review", async () => {
     activeSyncRecords = [
       makeCoinbaseRecord({
         recordType: "coinbase_account",
@@ -2096,7 +2110,7 @@ describe("coinbase normalization persistence", () => {
             ?.normalizationError
         ).toBeNull()
         expect(counts.legs.length).toBeGreaterThan(0)
-        expect(jobsAfter).toHaveLength(jobsBefore.length)
+        expect(jobsAfter).toHaveLength(jobsBefore.length + 1)
       })
     )
   })

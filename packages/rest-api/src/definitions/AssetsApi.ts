@@ -32,12 +32,29 @@ export class AssetNotFoundError extends Schema.TaggedError<AssetNotFoundError>()
   { httpApiStatus: 404 }
 ) {}
 
+export class AssetLookupValidationError extends Schema.TaggedError<AssetLookupValidationError>()(
+  "AssetLookupValidationError",
+  {
+    code: Schema.Literal("invalid_lookup"),
+  },
+  { httpApiStatus: 400 }
+) {}
+
+export class AssetLookupNotFoundError extends Schema.TaggedError<AssetLookupNotFoundError>()(
+  "AssetLookupNotFoundError",
+  {
+    code: Schema.Literal("observation_not_found"),
+  },
+  { httpApiStatus: 404 }
+) {}
+
 export class AssetStaleRevisionError extends Schema.TaggedError<AssetStaleRevisionError>()(
   "AssetStaleRevisionError",
   {
     code: Schema.Literal("stale_revision"),
     evidenceRevision: Schema.Number,
-    activeDecisionRevision: Schema.String,
+    currentConclusionRevision: Schema.String,
+    currentPolicyEvaluationRevision: Schema.String,
   },
   { httpApiStatus: 409 }
 ) {}
@@ -65,6 +82,8 @@ export class AssetExceptionImpactResponse extends Schema.Class<AssetExceptionImp
   affectedPrincipals: Schema.Number,
   affectedTransactions: Schema.Number,
   affectedSources: Schema.Number,
+  affectedCalculations: Schema.Number,
+  existingGeneratedReportSnapshots: Schema.Number,
   affectedTransactionValueEur: Schema.NullOr(Schema.String),
 }) {}
 
@@ -82,11 +101,14 @@ export class AssetExceptionListRowResponse extends Schema.Class<AssetExceptionLi
   severity: AssetExceptionSeverity,
   evidenceRevision: Schema.Number,
   policyRevision: Schema.String,
-  activeDecisionRevision: Schema.String,
+  currentConclusionRevision: Schema.String,
+  currentPolicyEvaluationRevision: Schema.String,
   blockedReports: Schema.Number,
   affectedPrincipals: Schema.Number,
   affectedTransactions: Schema.Number,
   affectedSources: Schema.Number,
+  affectedCalculations: Schema.Number,
+  existingGeneratedReportSnapshots: Schema.Number,
   affectedTransactionValueEur: Schema.NullOr(Schema.String),
   oldestAt: Schema.DateTimeUtcFromString,
 }) {}
@@ -118,8 +140,9 @@ export class AssetExceptionDecisionHistoryResponse extends Schema.Class<AssetExc
   "AssetExceptionDecisionHistoryResponse"
 )({
   id: Schema.String.check(Schema.isUUID()),
-  status: Schema.Literals(["active", "superseded"]),
-  supersedesDecisionId: Schema.NullOr(Schema.String.check(Schema.isUUID())),
+  supersedesConclusionId: Schema.NullOr(Schema.String.check(Schema.isUUID())),
+  isCurrentConclusion: Schema.Boolean,
+  isCurrentPolicyEvaluation: Schema.Boolean,
   outcome: Schema.Literals([
     "attach",
     "create_standalone",
@@ -145,7 +168,12 @@ export class AssetExceptionRematerializationResponse extends Schema.Class<AssetE
 )({
   status: AssetExceptionRematerializationStatus,
   affectedSourceCount: Schema.Number,
+  pendingSourceCount: Schema.Number,
+  runningSourceCount: Schema.Number,
+  completedSourceCount: Schema.Number,
   failedSourceCount: Schema.Number,
+  retryingSourceCount: Schema.Number,
+  remainingSourceCount: Schema.Number,
   lastFailureAt: Schema.NullOr(Schema.DateTimeUtcFromString),
   failureCode: Schema.NullOr(Schema.String),
 }) {}
@@ -163,22 +191,11 @@ export class AssetExceptionDetailResponse extends Schema.Class<AssetExceptionDet
   providerType: Schema.NullOr(Schema.String),
   rawProviderPayload: Schema.Unknown,
   evidenceRevision: Schema.Number,
-  policyRevision: Schema.String,
-  activeDecisionRevision: Schema.String,
+  currentConclusionRevision: Schema.String,
+  currentPolicyEvaluationRevision: Schema.String,
   reviewStatus: Schema.Literals(["unresolved", "approved", "excluded"]),
-  policyOutput: Schema.NullOr(
-    Schema.Struct({
-      outcome: Schema.Literals([
-        "attach",
-        "create_standalone",
-        "excluded",
-        "pending",
-        "fail_closed",
-      ]),
-      reason: Schema.NullOr(Schema.String),
-    })
-  ),
-  activeDecision: Schema.NullOr(AssetExceptionDecisionHistoryResponse),
+  currentConclusion: Schema.NullOr(AssetExceptionDecisionHistoryResponse),
+  currentPolicyEvaluation: Schema.NullOr(AssetExceptionDecisionHistoryResponse),
   decisionHistory: Schema.Array(AssetExceptionDecisionHistoryResponse),
   evidence: Schema.Array(AssetExceptionEvidenceResponse),
   impact: AssetExceptionImpactResponse,
@@ -192,12 +209,21 @@ export class AssetExceptionPreviewResponse extends Schema.Class<AssetExceptionPr
   decisionAction: Schema.Literals(["initial", "supersession", "reversal"]),
   resultingAssetId: Schema.NullOr(Schema.String.check(Schema.isUUID())),
   assetOutcome: Schema.Literals(["none", "reuse", "create"]),
-  representationOutcome: Schema.Literals(["none", "reuse", "create"]),
-  supersededDecision: Schema.NullOr(AssetExceptionDecisionHistoryResponse),
+  representationOutcome: Schema.Literals(["none", "reuse", "create", "reassign"]),
+  supersededConclusion: Schema.NullOr(AssetExceptionDecisionHistoryResponse),
   impact: AssetExceptionImpactResponse,
   rematerializationSourceCount: Schema.Number,
   evidenceRevision: Schema.Number,
-  activeDecisionRevision: Schema.String,
+  currentConclusionRevision: Schema.String,
+  currentPolicyEvaluationRevision: Schema.String,
+  affectedObservationRevisions: Schema.Array(
+    Schema.Struct({
+      providerAssetRowId: Schema.String.check(Schema.isUUID()),
+      evidenceRevision: Schema.Number,
+      currentConclusionRevision: Schema.String,
+      currentPolicyEvaluationRevision: Schema.String,
+    })
+  ),
 }) {}
 
 /** Maximum accepted length for public asset catalog search queries. */
@@ -457,7 +483,8 @@ export class AssetExceptionDecisionRequest extends Schema.Class<AssetExceptionDe
     Schema.check(Schema.isInt()),
     Schema.check(Schema.isGreaterThanOrEqualTo(1))
   ),
-  activeDecisionRevision: Schema.String,
+  currentConclusionRevision: Schema.String,
+  currentPolicyEvaluationRevision: Schema.String,
   evidenceSnapshotIds: Schema.Array(Schema.String.check(Schema.isUUID())),
   rationale: Schema.NullOr(Schema.String.check(Schema.isNonEmpty())),
 }) {}
@@ -468,7 +495,15 @@ export class AssetExceptionDecisionConfirmationRequest extends Schema.Class<Asse
   ...AssetExceptionDecisionRequest.fields,
   expectedResultingAssetId: Schema.NullOr(Schema.String.check(Schema.isUUID())),
   expectedAssetOutcome: Schema.Literals(["none", "reuse", "create"]),
-  expectedRepresentationOutcome: Schema.Literals(["none", "reuse", "create"]),
+  expectedRepresentationOutcome: Schema.Literals(["none", "reuse", "create", "reassign"]),
+  expectedAffectedObservationRevisions: Schema.Array(
+    Schema.Struct({
+      providerAssetRowId: Schema.String.check(Schema.isUUID()),
+      evidenceRevision: Schema.Number,
+      currentConclusionRevision: Schema.String,
+      currentPolicyEvaluationRevision: Schema.String,
+    })
+  ),
 }) {}
 
 const listAssets = HttpApiEndpoint.get("listAssets", "/assets", {
@@ -603,7 +638,7 @@ const lookupAssetException = HttpApiEndpoint.get(
   {
     query: AssetExceptionLookupQuery,
     success: AssetExceptionDetailResponse,
-    error: [AssetBadRequestError, AssetNotFoundError, InternalServerError],
+    error: [AssetLookupValidationError, AssetLookupNotFoundError, InternalServerError],
   }
 )
   .annotateMerge(

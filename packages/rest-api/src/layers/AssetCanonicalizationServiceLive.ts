@@ -37,8 +37,33 @@ import { coinGeckoAssetPlatformSnapshot } from "../services/coingecko/CoinGeckoA
 
 const COINGECKO_SOURCE_NOTES = "Approved with CoinGecko asset/platform metadata."
 const MANUAL_SOURCE_NOTES = "Approved by an admin with an existing canonical asset."
-const MANUAL_APPROVAL_ACTOR = "human:admin"
-const MANUAL_APPROVAL_POLICY_REVISION = "manual-approval.1"
+const COINGECKO_CONCLUSION_POLICY_REVISION = "2026-08-26.coingecko-canonicalization.1"
+const MANUAL_CONCLUSION_POLICY_REVISION = "2026-08-26.manual-canonicalization.1"
+
+const makeExistingAssetClaim = ({
+  assetId,
+  representation,
+}: {
+  readonly assetId: string
+  readonly representation: Pick<
+    SyncEngineAssetRepresentation,
+    "blockchainName" | "representationType" | "contractAddress" | "mintAddress" | "decimals"
+  > | null
+}) => ({
+  _tag: "identity" as const,
+  assetId,
+  newAsset: null,
+  representation:
+    representation === null
+      ? null
+      : {
+          blockchain: representation.blockchainName,
+          type: representation.representationType,
+          contractAddress: representation.contractAddress,
+          mintAddress: representation.mintAddress,
+          decimals: representation.decimals,
+        },
+})
 
 const appendSourceNote = ({
   existing,
@@ -643,11 +668,14 @@ const make = Effect.gen(function* () {
     providerAssetReview: ProviderAssetReviewRecord
   ): Effect.Effect<void, AssetCanonicalizationBadRequestError> => {
     const mappingStatus = providerAssetReview.mapping?.mappingStatus
-    if (
-      mappingStatus !== "pending_review" &&
-      mappingStatus !== "approved" &&
-      mappingStatus !== "excluded"
-    ) {
+    if (mappingStatus === "excluded") {
+      return Effect.fail(
+        makeBadRequest(
+          "Excluded provider asset mappings must be changed through revision-bound exception review."
+        )
+      )
+    }
+    if (mappingStatus !== "pending_review" && mappingStatus !== "approved") {
       return Effect.fail(
         makeBadRequest("Provider asset mapping cannot be approved from its current state.")
       )
@@ -750,6 +778,7 @@ const make = Effect.gen(function* () {
                 })
               }
 
+              let selectedRepresentation: SyncEngineAssetRepresentation | null = null
               if (assetRepresentationId === null) {
                 yield* validateProviderEconomicAssetType({
                   assetType: canonicalAsset.value.type,
@@ -779,6 +808,7 @@ const make = Effect.gen(function* () {
                     "Asset representation does not belong to the selected asset."
                   )
                 }
+                selectedRepresentation = representation.value
 
                 yield* validateManualRepresentationIdentity({
                   providerAsset: providerAssetReview.providerAsset,
@@ -790,6 +820,43 @@ const make = Effect.gen(function* () {
                   representation: representation.value,
                 })
               }
+
+              const reviewedAt = new Date()
+              const conclusion =
+                providerAssetReview.mapping?.mappingStatus === "pending_review"
+                  ? {
+                      providerAssetRowId,
+                      evidenceRevision: providerAssetReview.providerAsset.evidenceRevision,
+                      policyRevision: MANUAL_CONCLUSION_POLICY_REVISION,
+                      claim: makeExistingAssetClaim({
+                        assetId: canonicalAssetId,
+                        representation: selectedRepresentation,
+                      }),
+                      assetId: canonicalAssetId,
+                      assetRepresentationId,
+                      rationale: reviewerNotes,
+                      evidence: [
+                        {
+                          authority: "human_admin",
+                          claimKind: "canonical_asset_selection",
+                          sourceLocator: `taxmaxi://provider-assets/${providerAssetRowId}/manual-canonicalization`,
+                          retrievedAt: reviewedAt,
+                          evidenceRevision: providerAssetReview.providerAsset.evidenceRevision,
+                          decodedClaim: {
+                            canonicalAssetId,
+                            assetRepresentationId,
+                            reviewerNotes,
+                          },
+                          rawPayload: {
+                            providerAsset: providerAssetReview.providerAsset,
+                            observedRepresentations,
+                            selectedTarget: { canonicalAssetId, assetRepresentationId },
+                          },
+                        },
+                      ],
+                      actor: "human:admin",
+                    }
+                  : undefined
 
               yield* providerAssetRepository
                 .approveProviderAssetMappingAndRequestReplay({
@@ -806,12 +873,9 @@ const make = Effect.gen(function* () {
                       note: MANUAL_SOURCE_NOTES,
                     }),
                   },
+                  ...(conclusion === undefined ? {} : { conclusion }),
                   expectedObservedRepresentations: observedRepresentations,
                   expectedProviderAssetRetrievedAt: providerAssetReview.providerAsset.retrievedAt,
-                  exclusionReversal: {
-                    actor: MANUAL_APPROVAL_ACTOR,
-                    policyRevision: MANUAL_APPROVAL_POLICY_REVISION,
-                  },
                 })
                 .pipe(
                   Effect.catch(() =>
@@ -905,6 +969,7 @@ const make = Effect.gen(function* () {
             platformName: nativePlatform.name,
             contractAddress: null,
           },
+          rawEvidence: coin,
         }
       }
 
@@ -960,6 +1025,7 @@ const make = Effect.gen(function* () {
           platformName: tokenPlatform.name,
           contractAddress,
         },
+        rawEvidence: coin,
       }
     })
 
@@ -1122,6 +1188,35 @@ const make = Effect.gen(function* () {
                 }
               }
 
+              const reviewedAt = new Date()
+              const conclusion =
+                providerAssetReview.mapping?.mappingStatus === "pending_review"
+                  ? {
+                      providerAssetRowId,
+                      evidenceRevision: providerAssetReview.providerAsset.evidenceRevision,
+                      policyRevision: COINGECKO_CONCLUSION_POLICY_REVISION,
+                      claim: makeExistingAssetClaim({
+                        assetId: canonicalAsset.id,
+                        representation: assetRepresentationId === null ? null : canonicalAsset,
+                      }),
+                      assetId: canonicalAsset.id,
+                      assetRepresentationId,
+                      rationale: reviewerNotes,
+                      evidence: [
+                        {
+                          authority: "coingecko",
+                          claimKind: "canonical_asset_selection",
+                          sourceLocator: `coingecko://coins/${resolved.evidence.coinId}`,
+                          retrievedAt: reviewedAt,
+                          evidenceRevision: providerAssetReview.providerAsset.evidenceRevision,
+                          decodedClaim: resolved.evidence,
+                          rawPayload: resolved.rawEvidence,
+                        },
+                      ],
+                      actor: "human:admin",
+                    }
+                  : undefined
+
               yield* providerAssetRepository
                 .approveProviderAssetMappingAndRequestReplay({
                   mapping: {
@@ -1137,12 +1232,9 @@ const make = Effect.gen(function* () {
                       note: COINGECKO_SOURCE_NOTES,
                     }),
                   },
+                  ...(conclusion === undefined ? {} : { conclusion }),
                   expectedObservedRepresentations: observedRepresentations,
                   expectedProviderAssetRetrievedAt: providerAssetReview.providerAsset.retrievedAt,
-                  exclusionReversal: {
-                    actor: MANUAL_APPROVAL_ACTOR,
-                    policyRevision: MANUAL_APPROVAL_POLICY_REVISION,
-                  },
                 })
                 .pipe(
                   Effect.catch(() =>

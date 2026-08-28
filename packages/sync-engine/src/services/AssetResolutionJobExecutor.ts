@@ -24,15 +24,21 @@ import { SyncEngineStorageError } from "./SyncEngineStorageError.ts"
  *   every affected source.
  * - pending / fail_closed: the policy decided not to attach or create;
  *   the decision is recorded as audit history.
+ * - evaluated: later evidence for a settled mapping was evaluated without
+ *   replacing the current conclusion.
+ * - revision_mismatch: the job belongs to a different resolution policy
+ *   revision; it stays pending for a worker running that revision.
  */
 export type AssetResolutionJobOutcome =
   | "already_claimed"
   | "stale"
+  | "revision_mismatch"
   | "attached"
   | "created"
   | "excluded"
   | "pending"
   | "fail_closed"
+  | "evaluated"
 
 /** Result of executing one durable resolution job. */
 export interface AssetResolutionJobExecutionResult {

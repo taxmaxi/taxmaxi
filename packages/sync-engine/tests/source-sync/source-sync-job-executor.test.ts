@@ -694,16 +694,14 @@ const makeExecutorLayer = ({
     listProviderAssetObservedRepresentations: () =>
       Effect.die("listProviderAssetObservedRepresentations should not be called"),
     findProviderAssetMapping: () => Effect.die("findProviderAssetMapping should not be called"),
-    appendSupersedingAssetResolutionDecision: () =>
-      Effect.die("appendSupersedingAssetResolutionDecision should not be called"),
-    findActiveAssetResolutionDecision: () =>
-      Effect.die("findActiveAssetResolutionDecision should not be called"),
+    findCurrentAssetResolutionPolicyEvaluation: () =>
+      Effect.die("findCurrentAssetResolutionPolicyEvaluation should not be called"),
     listAssetResolutionDecisions: () =>
       Effect.die("listAssetResolutionDecisions should not be called"),
     listAssetResolutionEvidence: () =>
       Effect.die("listAssetResolutionEvidence should not be called"),
-    recordAssetResolutionDecision: () =>
-      Effect.die("recordAssetResolutionDecision should not be called"),
+    recordAssetResolutionPolicyEvaluation: () =>
+      Effect.die("recordAssetResolutionPolicyEvaluation should not be called"),
   })
 
   return SourceSyncJobExecutorLive.pipe(

@@ -6,6 +6,7 @@ import {
   PasswordHasher,
   type AuthServiceShape,
 } from "@my/core/authentication"
+import { NO_CURRENT_ASSET_CONCLUSION } from "@my/core/assets"
 import {
   SourceSyncRunService,
   SourceSyncService,
@@ -1315,27 +1316,50 @@ describe("AssetsApiLive", () => {
           },
         ])
         yield* db.insert(schema.assetResolutionJobs).values([
-          { providerAssetRowId: firstId, evidenceRevision: 1, status: "completed" },
-          { providerAssetRowId: secondId, evidenceRevision: 1, status: "completed" },
-        ])
-        yield* db.insert(schema.assetResolutionDecisions).values([
           {
             providerAssetRowId: firstId,
             evidenceRevision: 1,
-            policyRevision: "cursor-precision.1",
-            outcome: "fail_closed",
-            reason: "ownership_conflict",
-            actor: "policy:cursor-precision.1",
+            policyRevision: "test-policy.1",
+            status: "completed",
           },
           {
             providerAssetRowId: secondId,
             evidenceRevision: 1,
-            policyRevision: "cursor-precision.1",
-            outcome: "fail_closed",
-            reason: "ownership_conflict",
-            actor: "policy:cursor-precision.1",
+            policyRevision: "test-policy.1",
+            status: "completed",
           },
         ])
+        const decisions = yield* db
+          .insert(schema.assetResolutionDecisions)
+          .values([
+            {
+              providerAssetRowId: firstId,
+              evidenceRevision: 1,
+              policyRevision: "cursor-precision.1",
+              outcome: "fail_closed",
+              reason: "ownership_conflict",
+              actor: "policy:cursor-precision.1",
+            },
+            {
+              providerAssetRowId: secondId,
+              evidenceRevision: 1,
+              policyRevision: "cursor-precision.1",
+              outcome: "fail_closed",
+              reason: "ownership_conflict",
+              actor: "policy:cursor-precision.1",
+            },
+          ])
+          .returning({
+            id: schema.assetResolutionDecisions.id,
+            providerAssetRowId: schema.assetResolutionDecisions.providerAssetRowId,
+          })
+        yield* db.insert(schema.assetResolutionCurrentState).values(
+          decisions.map((decision) => ({
+            providerAssetRowId: decision.providerAssetRowId,
+            currentConclusionId: null,
+            currentPolicyEvaluationId: decision.id,
+          }))
+        )
         yield* db.execute(sql`
           update ${schema.assetResolutionDecisions}
           set created_at = case
@@ -1405,6 +1429,7 @@ describe("AssetsApiLive", () => {
         yield* db.insert(schema.assetResolutionJobs).values({
           providerAssetRowId: providerAsset.id,
           evidenceRevision: 3,
+          policyRevision: "test-policy.1",
           status: "completed",
         })
         const [decision] = yield* db
@@ -1421,6 +1446,11 @@ describe("AssetsApiLive", () => {
         if (decision === undefined) {
           return yield* Effect.die("Failed to seed API decision")
         }
+        yield* db.insert(schema.assetResolutionCurrentState).values({
+          providerAssetRowId: providerAsset.id,
+          currentConclusionId: null,
+          currentPolicyEvaluationId: decision.id,
+        })
         const [evidence] = yield* db
           .insert(schema.assetResolutionEvidence)
           .values({
@@ -1472,7 +1502,8 @@ describe("AssetsApiLive", () => {
     const payload = {
       claim: { _tag: "exclusion", reason: "provider_artifact" },
       evidenceRevision: 3,
-      activeDecisionRevision: seeded.decisionId,
+      currentConclusionRevision: NO_CURRENT_ASSET_CONCLUSION,
+      currentPolicyEvaluationRevision: seeded.decisionId,
       evidenceSnapshotIds: [seeded.evidenceId],
       rationale: "The immutable provider evidence shows an internal provider artifact.",
     }
@@ -1488,6 +1519,7 @@ describe("AssetsApiLive", () => {
       expectedResultingAssetId: preview.body.resultingAssetId,
       expectedAssetOutcome: preview.body.assetOutcome,
       expectedRepresentationOutcome: preview.body.representationOutcome,
+      expectedAffectedObservationRevisions: preview.body.affectedObservationRevisions,
     }
     const accepted = await Effect.runPromise(
       postAdminJson({
@@ -1511,12 +1543,14 @@ describe("AssetsApiLive", () => {
           providerAssetRowId: seeded.rowId,
           reason: "ownership_conflict",
           severity: "critical",
+          affectedCalculations: 1,
+          existingGeneratedReportSnapshots: 0,
         }),
       ])
     )
     expect(lookup.body).toMatchObject({
       providerAssetRowId: seeded.rowId,
-      policyOutput: { outcome: "fail_closed", reason: "ownership_conflict" },
+      currentPolicyEvaluation: { outcome: "fail_closed", reason: "ownership_conflict" },
     })
     expect(preview.body).toMatchObject({
       assetOutcome: "none",
@@ -1528,5 +1562,53 @@ describe("AssetsApiLive", () => {
       rematerialization: { status: "pending", affectedSourceCount: 1 },
     })
     expect(staleStatus).toBe(409)
+  })
+
+  it("returns machine-readable codes for lookup failures", async () => {
+    const invalid = await Effect.runPromise(
+      getAdminJson({
+        path: "/v1/assets/exceptions/lookup?provider=coinbase",
+        responseSchema: Schema.Struct({
+          _tag: Schema.Literal("AssetLookupValidationError"),
+          code: Schema.Literal("invalid_lookup"),
+        }),
+      }).pipe(Effect.provide(HttpLive), Effect.scoped)
+    )
+    const blankKey = await Effect.runPromise(
+      getAdminJson({
+        path: "/v1/assets/exceptions/lookup?provider=coinbase&providerAssetId=%20%20",
+        responseSchema: Schema.Struct({
+          _tag: Schema.Literal("AssetLookupValidationError"),
+          code: Schema.Literal("invalid_lookup"),
+        }),
+      }).pipe(Effect.provide(HttpLive), Effect.scoped)
+    )
+    const blankProvider = await Effect.runPromise(
+      getAdminJson({
+        path: "/v1/assets/exceptions/lookup?provider=%20&providerAssetId=some-observation",
+        responseSchema: Schema.Struct({
+          _tag: Schema.Literal("AssetLookupValidationError"),
+          code: Schema.Literal("invalid_lookup"),
+        }),
+      }).pipe(Effect.provide(HttpLive), Effect.scoped)
+    )
+    const missing = await Effect.runPromise(
+      getAdminJson({
+        path: "/v1/assets/exceptions/lookup?provider=coinbase&providerAssetId=missing-observation",
+        responseSchema: Schema.Struct({
+          _tag: Schema.Literal("AssetLookupNotFoundError"),
+          code: Schema.Literal("observation_not_found"),
+        }),
+      }).pipe(Effect.provide(HttpLive), Effect.scoped)
+    )
+
+    expect(invalid.status).toBe(400)
+    expect(invalid.body.code).toBe("invalid_lookup")
+    expect(blankKey.status).toBe(400)
+    expect(blankKey.body.code).toBe("invalid_lookup")
+    expect(blankProvider.status).toBe(400)
+    expect(blankProvider.body.code).toBe("invalid_lookup")
+    expect(missing.status).toBe(404)
+    expect(missing.body.code).toBe("observation_not_found")
   })
 })

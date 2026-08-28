@@ -4,16 +4,18 @@ import * as Layer from "effect/Layer"
 import * as Option from "effect/Option"
 import { beforeEach, describe, expect, it } from "vitest"
 import { AssetRepositoryLive } from "../../persistence/src/layers/AssetRepositoryLive.ts"
+import { AssetExceptionRepositoryLive } from "../../persistence/src/layers/AssetExceptionRepositoryLive.ts"
 import { drizzle } from "../../persistence/src/layers/PgClientLive.ts"
 import { ProviderAssetRepositoryLive } from "../../persistence/src/layers/ProviderAssetRepositoryLive.ts"
 import { SyncEngineTransactionLive } from "../../persistence/src/layers/SyncEngineTransactionLive.ts"
-import { and, eq } from "../../persistence/src/query/index.ts"
+import { and, eq, sql } from "../../persistence/src/query/index.ts"
 import { schema } from "../../persistence/src/schema/index.ts"
 import {
   TEST_BTC_ASSET_ID,
   TEST_BTC_REPRESENTATION_ID,
   TEST_PRINCIPAL_ID,
   TEST_SOURCE_ID,
+  TEST_USER_ID,
   makeIntegrationTestDatabaseContext,
   seedSyncEngineAssets,
   seedSyncEngineRepositoryFixture,
@@ -25,7 +27,7 @@ import {
   CoinGeckoClientError,
   type CoinGeckoClientShape,
 } from "../src/services/coingecko/CoinGeckoClient.ts"
-import { SyncEngineTransaction } from "@my/sync-engine/services"
+import { AssetExceptionRepository, SyncEngineTransaction } from "@my/sync-engine/services"
 
 const context = makeIntegrationTestDatabaseContext({
   databaseNamePrefix: "taxmaxi_asset_canonicalization_service",
@@ -62,6 +64,9 @@ const ServiceLayer = AssetCanonicalizationServiceLive.pipe(
 
 const runService = <A, E>(effect: Effect.Effect<A, E, AssetCanonicalizationService>) =>
   Effect.runPromise(context.runWithLayer({ effect, layer: ServiceLayer }))
+
+const runExceptionRepository = <A, E>(effect: Effect.Effect<A, E, AssetExceptionRepository>) =>
+  Effect.runPromise(context.runWithLayer({ effect, layer: AssetExceptionRepositoryLive }))
 
 const countCanonicalRows = () =>
   context.runPg(
@@ -202,7 +207,6 @@ const markProviderAssetExcluded = ({
         evidenceRevision: 1,
         policyRevision: "automatic-exclusion.1",
         outcome: "excluded",
-        status: "active",
         reason: "explicit_banned_verdict",
         actor: "system:asset-resolution-policy",
       })
@@ -267,7 +271,24 @@ describe("AssetCanonicalizationServiceLive", () => {
         const jobs = yield* db
           .select({ mode: schema.processingJobs.mode, sourceId: schema.processingJobs.sourceId })
           .from(schema.processingJobs)
-        return { jobs, mapping }
+        const [currentConclusion] = yield* db
+          .select({
+            actor: schema.assetResolutionDecisions.actor,
+            assetId: schema.assetResolutionDecisions.assetId,
+            humanClaim: schema.assetResolutionDecisions.humanClaim,
+            outcome: schema.assetResolutionDecisions.outcome,
+            currentPolicyEvaluationId: schema.assetResolutionCurrentState.currentPolicyEvaluationId,
+          })
+          .from(schema.assetResolutionCurrentState)
+          .innerJoin(
+            schema.assetResolutionDecisions,
+            eq(
+              schema.assetResolutionDecisions.id,
+              schema.assetResolutionCurrentState.currentConclusionId
+            )
+          )
+          .where(eq(schema.assetResolutionCurrentState.providerAssetRowId, providerAssetRowId))
+        return { currentConclusion, jobs, mapping }
       })
     )
 
@@ -277,7 +298,217 @@ describe("AssetCanonicalizationServiceLive", () => {
       assetRepresentationId: null,
     })
     expect(state.mapping?.status).toBe("approved")
+    expect(state.currentConclusion).toEqual({
+      actor: "human:admin",
+      assetId: TEST_BTC_ASSET_ID,
+      humanClaim: {
+        _tag: "identity",
+        assetId: TEST_BTC_ASSET_ID,
+        newAsset: null,
+        representation: null,
+      },
+      outcome: "attach",
+      currentPolicyEvaluationId: null,
+    })
     expect(state.jobs).toEqual([{ mode: "replay", sourceId: TEST_SOURCE_ID }])
+
+    const correction = await runExceptionRepository(
+      Effect.gen(function* () {
+        const repository = yield* AssetExceptionRepository
+        const found = yield* repository.findDetail({
+          _tag: "row_id",
+          providerAssetRowId,
+        })
+        if (Option.isNone(found)) {
+          return yield* Effect.die("Expected approved provider asset detail")
+        }
+        const approvedDetail = found.value
+        const input = {
+          providerAssetRowId,
+          claim: { _tag: "exclusion" as const, reason: "confirmed_spam" as const },
+          evidenceRevision: approvedDetail.evidenceRevision,
+          currentConclusionRevision: approvedDetail.currentConclusionRevision,
+          currentPolicyEvaluationRevision: approvedDetail.currentPolicyEvaluationRevision,
+          evidenceSnapshotIds: approvedDetail.evidence.map(({ id }) => id),
+          rationale: null,
+        }
+        const preview = yield* repository.previewDecision(input)
+        if (preview._tag !== "ready") {
+          return yield* Effect.die("Expected approved mapping correction preview")
+        }
+        const submitted = yield* repository.submitDecision({
+          actorId: TEST_USER_ID,
+          input: {
+            ...input,
+            expectedResultingAssetId: preview.preview.resultingAssetId,
+            expectedAssetOutcome: preview.preview.assetOutcome,
+            expectedRepresentationOutcome: preview.preview.representationOutcome,
+          },
+        })
+        return { approvedDetail, preview, submitted }
+      })
+    )
+
+    expect(correction.approvedDetail.evidence).toEqual([
+      expect.objectContaining({
+        authority: "human_admin",
+        claimKind: "canonical_asset_selection",
+      }),
+    ])
+    expect(correction.preview).toMatchObject({
+      _tag: "ready",
+      preview: { decisionAction: "reversal" },
+    })
+    expect(correction.submitted).toMatchObject({
+      _tag: "accepted",
+      detail: { currentConclusion: { outcome: "excluded" } },
+    })
+  })
+
+  it("keeps the automatic policy evaluation separate from a manual approval conclusion", async () => {
+    const providerAssetRowId = await seedChainlessPendingProviderAsset({
+      providerAssetId: "manual-approval-policy-separation",
+      providerType: "crypto",
+    })
+    const policyEvaluationId = await context.runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const [policyEvaluation] = yield* db
+          .insert(schema.assetResolutionDecisions)
+          .values({
+            providerAssetRowId,
+            evidenceRevision: 1,
+            policyRevision: "manual-approval-policy-separation.1",
+            outcome: "pending",
+            reason: "display_collision",
+            actor: "system:asset-resolution-policy",
+          })
+          .returning({ id: schema.assetResolutionDecisions.id })
+        if (policyEvaluation === undefined) {
+          return yield* Effect.die("Failed to seed policy evaluation")
+        }
+        yield* db.insert(schema.assetResolutionCurrentState).values({
+          providerAssetRowId,
+          currentConclusionId: null,
+          currentPolicyEvaluationId: policyEvaluation.id,
+        })
+        return policyEvaluation.id
+      })
+    )
+
+    await runService(
+      Effect.flatMap(AssetCanonicalizationService, (service) =>
+        service.approveProviderAssetMapping({
+          providerAssetRowId,
+          canonicalAssetId: TEST_BTC_ASSET_ID,
+          assetRepresentationId: null,
+          reviewerNotes: "Approve while preserving policy review state.",
+        })
+      )
+    )
+
+    const state = await context.runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const [currentState] = yield* db
+          .select({
+            currentConclusionId: schema.assetResolutionCurrentState.currentConclusionId,
+            currentPolicyEvaluationId: schema.assetResolutionCurrentState.currentPolicyEvaluationId,
+          })
+          .from(schema.assetResolutionCurrentState)
+          .where(eq(schema.assetResolutionCurrentState.providerAssetRowId, providerAssetRowId))
+        const [currentConclusion] = yield* db
+          .select({ humanClaim: schema.assetResolutionDecisions.humanClaim })
+          .from(schema.assetResolutionDecisions)
+          .where(
+            eq(
+              schema.assetResolutionDecisions.id,
+              currentState?.currentConclusionId ?? "00000000-0000-0000-0000-000000000000"
+            )
+          )
+        return { currentConclusion, currentState }
+      })
+    )
+
+    expect(state.currentState?.currentPolicyEvaluationId).toBe(policyEvaluationId)
+    expect(state.currentState?.currentConclusionId).not.toBe(policyEvaluationId)
+    expect(state.currentConclusion?.humanClaim).toMatchObject({
+      _tag: "identity",
+      assetId: TEST_BTC_ASSET_ID,
+    })
+  })
+
+  it("rolls back the human conclusion when mapping approval fails", async () => {
+    const providerAssetRowId = await seedChainlessPendingProviderAsset({
+      providerAssetId: "manual-approval-atomic-rollback",
+      providerType: "crypto",
+    })
+    await context.runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        yield* db.execute(sql`
+          create function reject_manual_mapping_approval() returns trigger
+          language plpgsql as $trigger$
+          begin
+            if new.mapping_status = 'approved' then
+              raise exception 'injected manual mapping approval failure';
+            end if;
+            return new;
+          end
+          $trigger$
+        `)
+        yield* db.execute(sql`
+          create trigger reject_manual_mapping_approval_before_update
+          before update on provider_asset_mappings
+          for each row execute function reject_manual_mapping_approval()
+        `)
+      })
+    )
+
+    const result = await runService(
+      Effect.flatMap(AssetCanonicalizationService, (service) =>
+        service.approveProviderAssetMapping({
+          providerAssetRowId,
+          canonicalAssetId: TEST_BTC_ASSET_ID,
+          assetRepresentationId: null,
+          reviewerNotes: "This approval must roll back.",
+        })
+      ).pipe(Effect.result)
+    )
+    await context.runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        yield* db.execute(
+          sql`drop trigger reject_manual_mapping_approval_before_update on provider_asset_mappings`
+        )
+        yield* db.execute(sql`drop function reject_manual_mapping_approval()`)
+      })
+    )
+    const state = await context.runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const decisions = yield* db
+          .select({ id: schema.assetResolutionDecisions.id })
+          .from(schema.assetResolutionDecisions)
+          .where(eq(schema.assetResolutionDecisions.providerAssetRowId, providerAssetRowId))
+        const currentState = yield* db
+          .select({ providerAssetRowId: schema.assetResolutionCurrentState.providerAssetRowId })
+          .from(schema.assetResolutionCurrentState)
+          .where(eq(schema.assetResolutionCurrentState.providerAssetRowId, providerAssetRowId))
+        const [mapping] = yield* db
+          .select({ status: schema.providerAssetMappings.mappingStatus })
+          .from(schema.providerAssetMappings)
+          .where(eq(schema.providerAssetMappings.providerAssetRowId, providerAssetRowId))
+        const jobs = yield* db.select({ id: schema.processingJobs.id }).from(schema.processingJobs)
+        return { currentState, decisions, jobs, mapping }
+      })
+    )
+
+    expect(result._tag).toBe("Failure")
+    expect(state.decisions).toEqual([])
+    expect(state.currentState).toEqual([])
+    expect(state.mapping?.status).toBe("pending_review")
+    expect(state.jobs).toEqual([])
   })
 
   it("approves a chainless NFT provider asset to an NFT target", async () => {
@@ -332,7 +563,7 @@ describe("AssetCanonicalizationServiceLive", () => {
     expect(state.jobs).toEqual([{ mode: "replay", sourceId: TEST_SOURCE_ID }])
   })
 
-  it("lets a human approval supersede an excluded mapping", async () => {
+  it("routes excluded mappings through the revision-bound review flow", async () => {
     const providerAssetRowId = await seedObservedPendingProviderAsset({
       providerAssetId: "manual-exclusion-reversal",
     })
@@ -364,7 +595,7 @@ describe("AssetCanonicalizationServiceLive", () => {
     )
     await markProviderAssetExcluded({ providerAssetRowId })
 
-    const result = await runService(
+    const approval = await runService(
       Effect.flatMap(AssetCanonicalizationService, (service) =>
         service.approveProviderAssetMapping({
           providerAssetRowId,
@@ -372,8 +603,16 @@ describe("AssetCanonicalizationServiceLive", () => {
           assetRepresentationId: TEST_BTC_REPRESENTATION_ID,
           reviewerNotes: "Human-reviewed exclusion reversal.",
         })
-      )
+      ).pipe(Effect.result)
     )
+    expect(approval).toMatchObject({
+      _tag: "Failure",
+      failure: {
+        _tag: "AssetCanonicalizationBadRequestError",
+        message:
+          "Excluded provider asset mappings must be changed through revision-bound exception review.",
+      },
+    })
     const history = await context.runPg(
       Effect.gen(function* () {
         const db = yield* drizzle
@@ -381,7 +620,6 @@ describe("AssetCanonicalizationServiceLive", () => {
           .select({
             actor: schema.assetResolutionDecisions.actor,
             outcome: schema.assetResolutionDecisions.outcome,
-            status: schema.assetResolutionDecisions.status,
             supersedesDecisionId: schema.assetResolutionDecisions.supersedesDecisionId,
           })
           .from(schema.assetResolutionDecisions)
@@ -390,14 +628,11 @@ describe("AssetCanonicalizationServiceLive", () => {
       })
     )
 
-    expect(result.mapping).toMatchObject({
-      mappingStatus: "approved",
-      canonicalAssetId: TEST_BTC_ASSET_ID,
-      assetRepresentationId: TEST_BTC_REPRESENTATION_ID,
-    })
-    expect(history).toMatchObject([
-      { outcome: "excluded", status: "superseded", supersedesDecisionId: null },
-      { outcome: "attach", status: "active", actor: "human:admin" },
+    expect(history).toEqual([
+      expect.objectContaining({
+        outcome: "excluded",
+        supersedesDecisionId: null,
+      }),
     ])
   })
 
@@ -522,24 +757,67 @@ describe("AssetCanonicalizationServiceLive", () => {
 
     expect(result.providerAsset.mapping?.mappingStatus).toBe("approved")
     expect(Option.isSome(await Effect.runPromise(Deferred.poll(transactionEntered)))).toBe(true)
+    const currentConclusion = await context.runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const [row] = yield* db
+          .select({
+            actor: schema.assetResolutionDecisions.actor,
+            assetId: schema.assetResolutionDecisions.assetId,
+            evidenceAuthority: schema.assetResolutionEvidence.authority,
+            evidenceClaimKind: schema.assetResolutionEvidence.claimKind,
+            humanClaim: schema.assetResolutionDecisions.humanClaim,
+            outcome: schema.assetResolutionDecisions.outcome,
+            currentPolicyEvaluationId: schema.assetResolutionCurrentState.currentPolicyEvaluationId,
+          })
+          .from(schema.assetResolutionCurrentState)
+          .innerJoin(
+            schema.assetResolutionDecisions,
+            eq(
+              schema.assetResolutionDecisions.id,
+              schema.assetResolutionCurrentState.currentConclusionId
+            )
+          )
+          .innerJoin(
+            schema.assetResolutionEvidence,
+            eq(schema.assetResolutionEvidence.decisionId, schema.assetResolutionDecisions.id)
+          )
+          .where(eq(schema.assetResolutionCurrentState.providerAssetRowId, providerAssetRowId))
+        return row
+      })
+    )
+    expect(currentConclusion).toMatchObject({
+      actor: "human:admin",
+      evidenceAuthority: "coingecko",
+      evidenceClaimKind: "canonical_asset_selection",
+      humanClaim: expect.objectContaining({ _tag: "identity" }),
+      outcome: "attach",
+      currentPolicyEvaluationId: null,
+    })
   })
 
-  it("lets CoinGecko canonicalization supersede an excluded mapping", async () => {
+  it("routes CoinGecko exclusion reversals through the revision-bound review flow", async () => {
     const providerAssetRowId = await seedObservedPendingProviderAsset({
       providerAssetId: "coingecko-exclusion-reversal",
     })
     await markProviderAssetExcluded({ providerAssetRowId })
 
-    const result = await runService(
+    const canonicalization = await runService(
       Effect.flatMap(AssetCanonicalizationService, (service) =>
         service.canonicalizeProviderAssetFromCoinGecko({
           providerAssetRowId,
           reviewerNotes: "Human-reviewed CoinGecko reversal.",
         })
-      )
+      ).pipe(Effect.result)
     )
-
-    expect(result.providerAsset.mapping).toMatchObject({ mappingStatus: "approved" })
+    expect(canonicalization).toMatchObject({
+      _tag: "Failure",
+      failure: {
+        _tag: "AssetCanonicalizationBadRequestError",
+        message:
+          "Excluded provider asset mappings must be changed through revision-bound exception review.",
+      },
+    })
     const history = await context.runPg(
       Effect.gen(function* () {
         const db = yield* drizzle
@@ -547,17 +825,13 @@ describe("AssetCanonicalizationServiceLive", () => {
           .select({
             actor: schema.assetResolutionDecisions.actor,
             outcome: schema.assetResolutionDecisions.outcome,
-            status: schema.assetResolutionDecisions.status,
           })
           .from(schema.assetResolutionDecisions)
           .where(eq(schema.assetResolutionDecisions.providerAssetRowId, providerAssetRowId))
           .orderBy(schema.assetResolutionDecisions.createdAt)
       })
     )
-    expect(history).toMatchObject([
-      { outcome: "excluded", status: "superseded" },
-      { outcome: "attach", status: "active", actor: "human:admin" },
-    ])
+    expect(history).toEqual([expect.objectContaining({ outcome: "excluded" })])
   })
 
   it("does not enter the database transaction when CoinGecko resolution fails", async () => {

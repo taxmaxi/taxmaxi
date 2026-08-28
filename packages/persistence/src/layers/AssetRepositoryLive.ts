@@ -4,7 +4,7 @@
  * @module AssetRepositoryLive
  */
 
-import { and, eq, inArray, ne, or, sql } from "drizzle-orm"
+import { and, desc, eq, inArray, ne, or, sql } from "drizzle-orm"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import * as Option from "effect/Option"
@@ -973,7 +973,7 @@ const make = Effect.gen(function* () {
             // The audit decision is written in the same transaction, with the
             // created ids filled in, so a crash can never leave a created
             // asset without the decision that created it. A conflicting
-            // active decision rolls the creation back.
+            // policy-evaluation record rolls the creation back.
             yield* insertAssetResolutionDecision({
               tx,
               decision: {
@@ -1001,34 +1001,73 @@ const make = Effect.gen(function* () {
   const recordRepresentationOwnershipDecision: AssetRepositoryShape["recordRepresentationOwnershipDecision"] =
     ({ assetRepresentationId, assetId, policyRevision, actor }) =>
       db
-        .insert(schema.assetRepresentationOwnershipDecisions)
-        .values({
-          assetRepresentationId,
-          assetId,
-          status: "active",
-          policyRevision,
-          reason: null,
-          actor,
-        })
-        .onConflictDoNothing({
-          target: schema.assetRepresentationOwnershipDecisions.assetRepresentationId,
-          where: sql`${schema.assetRepresentationOwnershipDecisions.status} = 'active'`,
-        })
-        .returning({ id: schema.assetRepresentationOwnershipDecisions.id })
+        .transaction((tx) =>
+          Effect.gen(function* () {
+            const [representation] = yield* tx
+              .select({ assetId: schema.assetRepresentations.assetId })
+              .from(schema.assetRepresentations)
+              .where(eq(schema.assetRepresentations.id, assetRepresentationId))
+              .for("update")
+              .limit(1)
+            if (representation?.assetId !== assetId) {
+              return yield* new SyncEngineStorageError({
+                operation: "assetRepository.recordRepresentationOwnershipDecision.owner",
+                cause: "The ownership decision must name the representation's current asset.",
+              })
+            }
+
+            const [currentOwnership] = yield* tx
+              .select({ id: schema.assetRepresentationOwnershipDecisions.id })
+              .from(schema.assetRepresentationOwnershipDecisions)
+              .where(
+                and(
+                  eq(
+                    schema.assetRepresentationOwnershipDecisions.assetRepresentationId,
+                    assetRepresentationId
+                  ),
+                  sql`not exists (
+                    select 1
+                    from ${schema.assetRepresentationOwnershipDecisions} next_ownership
+                    where next_ownership.supersedes_decision_id = ${schema.assetRepresentationOwnershipDecisions.id}
+                  )`
+                )
+              )
+              .limit(1)
+            if (currentOwnership !== undefined) {
+              return false
+            }
+
+            const inserted = yield* tx
+              .insert(schema.assetRepresentationOwnershipDecisions)
+              .values({
+                assetRepresentationId,
+                assetId,
+                policyRevision,
+                reason: null,
+                actor,
+              })
+              .onConflictDoNothing({
+                target: schema.assetRepresentationOwnershipDecisions.assetRepresentationId,
+                where: sql`${schema.assetRepresentationOwnershipDecisions.supersedesDecisionId} is null`,
+              })
+              .returning({ id: schema.assetRepresentationOwnershipDecisions.id })
+            return inserted.length > 0
+          })
+        )
         .pipe(
-          Effect.map((rows) => ({ recorded: rows.length > 0 })),
+          Effect.map((recorded) => ({ recorded })),
           wrapSyncEngineSqlError("assetRepository.recordRepresentationOwnershipDecision")
         )
 
-  const findActiveRepresentationOwnership: AssetRepositoryShape["findActiveRepresentationOwnership"] =
+  const findCurrentRepresentationOwnership: AssetRepositoryShape["findCurrentRepresentationOwnership"] =
     ({ assetRepresentationId }) =>
       db
         .select({
           id: schema.assetRepresentationOwnershipDecisions.id,
           assetRepresentationId: schema.assetRepresentationOwnershipDecisions.assetRepresentationId,
           assetId: schema.assetRepresentationOwnershipDecisions.assetId,
-          status: schema.assetRepresentationOwnershipDecisions.status,
-          supersedesDecisionId: schema.assetRepresentationOwnershipDecisions.supersedesDecisionId,
+          supersedesOwnershipDecisionId:
+            schema.assetRepresentationOwnershipDecisions.supersedesDecisionId,
           policyRevision: schema.assetRepresentationOwnershipDecisions.policyRevision,
           reason: schema.assetRepresentationOwnershipDecisions.reason,
           actor: schema.assetRepresentationOwnershipDecisions.actor,
@@ -1041,13 +1080,21 @@ const make = Effect.gen(function* () {
               schema.assetRepresentationOwnershipDecisions.assetRepresentationId,
               assetRepresentationId
             ),
-            eq(schema.assetRepresentationOwnershipDecisions.status, "active")
+            sql`not exists (
+              select 1
+              from ${schema.assetRepresentationOwnershipDecisions} next_ownership
+              where next_ownership.supersedes_decision_id = ${schema.assetRepresentationOwnershipDecisions.id}
+            )`
           )
+        )
+        .orderBy(
+          desc(schema.assetRepresentationOwnershipDecisions.createdAt),
+          desc(schema.assetRepresentationOwnershipDecisions.id)
         )
         .limit(1)
         .pipe(
           Effect.map(([row]) => Option.fromNullishOr(row)),
-          wrapSyncEngineSqlError("assetRepository.findActiveRepresentationOwnership")
+          wrapSyncEngineSqlError("assetRepository.findCurrentRepresentationOwnership")
         )
 
   return AssetRepository.of({
@@ -1062,7 +1109,7 @@ const make = Effect.gen(function* () {
     attachRepresentationToExistingAsset,
     createStandaloneAssetRepresentation,
     recordRepresentationOwnershipDecision,
-    findActiveRepresentationOwnership,
+    findCurrentRepresentationOwnership,
   } satisfies AssetRepositoryShape)
 })
 

@@ -121,8 +121,8 @@ const runWithProvider = <A, E>(
               Effect.die("attachRepresentationToExistingAsset should not be called"),
             recordRepresentationOwnershipDecision: () =>
               Effect.die("recordRepresentationOwnershipDecision should not be called"),
-            findActiveRepresentationOwnership: () =>
-              Effect.die("findActiveRepresentationOwnership should not be called"),
+            findCurrentRepresentationOwnership: () =>
+              Effect.die("findCurrentRepresentationOwnership should not be called"),
           })
         ),
         Layer.provide(
@@ -154,16 +154,14 @@ const runWithProvider = <A, E>(
               Effect.die("listProviderAssetObservedRepresentations should not be called"),
             findProviderAssetMapping: () =>
               Effect.die("findProviderAssetMapping should not be called"),
-            appendSupersedingAssetResolutionDecision: () =>
-              Effect.die("appendSupersedingAssetResolutionDecision should not be called"),
-            findActiveAssetResolutionDecision: () =>
-              Effect.die("findActiveAssetResolutionDecision should not be called"),
+            findCurrentAssetResolutionPolicyEvaluation: () =>
+              Effect.die("findCurrentAssetResolutionPolicyEvaluation should not be called"),
             listAssetResolutionDecisions: () =>
               Effect.die("listAssetResolutionDecisions should not be called"),
             listAssetResolutionEvidence: () =>
               Effect.die("listAssetResolutionEvidence should not be called"),
-            recordAssetResolutionDecision: () =>
-              Effect.die("recordAssetResolutionDecision should not be called"),
+            recordAssetResolutionPolicyEvaluation: () =>
+              Effect.die("recordAssetResolutionPolicyEvaluation should not be called"),
           })
         ),
         Layer.provide(

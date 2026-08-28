@@ -28,12 +28,14 @@ export function AssetCatalogListPane() {
     canLoadMoreNow,
     canRetryNow,
     catalogStatus,
+    exceptionActions,
     hasLoadError,
     hasMoreItems,
     isLoading,
     exceptionsAvailable,
     mobileDetailOpen,
     onLoadMore,
+    onOpenExactLookup,
     onQueryChange,
     onRetry,
     onScopeChange,
@@ -94,6 +96,12 @@ export function AssetCatalogListPane() {
             </button>
           ))}
         </div>
+        {scope === "exceptions" && exceptionActions !== undefined ? (
+          <Button className="h-11 w-full" onClick={onOpenExactLookup} variant="outline">
+            <Search data-icon="inline-start" />
+            {m["assetCatalog.exceptions.lookup.open"]()}
+          </Button>
+        ) : null}
       </div>
       <Separator />
       <div

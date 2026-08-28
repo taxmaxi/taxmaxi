@@ -11,6 +11,7 @@ import {
   TEST_BTC_ASSET_ID,
   TEST_BTC_REPRESENTATION_ID,
   TEST_EUR_ASSET_ID,
+  TEST_EUR_REPRESENTATION_ID,
   makeIntegrationTestDatabaseContext,
   seedSyncEngineAssets,
   seedSyncEngineRepositoryFixture,
@@ -825,7 +826,7 @@ describe("AssetRepositoryLive", () => {
 
       const active = await runRepository(
         Effect.flatMap(AssetRepository, (repository) =>
-          repository.findActiveRepresentationOwnership({
+          repository.findCurrentRepresentationOwnership({
             assetRepresentationId: TEST_BTC_REPRESENTATION_ID,
           })
         )
@@ -836,28 +837,105 @@ describe("AssetRepositoryLive", () => {
       expect(active.value).toMatchObject({
         assetRepresentationId: TEST_BTC_REPRESENTATION_ID,
         assetId: TEST_BTC_ASSET_ID,
-        status: "active",
-        supersedesDecisionId: null,
+        supersedesOwnershipDecisionId: null,
       })
     })
 
-    it("lets the database reject an ownership decision naming a different owner", async () => {
-      // TEST_BTC_REPRESENTATION_ID belongs to TEST_BTC_ASSET_ID; claiming EUR
-      // as its owner must fail on the composite foreign key, not just in code.
-      const wrongOwnerInsert = runPg(
+    it("serializes concurrent root ownership decisions across policy revisions", async () => {
+      const record = (policyRevision: string) =>
+        runRepository(
+          Effect.flatMap(AssetRepository, (repository) =>
+            repository.recordRepresentationOwnershipDecision({
+              assetRepresentationId: TEST_BTC_REPRESENTATION_ID,
+              assetId: TEST_BTC_ASSET_ID,
+              policyRevision,
+              actor: `system:${policyRevision}`,
+            })
+          )
+        )
+
+      const results = await Promise.all([
+        record("2026-08-19.attach-only.1"),
+        record("2026-08-26.attach-only.2"),
+      ])
+      const roots = await runPg(
         Effect.gen(function* () {
           const db = yield* drizzle
+          return yield* db
+            .select({ id: schema.assetRepresentationOwnershipDecisions.id })
+            .from(schema.assetRepresentationOwnershipDecisions)
+            .where(
+              eq(
+                schema.assetRepresentationOwnershipDecisions.assetRepresentationId,
+                TEST_BTC_REPRESENTATION_ID
+              )
+            )
+        })
+      )
+
+      expect(
+        results.map(({ recorded }) => recorded).sort((left, right) => Number(left) - Number(right))
+      ).toEqual([false, true])
+      expect(roots).toHaveLength(1)
+    })
+
+    it("keeps ownership history when a representation is reassigned", async () => {
+      await runPg(
+        Effect.gen(function* () {
+          const db = yield* drizzle
+          const [original] = yield* db
+            .insert(schema.assetRepresentationOwnershipDecisions)
+            .values({
+              assetRepresentationId: TEST_BTC_REPRESENTATION_ID,
+              assetId: TEST_BTC_ASSET_ID,
+              policyRevision: "2026-08-19.attach-only.1",
+              actor: "test:direct-insert",
+            })
+            .returning({ id: schema.assetRepresentationOwnershipDecisions.id })
+          if (original === undefined) {
+            return yield* Effect.die("Expected original ownership decision")
+          }
+          yield* db
+            .update(schema.assetRepresentations)
+            .set({ assetId: TEST_EUR_ASSET_ID })
+            .where(eq(schema.assetRepresentations.id, TEST_BTC_REPRESENTATION_ID))
           yield* db.insert(schema.assetRepresentationOwnershipDecisions).values({
             assetRepresentationId: TEST_BTC_REPRESENTATION_ID,
             assetId: TEST_EUR_ASSET_ID,
-            status: "active",
-            policyRevision: "2026-08-19.attach-only.1",
-            actor: "test:direct-insert",
+            supersedesDecisionId: original.id,
+            policyRevision: "2026-08-26.human-supersession.1",
+            actor: "human:admin",
           })
         })
       )
 
-      await expect(wrongOwnerInsert).rejects.toThrow()
+      await runPg(seedData)
+
+      const persisted = await runPg(
+        Effect.gen(function* () {
+          const db = yield* drizzle
+          const decisions = yield* db
+            .select({ assetId: schema.assetRepresentationOwnershipDecisions.assetId })
+            .from(schema.assetRepresentationOwnershipDecisions)
+            .where(
+              eq(
+                schema.assetRepresentationOwnershipDecisions.assetRepresentationId,
+                TEST_BTC_REPRESENTATION_ID
+              )
+            )
+          const [representation] = yield* db
+            .select({ assetId: schema.assetRepresentations.assetId })
+            .from(schema.assetRepresentations)
+            .where(eq(schema.assetRepresentations.id, TEST_BTC_REPRESENTATION_ID))
+          return { decisions, representation }
+        })
+      )
+
+      expect(persisted.decisions).toHaveLength(2)
+      expect(persisted.decisions.map(({ assetId }) => assetId)).toEqual(
+        expect.arrayContaining([TEST_BTC_ASSET_ID, TEST_EUR_ASSET_ID])
+      )
+      expect(persisted.representation).toEqual({ assetId: TEST_EUR_ASSET_ID })
     })
 
     it("keeps a representation referenced by a decision from being deleted", async () => {
@@ -882,6 +960,38 @@ describe("AssetRepositoryLive", () => {
       )
 
       await expect(deleteRepresentation).rejects.toThrow()
+    })
+
+    it("rejects supersession links that cross representation histories", async () => {
+      const crossRepresentation = await runPg(
+        Effect.gen(function* () {
+          const db = yield* drizzle
+          const [eurOwnership] = yield* db
+            .insert(schema.assetRepresentationOwnershipDecisions)
+            .values({
+              assetRepresentationId: TEST_EUR_REPRESENTATION_ID,
+              assetId: TEST_EUR_ASSET_ID,
+              policyRevision: "2026-08-19.attach-only.1",
+              actor: "test:direct-insert",
+            })
+            .returning({ id: schema.assetRepresentationOwnershipDecisions.id })
+          if (eurOwnership === undefined) {
+            return yield* Effect.die("Expected EUR ownership decision")
+          }
+          return yield* db
+            .insert(schema.assetRepresentationOwnershipDecisions)
+            .values({
+              assetRepresentationId: TEST_BTC_REPRESENTATION_ID,
+              assetId: TEST_BTC_ASSET_ID,
+              supersedesDecisionId: eurOwnership.id,
+              policyRevision: "2026-08-26.human-supersession.1",
+              actor: "human:admin",
+            })
+            .pipe(Effect.result)
+        })
+      )
+
+      expect(crossRepresentation._tag).toBe("Failure")
     })
   })
 
@@ -1060,7 +1170,6 @@ describe("AssetRepositoryLive", () => {
           const decisions = yield* db
             .select({
               outcome: schema.assetResolutionDecisions.outcome,
-              status: schema.assetResolutionDecisions.status,
               assetId: schema.assetResolutionDecisions.assetId,
               assetRepresentationId: schema.assetResolutionDecisions.assetRepresentationId,
             })
@@ -1079,7 +1188,6 @@ describe("AssetRepositoryLive", () => {
       expect(stored.decisions).toEqual([
         {
           outcome: "create_standalone",
-          status: "active",
           assetId: created.id,
           assetRepresentationId: created.representationId,
         },
