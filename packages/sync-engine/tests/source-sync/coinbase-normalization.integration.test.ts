@@ -355,12 +355,16 @@ const CoinbaseSyncClientTestLive = Layer.succeed(CoinbaseSyncClient, {
         })),
       nextCursor: null,
     }),
-  fetchFiatCurrencies: remoteReferenceCatalogAvailable
-    ? Effect.succeed(activeFiatCurrencies)
-    : Effect.die("Remote fiat reference catalog should not be called during replay"),
-  fetchCryptoCurrencies: remoteReferenceCatalogAvailable
-    ? Effect.succeed(activeCryptoCurrencies)
-    : Effect.die("Remote crypto reference catalog should not be called during replay"),
+  fetchFiatCurrencies: Effect.suspend(() =>
+    remoteReferenceCatalogAvailable
+      ? Effect.succeed(activeFiatCurrencies)
+      : Effect.die("Remote fiat reference catalog should not be called during replay")
+  ),
+  fetchCryptoCurrencies: Effect.suspend(() =>
+    remoteReferenceCatalogAvailable
+      ? Effect.succeed(activeCryptoCurrencies)
+      : Effect.die("Remote crypto reference catalog should not be called during replay")
+  ),
 })
 
 const CoinbaseReferenceMappingWithDepsLive = CoinbaseReferenceMappingServiceLive.pipe(

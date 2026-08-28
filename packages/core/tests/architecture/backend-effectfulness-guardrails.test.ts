@@ -1,6 +1,23 @@
-import { readdir, readFile } from "node:fs/promises"
+import { readdir } from "node:fs/promises"
 import path from "node:path"
-import ts from "typescript"
+import {
+  type ArrowFunction,
+  type FunctionExpression,
+  type Identifier,
+  isArrowFunction,
+  isCallExpression,
+  isFunctionExpression,
+  isIdentifier,
+  isImportDeclaration,
+  isNewExpression,
+  isPropertyAccessExpression,
+  isStringLiteral,
+  isThrowStatement,
+  type Node,
+  type SourceFile,
+  SyntaxKind,
+} from "typescript/unstable/ast"
+import { API } from "typescript/unstable/sync"
 import { describe, expect, it } from "vitest"
 
 const repoRoot = path.resolve(import.meta.dirname, "../../../..")
@@ -74,15 +91,13 @@ const collectTypeScriptFiles = async (directory: string): Promise<ReadonlyArray<
 const formatViolation = ({ filePath, line, column, message }: Violation): string =>
   `${path.relative(repoRoot, filePath)}:${line}:${column} ${message}`
 
-const isAsyncFunctionLike = (
-  node: ts.Node | undefined
-): node is ts.ArrowFunction | ts.FunctionExpression =>
+const isAsyncFunctionLike = (node: Node | undefined): node is ArrowFunction | FunctionExpression =>
   node !== undefined &&
-  (ts.isArrowFunction(node) || ts.isFunctionExpression(node)) &&
-  node.modifiers?.some((modifier) => modifier.kind === ts.SyntaxKind.AsyncKeyword) === true
+  (isArrowFunction(node) || isFunctionExpression(node)) &&
+  node.modifiers?.some((modifier) => modifier.kind === SyntaxKind.AsyncKeyword) === true
 
-const isIdentifierNamed = (node: ts.Node, text: string): node is ts.Identifier =>
-  ts.isIdentifier(node) && node.text === text
+const isIdentifierNamed = (node: Node, text: string): node is Identifier =>
+  isIdentifier(node) && node.text === text
 
 const isInside = ({ filePath, root }: { readonly filePath: string; readonly root: string }) =>
   filePath === root || filePath.startsWith(`${root}${path.sep}`)
@@ -105,18 +120,16 @@ const findRestrictedImport = (filePath: string, imported: string): string | null
   return restriction === undefined ? null : imported
 }
 
-const analyzeFile = async (filePath: string): Promise<ReadonlyArray<Violation>> => {
-  const sourceText = await readFile(filePath, "utf8")
-  const sourceFile = ts.createSourceFile(
-    filePath,
-    sourceText,
-    ts.ScriptTarget.Latest,
-    true,
-    ts.ScriptKind.TS
-  )
+const analyzeFile = ({
+  filePath,
+  sourceFile,
+}: {
+  readonly filePath: string
+  readonly sourceFile: SourceFile
+}): ReadonlyArray<Violation> => {
   const violations: Array<Violation> = []
 
-  const pushViolation = (node: ts.Node, message: string): void => {
+  const pushViolation = (node: Node, message: string): void => {
     const { line, character } = sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile))
     violations.push({
       filePath,
@@ -126,8 +139,8 @@ const analyzeFile = async (filePath: string): Promise<ReadonlyArray<Violation>> 
     })
   }
 
-  const visit = (node: ts.Node): void => {
-    if (ts.isImportDeclaration(node) && ts.isStringLiteral(node.moduleSpecifier)) {
+  const visit = (node: Node): void => {
+    if (isImportDeclaration(node) && isStringLiteral(node.moduleSpecifier)) {
       const restrictedImport = findRestrictedImport(filePath, node.moduleSpecifier.text)
 
       if (restrictedImport !== null) {
@@ -136,15 +149,15 @@ const analyzeFile = async (filePath: string): Promise<ReadonlyArray<Violation>> 
     }
 
     if (
-      ts.isThrowStatement(node) &&
+      isThrowStatement(node) &&
       node.expression !== undefined &&
-      ts.isNewExpression(node.expression) &&
+      isNewExpression(node.expression) &&
       isIdentifierNamed(node.expression.expression, "Error")
     ) {
       pushViolation(node, "throw new Error is banned in maintained backend runtime code")
     }
 
-    if (ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression)) {
+    if (isCallExpression(node) && isPropertyAccessExpression(node.expression)) {
       const callee = node.expression
 
       if (
@@ -174,7 +187,7 @@ const analyzeFile = async (filePath: string): Promise<ReadonlyArray<Violation>> 
       }
     }
 
-    ts.forEachChild(node, visit)
+    node.forEachChild(visit)
   }
 
   visit(sourceFile)
@@ -184,8 +197,25 @@ const analyzeFile = async (filePath: string): Promise<ReadonlyArray<Violation>> 
 describe("backend effectfulness guardrails", () => {
   it("blocks the runtime escape hatches called out by the backend effectfulness audit", async () => {
     const files = (await Promise.all(maintainedBackendRoots.map(collectTypeScriptFiles))).flat()
-    const violations = (await Promise.all(files.map(analyzeFile))).flat().map(formatViolation)
+    const api = new API({ cwd: repoRoot })
 
-    expect(violations).toEqual([])
-  })
+    try {
+      const snapshot = api.updateSnapshot({ openFiles: files })
+      const violations = files
+        .flatMap((filePath) => {
+          const sourceFile = snapshot
+            .getDefaultProjectForFile(filePath)
+            ?.program.getSourceFile(filePath)
+
+          return sourceFile === undefined
+            ? [{ filePath, line: 1, column: 1, message: "TypeScript did not parse this file" }]
+            : analyzeFile({ filePath, sourceFile })
+        })
+        .map(formatViolation)
+
+      expect(violations).toEqual([])
+    } finally {
+      api.close()
+    }
+  }, 15_000)
 })

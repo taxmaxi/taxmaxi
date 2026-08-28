@@ -187,8 +187,8 @@ const CoinbaseSyncClientTestLive = Layer.succeed(CoinbaseSyncClient, {
         })),
       nextCursor: null,
     }),
-  fetchFiatCurrencies: Effect.succeed(activeFiatCurrencies),
-  fetchCryptoCurrencies: Effect.succeed(activeCryptoCurrencies),
+  fetchFiatCurrencies: Effect.sync(() => activeFiatCurrencies),
+  fetchCryptoCurrencies: Effect.sync(() => activeCryptoCurrencies),
 })
 
 const CoinbaseReferenceMappingWithDepsLive = CoinbaseReferenceMappingServiceLive.pipe(
