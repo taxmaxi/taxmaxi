@@ -19,6 +19,7 @@ import {
   compareDecimalQuantities,
   FIFO_INVENTORY_REVIEW_REASON_PREFIX,
   removeFifoInventoryReview,
+  subtractDecimalQuantities,
   type FifoAllocation,
   type OpenFifoLot,
   toCostBasisPerToken,
@@ -685,6 +686,8 @@ const make = Effect.gen(function* () {
       const existingLots = yield* tx
         .select({
           id: schema.fifoLots.id,
+          originalAmount: schema.fifoLots.originalAmount,
+          remainingAmount: schema.fifoLots.remainingAmount,
           sourceLegSequence: schema.fifoLots.sourceLegSequence,
         })
         .from(schema.fifoLots)
@@ -732,6 +735,32 @@ const make = Effect.gen(function* () {
             cause: `Missing source FIFO lot ${allocation.fifoLotId}`,
           })
         }
+        const existingLot = existingLotsBySequence.get(sequence)
+        const retainedUse =
+          existingLot === undefined
+            ? "0"
+            : yield* subtractDecimalQuantities({
+                left: existingLot.originalAmount,
+                right: existingLot.remainingAmount,
+                errorFactory: fixedPointErrorFactory,
+              })
+        const retainedUseFits = yield* compareDecimalQuantities({
+          left: allocation.matchedAmount,
+          right: retainedUse,
+          errorFactory: fixedPointErrorFactory,
+        })
+        if (retainedUseFits < 0) {
+          return yield* new SyncEngineStorageError({
+            operation:
+              "principalAccountingRebuildRepository.refreshInternalTransferCarriedLots.retainedUse",
+            cause: `Rebuilt carried FIFO lot sequence ${sequence} does not cover its pre-boundary use`,
+          })
+        }
+        const remainingAmount = yield* subtractDecimalQuantities({
+          left: allocation.matchedAmount,
+          right: retainedUse,
+          errorFactory: fixedPointErrorFactory,
+        })
         const values = {
           principalId: destinationLeg.principalId,
           sourceId: destinationLeg.sourceId,
@@ -739,7 +768,7 @@ const make = Effect.gen(function* () {
           assetRepresentationId: destinationLeg.assetRepresentationId,
           acquiredAt: sourceLot.acquiredAt,
           originalAmount: allocation.matchedAmount,
-          remainingAmount: allocation.matchedAmount,
+          remainingAmount,
           costBasisPerToken: sourceLot.costBasisPerToken,
           costBasisCurrency: sourceLot.costBasisCurrency,
           costBasisStatus: sourceLot.costBasisStatus,
@@ -747,7 +776,6 @@ const make = Effect.gen(function* () {
           sourceLegSequence: sequence,
           updatedAt: nowDate(),
         }
-        const existingLot = existingLotsBySequence.get(sequence)
         if (existingLot === undefined) {
           yield* tx
             .insert(schema.fifoLots)
@@ -774,9 +802,24 @@ const make = Effect.gen(function* () {
       }
 
       const retainedSequences = new Set(allocations.map((_, sequence) => sequence))
-      const obsoleteLotIds = existingLots
-        .filter(({ sourceLegSequence }) => !retainedSequences.has(sourceLegSequence))
-        .map(({ id }) => id)
+      const obsoleteLots = existingLots.filter(
+        ({ sourceLegSequence }) => !retainedSequences.has(sourceLegSequence)
+      )
+      for (const obsoleteLot of obsoleteLots) {
+        const hasRetainedUse = yield* compareDecimalQuantities({
+          left: obsoleteLot.originalAmount,
+          right: obsoleteLot.remainingAmount,
+          errorFactory: fixedPointErrorFactory,
+        })
+        if (hasRetainedUse !== 0) {
+          return yield* new SyncEngineStorageError({
+            operation:
+              "principalAccountingRebuildRepository.refreshInternalTransferCarriedLots.retainedUse",
+            cause: `Cannot remove carried FIFO lot ${obsoleteLot.id} with pre-boundary use`,
+          })
+        }
+      }
+      const obsoleteLotIds = obsoleteLots.map(({ id }) => id)
       if (obsoleteLotIds.length > 0) {
         yield* tx
           .delete(schema.fifoLots)
@@ -1247,13 +1290,21 @@ const make = Effect.gen(function* () {
       const ownerSourceIds = [
         ...(ownerSourceIdsByLegId.get(leg.id) ?? new Set([leg.sourceId])),
       ].sort()
-      const lots = yield* loadOpenDisposalLots({
-        tx,
-        principalId,
-        sourceIds: ownerSourceIds,
-        assetId: leg.assetId,
-        timestamp: leg.timestamp,
-      })
+      const lots = yield* leg.derivationRule === "internal_transfer_out"
+        ? loadOpenMovementLots({
+            tx,
+            principalId,
+            sourceIds: ownerSourceIds,
+            assetId: leg.assetId,
+            timestamp: leg.timestamp,
+          })
+        : loadOpenDisposalLots({
+            tx,
+            principalId,
+            sourceIds: ownerSourceIds,
+            assetId: leg.assetId,
+            timestamp: leg.timestamp,
+          })
       const allocations = yield* buildRebuildFifoAllocations({
         tx,
         principalId,

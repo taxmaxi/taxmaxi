@@ -2588,4 +2588,208 @@ describe("PrincipalAccountingRebuildService", () => {
     expect(result.carriedLots).toEqual([])
     expect(result.review).toEqual({ matchedLayer: "transfer_reconciliation,fifo_inventory" })
   })
+
+  it("preserves pre-boundary use when refreshing a straddling internal transfer", async () => {
+    await seedCanonicalizationWithDependentFifoState()
+    await runTest(
+      Effect.flatMap(TransferReconciliationRepository, (reconciliation) =>
+        reconciliation.applyDeterministicInternalTransferCanonicalization({
+          principalId: TEST_PRINCIPAL_ID,
+          sourceId: TEST_SOURCE_ID,
+          affectedAssetIds: [TEST_BTC_ASSET_ID],
+          rebuildFrom,
+        })
+      )
+    )
+    const preBoundaryTimestamp = new Date("2025-01-31T23:00:00.000Z")
+    const preBoundaryTransactionId = "00000000-0000-0000-0000-000000001201"
+    const preBoundaryDisposalLegId = "00000000-0000-0000-0000-000000001202"
+    await context.runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const [destinationLeg] = yield* db
+          .select({ id: schema.transactionLegs.id })
+          .from(schema.transactionLegs)
+          .where(eq(schema.transactionLegs.derivationRule, "internal_transfer_in"))
+        const [originLeg] = yield* db
+          .select({ id: schema.transactionLegs.id })
+          .from(schema.transactionLegs)
+          .where(eq(schema.transactionLegs.derivationRule, "internal_transfer_out"))
+        const [carriedLot] = yield* db
+          .select({ id: schema.fifoLots.id })
+          .from(schema.fifoLots)
+          .innerJoin(
+            schema.transactionLegs,
+            eq(schema.transactionLegs.id, schema.fifoLots.sourceLegId)
+          )
+          .where(eq(schema.transactionLegs.derivationRule, "internal_transfer_in"))
+        if (destinationLeg === undefined || originLeg === undefined || carriedLot === undefined) {
+          return yield* Effect.die("Missing canonicalized transfer state")
+        }
+        const destinationTimestamp = new Date("2025-01-31T22:00:00.000Z")
+        const originTimestamp = new Date("2025-02-01T02:00:00.000Z")
+        yield* db
+          .update(schema.transactions)
+          .set({ timestamp: destinationTimestamp })
+          .where(eq(schema.transactions.id, CANONICALIZATION_IDS.destinationTransaction))
+        yield* db
+          .update(schema.transfers)
+          .set({ timestamp: destinationTimestamp })
+          .where(eq(schema.transfers.id, CANONICALIZATION_IDS.canonicalTransfer))
+        yield* db
+          .update(schema.transactionLegs)
+          .set({ timestamp: destinationTimestamp })
+          .where(eq(schema.transactionLegs.id, destinationLeg.id))
+        yield* db
+          .update(schema.transactions)
+          .set({ timestamp: originTimestamp })
+          .where(eq(schema.transactions.id, CANONICALIZATION_IDS.providerTransaction))
+        yield* db
+          .update(schema.providerTransfers)
+          .set({ timestamp: originTimestamp })
+          .where(eq(schema.providerTransfers.id, CANONICALIZATION_IDS.providerTransfer))
+        yield* db
+          .update(schema.transactionLegs)
+          .set({ timestamp: originTimestamp })
+          .where(eq(schema.transactionLegs.id, originLeg.id))
+        yield* db.insert(schema.transactions).values({
+          id: preBoundaryTransactionId,
+          sourceId: SECONDARY_SOURCE_ID,
+          externalId: "pre-boundary-carried-disposal",
+          timestamp: preBoundaryTimestamp,
+          principalId: TEST_PRINCIPAL_ID,
+        })
+        yield* db.insert(schema.transactionLegs).values({
+          id: preBoundaryDisposalLegId,
+          sourceId: SECONDARY_SOURCE_ID,
+          externalId: "pre-boundary-carried-disposal:leg",
+          timestamp: preBoundaryTimestamp,
+          principalId: TEST_PRINCIPAL_ID,
+          assetId: TEST_BTC_ASSET_ID,
+          amount: "1",
+          kind: "disposal",
+          provenance: "deterministic",
+          transactionId: preBoundaryTransactionId,
+          fiatAmount: "150",
+          fiatCurrency: "EUR",
+        })
+        yield* db.insert(schema.disposalMatches).values({
+          disposalLegId: preBoundaryDisposalLegId,
+          fifoLotId: carriedLot.id,
+          matchedAmount: "1",
+          costBasis: "100",
+          proceeds: "150",
+          gainLoss: "50",
+        })
+        yield* db
+          .update(schema.fifoLots)
+          .set({ remainingAmount: "1" })
+          .where(eq(schema.fifoLots.id, carriedLot.id))
+        yield* db
+          .update(schema.providerTransfers)
+          .set({ processingMode: "evidence_only" })
+          .where(eq(schema.providerTransfers.id, CANONICALIZATION_IDS.providerTransfer))
+      })
+    )
+
+    const result = await runTest(
+      Effect.gen(function* () {
+        const service = yield* PrincipalAccountingRebuildService
+        const db = yield* drizzle
+        yield* service.rebuildPrincipalAccounting({
+          principalId: TEST_PRINCIPAL_ID,
+          affectedAssetIds: [TEST_BTC_ASSET_ID],
+          rebuildFrom,
+        })
+        const carriedLots = yield* db
+          .select({ remainingAmount: schema.fifoLots.remainingAmount })
+          .from(schema.fifoLots)
+          .innerJoin(
+            schema.transactionLegs,
+            eq(schema.transactionLegs.id, schema.fifoLots.sourceLegId)
+          )
+          .where(eq(schema.transactionLegs.derivationRule, "internal_transfer_in"))
+        const preBoundaryMatches = yield* db
+          .select({ id: schema.disposalMatches.id })
+          .from(schema.disposalMatches)
+          .where(eq(schema.disposalMatches.disposalLegId, preBoundaryDisposalLegId))
+        return { carriedLots, preBoundaryMatches }
+      })
+    )
+
+    expect(result.carriedLots.map(({ remainingAmount }) => Number(remainingAmount))).toEqual([1])
+    expect(result.preBoundaryMatches).toHaveLength(1)
+  })
+
+  it("retains provider-origin custody lots for internal-transfer rebuilds", async () => {
+    await seedCanonicalizationWithDependentFifoState()
+    await runTest(
+      Effect.flatMap(TransferReconciliationRepository, (reconciliation) =>
+        reconciliation.applyDeterministicInternalTransferCanonicalization({
+          principalId: TEST_PRINCIPAL_ID,
+          sourceId: TEST_SOURCE_ID,
+          affectedAssetIds: [TEST_BTC_ASSET_ID],
+          rebuildFrom,
+        })
+      )
+    )
+    const custodyProviderTransferId = "00000000-0000-0000-0000-000000001203"
+    await context.runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        yield* db.insert(schema.providerTransfers).values({
+          id: custodyProviderTransferId,
+          sourceId: TEST_SOURCE_ID,
+          transactionId: CANONICALIZATION_IDS.openingTransaction,
+          externalId: "custody-provider-origin-lot",
+          timestamp: new Date("2025-01-01T10:00:00.000Z"),
+          direction: "inbound",
+          processingMode: "evidence_only",
+          fromAccountRef: "external",
+          toAccountRef: "principal",
+          amount: "2",
+        })
+        yield* db
+          .update(schema.fifoLots)
+          .set({ sourceLegId: null, sourceProviderTransferId: custodyProviderTransferId })
+          .where(eq(schema.fifoLots.id, CANONICALIZATION_IDS.openingLot))
+        yield* db
+          .update(schema.providerTransfers)
+          .set({ processingMode: "evidence_only" })
+          .where(eq(schema.providerTransfers.id, CANONICALIZATION_IDS.providerTransfer))
+      })
+    )
+
+    const result = await runTest(
+      Effect.gen(function* () {
+        const service = yield* PrincipalAccountingRebuildService
+        const db = yield* drizzle
+        yield* service.rebuildPrincipalAccounting({
+          principalId: TEST_PRINCIPAL_ID,
+          affectedAssetIds: [TEST_BTC_ASSET_ID],
+          rebuildFrom,
+        })
+        const internalTransferMatches = yield* db
+          .select({ id: schema.disposalMatches.id })
+          .from(schema.disposalMatches)
+          .innerJoin(
+            schema.transactionLegs,
+            eq(schema.transactionLegs.id, schema.disposalMatches.disposalLegId)
+          )
+          .where(eq(schema.transactionLegs.derivationRule, "internal_transfer_out"))
+        const carriedLots = yield* db
+          .select({ id: schema.fifoLots.id })
+          .from(schema.fifoLots)
+          .innerJoin(
+            schema.transactionLegs,
+            eq(schema.transactionLegs.id, schema.fifoLots.sourceLegId)
+          )
+          .where(eq(schema.transactionLegs.derivationRule, "internal_transfer_in"))
+        return { carriedLots, internalTransferMatches }
+      })
+    )
+
+    expect(result.internalTransferMatches).toHaveLength(1)
+    expect(result.carriedLots).toHaveLength(1)
+  })
 })
