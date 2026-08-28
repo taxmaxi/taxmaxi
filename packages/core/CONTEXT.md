@@ -12,6 +12,32 @@ _Avoid_: Fiat asset, canonical asset
 A fiat currency description received from a provider's dedicated fiat catalog. An exact supported currency code resolves without provider asset review; unknown or conflicting evidence fails closed.
 _Avoid_: Provider asset
 
+## Tax accounting language
+
+**Accounting event**:
+A jurisdiction-neutral record of something that factually happened to a principal's assets, such as an acquisition, a disposition, a reward received, or custody moving between the principal's own sources. It records what happened, never whether it is taxable.
+_Avoid_: Taxable event, transaction (when the factual record is meant)
+
+**Factual ledger**:
+The ordered accounting events for one principal, complete once provider data is processed and transfers between the principal's sources are matched. It is the input to tax accounting, not its output.
+_Avoid_: FIFO state, derived data
+
+**Calculation run**:
+One complete tax accounting calculation over a factual ledger for one principal, jurisdiction, and tax year. A run is produced whole and never edited; new facts or choices produce a new run.
+_Avoid_: Cache, recalculation of an existing result
+
+**Treatment code**:
+A machine-readable, jurisdiction-specific classification attached to a factual result, such as a German tax-free holding-period disposal. The factual result itself (dates, cost basis, proceeds, gain) is the same for every jurisdiction.
+_Avoid_: Tax status enum, display text
+
+**Inventory scope**:
+The boundary a disposal may match lots within. Per custody source: each custody unit — usually one source, sometimes a recorded group of sources that legally count as one wallet or account — is its own inventory, so transfers between the taxpayer's own units move lots between inventories (Germany's wallet FIFO, the US per-account rule from 2025). Whole taxpayer: one pool per asset across all sources, so transfers between their own sources change nothing (UK pooling). The jurisdiction decides the scope; events only record which custody source holds the assets. Which addresses form one custody source is a fact decided when the source is connected, not an accounting rule.
+_Avoid_: Wallet FIFO (as a universal assumption), per-wallet and per-account as different scopes
+
+**Accounting choice**:
+A recorded, append-only taxpayer election that a jurisdiction legally allows, such as a lot-identification instruction. Changing a choice supersedes the old record and yields a new calculation run.
+_Avoid_: Setting, preference
+
 ## Wallet input language
 
 **Wallet name**:
