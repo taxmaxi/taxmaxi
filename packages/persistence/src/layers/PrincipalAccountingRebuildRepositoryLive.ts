@@ -96,12 +96,180 @@ interface RebuildEventResult {
   readonly fifoShortage?: true
 }
 
+interface ExistingCarriedLot {
+  readonly id: string
+  readonly originalAmount: string
+  readonly remainingAmount: string
+  readonly acquiredAt: Date
+  readonly costBasisPerToken: string
+  readonly costBasisCurrency: string
+  readonly costBasisStatus: "known" | "pending_review"
+  readonly sourceLegSequence: number
+}
+
+interface CarriedSourceLot {
+  readonly id: string
+  readonly acquiredAt: Date
+  readonly costBasisPerToken: string
+  readonly costBasisCurrency: string
+  readonly costBasisStatus: "known" | "pending_review"
+}
+
+interface RebuiltCarriedSlice {
+  readonly sequence: number
+  readonly allocation: FifoAllocation
+  readonly sourceLot: CarriedSourceLot
+}
+
+interface CarriedLotWithRetainedUse extends ExistingCarriedLot {
+  readonly retainedUse: string
+  readonly hasRetainedUse: boolean
+}
+
 const fixedPointErrorFactory = makeFixedPointErrorFactory(({ kind, message }) =>
   toSyncEngineStorageError({
     operation: `principalAccountingRebuildRepository.fixedPoint.${kind}`,
     error: message,
   })
 )
+
+const hasSameCarriedLotIdentity = ({
+  existingLot,
+  sourceLot,
+}: {
+  readonly existingLot: ExistingCarriedLot
+  readonly sourceLot: CarriedSourceLot
+}) =>
+  existingLot.acquiredAt.getTime() === sourceLot.acquiredAt.getTime() &&
+  existingLot.costBasisPerToken === sourceLot.costBasisPerToken &&
+  existingLot.costBasisCurrency === sourceLot.costBasisCurrency &&
+  existingLot.costBasisStatus === sourceLot.costBasisStatus
+
+const addRetainedUse = (lot: ExistingCarriedLot) =>
+  Effect.gen(function* () {
+    const retainedUse = yield* subtractDecimalQuantities({
+      left: lot.originalAmount,
+      right: lot.remainingAmount,
+      errorFactory: fixedPointErrorFactory,
+    })
+    const retainedUseComparison = yield* compareDecimalQuantities({
+      left: retainedUse,
+      right: "0",
+      errorFactory: fixedPointErrorFactory,
+    })
+    return { ...lot, retainedUse, hasRetainedUse: retainedUseComparison !== 0 }
+  })
+
+const findBestRetainedCarriedLot = ({
+  lots,
+  assignedLotIds,
+  slice,
+}: {
+  readonly lots: ReadonlyArray<CarriedLotWithRetainedUse>
+  readonly assignedLotIds: ReadonlySet<string>
+  readonly slice: RebuiltCarriedSlice
+}) =>
+  Effect.gen(function* () {
+    let bestLot: CarriedLotWithRetainedUse | undefined
+    for (const lot of lots) {
+      if (
+        assignedLotIds.has(lot.id) ||
+        !lot.hasRetainedUse ||
+        !hasSameCarriedLotIdentity({ existingLot: lot, sourceLot: slice.sourceLot })
+      ) {
+        continue
+      }
+      const retainedUseFits = yield* compareDecimalQuantities({
+        left: slice.allocation.matchedAmount,
+        right: lot.retainedUse,
+        errorFactory: fixedPointErrorFactory,
+      })
+      if (retainedUseFits < 0) continue
+      if (bestLot === undefined) {
+        bestLot = lot
+        continue
+      }
+      const isBetterFit = yield* compareDecimalQuantities({
+        left: lot.retainedUse,
+        right: bestLot.retainedUse,
+        errorFactory: fixedPointErrorFactory,
+      })
+      if (isBetterFit > 0) bestLot = lot
+    }
+    return bestLot
+  })
+
+const findUnusedCarriedLot = ({
+  lots,
+  assignedLotIds,
+  sourceLot,
+}: {
+  readonly lots: ReadonlyArray<CarriedLotWithRetainedUse>
+  readonly assignedLotIds: ReadonlySet<string>
+  readonly sourceLot?: CarriedSourceLot
+}) =>
+  lots.find(
+    (lot) =>
+      !assignedLotIds.has(lot.id) &&
+      !lot.hasRetainedUse &&
+      (sourceLot === undefined || hasSameCarriedLotIdentity({ existingLot: lot, sourceLot }))
+  )
+
+const assignExistingCarriedLots = ({
+  existingLots,
+  rebuiltSlices,
+}: {
+  readonly existingLots: ReadonlyArray<ExistingCarriedLot>
+  readonly rebuiltSlices: ReadonlyArray<RebuiltCarriedSlice>
+}) =>
+  Effect.gen(function* () {
+    const lotsWithRetainedUse = yield* Effect.forEach(existingLots, addRetainedUse, {
+      concurrency: 1,
+    })
+    const assignedLotIds = new Set<string>()
+    const existingLotBySequence = new Map<number, (typeof lotsWithRetainedUse)[number]>()
+
+    for (const slice of rebuiltSlices) {
+      const bestRetainedLot = yield* findBestRetainedCarriedLot({
+        lots: lotsWithRetainedUse,
+        assignedLotIds,
+        slice,
+      })
+      const existingLot =
+        bestRetainedLot ??
+        findUnusedCarriedLot({
+          lots: lotsWithRetainedUse,
+          assignedLotIds,
+          sourceLot: slice.sourceLot,
+        })
+      if (existingLot === undefined) continue
+      existingLotBySequence.set(slice.sequence, existingLot)
+      assignedLotIds.add(existingLot.id)
+    }
+
+    for (const slice of rebuiltSlices) {
+      if (existingLotBySequence.has(slice.sequence)) continue
+      const reusableLot = findUnusedCarriedLot({
+        lots: lotsWithRetainedUse,
+        assignedLotIds,
+      })
+      if (reusableLot === undefined) continue
+      existingLotBySequence.set(slice.sequence, reusableLot)
+      assignedLotIds.add(reusableLot.id)
+    }
+
+    const obsoleteLots = lotsWithRetainedUse.filter(({ id }) => !assignedLotIds.has(id))
+    const retainedObsoleteLot = obsoleteLots.find(({ hasRetainedUse }) => hasRetainedUse)
+    if (retainedObsoleteLot !== undefined) {
+      return yield* new SyncEngineStorageError({
+        operation:
+          "principalAccountingRebuildRepository.refreshInternalTransferCarriedLots.retainedUse",
+        cause: `Cannot remove carried FIFO lot ${retainedObsoleteLot.id} with pre-boundary use`,
+      })
+    }
+
+    return { existingLotBySequence, obsoleteLots }
+  })
 
 const appendOwnerSource = ({
   ownerSourceIdsByRecordId,
@@ -690,6 +858,10 @@ const make = Effect.gen(function* () {
           id: schema.fifoLots.id,
           originalAmount: schema.fifoLots.originalAmount,
           remainingAmount: schema.fifoLots.remainingAmount,
+          acquiredAt: schema.fifoLots.acquiredAt,
+          costBasisPerToken: schema.fifoLots.costBasisPerToken,
+          costBasisCurrency: schema.fifoLots.costBasisCurrency,
+          costBasisStatus: schema.fifoLots.costBasisStatus,
           sourceLegSequence: schema.fifoLots.sourceLegSequence,
         })
         .from(schema.fifoLots)
@@ -724,10 +896,7 @@ const make = Effect.gen(function* () {
                 )
               )
       const sourceLotsById = new Map(sourceLots.map((lot) => [lot.id, lot] as const))
-      const existingLotsBySequence = new Map(
-        existingLots.map((lot) => [lot.sourceLegSequence, lot] as const)
-      )
-
+      const rebuiltSlices: Array<RebuiltCarriedSlice> = []
       for (const [sequence, allocation] of allocations.entries()) {
         const sourceLot = sourceLotsById.get(allocation.fifoLotId)
         if (sourceLot === undefined) {
@@ -737,15 +906,32 @@ const make = Effect.gen(function* () {
             cause: `Missing source FIFO lot ${allocation.fifoLotId}`,
           })
         }
-        const existingLot = existingLotsBySequence.get(sequence)
-        const retainedUse =
-          existingLot === undefined
-            ? "0"
-            : yield* subtractDecimalQuantities({
-                left: existingLot.originalAmount,
-                right: existingLot.remainingAmount,
-                errorFactory: fixedPointErrorFactory,
-              })
+        rebuiltSlices.push({ sequence, allocation, sourceLot })
+      }
+
+      const { existingLotBySequence, obsoleteLots } = yield* assignExistingCarriedLots({
+        existingLots,
+        rebuiltSlices,
+      })
+
+      if (existingLots.length > 0) {
+        yield* tx
+          .update(schema.fifoLots)
+          .set({
+            sourceLegSequence: sql`-${schema.fifoLots.sourceLegSequence} - 1`,
+            updatedAt: nowDate(),
+          })
+          .where(eq(schema.fifoLots.sourceLegId, destinationLeg.id))
+          .pipe(
+            wrapSyncEngineSqlError(
+              "principalAccountingRebuildRepository.refreshInternalTransferCarriedLots.releaseSequences"
+            )
+          )
+      }
+
+      for (const { sequence, allocation, sourceLot } of rebuiltSlices) {
+        const existingLot = existingLotBySequence.get(sequence)
+        const retainedUse = existingLot?.retainedUse ?? "0"
         const retainedUseFits = yield* compareDecimalQuantities({
           left: allocation.matchedAmount,
           right: retainedUse,
@@ -803,24 +989,6 @@ const make = Effect.gen(function* () {
         }
       }
 
-      const retainedSequences = new Set(allocations.map((_, sequence) => sequence))
-      const obsoleteLots = existingLots.filter(
-        ({ sourceLegSequence }) => !retainedSequences.has(sourceLegSequence)
-      )
-      for (const obsoleteLot of obsoleteLots) {
-        const hasRetainedUse = yield* compareDecimalQuantities({
-          left: obsoleteLot.originalAmount,
-          right: obsoleteLot.remainingAmount,
-          errorFactory: fixedPointErrorFactory,
-        })
-        if (hasRetainedUse !== 0) {
-          return yield* new SyncEngineStorageError({
-            operation:
-              "principalAccountingRebuildRepository.refreshInternalTransferCarriedLots.retainedUse",
-            cause: `Cannot remove carried FIFO lot ${obsoleteLot.id} with pre-boundary use`,
-          })
-        }
-      }
       const obsoleteLotIds = obsoleteLots.map(({ id }) => id)
       if (obsoleteLotIds.length > 0) {
         yield* tx
