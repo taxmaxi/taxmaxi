@@ -12,6 +12,7 @@ import * as BigDecimal from "effect/BigDecimal"
 import * as Effect from "effect/Effect"
 import * as Option from "effect/Option"
 import * as Schema from "effect/Schema"
+import type { AccountingQuantity } from "../../accounting/AccountingQuantity.ts"
 import { CurrencyCode } from "../../currency/CurrencyCode.ts"
 
 /**
@@ -220,6 +221,12 @@ export const multiply = (
   )
 }
 
+/** Multiply a monetary amount per asset unit by an exact asset quantity. */
+export const multiplyByQuantity = (
+  unitAmount: MonetaryAmount,
+  quantity: AccountingQuantity
+): MonetaryAmount => multiply(unitAmount, quantity)
+
 /**
  * Multiply a monetary amount by a number.
  * The result maintains the original currency.
@@ -391,6 +398,23 @@ export const round = (amount: MonetaryAmount, scale: number = 2): MonetaryAmount
     amount.currency
   )
 }
+
+/** Allocate a monetary total in proportion to two exact asset quantities. */
+export const prorate = ({
+  total,
+  part,
+  whole,
+  scale,
+}: {
+  readonly total: MonetaryAmount
+  readonly part: AccountingQuantity
+  readonly whole: AccountingQuantity
+  readonly scale: number
+}): Effect.Effect<MonetaryAmount, DivisionByZeroError> =>
+  Option.match(BigDecimal.divide(part, whole), {
+    onNone: () => Effect.fail(new DivisionByZeroError()),
+    onSome: (ratio) => Effect.succeed(round(multiply(total, ratio), scale)),
+  })
 
 /**
  * Get the maximum of two monetary amounts.
