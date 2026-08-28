@@ -1,22 +1,24 @@
 /**
  * SourceSyncServiceLive - API-facing source sync orchestration.
  *
+ * Writing the pending `processing_jobs` row is the whole hand-off: the worker
+ * poll loop claims ready rows straight from Postgres, so there is no queue to
+ * feed and nothing to keep in step with the database.
+ *
  * @module SourceSyncServiceLive
  */
 
+import * as Config from "effect/Config"
 import * as Effect from "effect/Effect"
 import * as DateTime from "effect/DateTime"
 import * as Layer from "effect/Layer"
 import * as Option from "effect/Option"
-import * as Schema from "effect/Schema"
 import {
   SourceNotFoundError,
   SourceRepository,
   type SourceSyncJobMode,
   SourceSyncJobNotFoundError,
   SourceSyncJobRepository,
-  SourceSyncQueue,
-  SourceSyncQueuePayload,
   SourceSyncService,
   SyncEngineStorageError,
   makePlainSourceSyncJobSummary,
@@ -25,7 +27,6 @@ import {
   type SourceSyncJobSummary,
   type SourceSyncServiceShape,
   type SourceSyncSource,
-  type SourceSyncQueueError,
 } from "../services/index.ts"
 import {
   nowDate,
@@ -35,6 +36,13 @@ import {
 
 const ACTIVE_SYNC_JOB_STALE_AFTER_MILLIS = 30_000
 const DEFAULT_SOURCE_SYNC_MAX_ATTEMPTS = 3
+
+const SOURCE_SYNC_MAX_ATTEMPTS_CONFIG = Config.int("SOURCE_SYNC_MAX_ATTEMPTS").pipe(
+  Config.map((configuredMaxAttempts) =>
+    configuredMaxAttempts > 0 ? configuredMaxAttempts : DEFAULT_SOURCE_SYNC_MAX_ATTEMPTS
+  ),
+  Config.orElse(() => Config.succeed(DEFAULT_SOURCE_SYNC_MAX_ATTEMPTS))
+)
 
 const isStaleActiveProcessingJob = ({
   updatedAt,
@@ -47,7 +55,7 @@ const isStaleActiveProcessingJob = ({
 const make = Effect.gen(function* () {
   const sourceRepository = yield* SourceRepository
   const sourceSyncJobRepository = yield* SourceSyncJobRepository
-  const sourceSyncQueue = yield* SourceSyncQueue
+  const maxAttempts = yield* SOURCE_SYNC_MAX_ATTEMPTS_CONFIG
 
   const loadSource = ({
     principalId,
@@ -123,60 +131,6 @@ const make = Effect.gen(function* () {
       })
     )
 
-  const shouldEnqueuePendingJob = ({
-    queueName,
-    queueJobId,
-  }: {
-    readonly queueName: string | null
-    readonly queueJobId: string | null
-  }): boolean => queueName === null || queueJobId === null
-
-  const enqueuePendingJob = ({
-    jobId,
-    sourceId,
-    principalId,
-    mode,
-  }: {
-    readonly jobId: string
-    readonly sourceId: string
-    readonly principalId: string
-    readonly mode: SourceSyncJobMode
-  }): Effect.Effect<void, SourceSyncQueueError | SyncEngineStorageError> =>
-    Effect.gen(function* () {
-      const readyForDispatch = yield* sourceSyncJobRepository.getExecutionJob({ jobId }).pipe(
-        Effect.as(true),
-        Effect.catchTags({
-          SourceSyncJobPrerequisitesPendingError: () => Effect.succeed(false),
-          SourceSyncJobExecutionRecordConflictError: () => Effect.succeed(false),
-        }),
-        Effect.mapError((cause) =>
-          Schema.is(SyncEngineStorageError)(cause)
-            ? cause
-            : new SyncEngineStorageError({
-                operation: "sourceSyncService.enqueuePendingJob.checkPrerequisites",
-                cause,
-              })
-        )
-      )
-
-      if (!readyForDispatch) return
-
-      yield* sourceSyncQueue.enqueueSourceSyncJob(
-        SourceSyncQueuePayload.make({
-          jobId,
-          sourceId,
-          principalId,
-          mode,
-        })
-      )
-    }).pipe(
-      sourceSyncSpan({
-        name: "source-sync.enqueue-job",
-        attributes: { jobId, sourceId, principalId, mode },
-        kind: "producer",
-      })
-    )
-
   const runSourceJob = ({
     principalId,
     sourceId,
@@ -187,7 +141,7 @@ const make = Effect.gen(function* () {
     readonly mode: SourceSyncJobMode
   }): Effect.Effect<
     SourceSyncJobSummary,
-    UnsupportedProviderError | SourceNotFoundError | SourceSyncQueueError | SyncEngineStorageError
+    UnsupportedProviderError | SourceNotFoundError | SyncEngineStorageError
   > =>
     Effect.gen(function* () {
       const source = yield* loadSource({ principalId, sourceId })
@@ -227,19 +181,14 @@ const make = Effect.gen(function* () {
                   sourceId: source.id,
                   principalId,
                   mode,
-                  maxAttempts: DEFAULT_SOURCE_SYNC_MAX_ATTEMPTS,
+                  maxAttempts,
                 })
               : undefined
 
           if (replayRequest?._tag === "CreatedSourceSyncJob") {
-            // The active job may finish after findActiveJob. In that race, the
-            // repository creates the replay directly, so it must be queued here.
-            yield* enqueuePendingJob({
-              jobId: replayRequest.id,
-              sourceId: source.id,
-              principalId,
-              mode,
-            })
+            // The active job finished after findActiveJob, so the repository
+            // created the replay directly. The pending row is already visible
+            // to the worker poll loop.
             yield* recordSourceSyncJobOutcome({ provider, mode, outcome: "queued" })
 
             return makePlainSourceSyncJobSummary({
@@ -254,26 +203,11 @@ const make = Effect.gen(function* () {
           const jobToReuse =
             replayRequest?._tag === "ReusedSourceSyncJob" ? replayRequest : activeJob
 
-          if (jobToReuse.status === "pending") {
-            if (
-              shouldEnqueuePendingJob({
-                queueName: jobToReuse.queueName,
-                queueJobId: jobToReuse.queueJobId,
-              })
-            ) {
-              yield* enqueuePendingJob({
-                jobId: jobToReuse.id,
-                sourceId: jobToReuse.sourceId,
-                principalId: jobToReuse.principalId,
-                mode: jobToReuse.mode,
-              })
-              yield* recordSourceSyncJobOutcome({ provider, mode, outcome: "enqueued-active-job" })
-            } else {
-              yield* recordSourceSyncJobOutcome({ provider, mode, outcome: "already-queued" })
-            }
-          } else {
-            yield* recordSourceSyncJobOutcome({ provider, mode, outcome: "already-running" })
-          }
+          yield* recordSourceSyncJobOutcome({
+            provider,
+            mode,
+            outcome: jobToReuse.status === "pending" ? "already-queued" : "already-running",
+          })
 
           return makePlainSourceSyncJobSummary({
             sourceId: source.id,
@@ -287,25 +221,10 @@ const make = Effect.gen(function* () {
         sourceId: source.id,
         principalId,
         mode,
-        maxAttempts: DEFAULT_SOURCE_SYNC_MAX_ATTEMPTS,
+        maxAttempts,
       })
 
       if (job._tag === "ReusedSourceSyncJob") {
-        if (
-          job.status === "pending" &&
-          shouldEnqueuePendingJob({
-            queueName: job.queueName,
-            queueJobId: job.queueJobId,
-          })
-        ) {
-          yield* enqueuePendingJob({
-            jobId: job.id,
-            sourceId: job.sourceId,
-            principalId: job.principalId,
-            mode: job.mode,
-          })
-        }
-
         yield* recordSourceSyncJobOutcome({ provider, mode, outcome: "reused-job" })
 
         return makePlainSourceSyncJobSummary({
@@ -315,14 +234,7 @@ const make = Effect.gen(function* () {
         })
       }
 
-      yield* enqueuePendingJob({
-        jobId: job.id,
-        sourceId: source.id,
-        principalId,
-        mode,
-      })
-
-      yield* recordSourceSyncJobOutcome({ provider, mode, outcome: "enqueued-job" })
+      yield* recordSourceSyncJobOutcome({ provider, mode, outcome: "queued" })
 
       return makePlainSourceSyncJobSummary({
         sourceId: source.id,

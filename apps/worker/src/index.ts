@@ -19,10 +19,9 @@ import {
   CoinbaseSyncClientLive,
 } from "@my/sync-engine/providers/coinbase/layers"
 import { HeliusSolanaSourceSyncProviderLive } from "@my/sync-engine/providers/helius-solana/layers"
-import { WorkerBullMqAssetResolutionConsumerLive } from "./layers/WorkerBullMqAssetResolutionConsumerLive.ts"
-import { WorkerBullMqSourceSyncConsumerLive } from "./layers/WorkerBullMqSourceSyncConsumerLive.ts"
+import { WorkerAssetResolutionPollerLive } from "./layers/WorkerAssetResolutionPollerLive.ts"
 import { WorkerHealthServerLive } from "./layers/WorkerHealthServerLive.ts"
-import { WorkerSourceSyncStartupRepairLive } from "./layers/WorkerSourceSyncStartupRepairLive.ts"
+import { WorkerSourceSyncPollerLive } from "./layers/WorkerSourceSyncPollerLive.ts"
 import { TracingLive } from "./layers/TracingLive.ts"
 
 const CoinbaseReferenceMappingRuntimeLive = CoinbaseReferenceMappingServiceLive.pipe(
@@ -59,10 +58,9 @@ const SourceSyncJobExecutorRuntimeLive = SourceSyncJobExecutorLive.pipe(
   Layer.provide(RepositoriesLive)
 )
 
-const SourceSyncWorkerRuntimeLive = WorkerBullMqSourceSyncConsumerLive.pipe(
+const SourceSyncWorkerRuntimeLive = WorkerSourceSyncPollerLive.pipe(
   Layer.provide(SourceSyncJobExecutorRuntimeLive),
-  // Startup repair is a dependency of the consumer so reconciliation finishes before BullMQ claims work.
-  Layer.provide(WorkerSourceSyncStartupRepairLive.pipe(Layer.provide(RepositoriesLive)))
+  Layer.provide(RepositoriesLive)
 )
 
 const AssetResolutionJobExecutorRuntimeLive = AssetResolutionJobExecutorLive.pipe(
@@ -71,7 +69,7 @@ const AssetResolutionJobExecutorRuntimeLive = AssetResolutionJobExecutorLive.pip
   Layer.provide(RepositoriesLive)
 )
 
-const AssetResolutionWorkerRuntimeLive = WorkerBullMqAssetResolutionConsumerLive.pipe(
+const AssetResolutionWorkerRuntimeLive = WorkerAssetResolutionPollerLive.pipe(
   Layer.provide(AssetResolutionJobExecutorRuntimeLive),
   Layer.provide(RepositoriesLive)
 )

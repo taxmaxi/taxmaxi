@@ -138,16 +138,18 @@ const selectProcessingJob = ({ jobId }: { readonly jobId: string }) =>
 const claimJob = ({
   jobId,
   workerId = "worker-1",
+  startedAt = new Date("2025-01-02T00:00:00.000Z"),
 }: {
   readonly jobId: string
   readonly workerId?: string
+  readonly startedAt?: Date
 }) =>
   runRepository(
     Effect.flatMap(SourceSyncJobRepository, (repository) =>
       repository.claimJob({
         jobId,
         workerId,
-        startedAt: new Date("2025-01-02T00:00:00.000Z"),
+        startedAt,
       })
     )
   )
@@ -171,23 +173,16 @@ const updateProcessingJobStaleTimestamps = ({
     })
   )
 
-const attachQueueMetadata = ({
-  jobId,
-  queueJobId,
-  queuedAt,
+const listClaimableJobs = ({
+  dueBefore = new Date("2025-01-02T00:00:00.000Z"),
+  limit = 20,
 }: {
-  readonly jobId: string
-  readonly queueJobId: string
-  readonly queuedAt: Date
-}) =>
+  readonly dueBefore?: Date
+  readonly limit?: number
+} = {}) =>
   runRepository(
     Effect.flatMap(SourceSyncJobRepository, (repository) =>
-      repository.attachQueueMetadata({
-        jobId,
-        queueName: "source-sync",
-        queueJobId,
-        queuedAt,
-      })
+      repository.listClaimableJobs({ dueBefore, limit })
     )
   )
 
@@ -233,8 +228,6 @@ describe("SourceSyncJobRepositoryLive", () => {
       principalId: TEST_PRINCIPAL_ID,
       mode: "sync",
       status: "pending",
-      queueName: null,
-      queueJobId: null,
     })
   })
 
@@ -324,8 +317,6 @@ describe("SourceSyncJobRepositoryLive", () => {
       principalId: TEST_PRINCIPAL_ID,
       mode: "sync",
       status: "pending",
-      queueName: null,
-      queueJobId: null,
     })
 
     const activeJobs = await runRepository(
@@ -402,53 +393,15 @@ describe("SourceSyncJobRepositoryLive", () => {
     }
   })
 
-  it("attaches queue metadata to a pending job", async () => {
+  it("stamps queued_at when the pending job row is created", async () => {
     const created = await createJob()
-    const queuedAt = new Date("2025-01-02T00:00:00.000Z")
-
-    await runRepository(
-      Effect.flatMap(SourceSyncJobRepository, (repository) =>
-        repository.attachQueueMetadata({
-          jobId: created.id,
-          queueName: "source-sync",
-          queueJobId: "bull-job-1",
-          queuedAt,
-        })
-      )
-    )
 
     const job = await selectProcessingJob({ jobId: created.id })
 
-    expect(job.queueName).toBe("source-sync")
-    expect(job.queueJobId).toBe("bull-job-1")
-    expect(job.queuedAt?.toISOString()).toBe(queuedAt.toISOString())
+    expect(job.queuedAt).toBeInstanceOf(Date)
   })
 
-  it("attaches queue metadata after a worker has claimed the job", async () => {
-    const created = await createJob()
-    const queuedAt = new Date("2025-01-02T00:00:01.000Z")
-    await claimJob({ jobId: created.id, workerId: "worker-1" })
-
-    await runRepository(
-      Effect.flatMap(SourceSyncJobRepository, (repository) =>
-        repository.attachQueueMetadata({
-          jobId: created.id,
-          queueName: "source-sync",
-          queueJobId: "bull-job-1",
-          queuedAt,
-        })
-      )
-    )
-
-    const job = await selectProcessingJob({ jobId: created.id })
-
-    expect(job.status).toBe("processing")
-    expect(job.queueName).toBe("source-sync")
-    expect(job.queueJobId).toBe("bull-job-1")
-    expect(job.queuedAt?.toISOString()).toBe(queuedAt.toISOString())
-  })
-
-  it("claims a pending job for worker execution", async () => {
+  it("claims a pending job for worker execution and counts the attempt", async () => {
     const created = await createJob()
     const claimed = await claimJob({ jobId: created.id, workerId: "worker-1" })
 
@@ -458,12 +411,15 @@ describe("SourceSyncJobRepositoryLive", () => {
       principalId: TEST_PRINCIPAL_ID,
       mode: "sync",
       status: "processing",
+      attemptCount: 1,
+      maxAttempts: 3,
     })
 
     const job = await selectProcessingJob({ jobId: created.id })
 
     expect(job.status).toBe("processing")
     expect(job.workerId).toBe("worker-1")
+    expect(job.attemptCount).toBe(1)
     expect(job.startedAt?.toISOString()).toBe("2025-01-02T00:00:00.000Z")
     expect(job.heartbeatAt?.toISOString()).toBe("2025-01-02T00:00:00.000Z")
   })
@@ -503,6 +459,103 @@ describe("SourceSyncJobRepositoryLive", () => {
       status: "pending",
       workerId: null,
     })
+  })
+
+  it("lets exactly one of two concurrently racing claims win", async () => {
+    const created = await createJob()
+
+    const results = await Promise.all(
+      ["worker-1", "worker-2"].map((workerId) =>
+        runRepository(
+          Effect.flatMap(SourceSyncJobRepository, (repository) =>
+            repository
+              .claimJob({
+                jobId: created.id,
+                workerId,
+                startedAt: new Date("2025-01-02T00:00:00.000Z"),
+              })
+              .pipe(Effect.result)
+          )
+        )
+      )
+    )
+
+    const wins = results.filter((result) => result._tag === "Success")
+    const conflicts = results.filter(
+      (result) =>
+        result._tag === "Failure" &&
+        result.failure._tag === "SourceSyncJobExecutionRecordConflictError"
+    )
+
+    expect(wins).toHaveLength(1)
+    expect(conflicts).toHaveLength(1)
+
+    const job = await selectProcessingJob({ jobId: created.id })
+    expect(job.status).toBe("processing")
+    // The claim of the losing worker never committed: one attempt counted.
+    expect(job.attemptCount).toBe(1)
+  })
+
+  it("recovering a stale job materializes its follow-up and cascade-fails dependents", async () => {
+    const dependentSourceId = "00000000-0000-0000-0000-000000009921"
+    await seedOwnedSource({
+      sourceId: dependentSourceId,
+      address: "bc1qstale-recovery-dependent",
+    })
+
+    const staleBefore = new Date("2025-01-02T00:10:00.000Z")
+    const staleAt = new Date("2025-01-02T00:00:00.000Z")
+
+    const crashed = await createJob({ mode: "sync" })
+    await claimJob({ jobId: crashed.id, workerId: "worker-crashed" })
+    // A replay was requested while the job ran, so it owes a follow-up.
+    await runPg(
+      Effect.flatMap(drizzle, (db) =>
+        db
+          .update(schema.processingJobs)
+          .set({ followUpMode: "replay" })
+          .where(eq(schema.processingJobs.id, crashed.id))
+      )
+    )
+    const dependent = await createJob({ mode: "replay", sourceId: dependentSourceId })
+    await recordJobDependency({ jobId: dependent.id, prerequisiteJobId: crashed.id })
+    await updateProcessingJobStaleTimestamps({
+      jobId: crashed.id,
+      heartbeatAt: staleAt,
+      updatedAt: staleAt,
+    })
+
+    await runRepository(
+      Effect.flatMap(SourceSyncJobRepository, (repository) =>
+        repository.recoverStaleActiveJob({
+          sourceId: TEST_SOURCE_ID,
+          jobId: crashed.id,
+          staleBefore,
+          message: "Stale-job sweep failed a processing source sync job without a heartbeat.",
+          completedAt: new Date("2025-01-02T00:30:00.000Z"),
+        })
+      )
+    )
+
+    expect(await selectProcessingJob({ jobId: crashed.id })).toMatchObject({ status: "failed" })
+    expect(await selectProcessingJob({ jobId: dependent.id })).toMatchObject({
+      status: "failed",
+      errorMessage: "Prerequisite processing job did not complete successfully.",
+    })
+
+    // The owed replay exists as a fresh pending row the poll loop can claim.
+    const followUpJobId = (await selectProcessingJob({ jobId: crashed.id })).followUpJobId
+    expect(followUpJobId).toEqual(expect.any(String))
+    if (followUpJobId !== null) {
+      expect(await selectProcessingJob({ jobId: followUpJobId })).toMatchObject({
+        mode: "replay",
+        status: "pending",
+      })
+      const claimable = await listClaimableJobs({
+        dueBefore: new Date("2025-01-02T01:00:00.000Z"),
+      })
+      expect(claimable.map((job) => job.id)).toContain(followUpJobId)
+    }
   })
 
   it("returns a typed conflict when a second worker claims the same job", async () => {
@@ -586,7 +639,7 @@ describe("SourceSyncJobRepositoryLive", () => {
     expect(job.workerId).toBeNull()
   })
 
-  it("reclaims the same job after a retryable failure and preserves attempts", async () => {
+  it("refuses to reclaim a released job before its retry is due", async () => {
     const created = await createJob()
     await claimJob({ jobId: created.id, workerId: "worker-1" })
 
@@ -601,14 +654,61 @@ describe("SourceSyncJobRepositoryLive", () => {
       )
     )
 
-    const reclaimed = await claimJob({ jobId: created.id, workerId: "worker-2" })
+    const earlyClaim = await runRepository(
+      Effect.flatMap(SourceSyncJobRepository, (repository) =>
+        repository
+          .claimJob({
+            jobId: created.id,
+            workerId: "worker-2",
+            startedAt: new Date("2025-01-02T00:04:00.000Z"),
+          })
+          .pipe(Effect.result)
+      )
+    )
+
+    expect(earlyClaim._tag).toBe("Failure")
+    if (earlyClaim._tag === "Failure") {
+      expect(earlyClaim.failure).toMatchObject({
+        _tag: "SourceSyncJobExecutionRecordConflictError",
+        reason: "Job retry is not due yet.",
+      })
+    }
+    expect(await listClaimableJobs({ dueBefore: new Date("2025-01-02T00:04:00.000Z") })).toEqual([])
+  })
+
+  it("reclaims the same job once its retry is due and counts the new attempt", async () => {
+    const created = await createJob()
+    await claimJob({ jobId: created.id, workerId: "worker-1" })
+
+    await runRepository(
+      Effect.flatMap(SourceSyncJobRepository, (repository) =>
+        repository.recordRetryableFailure({
+          jobId: created.id,
+          message: "Retry after provider timeout",
+          attemptCount: 1,
+          nextRetryAt: new Date("2025-01-02T00:05:00.000Z"),
+        })
+      )
+    )
+
+    const claimable = await listClaimableJobs({
+      dueBefore: new Date("2025-01-02T00:06:00.000Z"),
+    })
+    expect(claimable.map((job) => job.id)).toContain(created.id)
+
+    const reclaimed = await claimJob({
+      jobId: created.id,
+      workerId: "worker-2",
+      startedAt: new Date("2025-01-02T00:06:00.000Z"),
+    })
     const job = await selectProcessingJob({ jobId: created.id })
 
     expect(reclaimed).toMatchObject({
       id: created.id,
       status: "processing",
+      attemptCount: 2,
     })
-    expect(job.attemptCount).toBe(1)
+    expect(job.attemptCount).toBe(2)
     expect(job.workerId).toBe("worker-2")
     expect(job.status).toBe("processing")
   })
@@ -851,81 +951,50 @@ describe("SourceSyncJobRepositoryLive", () => {
     ])
   })
 
-  it("lists repairable active jobs by queue metadata and stale execution predicates", async () => {
-    const staleBefore = new Date("2025-01-02T00:10:00.000Z")
-    const oldTimestamp = new Date("2025-01-02T00:00:00.000Z")
-    const recentTimestamp = new Date("2025-01-02T00:20:00.000Z")
+  it("lists only pending jobs with met prerequisites and a due retry as claimable", async () => {
+    const now = new Date("2025-01-02T00:10:00.000Z")
     const fixtures = {
-      freshPending: {
+      processing: {
         sourceId: "00000000-0000-0000-0000-000000000291",
         principalId: "00000000-0000-0000-0000-000000000191",
       },
-      stalePending: {
+      blocked: {
         sourceId: "00000000-0000-0000-0000-000000000292",
         principalId: "00000000-0000-0000-0000-000000000192",
       },
-      staleHeartbeat: {
+      notDue: {
         sourceId: "00000000-0000-0000-0000-000000000293",
         principalId: "00000000-0000-0000-0000-000000000193",
       },
-      recentHeartbeat: {
+      completed: {
         sourceId: "00000000-0000-0000-0000-000000000294",
         principalId: "00000000-0000-0000-0000-000000000194",
-      },
-      nullHeartbeat: {
-        sourceId: "00000000-0000-0000-0000-000000000295",
-        principalId: "00000000-0000-0000-0000-000000000195",
-      },
-      completed: {
-        sourceId: "00000000-0000-0000-0000-000000000296",
-        principalId: "00000000-0000-0000-0000-000000000196",
-      },
-      failed: {
-        sourceId: "00000000-0000-0000-0000-000000000297",
-        principalId: "00000000-0000-0000-0000-000000000197",
       },
     } as const
 
     await Promise.all(Object.values(fixtures).map(seedSourceFixture))
 
-    const pendingMissingMetadata = await createJob()
-    const freshPending = await createJob(fixtures.freshPending)
-    await attachQueueMetadata({
-      jobId: freshPending.id,
-      queueJobId: "fresh-pending",
-      queuedAt: recentTimestamp,
-    })
+    const claimablePending = await createJob()
 
-    const stalePending = await createJob(fixtures.stalePending)
-    await attachQueueMetadata({
-      jobId: stalePending.id,
-      queueJobId: "stale-pending",
-      queuedAt: oldTimestamp,
-    })
+    const processing = await createJob(fixtures.processing)
+    await claimJob({ jobId: processing.id, workerId: "worker-processing" })
 
-    const staleHeartbeat = await createJob(fixtures.staleHeartbeat)
-    await claimJob({ jobId: staleHeartbeat.id, workerId: "worker-stale" })
-    await updateProcessingJobStaleTimestamps({
-      jobId: staleHeartbeat.id,
-      heartbeatAt: oldTimestamp,
-      updatedAt: recentTimestamp,
-    })
+    // Blocked by an unfinished prerequisite (the processing job).
+    const blocked = await createJob({ mode: "replay", ...fixtures.blocked })
+    await recordJobDependency({ jobId: blocked.id, prerequisiteJobId: processing.id })
 
-    const recentHeartbeat = await createJob(fixtures.recentHeartbeat)
-    await claimJob({ jobId: recentHeartbeat.id, workerId: "worker-recent" })
-    await updateProcessingJobStaleTimestamps({
-      jobId: recentHeartbeat.id,
-      heartbeatAt: recentTimestamp,
-      updatedAt: oldTimestamp,
-    })
-
-    const nullHeartbeat = await createJob(fixtures.nullHeartbeat)
-    await claimJob({ jobId: nullHeartbeat.id, workerId: "worker-null-heartbeat" })
-    await updateProcessingJobStaleTimestamps({
-      jobId: nullHeartbeat.id,
-      heartbeatAt: null,
-      updatedAt: oldTimestamp,
-    })
+    const notDue = await createJob(fixtures.notDue)
+    await claimJob({ jobId: notDue.id, workerId: "worker-retry" })
+    await runRepository(
+      Effect.flatMap(SourceSyncJobRepository, (repository) =>
+        repository.recordRetryableFailure({
+          jobId: notDue.id,
+          message: "retry later",
+          attemptCount: 1,
+          nextRetryAt: new Date("2025-01-02T01:00:00.000Z"),
+        })
+      )
+    )
 
     const completed = await createJob(fixtures.completed)
     await claimJob({ jobId: completed.id, workerId: "worker-completed" })
@@ -935,50 +1004,33 @@ describe("SourceSyncJobRepositoryLive", () => {
       )
     )
 
-    const failed = await createJob(fixtures.failed)
-    await claimJob({ jobId: failed.id, workerId: "worker-failed" })
+    const claimableIds = (await listClaimableJobs({ dueBefore: now })).map((job) => job.id)
+
+    expect(claimableIds).toContain(claimablePending.id)
+    expect(claimableIds).not.toContain(processing.id)
+    expect(claimableIds).not.toContain(blocked.id)
+    expect(claimableIds).not.toContain(notDue.id)
+    expect(claimableIds).not.toContain(completed.id)
+
+    // Complete the prerequisite with no failed records: the dependent replay
+    // becomes claimable on the next listing.
     await runRepository(
       Effect.flatMap(SourceSyncJobRepository, (repository) =>
-        repository.failJob({
-          jobId: failed.id,
-          message: "Failed terminally",
-          completedAt: recentTimestamp,
+        repository.completeJob({
+          jobId: processing.id,
+          state: { ...completedState, failedRecords: 0 },
         })
       )
     )
 
-    const repairableJobs = await runRepository(
-      Effect.flatMap(SourceSyncJobRepository, (repository) =>
-        repository.listRepairableActiveJobs({
-          pendingStaleBefore: staleBefore,
-          processingStaleBefore: staleBefore,
-          limit: 20,
-        })
-      )
-    )
-    const repairableJobIds = repairableJobs.map((job) => job.id)
+    const unblockedIds = (await listClaimableJobs({ dueBefore: now })).map((job) => job.id)
+    expect(unblockedIds).toContain(blocked.id)
 
-    expect(repairableJobIds).toContain(pendingMissingMetadata.id)
-    expect(repairableJobIds).toContain(stalePending.id)
-    expect(repairableJobIds).toContain(staleHeartbeat.id)
-    expect(repairableJobIds).toContain(nullHeartbeat.id)
-    expect(repairableJobIds).not.toContain(freshPending.id)
-    expect(repairableJobIds).not.toContain(recentHeartbeat.id)
-    expect(repairableJobIds).not.toContain(completed.id)
-    expect(repairableJobIds).not.toContain(failed.id)
-
-    const pendingJobsNeedingDispatch = await runRepository(
-      Effect.flatMap(SourceSyncJobRepository, (repository) =>
-        repository.listPendingJobsNeedingDispatch({ staleBefore, limit: 20 })
-      )
-    )
-    const pendingJobIds = pendingJobsNeedingDispatch.map((job) => job.id)
-
-    expect(pendingJobIds).toContain(pendingMissingMetadata.id)
-    expect(pendingJobIds).toContain(stalePending.id)
-    expect(pendingJobIds).not.toContain(freshPending.id)
-    expect(pendingJobIds).not.toContain(staleHeartbeat.id)
-    expect(pendingJobIds).not.toContain(nullHeartbeat.id)
+    // The released retry becomes claimable once its delay has passed.
+    const dueIds = (
+      await listClaimableJobs({ dueBefore: new Date("2025-01-02T01:00:00.000Z") })
+    ).map((job) => job.id)
+    expect(dueIds).toContain(notDue.id)
   })
 
   it("recovers a stale active job and allows a fresh job to start", async () => {

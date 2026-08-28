@@ -5,10 +5,10 @@ import { describe, expect, it } from "vitest"
 import { SourceSyncRunServiceLive } from "../../src/layers/SourceSyncRunServiceLive.ts"
 import {
   SourceRepository,
-  SourceSyncQueueError,
   SourceSyncRunRepository,
   SourceSyncRunService,
   SourceSyncService,
+  UnsupportedProviderError,
   type SourceSyncRunDetails,
   type SourceSyncRunRepositoryShape,
   type SourceSyncServiceShape,
@@ -302,18 +302,13 @@ describe("SourceSyncRunService", () => {
     expect(result.items[0]?.processingJobId).toBe("existing-active-job")
   })
 
-  it("records queue failure from child source job start as a failed run item", async () => {
+  it("records a failed child source job start as a failed run item", async () => {
     const result = await runWithLayer(
       makeLayer({
         listedSources: [coinbaseSource],
         sourceSyncService: {
           startSourceSyncJob: () =>
-            Effect.fail(
-              new SourceSyncQueueError({
-                operation: "test.enqueue",
-                cause: "queue unavailable",
-              })
-            ),
+            Effect.fail(new UnsupportedProviderError({ provider: "coinbase" })),
           replaySourceSyncJob: () => Effect.die("replaySourceSyncJob should not be called"),
           getSourceSyncJob: () => Effect.die("getSourceSyncJob should not be called"),
         },
@@ -326,7 +321,7 @@ describe("SourceSyncRunService", () => {
       {
         processingJobId: null,
         status: "failed",
-        message: "Failed to enqueue source sync job.",
+        message: "Unsupported provider: coinbase",
       },
     ])
   })

@@ -12,7 +12,6 @@ import { CoinbaseReferenceDataServiceLive } from "../../src/providers/coinbase/l
 import { CoinbaseReferenceMappingServiceLive } from "../../src/providers/coinbase/layers/CoinbaseReferenceMappingServiceLive.ts"
 import { CoinbaseSourceSyncProviderLive } from "../../src/providers/coinbase/layers/CoinbaseSourceSyncProviderLive.ts"
 import { CoinbaseSyncClient } from "../../src/providers/coinbase/services/CoinbaseSyncClient.ts"
-import { SourceSyncService } from "@my/sync-engine/services"
 import { AssetRepositoryLive } from "../../../persistence/src/layers/AssetRepositoryLive.ts"
 import { ProviderAssetRepositoryLive } from "../../../persistence/src/layers/ProviderAssetRepositoryLive.ts"
 import { ProviderReferenceRepositoryLive } from "../../../persistence/src/layers/ProviderReferenceRepositoryLive.ts"
@@ -24,7 +23,7 @@ import {
   seedSyncEngineRepositoryFixture,
 } from "../../../persistence/tests/support/integration-test-kit.ts"
 import { ProviderRawRecord } from "../../src/shared/SourceProviderRawBatch.ts"
-import { SourceSyncQueueInlineExecutorTestLive } from "../support/SourceSyncQueueInlineExecutorTestLive.ts"
+import { startSourceSyncJobInline } from "../support/SourceSyncInlineExecution.ts"
 
 const context = makeIntegrationTestDatabaseContext({
   databaseNamePrefix: "taxmaxi_sync_engine_coinbase_replay_pr04",
@@ -183,8 +182,7 @@ const SourceSyncJobExecutorTestLive = SourceSyncJobExecutorLive.pipe(
 )
 
 const SourceSyncLayer = SourceSyncServiceLive.pipe(
-  Layer.provide(SourceSyncQueueInlineExecutorTestLive),
-  Layer.provide(SourceSyncJobExecutorTestLive)
+  Layer.provideMerge(SourceSyncJobExecutorTestLive)
 )
 
 const TestLayer = SourceSyncLayer.pipe(
@@ -213,13 +211,7 @@ const insertTaoAsset = () =>
   }).pipe(Effect.provide(TestPgClientLive))
 
 const runSync = () =>
-  Effect.gen(function* () {
-    const sourceSync = yield* SourceSyncService
-    return yield* sourceSync.startSourceSyncJob({
-      principalId,
-      sourceId,
-    })
-  }).pipe(Effect.provide(TestLayer))
+  startSourceSyncJobInline({ principalId, sourceId }).pipe(Effect.provide(TestLayer))
 
 const fetchReplayState = () =>
   Effect.gen(function* () {

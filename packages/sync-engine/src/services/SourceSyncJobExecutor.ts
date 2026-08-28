@@ -44,41 +44,21 @@ export class SourceSyncJobExecutionPayloadError extends Schema.TaggedError<Sourc
 
 /**
  * ExecuteSourceSyncJobParams - Identifies one existing DB job to execute.
+ *
+ * Retry bookkeeping lives on the DB job row (`attempt_count`, `max_attempts`,
+ * `next_retry_at`), so callers pass no retry metadata: a retryable failure is
+ * persisted and reported as a `queued` summary, and the worker poll loop picks
+ * the job up again once the retry delay has passed.
  */
 export interface ExecuteSourceSyncJobParams {
   readonly jobId: string
   readonly workerId?: string
-  readonly retryPolicy?: SourceSyncJobExecutionRetryPolicy
 }
-
-/**
- * SourceSyncJobExecutionRetryPolicy - BullMQ attempt metadata used by workers.
- */
-export interface SourceSyncJobExecutionRetryPolicy {
-  readonly attemptNumber: number
-  readonly maxAttempts: number
-  readonly nextRetryAt: Date
-}
-
-/**
- * SourceSyncJobRetryableExecutionError - Retryable job failure returned to the queue worker.
- */
-export class SourceSyncJobRetryableExecutionError extends Schema.TaggedError<SourceSyncJobRetryableExecutionError>()(
-  "SourceSyncJobRetryableExecutionError",
-  {
-    jobId: Schema.String,
-    message: Schema.String,
-    attemptNumber: Schema.Finite,
-    maxAttempts: Schema.Finite,
-    nextRetryAt: Schema.Date,
-  }
-) {}
 
 export type SourceSyncJobExecutorError =
   | SourceSyncJobExecutionNotFoundError
   | SourceSyncJobExecutionConflictError
   | SourceSyncJobExecutionPayloadError
-  | SourceSyncJobRetryableExecutionError
   | SyncEngineStorageError
 
 /**

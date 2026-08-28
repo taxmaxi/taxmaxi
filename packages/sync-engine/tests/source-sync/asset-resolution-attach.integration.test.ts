@@ -47,7 +47,10 @@ import {
 } from "../../../persistence/tests/support/integration-test-kit.ts"
 import { ProviderRawRecord } from "../../src/shared/SourceProviderRawBatch.ts"
 import { TaxCalculationService } from "../../../persistence/src/services/index.ts"
-import { SourceSyncQueueInlineExecutorTestLive } from "../support/SourceSyncQueueInlineExecutorTestLive.ts"
+import {
+  replaySourceSyncJobInline,
+  startSourceSyncJobInline,
+} from "../support/SourceSyncInlineExecution.ts"
 
 const context = makeIntegrationTestDatabaseContext({
   databaseNamePrefix: "taxmaxi_sync_engine_asset_resolution_attach_143",
@@ -311,8 +314,7 @@ const SourceSyncJobExecutorTestLive = SourceSyncJobExecutorLive.pipe(
 )
 
 const SourceSyncLayer = SourceSyncServiceLive.pipe(
-  Layer.provide(SourceSyncQueueInlineExecutorTestLive),
-  Layer.provide(SourceSyncJobExecutorTestLive)
+  Layer.provideMerge(SourceSyncJobExecutorTestLive)
 )
 
 const AssetResolutionJobExecutorTestLive = AssetResolutionJobExecutorLive.pipe(
@@ -557,10 +559,7 @@ const fetchResolutionJobState = ({ jobId }: { readonly jobId: string }) =>
   }).pipe(Effect.provide(TestPgClientLive))
 
 const runSync = () =>
-  Effect.gen(function* () {
-    const sourceSync = yield* SourceSyncService
-    return yield* sourceSync.startSourceSyncJob({ principalId, sourceId })
-  }).pipe(Effect.provide(TestLayer))
+  startSourceSyncJobInline({ principalId, sourceId }).pipe(Effect.provide(TestLayer))
 
 const runResolutionJob = ({ jobId }: { readonly jobId: string }) =>
   Effect.gen(function* () {
@@ -571,7 +570,7 @@ const runResolutionJob = ({ jobId }: { readonly jobId: string }) =>
 const replaySource = () =>
   Effect.gen(function* () {
     const sourceSync = yield* SourceSyncService
-    const summary = yield* sourceSync.replaySourceSyncJob({ principalId, sourceId })
+    const summary = yield* replaySourceSyncJobInline({ principalId, sourceId })
     return yield* sourceSync.getSourceSyncJob({ principalId, sourceId, jobId: summary.jobId })
   }).pipe(Effect.provide(TestLayer))
 

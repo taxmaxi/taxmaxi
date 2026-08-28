@@ -34,7 +34,7 @@ import { SourceSyncJobExecutorLive } from "../../src/layers/SourceSyncJobExecuto
 import { SourceProviderRegistryLive } from "../../src/layers/SourceProviderRegistryLive.ts"
 import { AssetResolutionJobRepository } from "../../src/services/AssetResolutionJobRepository.ts"
 import { ProviderRawRecord } from "../../src/shared/SourceProviderRawBatch.ts"
-import { SourceSyncQueueInlineExecutorTestLive } from "../support/SourceSyncQueueInlineExecutorTestLive.ts"
+import { startSourceSyncJobInline } from "../support/SourceSyncInlineExecution.ts"
 
 const context = makeIntegrationTestDatabaseContext({
   databaseNamePrefix: "taxmaxi_sync_engine_asset_resolution_job",
@@ -225,8 +225,7 @@ const SourceSyncJobExecutorTestLive = SourceSyncJobExecutorLive.pipe(
 )
 
 const SourceSyncLayer = SourceSyncServiceLive.pipe(
-  Layer.provide(SourceSyncQueueInlineExecutorTestLive),
-  Layer.provide(SourceSyncJobExecutorTestLive)
+  Layer.provideMerge(SourceSyncJobExecutorTestLive)
 )
 
 const TestLayer = SourceSyncLayer.pipe(
@@ -357,13 +356,9 @@ const runSync = ({
   readonly sourceId: string
   readonly ownerPrincipalId?: string
 }) =>
-  Effect.gen(function* () {
-    const sourceSync = yield* SourceSyncService
-    return yield* sourceSync.startSourceSyncJob({
-      principalId: ownerPrincipalId,
-      sourceId,
-    })
-  }).pipe(Effect.provide(TestLayer))
+  startSourceSyncJobInline({ principalId: ownerPrincipalId, sourceId }).pipe(
+    Effect.provide(TestLayer)
+  )
 
 const fetchJobDetails = ({
   sourceId,

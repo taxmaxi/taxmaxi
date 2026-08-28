@@ -27,16 +27,12 @@ import {
   X402PaymentValidatorLive,
 } from "@my/rest-api"
 import { TaxMaxiApi } from "@my/rest-api/contracts"
-import { ApiBullMqSourceSyncQueueLive } from "./layers/ApiBullMqSourceSyncQueueLive.ts"
 import { TracingLive } from "./layers/TracingLive.ts"
 
 const port = 4000
 const DEFAULT_FRONTEND_URL = "http://localhost:3000"
 
-const SyncRuntimeLive = SourceSyncServiceLive.pipe(
-  Layer.provide(ApiBullMqSourceSyncQueueLive),
-  Layer.provide(RepositoriesLive)
-)
+const SyncRuntimeLive = SourceSyncServiceLive.pipe(Layer.provide(RepositoriesLive))
 
 const SyncRunRuntimeLive = SourceSyncRunServiceLive.pipe(
   Layer.provide(SyncRuntimeLive),

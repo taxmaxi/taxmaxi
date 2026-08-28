@@ -22,7 +22,6 @@ jobs:
       PGPORT: 5432
       TEST_PGPORT: 5433
       PGDATABASE: taxmaxi
-      QUEUE_REDIS_URL: redis://127.0.0.1:6379
       ANON_SESSION_SECRET: test-anon-session-secret-32-bytes-long
 
     steps:
@@ -30,7 +29,7 @@ jobs:
         uses: actions/checkout@v6
 
       - name: Start test services
-        run: docker compose up -d db-test redis
+        run: docker compose up -d db-test
 
       - name: Wait for test services
         run: |
@@ -41,14 +40,6 @@ jobs:
             sleep 1
           done
           docker compose exec -T db-test pg_isready -U postgres -d taxmaxi
-
-          for attempt in {1..30}; do
-            if [ "$(docker compose exec -T redis redis-cli ping 2>/dev/null)" = "PONG" ]; then
-              break
-            fi
-            sleep 1
-          done
-          test "$(docker compose exec -T redis redis-cli ping)" = "PONG"
 
       - name: Install pnpm
         uses: pnpm/action-setup@v6

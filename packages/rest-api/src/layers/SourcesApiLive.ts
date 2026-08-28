@@ -186,8 +186,6 @@ export const SourcesApiLive = HttpApiBuilder.group(TaxMaxiApi, "sources", (handl
                 return toBadRequestError(`Unsupported provider: ${error.provider}`)
               case "SourceNotFoundError":
                 return toBadRequestError(sourceNotFoundMessage)
-              case "SourceSyncQueueError":
-                return toInternalServerError("Failed to enqueue source sync job.")
               default:
                 return toInternalServerError("Failed to start source sync.")
             }
@@ -396,8 +394,6 @@ export const SourcesApiLive = HttpApiBuilder.group(TaxMaxiApi, "sources", (handl
                   return toBadRequestError(`Unsupported provider: ${error.provider}`)
                 case "SourceNotFoundError":
                   return toBadRequestError(sourceNotFoundMessage)
-                case "SourceSyncQueueError":
-                  return toInternalServerError("Failed to enqueue source replay job.")
                 default:
                   return toInternalServerError("Failed to replay source sync.")
               }

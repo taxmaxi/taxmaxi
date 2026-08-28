@@ -27,7 +27,7 @@ Keep these production-shaped surfaces intact:
 
 - `apps/cli` - installable `tax` CLI and future TUI entrypoint
 - `apps/server` - hosted REST API used by the CLI
-- `apps/worker` - BullMQ/Redis worker for sync and classification jobs
+- `apps/worker` - Postgres-backed worker for sync and classification jobs
 - `packages/core` - domain contracts and framework-light core types
 - `packages/persistence` - schema, SQL, repository contracts, and live layers
 - `packages/rest-api` - HTTP API definitions and handlers
