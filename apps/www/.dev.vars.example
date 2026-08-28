@@ -1,0 +1,7 @@
+# The local API sets the session cookie without a Domain attribute, so the
+# logout delete must not send one either (the browser drops a Set-Cookie with
+# Domain=.taxmaxi.com on localhost and the cookie would survive logout).
+# Empty means "no cookie domain". Deployed environments use the value from
+# wrangler.jsonc.
+COOKIE_DOMAIN=""
+TAXMAXI_API_BASE_URL=http://localhost:4000

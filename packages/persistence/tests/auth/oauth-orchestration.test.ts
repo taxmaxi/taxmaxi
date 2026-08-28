@@ -202,8 +202,9 @@ const makeUserRepo = (state: HarnessState): UserRepositoryService => ({
     state.users.delete(id)
     return Effect.void
   },
-  findPlatformAdmins: () =>
-    Effect.succeed(Array.from(state.users.values()).filter((user) => user.role === "admin")),
+  findPlatformAdmins: Effect.succeed(
+    Array.from(state.users.values()).filter((user) => user.role === "admin")
+  ),
   isPlatformAdmin: (id) => Effect.succeed(state.users.get(id)?.role === "admin"),
 })
 
@@ -364,7 +365,7 @@ const makePrincipalRepository = (state: HarnessState): PrincipalRepositoryServic
     state.principals.set(principal.id, principal)
     return Effect.succeed(principal)
   },
-  createAnonymousWalletPrincipal: () => {
+  createAnonymousWalletPrincipal: Effect.suspend(() => {
     const principal = Principal.make({
       id: PrincipalId.make(crypto.randomUUID()),
       kind: "anonymous_wallet",
@@ -372,7 +373,7 @@ const makePrincipalRepository = (state: HarnessState): PrincipalRepositoryServic
     })
     state.principals.set(principal.id, principal)
     return Effect.succeed(principal)
-  },
+  }),
 })
 
 const makeSessionRepo = (): SessionRepositoryService => {
@@ -398,7 +399,7 @@ const makeSessionRepo = (): SessionRepositoryService => {
       sessions.delete(id)
       return Effect.void
     },
-    deleteExpired: () => {
+    deleteExpired: Effect.suspend(() => {
       const current = Timestamp.now().epochMillis
       let deleted = 0
       for (const [id, session] of sessions) {
@@ -408,7 +409,7 @@ const makeSessionRepo = (): SessionRepositoryService => {
         }
       }
       return Effect.succeed(deleted)
-    },
+    }),
     deleteByUserId: (userId) => {
       let deleted = 0
       for (const [id, session] of sessions) {
@@ -502,7 +503,7 @@ const makeOAuthStateStore = (): OAuthStateStoreService => {
       })
       return Effect.void
     },
-    deleteExpired: () => {
+    deleteExpired: Effect.suspend(() => {
       let deleted = 0
       for (const [state, record] of states) {
         if (record.expiresAt.epochMillis <= Timestamp.now().epochMillis) {
@@ -511,7 +512,7 @@ const makeOAuthStateStore = (): OAuthStateStoreService => {
         }
       }
       return Effect.succeed(deleted)
-    },
+    }),
   }
 }
 
@@ -541,11 +542,11 @@ const makeHarness = (providers: ReadonlyArray<AuthProvider>): Harness => {
     Layer.succeed(SessionRepository, makeSessionRepo()),
     Layer.succeed(OAuthStateStore, makeOAuthStateStore()),
     Layer.succeed(SessionTokenGenerator, {
-      generate: () => {
+      generate: Effect.sync(() => {
         sessionCounter += 1
         const token = `sess_${String(sessionCounter).padStart(40, "0")}`
-        return Effect.succeed(SessionId.make(token))
-      },
+        return SessionId.make(token)
+      }),
     }),
     Layer.succeed(PasswordHasher, {
       hash: (plaintext) => Effect.succeed(HashedPassword.make(`hash:${Redacted.value(plaintext)}`)),

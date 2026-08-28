@@ -4,8 +4,12 @@
  * @module WorkerHealthServerLive
  */
 
+import { NodeHttpServer } from "@effect/platform-node"
 import { Config, Effect, Layer, Schema } from "effect"
-import { createServer, type Server } from "node:http"
+import { HttpRouter, HttpServerResponse } from "effect/unstable/http"
+// NodeHttpServer requires the Node server constructor as its platform adapter.
+// @effect-diagnostics-next-line nodeBuiltinImport:off
+import { createServer } from "node:http"
 
 const DEFAULT_WORKER_HEALTH_PORT = 4001
 
@@ -27,15 +31,6 @@ export class WorkerHealthServerError extends Schema.TaggedError<WorkerHealthServ
   }
 ) {}
 
-/**
- * WorkerHealthServerOptions - Optional dependency injection hooks for tests.
- */
-export interface WorkerHealthServerOptions {
-  readonly acquireServer?: (
-    config: WorkerHealthServerConfig
-  ) => Effect.Effect<Server, WorkerHealthServerError>
-}
-
 const loadConfig = Effect.gen(function* () {
   return {
     port: yield* Config.schema(
@@ -50,131 +45,39 @@ const loadConfig = Effect.gen(function* () {
   } satisfies WorkerHealthServerConfig
 })
 
-const closeServer = (server: Server): Effect.Effect<void, WorkerHealthServerError> =>
-  Effect.callback<void, WorkerHealthServerError>((resume) => {
-    let completed = false
-    const complete = (effect: Effect.Effect<void, WorkerHealthServerError>) => {
-      if (completed) {
-        return
-      }
-
-      completed = true
-      resume(effect)
-    }
-
-    if (!server.listening) {
-      complete(Effect.void)
-      return Effect.void
-    }
-
-    server.close((cause) => {
-      if (cause === undefined) {
-        complete(Effect.void)
-        return
-      }
-
-      complete(
-        Effect.fail(
-          new WorkerHealthServerError({
-            operation: "workerHealthServer.close",
-            cause,
-          })
-        )
-      )
-    })
-
-    return Effect.sync(() => {
-      completed = true
-    })
+const HealthRoutesLive = HttpRouter.add(
+  "GET",
+  "/health",
+  HttpServerResponse.text("ok", {
+    contentType: "text/plain; charset=utf-8",
   })
-
-const acquireLiveServer = ({
-  port,
-}: WorkerHealthServerConfig): Effect.Effect<Server, WorkerHealthServerError> =>
-  Effect.callback<Server, WorkerHealthServerError>((resume) => {
-    const server = createServer((request, response) => {
-      if (request.method === "GET" && request.url === "/health") {
-        response.writeHead(200, { "content-type": "text/plain; charset=utf-8" })
-        response.end("ok")
-        return
-      }
-
-      response.writeHead(404, { "content-type": "text/plain; charset=utf-8" })
-      response.end("not found")
-    })
-
-    const cleanup = () => {
-      server.off("error", onError)
-      server.off("listening", onListening)
-    }
-    let completed = false
-    const complete = (effect: Effect.Effect<Server, WorkerHealthServerError>) => {
-      if (completed) {
-        return
-      }
-
-      completed = true
-      cleanup()
-      resume(effect)
-    }
-    const onError = (cause: Error) => {
-      complete(
-        Effect.fail(
-          new WorkerHealthServerError({
-            operation: "workerHealthServer.listen",
-            cause,
-          })
-        )
-      )
-    }
-    const onListening = () => {
-      complete(Effect.succeed(server))
-    }
-
-    server.once("error", onError)
-    server.once("listening", onListening)
-    server.listen({ host: "0.0.0.0", port })
-
-    return Effect.sync(() => {
-      if (completed) {
-        return
-      }
-
-      completed = true
-      cleanup()
-      try {
-        server.close()
-      } catch {
-        // Server may not have reached the listening state before interruption.
-      }
-    })
-  })
-
-/**
- * Construct a scoped health server layer.
- */
-export const makeWorkerHealthServerLive = (options: WorkerHealthServerOptions = {}) =>
-  Layer.effectDiscard(
-    Effect.gen(function* () {
-      const config = yield* loadConfig
-      const acquireServer = options.acquireServer ?? acquireLiveServer
-
-      yield* Effect.acquireRelease(acquireServer(config), (server) =>
-        closeServer(server).pipe(
-          Effect.catch((error) =>
-            Effect.logWarning(
-              { operation: error.operation, cause: error.cause },
-              "worker-health:close-failed"
-            )
-          )
-        )
-      )
-
-      yield* Effect.logInfo({ port: config.port }, "worker-health:started")
-    })
-  )
+)
 
 /**
  * WorkerHealthServerLive - Live worker health server.
  */
-export const WorkerHealthServerLive = makeWorkerHealthServerLive()
+export const WorkerHealthServerLive = Layer.unwrap(
+  loadConfig.pipe(
+    Effect.map((config) =>
+      HttpRouter.serve(HealthRoutesLive).pipe(
+        Layer.provide(
+          NodeHttpServer.layer(createServer, {
+            host: "0.0.0.0",
+            port: config.port,
+          })
+        ),
+        Layer.catchTag("ServeError", (error) =>
+          Layer.effectDiscard(
+            Effect.fail(
+              new WorkerHealthServerError({
+                operation: "workerHealthServer.listen",
+                cause: error.cause,
+              })
+            )
+          )
+        ),
+        Layer.tap(() => Effect.logInfo({ port: config.port }, "worker-health:started"))
+      )
+    )
+  )
+)

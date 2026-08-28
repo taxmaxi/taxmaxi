@@ -1,6 +1,7 @@
-import { spawn } from "node:child_process"
+import { Effect } from "effect"
+import { ChildProcess } from "effect/unstable/process"
 
-export const openBrowser = (url: string): boolean => {
+export const openBrowser = (url: string) => {
   const command =
     process.platform === "darwin"
       ? { cmd: "open", args: [url] }
@@ -8,14 +9,16 @@ export const openBrowser = (url: string): boolean => {
         ? { cmd: "cmd", args: ["/c", "start", "", url] }
         : { cmd: "xdg-open", args: [url] }
 
-  try {
-    const child = spawn(command.cmd, command.args, {
-      detached: true,
-      stdio: "ignore",
+  return Effect.scoped(
+    Effect.gen(function* () {
+      const child = yield* ChildProcess.make(command.cmd, command.args, {
+        detached: true,
+        stdin: "ignore",
+        stdout: "ignore",
+        stderr: "ignore",
+      })
+      yield* child.unref.pipe(Effect.asVoid)
+      return true
     })
-    child.unref()
-    return true
-  } catch {
-    return false
-  }
+  ).pipe(Effect.orElseSucceed(() => false))
 }

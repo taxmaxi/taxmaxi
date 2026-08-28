@@ -32,7 +32,7 @@ export class FetchProviderRawBatchParams extends Schema.Class<FetchProviderRawBa
   cursorPayload: Schema.Unknown,
   resumeHighWatermark: Schema.NullOr(Schema.Date),
   resumeCheckpointExternalId: Schema.NullOr(Schema.String),
-  pageSize: Schema.Number,
+  pageSize: Schema.Finite,
 }) {}
 
 /**

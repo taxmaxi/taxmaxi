@@ -10,6 +10,7 @@
 
 import { and, asc, eq, isNull, lt, lte, or } from "drizzle-orm"
 import * as Context from "effect/Context"
+import * as DateTime from "effect/DateTime"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import {
@@ -304,8 +305,11 @@ const make = Effect.gen(function* () {
               return { _tag: "attempts_exhausted", attemptCount: job.attemptCount } as const
             }
 
-            const nextRetryAt = new Date(
-              now.getTime() + ASSET_RESOLUTION_JOB_RETRY_BASE_DELAY_MS * 2 ** (job.attemptCount - 1)
+            const nextRetryAt = DateTime.toDateUtc(
+              DateTime.addDuration(
+                DateTime.makeUnsafe(now),
+                ASSET_RESOLUTION_JOB_RETRY_BASE_DELAY_MS * 2 ** (job.attemptCount - 1)
+              )
             )
 
             yield* tx

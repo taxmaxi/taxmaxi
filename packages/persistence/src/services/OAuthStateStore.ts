@@ -151,7 +151,7 @@ export interface OAuthStateStoreService {
    * @returns Effect containing number of deleted rows
    * @errors PersistenceError - Database/storage failure
    */
-  readonly deleteExpired: () => Effect.Effect<number, PersistenceError>
+  readonly deleteExpired: Effect.Effect<number, PersistenceError>
 }
 
 /**

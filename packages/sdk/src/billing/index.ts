@@ -19,11 +19,11 @@ export type BillingStatus = {
 }
 
 export interface BillingEffectResource {
-  readonly catalog: () => Effect.Effect<BillingCatalog, unknown, never>
-  readonly status: () => Effect.Effect<BillingStatus, unknown, never>
-  readonly createAnnualCheckout: () => Effect.Effect<BillingRedirect, unknown, never>
-  readonly createTopUpCheckout: () => Effect.Effect<BillingRedirect, unknown, never>
-  readonly createPortalSession: () => Effect.Effect<BillingRedirect, unknown, never>
+  readonly catalog: Effect.Effect<BillingCatalog, unknown, never>
+  readonly status: Effect.Effect<BillingStatus, unknown, never>
+  readonly createAnnualCheckout: Effect.Effect<BillingRedirect, unknown, never>
+  readonly createTopUpCheckout: Effect.Effect<BillingRedirect, unknown, never>
+  readonly createPortalSession: Effect.Effect<BillingRedirect, unknown, never>
 }
 
 export interface BillingPromiseResource {
@@ -47,40 +47,35 @@ const encodeRedirect = Schema.encodeSync(BillingRedirectResponse)
 export const makeBillingEffectResource = (
   client: Effect.Effect<TaxMaxiEffectClient, never>
 ): BillingEffectResource => ({
-  catalog: () =>
-    Effect.map(
-      Effect.flatMap(client, (resolved) => resolved.billing.getBillingCatalog()),
-      encodeCatalog
-    ),
-  status: () =>
-    Effect.map(
-      Effect.flatMap(client, (resolved) => resolved.billing.getBillingStatus()),
-      encodeStatus
-    ),
-  createAnnualCheckout: () =>
-    Effect.map(
-      Effect.flatMap(client, (resolved) => resolved.billing.createAnnualCheckout()),
-      encodeRedirect
-    ),
-  createTopUpCheckout: () =>
-    Effect.map(
-      Effect.flatMap(client, (resolved) => resolved.billing.createTopUpCheckout()),
-      encodeRedirect
-    ),
-  createPortalSession: () =>
-    Effect.map(
-      Effect.flatMap(client, (resolved) => resolved.billing.createBillingPortalSession()),
-      encodeRedirect
-    ),
+  catalog: Effect.map(
+    Effect.flatMap(client, (resolved) => resolved.billing.getBillingCatalog()),
+    encodeCatalog
+  ),
+  status: Effect.map(
+    Effect.flatMap(client, (resolved) => resolved.billing.getBillingStatus()),
+    encodeStatus
+  ),
+  createAnnualCheckout: Effect.map(
+    Effect.flatMap(client, (resolved) => resolved.billing.createAnnualCheckout()),
+    encodeRedirect
+  ),
+  createTopUpCheckout: Effect.map(
+    Effect.flatMap(client, (resolved) => resolved.billing.createTopUpCheckout()),
+    encodeRedirect
+  ),
+  createPortalSession: Effect.map(
+    Effect.flatMap(client, (resolved) => resolved.billing.createBillingPortalSession()),
+    encodeRedirect
+  ),
 })
 
 export const makeBillingPromiseResource = (
   effect: BillingEffectResource,
   run: <A>(effect: Effect.Effect<A, unknown, never>) => Promise<A>
 ): BillingPromiseResource => ({
-  catalog: () => run(effect.catalog()),
-  status: () => run(effect.status()),
-  createAnnualCheckout: () => run(effect.createAnnualCheckout()),
-  createTopUpCheckout: () => run(effect.createTopUpCheckout()),
-  createPortalSession: () => run(effect.createPortalSession()),
+  catalog: () => run(effect.catalog),
+  status: () => run(effect.status),
+  createAnnualCheckout: () => run(effect.createAnnualCheckout),
+  createTopUpCheckout: () => run(effect.createTopUpCheckout),
+  createPortalSession: () => run(effect.createPortalSession),
 })

@@ -697,12 +697,12 @@ const make = Effect.gen(function* () {
       .pipe(
         Effect.retry({
           times: 2,
-          while: (error) => error instanceof ReplayDependencySetChanged,
+          while: (error) => Schema.is(ReplayDependencySetChanged)(error),
         }),
         Effect.mapError((error) =>
-          error instanceof SourceReplayDependencyCycleError ||
-          error instanceof SourceReplayDependencyError ||
-          error instanceof SourceReplaySchedulingPendingError
+          Schema.is(SourceReplayDependencyCycleError)(error) ||
+          Schema.is(SourceReplayDependencyError)(error) ||
+          Schema.is(SourceReplaySchedulingPendingError)(error)
             ? error
             : toSyncEngineStorageError({
                 error,
@@ -862,8 +862,8 @@ const makeReplayPlanRepository = Effect.gen(function* () {
       )
       .pipe(
         Effect.mapError((error) =>
-          error instanceof SourceReplayPlanJobNotFoundError ||
-          error instanceof SourceReplayPlanConflictError
+          Schema.is(SourceReplayPlanJobNotFoundError)(error) ||
+          Schema.is(SourceReplayPlanConflictError)(error)
             ? error
             : toSyncEngineStorageError({
                 error,

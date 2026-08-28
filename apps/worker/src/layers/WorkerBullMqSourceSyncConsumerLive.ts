@@ -309,13 +309,7 @@ const acquireLiveWorker = (
 
     return {
       close: Effect.tryPromise({
-        try: async () => {
-          try {
-            await worker.close()
-          } finally {
-            connection.disconnect()
-          }
-        },
+        try: () => worker.close().finally(() => connection.disconnect()),
         catch: (cause) =>
           new WorkerBullMqSourceSyncConsumerError({
             operation: "workerBullMqSourceSyncConsumer.close",
@@ -338,95 +332,99 @@ export const makeWorkerBullMqSourceSyncConsumerLive = (
       const context = yield* Effect.context<SourceSyncJobExecutor>()
       const runPromise = Effect.runPromiseWith(context)
       const acquireWorker = options.acquireWorker ?? acquireLiveWorker
-      const processor: WorkerBullMqSourceSyncProcessor = async (job, token) => {
-        const result = await runPromise(processJob({ job, config }).pipe(Effect.result))
+      const processor: WorkerBullMqSourceSyncProcessor = (job, token) =>
+        runPromise(processJob({ job, config }).pipe(Effect.result)).then((result) => {
+          if (Result.isSuccess(result)) {
+            if (result.success.summary.status === "queued") {
+              if (job.moveToDelayed === undefined) {
+                return Promise.reject(
+                  new WorkerBullMqSourceSyncConsumerError({
+                    operation: "workerBullMqSourceSyncConsumer.delayJob",
+                    cause: "Source sync queue job cannot be delayed",
+                  })
+                )
+              }
+              const moveToDelayed = job.moveToDelayed
 
-        if (Result.isSuccess(result)) {
-          if (result.success.summary.status === "queued") {
-            if (job.moveToDelayed === undefined) {
-              return Promise.reject(
-                new WorkerBullMqSourceSyncConsumerError({
-                  operation: "workerBullMqSourceSyncConsumer.delayJob",
-                  cause: "Source sync queue job cannot be delayed",
+              return runPromise(
+                DateTime.now.pipe(
+                  Effect.map(DateTime.add({ milliseconds: resolveBackoffDelayMs(job) })),
+                  Effect.map(DateTime.toDateUtc),
+                  Effect.map((date) => date.getTime())
+                )
+              ).then((delayedUntil) =>
+                moveToDelayed(delayedUntil, token).then(() => {
+                  throw new DelayedError()
                 })
               )
             }
 
-            const delayedUntil = await runPromise(
-              DateTime.now.pipe(
-                Effect.map(DateTime.add({ milliseconds: resolveBackoffDelayMs(job) })),
-                Effect.map(DateTime.toDateUtc),
-                Effect.map((date) => date.getTime())
-              )
-            )
-            await job.moveToDelayed(delayedUntil, token)
-            return Promise.reject(new DelayedError())
-          }
-
-          await runPromise(
-            startupRepair
-              .dispatchFollowUp({
-                jobId: result.success.payload.jobId,
-                sourceId: result.success.payload.sourceId,
-                principalId: result.success.payload.principalId,
-              })
-              .pipe(
-                Effect.catch((error) =>
-                  Effect.logWarning(
-                    { operation: error.operation, cause: error.cause },
-                    "source-sync-worker:follow-up-dispatch-failed"
+            return runPromise(
+              startupRepair
+                .dispatchFollowUp({
+                  jobId: result.success.payload.jobId,
+                  sourceId: result.success.payload.sourceId,
+                  principalId: result.success.payload.principalId,
+                })
+                .pipe(
+                  Effect.catch((error) =>
+                    Effect.logWarning(
+                      { operation: error.operation, cause: error.cause },
+                      "source-sync-worker:follow-up-dispatch-failed"
+                    )
                   )
                 )
+            ).then(() => result.success.summary)
+          }
+
+          const error = result.failure
+
+          if (error._tag === "WorkerBullMqMalformedSourceSyncPayloadError") {
+            return runPromise(
+              Effect.logError(
+                {
+                  queueName: SOURCE_SYNC_QUEUE_NAME,
+                  queueJobId: error.queueJobId,
+                  workerId: config.workerId,
+                  cause: error.cause,
+                },
+                "source-sync-worker:malformed-payload"
               )
-          )
-          return result.success.summary
-        }
+            ).then(() => {
+              throw new UnrecoverableError("Malformed source sync queue payload")
+            })
+          }
 
-        const error = result.failure
+          if (!isRetryableWorkerError(error)) {
+            return runPromise(
+              Effect.logError(
+                {
+                  queueName: SOURCE_SYNC_QUEUE_NAME,
+                  queueJobId: job.id ?? null,
+                  workerId: config.workerId,
+                  error,
+                },
+                "source-sync-worker:job-unrecoverable"
+              )
+            ).then(() => {
+              throw new UnrecoverableError(errorMessage(error))
+            })
+          }
 
-        if (error._tag === "WorkerBullMqMalformedSourceSyncPayloadError") {
-          await runPromise(
-            Effect.logError(
-              {
-                queueName: SOURCE_SYNC_QUEUE_NAME,
-                queueJobId: error.queueJobId,
-                workerId: config.workerId,
-                cause: error.cause,
-              },
-              "source-sync-worker:malformed-payload"
-            )
-          )
-          throw new UnrecoverableError("Malformed source sync queue payload")
-        }
-
-        if (!isRetryableWorkerError(error)) {
-          await runPromise(
-            Effect.logError(
+          return runPromise(
+            Effect.logWarning(
               {
                 queueName: SOURCE_SYNC_QUEUE_NAME,
                 queueJobId: job.id ?? null,
                 workerId: config.workerId,
                 error,
               },
-              "source-sync-worker:job-unrecoverable"
+              "source-sync-worker:job-retry-scheduled"
             )
-          )
-          throw new UnrecoverableError(errorMessage(error))
-        }
-
-        await runPromise(
-          Effect.logWarning(
-            {
-              queueName: SOURCE_SYNC_QUEUE_NAME,
-              queueJobId: job.id ?? null,
-              workerId: config.workerId,
-              error,
-            },
-            "source-sync-worker:job-retry-scheduled"
-          )
-        )
-        throw toJobFailure(error)
-      }
+          ).then(() => {
+            throw toJobFailure(error)
+          })
+        })
 
       const worker = yield* Effect.acquireRelease(
         startupRepair.repair.pipe(Effect.andThen(acquireWorker(config, processor))),

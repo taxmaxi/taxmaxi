@@ -157,7 +157,7 @@ export interface AssetRepositoryShape {
   /**
    * Load all blockchains used for provider network-name resolution.
    */
-  readonly listBlockchains: () => Effect.Effect<
+  readonly listBlockchains: Effect.Effect<
     ReadonlyArray<SyncEngineBlockchain>,
     SyncEngineStorageError
   >

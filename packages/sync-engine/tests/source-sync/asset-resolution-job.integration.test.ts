@@ -187,8 +187,8 @@ const CoinbaseSyncClientTestLive = Layer.succeed(CoinbaseSyncClient, {
         })),
       nextCursor: null,
     }),
-  fetchFiatCurrencies: () => Effect.succeed(activeFiatCurrencies),
-  fetchCryptoCurrencies: () => Effect.succeed(activeCryptoCurrencies),
+  fetchFiatCurrencies: Effect.succeed(activeFiatCurrencies),
+  fetchCryptoCurrencies: Effect.succeed(activeCryptoCurrencies),
 })
 
 const CoinbaseReferenceMappingWithDepsLive = CoinbaseReferenceMappingServiceLive.pipe(
@@ -697,7 +697,7 @@ describe("asset resolution job scheduling", () => {
       context.runWithLayer({
         effect: Effect.flatMap(HeliusSolanaAssetResolutionService, (service) =>
           Effect.gen(function* () {
-            yield* service.ensureDefaultMappings()
+            yield* service.ensureDefaultMappings
             return yield* service.resolveAsset({
               kind: "spl",
               mintAddress: SOLANA_USDC_MINT,

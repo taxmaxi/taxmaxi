@@ -43,7 +43,7 @@ export const DEFAULT_SOLANA_DEX_DISCOVERY_WINDOW_DAYS = 7
 export const SOLANA_DEX_PROJECT_PRIORITY_QUERY_ROW_LIMIT = 100
 export const SOLANA_DEX_PROJECT_SAMPLE_TRANSACTIONS_QUERY_ROW_LIMIT = 50
 
-const NumericField = Schema.Union([Schema.Number, Schema.NumberFromString])
+const NumericField = Schema.Union([Schema.Finite, Schema.FiniteFromString])
 
 const DuneExecutionResultResponse = Schema.Struct({
   state: Schema.String,
@@ -117,7 +117,7 @@ const decodeRows = <S extends Schema.Codec<unknown, unknown, never>>(
   rows: ReadonlyArray<unknown>,
   query: SolanaDuneQueryConfig
 ): Effect.Effect<ReadonlyArray<S["Type"]>, SolanaDuneError> =>
-  Schema.decodeUnknownEffect(Schema.Array(schema))(rows).pipe(
+  Schema.decodeEffect(Schema.Array(schema))(rows).pipe(
     Effect.mapError((error) =>
       queryError({
         query,
@@ -173,7 +173,7 @@ const decodeUtcDate = (
   value: string,
   field: string
 ): Effect.Effect<DateTime.Utc, SolanaDuneError> =>
-  Schema.decodeUnknownEffect(Schema.DateTimeUtcFromString)(`${value}T00:00:00.000Z`).pipe(
+  Schema.decodeEffect(Schema.DateTimeUtcFromString)(`${value}T00:00:00.000Z`).pipe(
     Effect.mapError(() => invalidUtcDate(field))
   )
 
@@ -194,11 +194,9 @@ const validateDateRange = ({
     yield* validateUtcDate(startDate, "startDate")
     yield* validateUtcDate(endDate, "endDate")
     if (startDate >= endDate) {
-      return yield* Effect.fail(
-        new SolanaDuneError({
-          message: "`startDate` must be before `endDate`",
-        })
-      )
+      return yield* new SolanaDuneError({
+        message: "`startDate` must be before `endDate`",
+      })
     }
   })
 
@@ -298,12 +296,10 @@ const canonicalProgramIdsFromPriorityRow = (
     })
 
     if (rawProgramIds.length < canonicalProgramIdCount) {
-      return yield* Effect.fail(
-        queryError({
-          query,
-          message: `Dune row for project ${row.project} has ${rawProgramIds.length} canonical_program_ids but canonical_program_id_count is ${canonicalProgramIdCount}`,
-        })
-      )
+      return yield* queryError({
+        query,
+        message: `Dune row for project ${row.project} has ${rawProgramIds.length} canonical_program_ids but canonical_program_id_count is ${canonicalProgramIdCount}`,
+      })
     }
 
     return [...new Set(rawProgramIds.filter((programId) => programId.trim() !== ""))]
@@ -545,9 +541,9 @@ export const buildSolanaDexDiscoveryFile = ({
       limit: SOLANA_DEX_PROJECT_SAMPLE_TRANSACTIONS_QUERY_ROW_LIMIT,
     })
     if (!Number.isSafeInteger(windowDays) || windowDays <= 0) {
-      return yield* Effect.fail(
-        new SolanaDuneError({ message: "`windowDays` must be a positive safe integer" })
-      )
+      return yield* new SolanaDuneError({
+        message: "`windowDays` must be a positive safe integer",
+      })
     }
 
     const priorityQuery = yield* queryConfigForKind({
@@ -598,11 +594,9 @@ export const buildSolanaDexDiscoveryFile = ({
     }
 
     if (entries.length === 0) {
-      return yield* Effect.fail(
-        new SolanaDuneError({
-          message: `Dune DEX discovery for ${startDate} to ${endDate} produced no candidate entries`,
-        })
-      )
+      return yield* new SolanaDuneError({
+        message: `Dune DEX discovery for ${startDate} to ${endDate} produced no candidate entries`,
+      })
     }
 
     return {

@@ -7,6 +7,7 @@
 import { SOLANA_WRAPPED_NATIVE_MINT } from "@my/core/assets"
 import * as Timestamp from "@my/core/shared/values/Timestamp"
 import * as BigDecimal from "effect/BigDecimal"
+import * as DateTime from "effect/DateTime"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import * as Option from "effect/Option"
@@ -96,13 +97,13 @@ const HeliusSolanaTransactionsPageSchema = Schema.Struct({
 })
 
 const HeliusSolanaFullTransactionEntrySchema = Schema.Struct({
-  slot: Schema.Number,
-  transactionIndex: Schema.Number,
+  slot: Schema.Finite,
+  transactionIndex: Schema.Finite,
   transaction: Schema.Struct({
     signatures: Schema.Array(Schema.String),
   }),
   meta: Schema.NullOr(Schema.Unknown),
-  blockTime: Schema.NullOr(Schema.Number),
+  blockTime: Schema.NullOr(Schema.Finite),
 })
 
 const HeliusSolanaAccountKeySchema = Schema.Union([
@@ -121,7 +122,7 @@ const HeliusSolanaInstructionSchema = Schema.Struct({
 })
 
 const HeliusSolanaInnerInstructionsSchema = Schema.Struct({
-  index: Schema.Number,
+  index: Schema.Finite,
   instructions: Schema.Array(HeliusSolanaInstructionSchema),
 })
 
@@ -137,7 +138,7 @@ const SolanaRawTokenAmountSchema = Schema.String.check(
 )
 
 const HeliusSolanaTokenBalanceSchema = Schema.Struct({
-  accountIndex: Schema.Number,
+  accountIndex: Schema.Finite,
   mint: Schema.String,
   owner: Schema.optional(Schema.NullOr(Schema.String)),
   programId: Schema.optional(Schema.NullOr(Schema.String)),
@@ -148,7 +149,7 @@ const HeliusSolanaTokenBalanceSchema = Schema.Struct({
   }),
 })
 
-const HeliusSolanaDecimalStringSchema = Schema.Union([Schema.String, Schema.Number]).pipe(
+const HeliusSolanaDecimalStringSchema = Schema.Union([Schema.String, Schema.Finite]).pipe(
   Schema.decodeTo(Schema.String, {
     decode: SchemaGetter.transformOrFail((value, options) => {
       const amount = typeof value === "number" ? String(value) : value.trim()
@@ -179,12 +180,12 @@ const HeliusSolanaParsedTokenTransferSchema = Schema.Struct({
 
 const HeliusSolanaWalletTransferSchema = Schema.Struct({
   signature: Schema.String,
-  timestamp: Schema.Number,
+  timestamp: Schema.Finite,
   direction: Schema.Literals(["in", "out"]),
   counterparty: Schema.String,
   mint: Schema.String,
   symbol: Schema.NullOr(Schema.String),
-  amount: Schema.Union([Schema.Number, Schema.NumberFromString]),
+  amount: Schema.Union([Schema.Finite, Schema.FiniteFromString]),
   amountRaw: SolanaRawTokenAmountSchema,
   decimals: SolanaTokenDecimalsSchema,
 })
@@ -208,8 +209,8 @@ const HeliusSolanaCursorPayloadSchema = Schema.Struct({
 })
 
 const HeliusSolanaFullTransactionPayloadSchema = Schema.Struct({
-  slot: Schema.Number,
-  transactionIndex: Schema.optional(Schema.Number),
+  slot: Schema.Finite,
+  transactionIndex: Schema.optional(Schema.Finite),
   transaction: Schema.Struct({
     signatures: Schema.Array(Schema.String),
     message: Schema.Struct({
@@ -220,15 +221,15 @@ const HeliusSolanaFullTransactionPayloadSchema = Schema.Struct({
   meta: Schema.NullOr(
     Schema.Struct({
       err: Schema.NullOr(Schema.Unknown),
-      fee: Schema.optional(Schema.Number),
-      preBalances: Schema.optional(Schema.Array(Schema.Number)),
-      postBalances: Schema.optional(Schema.Array(Schema.Number)),
+      fee: Schema.optional(Schema.Finite),
+      preBalances: Schema.optional(Schema.Array(Schema.Finite)),
+      postBalances: Schema.optional(Schema.Array(Schema.Finite)),
       preTokenBalances: Schema.optional(Schema.Array(HeliusSolanaTokenBalanceSchema)),
       postTokenBalances: Schema.optional(Schema.Array(HeliusSolanaTokenBalanceSchema)),
       innerInstructions: Schema.optional(Schema.Array(HeliusSolanaInnerInstructionsSchema)),
     })
   ),
-  blockTime: Schema.NullOr(Schema.Number),
+  blockTime: Schema.NullOr(Schema.Finite),
   type: Schema.optional(Schema.String),
   source: Schema.optional(Schema.String),
   description: Schema.optional(Schema.NullOr(Schema.String)),
@@ -430,7 +431,8 @@ const decodeTransactionEntry = (
     })
   )
 
-const occurredAtFromBlockTime = (blockTime: number): Date => new Date(blockTime * 1_000)
+const occurredAtFromBlockTime = (blockTime: number): Date =>
+  DateTime.toDateUtc(DateTime.makeUnsafe(blockTime * 1_000))
 
 const makeRawRecord = ({
   walletAddress,
@@ -553,7 +555,7 @@ const toSharedCursorDecodeError = (error: HeliusSolanaCursorDecodeError) =>
 const toProviderFailureError = (
   error: HeliusSolanaSyncClientError | HeliusSolanaPayloadDecodeError
 ): SourceSyncProviderFailureError => {
-  if (error instanceof HeliusSolanaAuthError) {
+  if (Schema.is(HeliusSolanaAuthError)(error)) {
     return new SourceSyncProviderFailureError({
       providerKey: HELIUS_SOLANA_PROVIDER_KEY,
       message: error.message,
@@ -561,7 +563,7 @@ const toProviderFailureError = (
     })
   }
 
-  if (error instanceof HeliusSolanaProviderError) {
+  if (Schema.is(HeliusSolanaProviderError)(error)) {
     return new SourceSyncProviderFailureError({
       providerKey: HELIUS_SOLANA_PROVIDER_KEY,
       message: error.message,
@@ -580,7 +582,7 @@ const isRetryableFailure = (error: SourceSyncProviderError): boolean =>
   error._tag === "SourceSyncProviderFailureError" && error.retryable
 
 const toReferenceRefreshStorageError = (cause: unknown): SyncEngineStorageError =>
-  cause instanceof SyncEngineStorageError
+  Schema.is(SyncEngineStorageError)(cause)
     ? cause
     : new SyncEngineStorageError({
         operation: "heliusSolanaSourceSyncProvider.refreshReferenceData",
@@ -1528,19 +1530,18 @@ const make = ({
     }
 
     const loadNormalizationLookups: HeliusSolanaSourceSyncProviderShape["loadNormalizationLookups"] =
-      () =>
-        assetRepository.listBlockchains().pipe(
-          Effect.map((blockchains) => {
-            const solana = blockchains.find(
-              (blockchain) => blockchain.name.toLowerCase() === SOLANA_BLOCKCHAIN_NAME
-            )
-            return solana?.id ?? null
-          }),
-          Effect.map((solanaBlockchainId) => ({
-            providerKey: HELIUS_SOLANA_PROVIDER_KEY,
-            solanaBlockchainId,
-          }))
-        )
+      assetRepository.listBlockchains.pipe(
+        Effect.map((blockchains) => {
+          const solana = blockchains.find(
+            (blockchain) => blockchain.name.toLowerCase() === SOLANA_BLOCKCHAIN_NAME
+          )
+          return solana?.id ?? null
+        }),
+        Effect.map((solanaBlockchainId) => ({
+          providerKey: HELIUS_SOLANA_PROVIDER_KEY,
+          solanaBlockchainId,
+        }))
+      )
 
     const requireSolanaBlockchainId = (lookups: HeliusSolanaNormalizationLookups) =>
       lookups.solanaBlockchainId === null
@@ -3084,20 +3085,17 @@ const make = ({
   })
 
 const makeWithEmptyReferenceData = make({
-  refreshReferenceData: () => Effect.succeed(emptyReferenceDataRefresh),
+  refreshReferenceData: Effect.succeed(emptyReferenceDataRefresh),
 })
 
 const makeWithAssetResolutionReferenceData = Effect.gen(function* () {
   const assetResolutionService = yield* HeliusSolanaAssetResolutionService
 
   return yield* make({
-    refreshReferenceData: () =>
-      assetResolutionService
-        .ensureDefaultMappings()
-        .pipe(
-          Effect.map(toHeliusSolanaReferenceDataRefreshResult),
-          Effect.mapError(toReferenceRefreshStorageError)
-        ),
+    refreshReferenceData: assetResolutionService.ensureDefaultMappings.pipe(
+      Effect.map(toHeliusSolanaReferenceDataRefreshResult),
+      Effect.mapError(toReferenceRefreshStorageError)
+    ),
   })
 })
 

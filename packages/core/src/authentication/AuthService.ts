@@ -364,7 +364,7 @@ export interface AuthServiceShape {
    *
    * @returns Effect containing the list of enabled provider types
    */
-  readonly getEnabledProviders: () => Effect.Effect<Chunk.Chunk<AuthProviderType>>
+  readonly getEnabledProviders: Effect.Effect<Chunk.Chunk<AuthProviderType>>
 }
 
 /**

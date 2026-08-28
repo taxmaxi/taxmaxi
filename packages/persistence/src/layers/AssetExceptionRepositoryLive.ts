@@ -1737,7 +1737,7 @@ const make = Effect.gen(function* () {
       )
     }).pipe(
       Effect.mapError((cause) =>
-        cause instanceof SyncEngineStorageError
+        Schema.is(SyncEngineStorageError)(cause)
           ? cause
           : toStorageError("assetExceptionRepository.scheduleRematerialization", cause)
       )
@@ -2390,7 +2390,7 @@ const make = Effect.gen(function* () {
             : Effect.fail(cause)
         ),
         Effect.mapError((cause) =>
-          cause instanceof SyncEngineStorageError
+          Schema.is(SyncEngineStorageError)(cause)
             ? cause
             : toStorageError("assetExceptionRepository.submitDecision", cause)
         )
@@ -2435,7 +2435,7 @@ const make = Effect.gen(function* () {
         )
       }),
       Effect.mapError((cause) =>
-        cause instanceof SyncEngineStorageError
+        Schema.is(SyncEngineStorageError)(cause)
           ? cause
           : toStorageError("assetExceptionRepository.submitDecision", cause)
       )

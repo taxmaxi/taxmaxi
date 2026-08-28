@@ -41,7 +41,7 @@ export class SessionDurationConfig extends Schema.Class<SessionDurationConfig>(
   /**
    * Session duration for local provider in milliseconds
    */
-  local: Schema.Number.pipe(
+  local: Schema.Finite.pipe(
     Schema.check(Schema.isInt(), Schema.isGreaterThan(0)),
     Schema.optionalKey,
     Schema.withConstructorDefault(Effect.succeed(DEFAULT_SESSION_DURATIONS.local))
@@ -50,7 +50,7 @@ export class SessionDurationConfig extends Schema.Class<SessionDurationConfig>(
   /**
    * Session duration for Google OAuth in milliseconds
    */
-  google: Schema.Number.pipe(
+  google: Schema.Finite.pipe(
     Schema.check(Schema.isInt(), Schema.isGreaterThan(0)),
     Schema.optionalKey,
     Schema.withConstructorDefault(Effect.succeed(DEFAULT_SESSION_DURATIONS.google))
@@ -59,7 +59,7 @@ export class SessionDurationConfig extends Schema.Class<SessionDurationConfig>(
   /**
    * Session duration for Coinbase OAuth in milliseconds
    */
-  coinbase: Schema.Number.pipe(
+  coinbase: Schema.Finite.pipe(
     Schema.check(Schema.isInt(), Schema.isGreaterThan(0)),
     Schema.optionalKey,
     Schema.withConstructorDefault(Effect.succeed(DEFAULT_SESSION_DURATIONS.coinbase))

@@ -5,7 +5,10 @@
  */
 
 import { createHmac, timingSafeEqual } from "node:crypto"
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto"
 import * as Config from "effect/Config"
+import * as Crypto from "effect/Crypto"
+import * as DateTime from "effect/DateTime"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import * as Redacted from "effect/Redacted"
@@ -25,6 +28,12 @@ const ANON_SESSION_SECRET_PLACEHOLDERS = new Set(["<generated-secret>"])
 const ANON_SESSION_SECRET_ERROR_MESSAGE =
   "ANON_SESSION_SECRET must be a high-entropy value with at least 32 non-whitespace characters; generate it with openssl rand -base64 32"
 
+const randomUuid = Crypto.Crypto.pipe(
+  Effect.flatMap((crypto) => crypto.randomUUIDv4),
+  Effect.provide(NodeCrypto.layer),
+  Effect.orDie
+)
+
 const isValidAnonSessionSecret = (value: string): boolean => {
   if (value.length < MIN_ANON_SESSION_SECRET_LENGTH) return false
   if (new Set(value).size < MIN_ANON_SESSION_SECRET_UNIQUE_CHARACTERS) return false
@@ -40,7 +49,7 @@ const AnonSessionSecret = Schema.Trimmed.check(
 
 const anonSessionSecretConfig = Config.string("ANON_SESSION_SECRET").pipe(
   Config.mapOrFail((value) =>
-    Schema.decodeUnknownEffect(AnonSessionSecret)(value).pipe(
+    Schema.decodeEffect(AnonSessionSecret)(value).pipe(
       Effect.mapError((error) => new Config.ConfigError(error))
     )
   ),
@@ -51,13 +60,13 @@ const AnonSessionPayload = Schema.Struct({
   kind: Schema.Literal("anon_session"),
   payerChainType: Schema.Literals(["evm", "solana", "bitcoin"]),
   payerWalletAddress: Schema.Trimmed.check(Schema.isNonEmpty()),
-  expiresAt: Schema.Number,
+  expiresAt: Schema.Finite,
 })
 
 const AnonChallengePayload = Schema.Struct({
   kind: Schema.Literal("anon_challenge"),
   nonce: Schema.Trimmed.check(Schema.isNonEmpty()),
-  expiresAt: Schema.Number,
+  expiresAt: Schema.Finite,
 })
 
 const tokenError = (message: string) => new AnonSessionTokenError({ message })
@@ -108,7 +117,7 @@ const parseToken = (token: string) =>
       return yield* tokenError("Invalid anon session token.")
     }
     const decoded = yield* base64UrlDecode(payload)
-    const parsed = yield* Schema.decodeUnknownEffect(JsonPayload)(decoded).pipe(
+    const parsed = yield* Schema.decodeEffect(JsonPayload)(decoded).pipe(
       Effect.mapError(() => tokenError("Invalid anon session token."))
     )
     return { payload, signature, parsed }
@@ -168,18 +177,21 @@ const make = Effect.gen(function* () {
       } satisfies AnonPayerSessionSubject
     })
 
-  const createChallenge: AnonSessionServiceShape["createChallenge"] = () =>
-    Effect.gen(function* () {
-      const nonce = crypto.randomUUID()
-      const now = yield* currentTimeMillis
-      const expiresAt = now + CHALLENGE_TTL_MILLIS
-      const token = yield* createSignedToken({
-        kind: "anon_challenge",
-        nonce,
-        expiresAt,
-      })
-      return { nonce, expiresAt: new Date(expiresAt).toISOString(), token }
+  const createChallenge: AnonSessionServiceShape["createChallenge"] = Effect.gen(function* () {
+    const nonce = yield* randomUuid
+    const now = yield* currentTimeMillis
+    const expiresAt = now + CHALLENGE_TTL_MILLIS
+    const token = yield* createSignedToken({
+      kind: "anon_challenge",
+      nonce,
+      expiresAt,
     })
+    return {
+      nonce,
+      expiresAt: DateTime.formatIso(DateTime.makeUnsafe(expiresAt)),
+      token,
+    }
+  })
 
   const verifyChallengeToken: AnonSessionServiceShape["verifyChallengeToken"] = (token) =>
     Effect.gen(function* () {

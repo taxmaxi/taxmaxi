@@ -1,4 +1,4 @@
-import { Console, Effect, FileSystem, Layer, Path, Schema } from "effect"
+import { Console, DateTime, Effect, FileSystem, Layer, Path, Schema } from "effect"
 import * as Config from "effect/Config"
 import * as Option from "effect/Option"
 import { Command, Flag as Options } from "effect/unstable/cli"
@@ -34,16 +34,16 @@ const SOLANA_REFERENCE_DATA_DIR_ENV_VAR = "CRAWLER_SOLANA_REFERENCE_DATA_DIR"
 const CrawlSolanaBehaviorJsonSummary = Schema.Struct({
   stage: Schema.Literal("crawl_solana_behavior_completed"),
   behaviorSamplesPath: Schema.String,
-  samples: Schema.Number,
+  samples: Schema.Finite,
 })
 
 const CrawlSolanaJsonSummary = Schema.Struct({
   stage: Schema.Literal("crawl_solana_completed"),
   dexProjectRankingsPath: Schema.optional(Schema.String),
   replayedFromFile: Schema.optional(Schema.String),
-  entries: Schema.Number,
-  candidates: Schema.Number,
-  duneProtocolCandidateObservations: Schema.Number,
+  entries: Schema.Finite,
+  candidates: Schema.Finite,
+  duneProtocolCandidateObservations: Schema.Finite,
 })
 
 export type CrawlSolanaBehaviorOptions = {
@@ -174,10 +174,7 @@ const resolveDefaultOutputDirectory = Config.string(SOLANA_REFERENCE_DATA_DIR_EN
   Config.orElse(() => Config.succeed(DEFAULT_SOLANA_REFERENCE_DATA_DIR))
 )
 
-const nowIsoString = Effect.map(
-  Effect.clockWith((clock) => clock.currentTimeMillis),
-  (currentTimeMillis) => new Date(Number(currentTimeMillis)).toISOString()
-)
+const nowIsoString = DateTime.now.pipe(Effect.map(DateTime.formatIso))
 
 const validateSampleLimit = (sampleLimit: number) =>
   sampleLimit < 0
@@ -463,9 +460,7 @@ const readReplayRankingsFile = (
       )
     )
 
-    return yield* Schema.decodeUnknownEffect(Schema.fromJsonString(SolanaDuneRankingsFile))(
-      content
-    ).pipe(
+    return yield* Schema.decodeEffect(Schema.fromJsonString(SolanaDuneRankingsFile))(content).pipe(
       Effect.mapError(
         () =>
           new CrawlerCommandError({
@@ -502,7 +497,7 @@ const importDexProjectRankingsCandidatesWithLayer =
     importDexProjectRankingsCandidates(dexProjectRankings).pipe(
       Effect.provide(protocolCandidateRepositoryLayer),
       Effect.mapError((error) =>
-        error instanceof CrawlerCommandError
+        Schema.is(CrawlerCommandError)(error)
           ? error
           : new CrawlerCommandError({
               message: "Failed to import Solana Dune protocol candidates.",

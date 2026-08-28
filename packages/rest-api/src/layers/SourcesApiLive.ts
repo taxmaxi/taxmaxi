@@ -128,7 +128,7 @@ export const SourcesApiLive = HttpApiBuilder.group(TaxMaxiApi, "sources", (handl
 
       return yield* anonSessionService.verifySessionToken(token).pipe(
         Effect.map(Option.some),
-        Effect.catch(() => Effect.succeed(Option.none()))
+        Effect.orElseSucceed(() => Option.none())
       )
     })
 
@@ -201,7 +201,7 @@ export const SourcesApiLive = HttpApiBuilder.group(TaxMaxiApi, "sources", (handl
       readonly principalId: string
       readonly sourceId: string
     }) =>
-      Schema.decodeUnknownEffect(SourceId)(sourceId).pipe(
+      Schema.decodeEffect(SourceId)(sourceId).pipe(
         Effect.map((decodedSourceId) => ({ principalId, sourceId: decodedSourceId })),
         Effect.mapError(() => toBadRequestError("Invalid source identifier."))
       )
@@ -269,7 +269,7 @@ export const SourcesApiLive = HttpApiBuilder.group(TaxMaxiApi, "sources", (handl
       .handle("createSource", ({ payload }) =>
         Effect.gen(function* () {
           const request = yield* HttpServerRequest.HttpServerRequest
-          const currentUser = yield* optionalCurrentUser.resolve()
+          const currentUser = yield* optionalCurrentUser.resolve
           const anonPayerSession = yield* resolveOptionalAnonPayerSession
           const paymentSignatureHeader = Headers.get(request.headers, "payment-signature")
           const xPaymentHeader = Headers.get(request.headers, "x-payment")
@@ -433,7 +433,7 @@ export const SourcesApiLive = HttpApiBuilder.group(TaxMaxiApi, "sources", (handl
       .handle("calculateTaxForSource", ({ params: path, payload }) =>
         Effect.gen(function* () {
           const principal = yield* resolveCurrentUserPrincipal
-          const sourceId = yield* Schema.decodeUnknownEffect(SourceId)(path.sourceId).pipe(
+          const sourceId = yield* Schema.decodeEffect(SourceId)(path.sourceId).pipe(
             Effect.mapError(() => toBadRequestError("Invalid source identifier."))
           )
           const maybeSource = yield* syncEngineSourceRepository

@@ -105,7 +105,7 @@ export interface UserRepositoryService {
    *
    * @returns Effect containing array of platform admin users
    */
-  readonly findPlatformAdmins: () => Effect.Effect<readonly AuthUser[], PersistenceError>
+  readonly findPlatformAdmins: Effect.Effect<readonly AuthUser[], PersistenceError>
 
   /**
    * Check if a user is a platform administrator

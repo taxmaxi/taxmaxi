@@ -23,12 +23,15 @@ import { HttpApiBuilder } from "effect/unstable/httpapi"
 import { HttpEffect, HttpServerRequest, HttpServerResponse } from "effect/unstable/http"
 import * as Chunk from "effect/Chunk"
 import * as Config from "effect/Config"
+import * as Crypto from "effect/Crypto"
+import * as DateTime from "effect/DateTime"
 import * as Duration from "effect/Duration"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import * as Option from "effect/Option"
 import * as Redacted from "effect/Redacted"
 import * as Schema from "effect/Schema"
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto"
 import { TaxMaxiApi } from "../definitions/TaxMaxiApi.ts"
 import {
   CurrentUser,
@@ -127,6 +130,19 @@ const AUTH_PUBLIC_BASE_URL_DEFAULT = "http://localhost:4000"
 const FRONTEND_URL_DEFAULT = "http://localhost:3000"
 const VERIFY_EMAIL_REDIRECT = "/verify-email"
 const POST_AUTH_REDIRECT = "/home"
+
+const randomUuid = Crypto.Crypto.pipe(
+  Effect.flatMap((crypto) => crypto.randomUUIDv4),
+  Effect.provide(NodeCrypto.layer),
+  Effect.orDie
+)
+
+const randomBytes = (size: number): Effect.Effect<Uint8Array> =>
+  Crypto.Crypto.pipe(
+    Effect.flatMap((crypto) => crypto.randomBytes(size)),
+    Effect.provide(NodeCrypto.layer),
+    Effect.orDie
+  )
 
 const cookieOptionsForEnv = (environment: string, path = "/", domain?: string) => ({
   httpOnly: true,
@@ -281,9 +297,9 @@ const providerEmailFromIdentity = (identity: UserIdentity): Email | null => {
 }
 
 const getEnabledProviderSet = (authService: AuthServiceShape) =>
-  authService
-    .getEnabledProviders()
-    .pipe(Effect.map((providers) => new Set(Chunk.toReadonlyArray(providers))))
+  authService.getEnabledProviders.pipe(
+    Effect.map((providers) => new Set(Chunk.toReadonlyArray(providers)))
+  )
 
 const getLoginMethodAvailability = ({
   user,
@@ -404,7 +420,7 @@ const clearSessionCookie = (
     Effect.orDie(
       HttpServerResponse.setCookie(response, SESSION_COOKIE_NAME, "", {
         ...baseCookieOptions,
-        expires: new Date(0), // Expire in the past
+        expires: DateTime.toDateUtc(DateTime.makeUnsafe(0)), // Expire in the past
       })
     )
   )
@@ -418,7 +434,7 @@ const setVerificationCookie = ({
   expiresAt,
   baseCookieOptions,
 }: {
-  readonly requestId: typeof EmailVerificationRequestId.Type
+  readonly requestId: EmailVerificationRequestId
   readonly expiresAt: Date
   readonly baseCookieOptions: ReturnType<typeof cookieOptionsForEnv>
 }): Effect.Effect<void, never, HttpServerRequest.HttpServerRequest> =>
@@ -441,7 +457,7 @@ const clearVerificationCookie = (
     Effect.orDie(
       HttpServerResponse.setCookie(response, VERIFICATION_COOKIE_NAME, "", {
         ...baseCookieOptions,
-        expires: new Date(0),
+        expires: DateTime.toDateUtc(DateTime.makeUnsafe(0)),
       })
     )
   )
@@ -476,7 +492,7 @@ const clearOAuthRedirectCookie = ({
     Effect.orDie(
       HttpServerResponse.setCookie(response, OAUTH_REDIRECT_COOKIE_NAME, "", {
         ...baseCookieOptions,
-        expires: new Date(0),
+        expires: DateTime.toDateUtc(DateTime.makeUnsafe(0)),
         path: getOAuthLoginCallbackPath(provider),
       })
     )
@@ -484,12 +500,12 @@ const clearOAuthRedirectCookie = ({
 
 const decodeVerificationRequestId = (
   rawRequestId: string | undefined
-): Effect.Effect<typeof EmailVerificationRequestId.Type, EmailVerificationFlowMissingError> => {
+): Effect.Effect<EmailVerificationRequestId, EmailVerificationFlowMissingError> => {
   if (rawRequestId === undefined) {
     return Effect.fail(new EmailVerificationFlowMissingError({}))
   }
 
-  return Schema.decodeUnknownEffect(EmailVerificationRequestId)(rawRequestId).pipe(
+  return Schema.decodeEffect(EmailVerificationRequestId)(rawRequestId).pipe(
     Effect.mapError(() => new EmailVerificationFlowMissingError({}))
   )
 }
@@ -716,7 +732,7 @@ export const AuthApiLive = HttpApiBuilder.group(TaxMaxiApi, "auth", (handlers) =
     return handlers
       .handle("getProviders", () =>
         Effect.gen(function* () {
-          const enabledProviders = yield* authService.getEnabledProviders()
+          const enabledProviders = yield* authService.getEnabledProviders
           const providers = Chunk.toReadonlyArray(enabledProviders).map(getProviderMetadata)
           return ProvidersResponse.make({ providers })
         })
@@ -1282,7 +1298,7 @@ export const CoinbaseCompatApiLive = HttpApiBuilder.group(
           if (Option.isNone(maybeCoinbaseSource)) {
             yield* sourceRepo
               .create({
-                id: SourceId.make(crypto.randomUUID()),
+                id: SourceId.make(yield* randomUuid),
                 principalId: principal.id,
                 name: "Coinbase",
                 providerKey: "coinbase",
@@ -1699,8 +1715,9 @@ export const AuthSessionApiLive = HttpApiBuilder.group(TaxMaxiApi, "authSession"
 
           // Generate new session token
           // Note: In a real implementation, this would create a new session in SessionRepository
+          const sessionIdBytes = yield* randomBytes(32)
           const newSessionId = SessionId.make(
-            Array.from(crypto.getRandomValues(new Uint8Array(32)))
+            Array.from(sessionIdBytes)
               .map((b) => b.toString(16).padStart(2, "0"))
               .join("")
           )
@@ -1995,7 +2012,7 @@ export const SessionTokenValidatorLive: Layer.Layer<TokenValidator, never, AuthS
             }
 
             // Parse and validate SessionId format
-            const sessionId = yield* Schema.decodeUnknownEffect(SessionId)(tokenValue).pipe(
+            const sessionId = yield* Schema.decodeEffect(SessionId)(tokenValue).pipe(
               Effect.mapError(
                 () => new UnauthorizedError({ message: "Invalid session token format" })
               )
@@ -2044,7 +2061,7 @@ export const makeSessionTokenValidator = (
         return yield* new UnauthorizedError({ message: "Bearer token is required" })
       }
 
-      const sessionId = yield* Schema.decodeUnknownEffect(SessionId)(tokenValue).pipe(
+      const sessionId = yield* Schema.decodeEffect(SessionId)(tokenValue).pipe(
         Effect.mapError(() => new UnauthorizedError({ message: "Invalid session token format" }))
       )
 

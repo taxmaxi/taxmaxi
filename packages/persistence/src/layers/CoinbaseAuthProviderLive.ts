@@ -55,7 +55,7 @@ const COINBASE_SCOPES = ["wallet:user:email", "wallet:accounts:read", "wallet:tr
  */
 const CoinbaseTokenResponse = Schema.Struct({
   access_token: Schema.String,
-  expires_in: Schema.Number,
+  expires_in: Schema.Finite,
   token_type: Schema.String,
   scope: Schema.optional(Schema.String),
   refresh_token: Schema.optional(Schema.String),

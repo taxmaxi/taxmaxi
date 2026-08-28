@@ -73,7 +73,7 @@ export class LegalRuleReferenceResponse extends Schema.Class<LegalRuleReferenceR
   description: Schema.String,
   scope: Schema.String,
   outcomeCategory: Schema.String,
-  relevance: Schema.Number,
+  relevance: Schema.Finite,
   citations: Schema.Array(LegalCitationReferenceResponse),
 }) {}
 
@@ -87,10 +87,10 @@ export class TransactionTypeLegalReferencesRequest extends Schema.Class<Transact
   jurisdictionCode: Schema.optional(Schema.Trimmed.check(Schema.isNonEmpty())),
   ruleSetVersion: Schema.optional(Schema.Trimmed.check(Schema.isNonEmpty())),
   maxReferences: Schema.optional(
-    Schema.Number.check(Schema.isInt(), Schema.isGreaterThan(0), Schema.isLessThanOrEqualTo(20))
+    Schema.Finite.check(Schema.isInt(), Schema.isGreaterThan(0), Schema.isLessThanOrEqualTo(20))
   ),
   maxCitationsPerReference: Schema.optional(
-    Schema.Number.check(Schema.isInt(), Schema.isGreaterThan(0), Schema.isLessThanOrEqualTo(20))
+    Schema.Finite.check(Schema.isInt(), Schema.isGreaterThan(0), Schema.isLessThanOrEqualTo(20))
   ),
 }) {}
 
@@ -116,7 +116,7 @@ export class QuestionLegalReferencesRequest extends Schema.Class<QuestionLegalRe
   jurisdictionCode: Schema.optional(Schema.Trimmed.check(Schema.isNonEmpty())),
   ruleSetVersion: Schema.optional(Schema.Trimmed.check(Schema.isNonEmpty())),
   maxClauses: Schema.optional(
-    Schema.Number.check(Schema.isInt(), Schema.isGreaterThan(0), Schema.isLessThanOrEqualTo(20))
+    Schema.Finite.check(Schema.isInt(), Schema.isGreaterThan(0), Schema.isLessThanOrEqualTo(20))
   ),
 }) {}
 
@@ -132,7 +132,7 @@ export class ScoredLegalClauseReferenceResponse extends Schema.Class<ScoredLegal
   randnummer: Schema.String,
   summary: NullableString,
   clauseText: Schema.String,
-  score: Schema.Number,
+  score: Schema.Finite,
   source: LegalCitationSource,
 }) {}
 

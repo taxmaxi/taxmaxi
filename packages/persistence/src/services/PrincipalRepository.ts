@@ -30,7 +30,7 @@ export interface PrincipalRepositoryService {
   /**
    * Create an anonymous wallet ownership principal.
    */
-  readonly createAnonymousWalletPrincipal: () => Effect.Effect<Principal, PersistenceError>
+  readonly createAnonymousWalletPrincipal: Effect.Effect<Principal, PersistenceError>
 }
 
 /**

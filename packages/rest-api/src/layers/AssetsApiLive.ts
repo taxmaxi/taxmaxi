@@ -89,12 +89,12 @@ const AssetExceptionValueEur = Schema.String.check(
 
 const AssetExceptionCursorPayload = Schema.Struct({
   version: Schema.Literal(2),
-  blockedReports: Schema.Number,
-  affectedPrincipals: Schema.Number,
-  affectedTransactions: Schema.Number,
-  affectedSources: Schema.Number,
-  affectedCalculations: Schema.Number,
-  existingGeneratedReportSnapshots: Schema.Number,
+  blockedReports: Schema.Finite,
+  affectedPrincipals: Schema.Finite,
+  affectedTransactions: Schema.Finite,
+  affectedSources: Schema.Finite,
+  affectedCalculations: Schema.Finite,
+  existingGeneratedReportSnapshots: Schema.Finite,
   affectedTransactionValueEur: Schema.NullOr(AssetExceptionValueEur),
   severity: Schema.Literals(["critical", "high", "medium", "low"]),
   oldestAt: Schema.DateTimeUtcFromString,
@@ -121,7 +121,7 @@ const decodeCursor = <S extends Schema.ConstraintDecoder<unknown, never>>(
       catch: () => new AssetBadRequestError({ message: "Invalid asset cursor." }),
     })
 
-    return yield* Schema.decodeUnknownEffect(schema)(decoded).pipe(
+    return yield* Schema.decodeEffect(schema)(decoded).pipe(
       Effect.mapError(() => new AssetBadRequestError({ message: "Invalid asset cursor." }))
     )
   })

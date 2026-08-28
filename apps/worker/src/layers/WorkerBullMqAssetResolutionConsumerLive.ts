@@ -255,13 +255,7 @@ const acquireLiveWorker = (
 
     return {
       close: Effect.tryPromise({
-        try: async () => {
-          try {
-            await worker.close()
-          } finally {
-            connection.disconnect()
-          }
-        },
+        try: () => worker.close().finally(() => connection.disconnect()),
         catch: (cause) =>
           new WorkerBullMqAssetResolutionConsumerError({
             operation: "workerBullMqAssetResolutionConsumer.close",
@@ -300,13 +294,7 @@ const acquireLiveQueue = (
     return {
       add: (name, payload, options) => queue.add(name, payload, options),
       close: Effect.tryPromise({
-        try: async () => {
-          try {
-            await queue.close()
-          } finally {
-            connection.disconnect()
-          }
-        },
+        try: () => queue.close().finally(() => connection.disconnect()),
         catch: (cause) =>
           new WorkerBullMqAssetResolutionConsumerError({
             operation: "workerBullMqAssetResolutionConsumer.closeQueue",
@@ -331,46 +319,47 @@ export const makeWorkerBullMqAssetResolutionConsumerLive = (
       const acquireWorker = options.acquireWorker ?? acquireLiveWorker
       const acquireQueue = options.acquireQueue ?? acquireLiveQueue
 
-      const processor: WorkerBullMqAssetResolutionProcessor = async (job) => {
-        const result = await runPromise(processJob({ job, config }).pipe(Effect.result))
+      const processor: WorkerBullMqAssetResolutionProcessor = (job) =>
+        runPromise(processJob({ job, config }).pipe(Effect.result)).then((result) => {
+          if (Result.isSuccess(result)) {
+            return result.success
+          }
 
-        if (Result.isSuccess(result)) {
-          return result.success
-        }
+          const error = result.failure
 
-        const error = result.failure
+          if (error._tag === "WorkerBullMqMalformedAssetResolutionPayloadError") {
+            return runPromise(
+              Effect.logError(
+                {
+                  queueName: ASSET_RESOLUTION_QUEUE_NAME,
+                  queueJobId: error.queueJobId,
+                  workerId: config.workerId,
+                  cause: error.cause,
+                },
+                "asset-resolution-worker:malformed-payload"
+              )
+            ).then(() => {
+              throw new UnrecoverableError("Malformed asset resolution queue payload")
+            })
+          }
 
-        if (error._tag === "WorkerBullMqMalformedAssetResolutionPayloadError") {
-          await runPromise(
+          // The executor already released the job with a retry delay or failed
+          // it at the attempt cap, so the database owns the retry. Surface the
+          // failure to BullMQ for observability without scheduling a queue retry.
+          return runPromise(
             Effect.logError(
               {
                 queueName: ASSET_RESOLUTION_QUEUE_NAME,
-                queueJobId: error.queueJobId,
+                queueJobId: job.id ?? null,
                 workerId: config.workerId,
-                cause: error.cause,
+                error,
               },
-              "asset-resolution-worker:malformed-payload"
+              "asset-resolution-worker:job-failed"
             )
-          )
-          throw new UnrecoverableError("Malformed asset resolution queue payload")
-        }
-
-        // The executor already released the job with a retry delay or failed
-        // it at the attempt cap, so the database owns the retry. Surface the
-        // failure to BullMQ for observability without scheduling a queue retry.
-        await runPromise(
-          Effect.logError(
-            {
-              queueName: ASSET_RESOLUTION_QUEUE_NAME,
-              queueJobId: job.id ?? null,
-              workerId: config.workerId,
-              error,
-            },
-            "asset-resolution-worker:job-failed"
-          )
-        )
-        throw new UnrecoverableError(`Asset resolution job execution failed: ${error._tag}`)
-      }
+          ).then(() => {
+            throw new UnrecoverableError(`Asset resolution job execution failed: ${error._tag}`)
+          })
+        })
 
       const worker = yield* Effect.acquireRelease(acquireWorker(config, processor), (toClose) =>
         toClose.close.pipe(
@@ -395,8 +384,11 @@ export const makeWorkerBullMqAssetResolutionConsumerLive = (
       )
 
       const dispatchPending = Effect.gen(function* () {
-        const now = yield* DateTime.now.pipe(Effect.map(DateTime.toDateUtc))
-        const staleBefore = new Date(now.getTime() - config.staleAfterMs)
+        const nowDateTime = yield* DateTime.now
+        const now = DateTime.toDateUtc(nowDateTime)
+        const staleBefore = DateTime.toDateUtc(
+          DateTime.subtractDuration(nowDateTime, config.staleAfterMs)
+        )
         const jobs = yield* assetResolutionJobRepository.listDispatchableResolutionJobs({
           now,
           staleBefore,

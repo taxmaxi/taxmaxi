@@ -192,11 +192,10 @@ const makeAuthHandler = () => {
   })
 
   const SessionTokenGeneratorTestLive = Layer.succeed(SessionTokenGenerator, {
-    generate: () =>
-      Effect.sync(() => {
-        sessionCounter += 1
-        return SessionId.make(`sess_${String(sessionCounter).padStart(40, "0")}`)
-      }),
+    generate: Effect.sync(() => {
+      sessionCounter += 1
+      return SessionId.make(`sess_${String(sessionCounter).padStart(40, "0")}`)
+    }),
   })
 
   const EmailVerificationDeliveryServiceTestLive = Layer.succeed(EmailVerificationDeliveryService, {

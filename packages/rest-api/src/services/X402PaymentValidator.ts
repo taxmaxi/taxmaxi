@@ -53,7 +53,7 @@ export interface X402VerifiedPayment {
   /**
    * Settle the verified payment after the protected work succeeds.
    */
-  readonly settle: () => Effect.Effect<X402PaymentSettlement, X402PaymentSettlementError>
+  readonly settle: Effect.Effect<X402PaymentSettlement, X402PaymentSettlementError>
 }
 
 /**

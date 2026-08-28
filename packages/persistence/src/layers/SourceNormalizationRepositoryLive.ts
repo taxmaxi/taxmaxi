@@ -88,7 +88,7 @@ const wrapPreservingCreditExhausted =
     effect: Effect.Effect<A, E, R>
   ): Effect.Effect<A, SyncEngineStorageError | SourceSyncCreditExhaustedError, R> =>
     Effect.mapError(effect, (error) =>
-      error instanceof SourceSyncCreditExhaustedError
+      Schema.is(SourceSyncCreditExhaustedError)(error)
         ? error
         : toSyncEngineStorageError({ error, operation })
     )
@@ -135,10 +135,10 @@ const decodeProviderTransferMetadata = (metadata: unknown) =>
     Effect.map((decoded) => ({
       purpose: decoded.role === "fee" ? ("fee" as const) : ("principal" as const),
     })),
-    Effect.catch(() => Effect.succeed({ purpose: "principal" as const }))
+    Effect.orElseSucceed(() => ({ purpose: "principal" as const }))
   )
 
-const NumericStringSchema = Schema.Union([Schema.String, Schema.Number])
+const NumericStringSchema = Schema.Union([Schema.String, Schema.Finite])
 
 const decodeNumericString = ({
   value,

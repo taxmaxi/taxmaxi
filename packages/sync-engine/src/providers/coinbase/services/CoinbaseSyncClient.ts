@@ -27,7 +27,7 @@ export class CoinbaseSyncProviderError extends Schema.TaggedError<CoinbaseSyncPr
   "CoinbaseSyncProviderError",
   {
     message: Schema.String,
-    statusCode: Schema.NullOr(Schema.Number),
+    statusCode: Schema.NullOr(Schema.Finite),
     retryable: Schema.Boolean,
   }
 ) {}
@@ -138,12 +138,12 @@ export interface CoinbaseSyncClientShape {
     params: FetchCoinbaseTransactionsPageParams
   ) => Effect.Effect<CoinbasePageResult<CoinbaseTransactionPageRecord>, CoinbaseSyncClientError>
 
-  readonly fetchFiatCurrencies: () => Effect.Effect<
+  readonly fetchFiatCurrencies: Effect.Effect<
     ReadonlyArray<CoinbaseFiatCurrencyRecord>,
     CoinbaseSyncClientError
   >
 
-  readonly fetchCryptoCurrencies: () => Effect.Effect<
+  readonly fetchCryptoCurrencies: Effect.Effect<
     ReadonlyArray<CoinbaseCryptoCurrencyRecord>,
     CoinbaseSyncClientError
   >

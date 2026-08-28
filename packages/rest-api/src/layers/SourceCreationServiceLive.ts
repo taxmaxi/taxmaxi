@@ -15,6 +15,9 @@ import {
 } from "@my/persistence/services"
 import { SourceSyncService } from "@my/sync-engine/services"
 import { createHash } from "node:crypto"
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto"
+import * as Crypto from "effect/Crypto"
+import * as DateTime from "effect/DateTime"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import { Option } from "effect"
@@ -48,6 +51,19 @@ const CLI_CLAIM_TOKEN_BYTES = 32
 const CLI_CLAIM_TTL_MILLIS = 30 * 24 * 60 * 60 * 1000
 const DEFAULT_CLAIM_JURISDICTION = "germany"
 
+const randomUuid = Crypto.Crypto.pipe(
+  Effect.flatMap((crypto) => crypto.randomUUIDv4),
+  Effect.provide(NodeCrypto.layer),
+  Effect.orDie
+)
+
+const randomBytes = (size: number): Effect.Effect<Uint8Array> =>
+  Crypto.Crypto.pipe(
+    Effect.flatMap((crypto) => crypto.randomBytes(size)),
+    Effect.provide(NodeCrypto.layer),
+    Effect.orDie
+  )
+
 const toBadRequestError = (message: string) => new SourceCreationBadRequestError({ message })
 const toInternalError = (message: string) => new SourceCreationInternalError({ message })
 const toPaymentRequiredError = ({
@@ -66,12 +82,6 @@ const toCreditRequiredError = (error: NoUsableCreditsError) =>
     availableCredits: error.availableCredits,
   })
 
-const generateClaimToken = (): string => {
-  const bytes = new Uint8Array(CLI_CLAIM_TOKEN_BYTES)
-  crypto.getRandomValues(bytes)
-  return Buffer.from(bytes).toString("base64url")
-}
-
 const hashReceiptValue = (receiptValue: string): string =>
   createHash("sha256").update("x402_receipt").update("\0").update(receiptValue).digest("hex")
 
@@ -86,6 +96,9 @@ export const SourceCreationServiceLive = Layer.effect(
     const x402PaymentValidator = yield* X402PaymentValidator
     const principalResolutionService = yield* PrincipalResolutionService
     const walletNameResolutionService = yield* WalletNameResolutionService
+    const generateClaimToken = randomBytes(CLI_CLAIM_TOKEN_BYTES).pipe(
+      Effect.map((bytes) => Buffer.from(bytes).toString("base64url"))
+    )
 
     const resolveCreatePrincipal = (currentUser: Option.Option<User>) =>
       Effect.gen(function* () {
@@ -96,9 +109,9 @@ export const SourceCreationServiceLive = Layer.effect(
           return { principal, isAnonymous: false } as const
         }
 
-        const principal = yield* principalRepository
-          .createAnonymousWalletPrincipal()
-          .pipe(Effect.mapError(() => toInternalError("Failed to create anonymous principal.")))
+        const principal = yield* principalRepository.createAnonymousWalletPrincipal.pipe(
+          Effect.mapError(() => toInternalError("Failed to create anonymous principal."))
+        )
 
         return { principal, isAnonymous: true } as const
       })
@@ -275,7 +288,7 @@ export const SourceCreationServiceLive = Layer.effect(
       readonly pepper: Redacted.Redacted<string>
     }) =>
       Effect.gen(function* () {
-        const claimToken = generateClaimToken()
+        const claimToken = yield* generateClaimToken
         const expiresAt = Timestamp.addMillis(Timestamp.now(), CLI_CLAIM_TTL_MILLIS).toDate()
 
         yield* principalClaimRepository
@@ -373,7 +386,8 @@ export const SourceCreationServiceLive = Layer.effect(
     }) =>
       Effect.gen(function* () {
         const { parsedAddress, walletName } = yield* resolveWalletInput(payload.walletAddress)
-        const year = payload.year ?? new Date().getUTCFullYear()
+        const currentYear = DateTime.toPartsUtc(yield* DateTime.now).year
+        const year = payload.year ?? currentYear
         const jurisdiction = payload.jurisdiction ?? DEFAULT_CLAIM_JURISDICTION
         const maybeExistingAnonymousSource: Option.Option<AnonymousSourceEntitlement> =
           Option.isNone(currentUser)
@@ -457,7 +471,7 @@ export const SourceCreationServiceLive = Layer.effect(
           ? Option.some(yield* loadClaimTokenPepper)
           : Option.none<Redacted.Redacted<string>>()
 
-        const requestId = crypto.randomUUID()
+        const requestId = yield* randomUuid
 
         const syncJob = yield* startSync({
           principalId: principal.id,
@@ -467,7 +481,7 @@ export const SourceCreationServiceLive = Layer.effect(
         const maybeSettlement =
           Option.isSome(maybeVerifiedPayment) && isAnonymous
             ? Option.some(
-                yield* maybeVerifiedPayment.value.settle().pipe(
+                yield* maybeVerifiedPayment.value.settle.pipe(
                   Effect.mapError((error) =>
                     toPaymentRequiredError({
                       message: error.message,

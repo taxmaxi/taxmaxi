@@ -39,7 +39,7 @@ export class AnonSource extends Schema.Class<AnonSource>("AnonSource")({
   requestId: Schema.String,
   chainType: Schema.Literals(["evm", "solana", "bitcoin"]),
   walletAddress: Schema.String,
-  year: Schema.Number,
+  year: Schema.Finite,
   jurisdiction: Schema.String,
 }) {}
 

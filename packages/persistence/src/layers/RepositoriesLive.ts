@@ -160,6 +160,12 @@ const WebCryptoAdapter = Layer.succeed(CryptoRandomAdapterTag, {
     }),
 })
 
+const runWebCrypto = <A>(operation: string, evaluate: () => Promise<A>): Effect.Effect<A> =>
+  Effect.tryPromise({
+    try: evaluate,
+    catch: (cause) => new PersistenceError({ operation, cause }),
+  }).pipe(Effect.orDie)
+
 /**
  * SimpleBcryptAdapter - Bcrypt adapter using the native Web Crypto API
  *
@@ -171,16 +177,16 @@ const WebCryptoAdapter = Layer.succeed(CryptoRandomAdapterTag, {
  */
 const SimpleBcryptAdapter = Layer.succeed(BcryptAdapterTag, {
   hash: (password: string, rounds: number): Effect.Effect<string> =>
-    Effect.tryPromise({
-      try: async () => {
-        const encoder = new TextEncoder()
-        const data = encoder.encode(password)
-        const salt = crypto.getRandomValues(new Uint8Array(16))
-        const keyMaterial = await crypto.subtle.importKey("raw", data, "PBKDF2", false, [
-          "deriveBits",
-        ])
-        const iterations = Math.pow(2, rounds)
-        const derivedBits = await crypto.subtle.deriveBits(
+    Effect.gen(function* () {
+      const encoder = new TextEncoder()
+      const data = encoder.encode(password)
+      const salt = crypto.getRandomValues(new Uint8Array(16))
+      const keyMaterial = yield* runWebCrypto("passwordHasher.hash.importKey", () =>
+        crypto.subtle.importKey("raw", data, "PBKDF2", false, ["deriveBits"])
+      )
+      const iterations = Math.pow(2, rounds)
+      const derivedBits = yield* runWebCrypto("passwordHasher.hash.deriveBits", () =>
+        crypto.subtle.deriveBits(
           {
             name: "PBKDF2",
             salt,
@@ -190,41 +196,40 @@ const SimpleBcryptAdapter = Layer.succeed(BcryptAdapterTag, {
           keyMaterial,
           256
         )
-        const hashArray = new Uint8Array(derivedBits)
-        const saltHex = Array.from(salt)
-          .map((b) => b.toString(16).padStart(2, "0"))
-          .join("")
-        const hashHex = Array.from(hashArray)
-          .map((b) => b.toString(16).padStart(2, "0"))
-          .join("")
-        return `pbkdf2$${rounds}$${saltHex}$${hashHex}`
-      },
-      catch: (cause) => new PersistenceError({ operation: "passwordHasher.hash", cause }),
-    }).pipe(Effect.orDie),
+      )
+      const hashArray = new Uint8Array(derivedBits)
+      const saltHex = Array.from(salt)
+        .map((b) => b.toString(16).padStart(2, "0"))
+        .join("")
+      const hashHex = Array.from(hashArray)
+        .map((b) => b.toString(16).padStart(2, "0"))
+        .join("")
+      return `pbkdf2$${rounds}$${saltHex}$${hashHex}`
+    }),
   compare: (password: string, hash: string): Effect.Effect<boolean> =>
-    Effect.tryPromise({
-      try: async () => {
-        const isPbkdf2HashParts = (
-          value: ReadonlyArray<string>
-        ): value is readonly [scheme: string, rounds: string, saltHex: string, hashHex: string] =>
-          value.length === 4 && value[0] === "pbkdf2"
+    Effect.gen(function* () {
+      const isPbkdf2HashParts = (
+        value: ReadonlyArray<string>
+      ): value is readonly [scheme: string, rounds: string, saltHex: string, hashHex: string] =>
+        value.length === 4 && value[0] === "pbkdf2"
 
-        const parts = hash.split("$")
-        if (!isPbkdf2HashParts(parts)) {
-          return false
-        }
-        const [, roundsStr, saltHex, storedHashHex] = parts
-        const rounds = Number.parseInt(roundsStr, 10)
+      const parts = hash.split("$")
+      if (!isPbkdf2HashParts(parts)) {
+        return false
+      }
+      const [, roundsStr, saltHex, storedHashHex] = parts
+      const rounds = Number.parseInt(roundsStr, 10)
 
-        const saltBytes = saltHex.match(/.{1,2}/g)?.map((byte) => Number.parseInt(byte, 16)) ?? []
-        const salt = new Uint8Array(saltBytes)
-        const encoder = new TextEncoder()
-        const data = encoder.encode(password)
-        const keyMaterial = await crypto.subtle.importKey("raw", data, "PBKDF2", false, [
-          "deriveBits",
-        ])
-        const iterations = Math.pow(2, rounds)
-        const derivedBits = await crypto.subtle.deriveBits(
+      const saltBytes = saltHex.match(/.{1,2}/g)?.map((byte) => Number.parseInt(byte, 16)) ?? []
+      const salt = new Uint8Array(saltBytes)
+      const encoder = new TextEncoder()
+      const data = encoder.encode(password)
+      const keyMaterial = yield* runWebCrypto("passwordHasher.compare.importKey", () =>
+        crypto.subtle.importKey("raw", data, "PBKDF2", false, ["deriveBits"])
+      )
+      const iterations = Math.pow(2, rounds)
+      const derivedBits = yield* runWebCrypto("passwordHasher.compare.deriveBits", () =>
+        crypto.subtle.deriveBits(
           {
             name: "PBKDF2",
             salt,
@@ -234,15 +239,14 @@ const SimpleBcryptAdapter = Layer.succeed(BcryptAdapterTag, {
           keyMaterial,
           256
         )
-        const hashArray = new Uint8Array(derivedBits)
-        const computedHashHex = Array.from(hashArray)
-          .map((b) => b.toString(16).padStart(2, "0"))
-          .join("")
+      )
+      const hashArray = new Uint8Array(derivedBits)
+      const computedHashHex = Array.from(hashArray)
+        .map((b) => b.toString(16).padStart(2, "0"))
+        .join("")
 
-        return computedHashHex === storedHashHex
-      },
-      catch: (cause) => new PersistenceError({ operation: "passwordHasher.compare", cause }),
-    }).pipe(Effect.orDie),
+      return computedHashHex === storedHashHex
+    }),
 })
 
 // =============================================================================

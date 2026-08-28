@@ -25,9 +25,9 @@ const HELIUS_RETRYABLE_STATUS_CODES = new Set([408, 429, 500, 502, 503, 504])
 
 const UnknownProviderErrorSchema = Schema.Struct({
   message: Schema.optional(Schema.String),
-  status: Schema.optional(Schema.Number),
-  statusCode: Schema.optional(Schema.Number),
-  code: Schema.optional(Schema.Union([Schema.Number, Schema.String])),
+  status: Schema.optional(Schema.Finite),
+  statusCode: Schema.optional(Schema.Finite),
+  code: Schema.optional(Schema.Union([Schema.Finite, Schema.String])),
 })
 
 type UnknownProviderError = Schema.Schema.Type<typeof UnknownProviderErrorSchema>

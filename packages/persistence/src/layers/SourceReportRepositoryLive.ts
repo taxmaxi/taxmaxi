@@ -17,6 +17,7 @@ import {
   type SourceRef,
 } from "@my/core/source"
 import * as BigDecimal from "effect/BigDecimal"
+import * as DateTime from "effect/DateTime"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import * as Option from "effect/Option"
@@ -98,9 +99,9 @@ const emptyCurrency = (current: string | null, next: string | null): string | nu
 }
 
 const holdingPeriodEnd = (acquiredAt: Date): Date => {
-  const end = new Date(acquiredAt.getTime())
-  end.setUTCFullYear(end.getUTCFullYear() + 1)
-  return end
+  const acquiredDateTime = DateTime.makeUnsafe(acquiredAt)
+  const { year } = DateTime.toPartsUtc(acquiredDateTime)
+  return DateTime.toDateUtc(DateTime.setParts(acquiredDateTime, { year: year + 1 }))
 }
 
 const taxableTreatmentForDates = ({
@@ -240,12 +241,12 @@ const parseCursor = (cursor: string | null) =>
       return yield* new SourceReportInvalidCursorError({ cursor })
     }
 
-    const timestamp = new Date(timestampPart)
-    if (Number.isNaN(timestamp.getTime()) || !isUuid(idPart)) {
+    const timestamp = DateTime.make(timestampPart)
+    if (Option.isNone(timestamp) || !isUuid(idPart)) {
       return yield* new SourceReportInvalidCursorError({ cursor })
     }
 
-    return Option.some({ timestamp, id: idPart })
+    return Option.some({ timestamp: DateTime.toDateUtc(timestamp.value), id: idPart })
   })
 
 const decodeDecimal = ({
@@ -837,7 +838,10 @@ const make = Effect.gen(function* () {
         rows: items,
         limit: params.limit,
         cursorFor: (row) =>
-          makeCursor({ timestamp: new Date(row.timestamp), id: row.transactionId }),
+          makeCursor({
+            timestamp: DateTime.toDateUtc(DateTime.makeUnsafe(row.timestamp)),
+            id: row.transactionId,
+          }),
       })
     })
 
@@ -964,7 +968,11 @@ const make = Effect.gen(function* () {
       return makePage({
         rows: items,
         limit: params.limit,
-        cursorFor: (row) => makeCursor({ timestamp: new Date(row.timestamp), id: row.legId }),
+        cursorFor: (row) =>
+          makeCursor({
+            timestamp: DateTime.toDateUtc(DateTime.makeUnsafe(row.timestamp)),
+            id: row.legId,
+          }),
       })
     })
 
@@ -1100,7 +1108,11 @@ const make = Effect.gen(function* () {
       return makePage({
         rows: items,
         limit: params.limit,
-        cursorFor: (row) => makeCursor({ timestamp: new Date(row.acquiredAt), id: row.lotId }),
+        cursorFor: (row) =>
+          makeCursor({
+            timestamp: DateTime.toDateUtc(DateTime.makeUnsafe(row.acquiredAt)),
+            id: row.lotId,
+          }),
       })
     })
 

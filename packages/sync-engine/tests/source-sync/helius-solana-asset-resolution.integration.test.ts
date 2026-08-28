@@ -272,7 +272,7 @@ describe("HeliusSolanaAssetResolutionServiceLive", () => {
     const result = await runAssetService(
       Effect.flatMap(HeliusSolanaAssetResolutionService, (service) =>
         Effect.gen(function* () {
-          yield* service.ensureDefaultMappings()
+          yield* service.ensureDefaultMappings
 
           return yield* service.resolveAsset({
             kind: "spl",
@@ -294,8 +294,9 @@ describe("HeliusSolanaAssetResolutionServiceLive", () => {
 
   it("rejects a wrapped SOL mapping that points to native SOL", async () => {
     await runAssetService(
-      Effect.flatMap(HeliusSolanaAssetResolutionService, (service) =>
-        service.ensureDefaultMappings()
+      Effect.flatMap(
+        HeliusSolanaAssetResolutionService,
+        (service) => service.ensureDefaultMappings
       ),
       () => Effect.die("DAS should not be called while seeding default mappings")
     )
@@ -347,8 +348,9 @@ describe("HeliusSolanaAssetResolutionServiceLive", () => {
 
   it("rejects an approved mapping whose stored decimals no longer match", async () => {
     await runAssetService(
-      Effect.flatMap(HeliusSolanaAssetResolutionService, (service) =>
-        service.ensureDefaultMappings()
+      Effect.flatMap(
+        HeliusSolanaAssetResolutionService,
+        (service) => service.ensureDefaultMappings
       ),
       () => Effect.die("DAS should not be called while seeding default mappings")
     )
@@ -457,7 +459,7 @@ describe("HeliusSolanaAssetResolutionServiceLive", () => {
     const result = await runAssetService(
       Effect.flatMap(HeliusSolanaAssetResolutionService, (service) =>
         Effect.gen(function* () {
-          yield* service.ensureDefaultMappings()
+          yield* service.ensureDefaultMappings
 
           return yield* service.resolveAsset({
             kind: "spl",

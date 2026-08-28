@@ -398,7 +398,7 @@ const make = Effect.gen(function* () {
       } satisfies ProviderAssetMappingDraft
     })
 
-  const ensureDefaultMappings: CoinbaseReferenceMappingServiceShape["ensureDefaultMappings"] = () =>
+  const ensureDefaultMappings: CoinbaseReferenceMappingServiceShape["ensureDefaultMappings"] =
     Effect.gen(function* () {
       yield* providerReferenceRepository.ensureTransactionTypeMappings({
         providerKey: COINBASE_PROVIDER,

@@ -167,12 +167,12 @@ export interface HeliusSolanaSourceSyncProviderShape {
     params: FetchProviderRawBatchParams
   ) => Effect.Effect<FetchProviderRawBatchResult, SourceSyncProviderError>
 
-  readonly refreshReferenceData: () => Effect.Effect<
+  readonly refreshReferenceData: Effect.Effect<
     HeliusSolanaReferenceDataRefreshResult,
     SyncEngineStorageError
   >
 
-  readonly loadNormalizationLookups: () => Effect.Effect<
+  readonly loadNormalizationLookups: Effect.Effect<
     HeliusSolanaNormalizationLookups,
     SyncEngineStorageError
   >

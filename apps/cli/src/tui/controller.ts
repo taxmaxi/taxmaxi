@@ -123,7 +123,7 @@ export const loadSessionState = (): Promise<SessionState> =>
         return { _tag: "missing" } as const
       }
 
-      const session = yield* readSession().pipe(Effect.option)
+      const session = yield* readSession.pipe(Effect.option)
       if (Option.isNone(session)) {
         return { _tag: "invalid", message: "The local session file could not be read." } as const
       }
@@ -299,7 +299,7 @@ export const fetchProtocolCandidates = (
   )
 
 export const clearLocalSession = (): Promise<void> =>
-  runtime.runPromise(deleteSession().pipe(Effect.catch(() => Effect.void)))
+  runtime.runPromise(deleteSession.pipe(Effect.ignore))
 
 /**
  * Loads a protocol candidate detail view and the transaction types needed for mapping review.
@@ -348,7 +348,7 @@ export const startCoinbaseConnect = (options?: {
       if (options?.signal?.aborted === true) {
         return yield* Effect.interrupt
       }
-      const browserOpened = openBrowser(started.redirectUrl)
+      const browserOpened = yield* openBrowser(started.redirectUrl)
       return {
         _tag: "started",
         apiUrl,
@@ -409,8 +409,8 @@ export const logout = (session: CliSession): Promise<LogoutResult> =>
       yield* logoutSession({
         apiUrl: session.apiUrl,
         sessionToken: session.sessionToken,
-      }).pipe(Effect.catch(() => Effect.void))
-      yield* deleteSession()
+      }).pipe(Effect.ignore)
+      yield* deleteSession
       return { _tag: "loggedOut" } as const
     }).pipe(
       Effect.catch((error) => Effect.succeed({ _tag: "error", message: error.message } as const))

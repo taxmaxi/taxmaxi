@@ -68,7 +68,7 @@ const decodePayload = <S extends Schema.ConstraintDecoder<unknown, never>>(
       catch: () => invalidCursorError(cursorName),
     })
 
-    return yield* Schema.decodeUnknownEffect(schema)(decoded).pipe(
+    return yield* Schema.decodeEffect(schema)(decoded).pipe(
       Effect.mapError(() => invalidCursorError(cursorName))
     )
   })
@@ -245,13 +245,11 @@ export const AdminProtocolReviewApiLive = HttpApiBuilder.group(
         )
         .handle("listTaxMaxiTransactionTypes", () =>
           Effect.gen(function* () {
-            const transactionTypes = yield* protocolCandidateRepository
-              .listTransactionTypes()
-              .pipe(
-                Effect.mapError(() =>
-                  toInternalServerError("Failed to list TaxMaxi transaction types.")
-                )
+            const transactionTypes = yield* protocolCandidateRepository.listTransactionTypes.pipe(
+              Effect.mapError(() =>
+                toInternalServerError("Failed to list TaxMaxi transaction types.")
               )
+            )
 
             return TaxMaxiTransactionTypeListResponse.make({
               transactionTypes: transactionTypes.map(toTaxMaxiTransactionTypeResponse),

@@ -5,6 +5,8 @@
  */
 
 import * as Effect from "effect/Effect"
+import * as DateTime from "effect/DateTime"
+import * as Option from "effect/Option"
 import * as Schema from "effect/Schema"
 import {
   ProtocolCandidateRepository,
@@ -14,9 +16,9 @@ import {
 } from "../../../services/index.ts"
 
 export const SolanaDuneQueryConfig = Schema.Struct({
-  queryId: Schema.Number,
+  queryId: Schema.Finite,
   queryName: Schema.String,
-  version: Schema.Number,
+  version: Schema.Finite,
   kind: Schema.Literals(["dex-project-priority", "dex-project-sample-transactions"]),
 })
 export type SolanaDuneQueryConfig = typeof SolanaDuneQueryConfig.Type
@@ -34,15 +36,15 @@ export const SolanaDuneRankingEntry = Schema.Struct({
   canonicalProgramIds: Schema.Array(Schema.String),
   /** Observed window formatted as `YYYY-MM-DD to YYYY-MM-DD`. */
   period: Schema.String,
-  invocationCount: Schema.Number,
-  uniqueSignerCount: Schema.NullOr(Schema.Number),
-  transactionCount: Schema.NullOr(Schema.Number),
+  invocationCount: Schema.Finite,
+  uniqueSignerCount: Schema.NullOr(Schema.Finite),
+  transactionCount: Schema.NullOr(Schema.Finite),
   /** Total traded USD volume in the observed window when the query reports it. */
-  volumeUsd: Schema.NullOr(Schema.Number),
+  volumeUsd: Schema.NullOr(Schema.Finite),
   sampleSignatures: Schema.Array(Schema.String),
-  queryId: Schema.Number,
+  queryId: Schema.Finite,
   queryName: Schema.String,
-  queryVersion: Schema.Number,
+  queryVersion: Schema.Finite,
   retrievedAt: Schema.String,
 })
 export type SolanaDuneRankingEntry = typeof SolanaDuneRankingEntry.Type
@@ -56,7 +58,7 @@ export type SolanaDuneRankingEntry = typeof SolanaDuneRankingEntry.Type
  * a replay reproduces the same window-halving decisions.
  */
 export const SolanaDuneRecordedExecution = Schema.Struct({
-  queryId: Schema.Number,
+  queryId: Schema.Finite,
   kind: Schema.Literals(["dex-project-priority", "dex-project-sample-transactions"]),
   parameters: Schema.Record(Schema.String, Schema.String),
   status: Schema.Literals(["completed", "timed_out"]),
@@ -76,8 +78,8 @@ export const SolanaDuneRankingsFile = Schema.Struct({
   endDate: Schema.String,
   /** Crawl tuning used to produce this file; replays reuse it for identical windowing. */
   parameters: Schema.Struct({
-    samplesPerProject: Schema.Number,
-    windowDays: Schema.Number,
+    samplesPerProject: Schema.Finite,
+    windowDays: Schema.Finite,
   }),
   queries: Schema.Array(SolanaDuneQueryConfig),
   entries: Schema.Array(SolanaDuneRankingEntry),
@@ -100,27 +102,36 @@ const parseUtcDate = (
   value: string,
   field: string
 ): Effect.Effect<Date, SolanaDuneRankingsFileImportError> => {
-  const date = new Date(`${value}T00:00:00.000Z`)
-  return Number.isNaN(date.getTime()) || date.toISOString().slice(0, 10) !== value
-    ? Effect.fail(
+  return Option.match(DateTime.make(`${value}T00:00:00.000Z`), {
+    onNone: () =>
+      Effect.fail(
         new SolanaDuneRankingsFileImportError({
           message: `Invalid ${field}: expected YYYY-MM-DD`,
         })
-      )
-    : Effect.succeed(date)
+      ),
+    onSome: (dateTime) =>
+      DateTime.formatIsoDateUtc(dateTime) === value
+        ? Effect.succeed(DateTime.toDateUtc(dateTime))
+        : Effect.fail(
+            new SolanaDuneRankingsFileImportError({
+              message: `Invalid ${field}: expected YYYY-MM-DD`,
+            })
+          ),
+  })
 }
 
 const parseRetrievedAt = (
   value: string
 ): Effect.Effect<Date, SolanaDuneRankingsFileImportError> => {
-  const date = new Date(value)
-  return Number.isNaN(date.getTime())
-    ? Effect.fail(
+  return Option.match(DateTime.make(value), {
+    onNone: () =>
+      Effect.fail(
         new SolanaDuneRankingsFileImportError({
           message: "Invalid retrievedAt: expected ISO date string",
         })
-      )
-    : Effect.succeed(date)
+      ),
+    onSome: (dateTime) => Effect.succeed(DateTime.toDateUtc(dateTime)),
+  })
 }
 
 const parseFilePeriod = (

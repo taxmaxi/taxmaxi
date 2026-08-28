@@ -133,18 +133,18 @@ export interface SourceProviderModuleShape {
     params: FetchProviderRawBatchParams
   ) => Effect.Effect<FetchProviderRawBatchResult, SourceSyncProviderError>
 
-  readonly refreshReferenceData: () => Effect.Effect<
+  readonly refreshReferenceData: Effect.Effect<
     SourceProviderReferenceDataRefreshResult,
     SourceProviderModuleError
   >
 
   /** Apply checked-in mappings without contacting the remote provider. */
-  readonly refreshDefaultMappings: () => Effect.Effect<
+  readonly refreshDefaultMappings: Effect.Effect<
     SourceProviderDefaultMappingsRefreshResult,
     SourceProviderModuleError
   >
 
-  readonly makeRawRecordNormalizer: () => Effect.Effect<
+  readonly makeRawRecordNormalizer: Effect.Effect<
     SourceProviderRawRecordNormalizer,
     SourceProviderModuleError
   >

@@ -25,6 +25,7 @@
 
 import * as Config from "effect/Config"
 import * as Data from "effect/Data"
+import * as DateTime from "effect/DateTime"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import * as Option from "effect/Option"
@@ -116,6 +117,12 @@ class EnsRuntimeLoadError extends Data.TaggedError("EnsRuntimeLoadError")<{
   readonly cause: unknown
 }> {}
 
+const loadEnsModule = <A>(load: () => Promise<A>): Effect.Effect<A, EnsRuntimeLoadError> =>
+  Effect.tryPromise({
+    try: load,
+    catch: (cause) => new EnsRuntimeLoadError({ cause }),
+  })
+
 const make = Effect.gen(function* () {
   const cache = yield* WalletNameCacheRepository
   const httpClient = yield* HttpClient.HttpClient
@@ -128,22 +135,22 @@ const make = Effect.gen(function* () {
   // static import pulls viem and every chain definition into each module
   // that imports the API graph, which slows every test worker down.
   const ensRuntime = yield* Effect.cached(
-    Effect.tryPromise({
-      try: async () => {
-        const [viem, chains, ens] = await Promise.all([
-          import("viem"),
-          import("viem/chains"),
-          import("viem/ens"),
-        ])
+    Effect.gen(function* () {
+      const [viem, chains, ens] = yield* Effect.all(
+        [
+          loadEnsModule(() => import("viem")),
+          loadEnsModule(() => import("viem/chains")),
+          loadEnsModule(() => import("viem/ens")),
+        ],
+        { concurrency: "unbounded" }
+      )
 
-        const client = viem.createPublicClient({
-          chain: chains.mainnet,
-          transport: viem.http(ethereumRpcUrl),
-        })
+      const client = viem.createPublicClient({
+        chain: chains.mainnet,
+        transport: viem.http(ethereumRpcUrl),
+      })
 
-        return { client, normalize: ens.normalize }
-      },
-      catch: (cause) => new EnsRuntimeLoadError({ cause }),
+      return { client, normalize: ens.normalize }
     })
   )
 
@@ -269,12 +276,14 @@ const make = Effect.gen(function* () {
         )
       )
 
-      const now = new Date()
+      const now = yield* DateTime.nowAsDate
       yield* cache.upsert({
         namespace,
         name,
         resolvedAddress,
-        expiresAt: new Date(now.getTime() + CACHE_TTL_MILLIS),
+        expiresAt: DateTime.toDateUtc(
+          DateTime.addDuration(DateTime.makeUnsafe(now), CACHE_TTL_MILLIS)
+        ),
       })
       yield* Effect.logInfo({ namespace, name, resolvedAddress }, "Wallet name resolved")
 

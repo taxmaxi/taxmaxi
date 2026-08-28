@@ -9,6 +9,7 @@
 
 import * as DateTime from "effect/DateTime"
 import * as Effect from "effect/Effect"
+import * as Option from "effect/Option"
 import * as Order from "effect/Order"
 import * as Schema from "effect/Schema"
 import * as SchemaIssue from "effect/SchemaIssue"
@@ -21,7 +22,7 @@ import { LocalDate } from "./LocalDate.ts"
  * Encoded as ISO 8601 datetime string.
  */
 export class Timestamp extends Schema.Class<Timestamp>("Timestamp")({
-  epochMillis: Schema.Number.pipe(Schema.check(Schema.isInt())),
+  epochMillis: Schema.Finite.pipe(Schema.check(Schema.isInt())),
 }) {
   /**
    * Get the underlying DateTime.Utc instance
@@ -34,14 +35,14 @@ export class Timestamp extends Schema.Class<Timestamp>("Timestamp")({
    * Convert to JavaScript Date
    */
   toDate(): Date {
-    return new Date(this.epochMillis)
+    return DateTime.toDateUtc(this.toDateTime())
   }
 
   /**
    * Convert to ISO 8601 string
    */
   toISOString(): string {
-    return this.toDate().toISOString()
+    return DateTime.formatIso(this.toDateTime())
   }
 
   /**
@@ -55,11 +56,11 @@ export class Timestamp extends Schema.Class<Timestamp>("Timestamp")({
    * Extract the LocalDate portion (UTC date)
    */
   toLocalDate(): LocalDate {
-    const date = this.toDate()
+    const parts = DateTime.toPartsUtc(this.toDateTime())
     return LocalDate.make({
-      year: date.getUTCFullYear(),
-      month: date.getUTCMonth() + 1,
-      day: date.getUTCDate(),
+      year: parts.year,
+      month: parts.month,
+      day: parts.day,
     })
   }
 }
@@ -88,26 +89,26 @@ export const fromDate = (date: Date): Timestamp => {
  * Returns an Effect that may fail with SchemaError
  */
 export const fromString = (dateString: string): Effect.Effect<Timestamp, Schema.SchemaError> => {
-  const date = new Date(dateString)
-  if (isNaN(date.getTime())) {
-    return Effect.fail(
-      new Schema.SchemaError(
-        new SchemaIssue.InvalidValue(
-          { message: `Invalid ISO 8601 datetime: "${dateString}"` },
-          dateString,
-          { reportInput: true }
+  return Option.match(DateTime.make(dateString), {
+    onNone: () =>
+      Effect.fail(
+        new Schema.SchemaError(
+          new SchemaIssue.InvalidValue(
+            { message: `Invalid ISO 8601 datetime: "${dateString}"` },
+            dateString,
+            { reportInput: true }
+          )
         )
-      )
-    )
-  }
-  return Effect.succeed(Timestamp.make({ epochMillis: date.getTime() }))
+      ),
+    onSome: (dateTime) => Effect.succeed(fromDateTime(dateTime)),
+  })
 }
 
 /**
  * Get the current timestamp (now)
  */
 export const now = (): Timestamp => {
-  return Timestamp.make({ epochMillis: Date.now() })
+  return fromDateTime(DateTime.nowUnsafe())
 }
 
 /**

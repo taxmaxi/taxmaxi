@@ -213,7 +213,7 @@ const makeProviderLayer = ({
           findRepresentationById: () => Effect.succeed(Option.none()),
           findNativeRepresentationForBlockchain: () => Effect.succeed(Option.none()),
           findRepresentationByBlockchainAndAddress: () => Effect.succeed(Option.none()),
-          listBlockchains: () => Effect.succeed([{ id: "solana-blockchain-id", name: "solana" }]),
+          listBlockchains: Effect.succeed([{ id: "solana-blockchain-id", name: "solana" }]),
           upsertEconomicAssetRepresentation: () =>
             Effect.die("upsertEconomicAssetRepresentation should not be called"),
           findAssetResolutionCandidatesByDisplay: () => Effect.succeed([]),
@@ -232,11 +232,10 @@ const makeProviderLayer = ({
       Layer.succeed(
         HeliusSolanaAssetResolutionService,
         HeliusSolanaAssetResolutionService.of({
-          ensureDefaultMappings: () =>
-            Effect.succeed({
-              providerAssetCatalogCount: 0,
-              defaultProviderAssetMappingCount: 0,
-            }),
+          ensureDefaultMappings: Effect.succeed({
+            providerAssetCatalogCount: 0,
+            defaultProviderAssetMappingCount: 0,
+          }),
           resolveAsset:
             resolveNativeAsset ??
             (() =>
@@ -424,7 +423,7 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
     const result = await Effect.runPromise(
       Effect.gen(function* () {
         const provider = yield* HeliusSolanaSourceSyncProvider
-        const lookups = yield* provider.loadNormalizationLookups()
+        const lookups = yield* provider.loadNormalizationLookups
         const normalized = yield* provider.prepareNormalization({
           source: makeSource(),
           sourceRecord: makeRawRecord({
@@ -593,7 +592,7 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
           return yield* Effect.die("Expected two cached raw records")
         }
 
-        const lookups = yield* provider.loadNormalizationLookups()
+        const lookups = yield* provider.loadNormalizationLookups
         const firstPrepared = yield* provider.prepareNormalization({
           source: makeSource(),
           sourceRecord: makeRawRecord({ rawRecordPayload: firstRawRecord.payload }),
@@ -1096,7 +1095,7 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
     const result = await runProvider(
       Effect.gen(function* () {
         const provider = yield* HeliusSolanaSourceSyncProvider
-        const lookups = yield* provider.loadNormalizationLookups()
+        const lookups = yield* provider.loadNormalizationLookups
         return yield* provider.prepareNormalization({
           source: makeSource(),
           sourceRecord: makeRawRecord({ fullTransaction: payload }),
@@ -1163,7 +1162,7 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
     const { prepared, legs } = await runProvider(
       Effect.gen(function* () {
         const provider = yield* HeliusSolanaSourceSyncProvider
-        const lookups = yield* provider.loadNormalizationLookups()
+        const lookups = yield* provider.loadNormalizationLookups
         const prepared = yield* provider.prepareNormalization({
           source: makeSource(),
           sourceRecord: makeRawRecord({ fullTransaction: payload }),
@@ -1285,7 +1284,7 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
     const { prepared, legs } = await runProvider(
       Effect.gen(function* () {
         const provider = yield* HeliusSolanaSourceSyncProvider
-        const lookups = yield* provider.loadNormalizationLookups()
+        const lookups = yield* provider.loadNormalizationLookups
         const prepared = yield* provider.prepareNormalization({
           source: makeSource(),
           sourceRecord: makeRawRecord({ fullTransaction: payload }),
@@ -1388,7 +1387,7 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
     const result = await runProvider(
       Effect.gen(function* () {
         const provider = yield* HeliusSolanaSourceSyncProvider
-        const lookups = yield* provider.loadNormalizationLookups()
+        const lookups = yield* provider.loadNormalizationLookups
         return yield* provider.prepareNormalization({
           source: makeSource(),
           sourceRecord: makeRawRecord({ fullTransaction: payload, walletTransferEvidence }),
@@ -1478,7 +1477,7 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
     const result = await runProvider(
       Effect.gen(function* () {
         const provider = yield* HeliusSolanaSourceSyncProvider
-        const lookups = yield* provider.loadNormalizationLookups()
+        const lookups = yield* provider.loadNormalizationLookups
         return yield* provider.prepareNormalization({
           source: makeSource(),
           sourceRecord: makeRawRecord({ fullTransaction: payload, walletTransferEvidence }),
@@ -1556,7 +1555,7 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
     const result = await runProvider(
       Effect.gen(function* () {
         const provider = yield* HeliusSolanaSourceSyncProvider
-        const lookups = yield* provider.loadNormalizationLookups()
+        const lookups = yield* provider.loadNormalizationLookups
         return yield* provider.prepareNormalization({
           source: makeSource(),
           sourceRecord: makeRawRecord({ fullTransaction: payload, walletTransferEvidence }),
@@ -1637,7 +1636,7 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
     const result = await runProvider(
       Effect.gen(function* () {
         const provider = yield* HeliusSolanaSourceSyncProvider
-        const lookups = yield* provider.loadNormalizationLookups()
+        const lookups = yield* provider.loadNormalizationLookups
         return yield* provider.prepareNormalization({
           source: makeSource(),
           sourceRecord: makeRawRecord({ fullTransaction: payload, walletTransferEvidence }),
@@ -1714,7 +1713,7 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
     const result = await runProvider(
       Effect.gen(function* () {
         const provider = yield* HeliusSolanaSourceSyncProvider
-        const lookups = yield* provider.loadNormalizationLookups()
+        const lookups = yield* provider.loadNormalizationLookups
         return yield* provider.prepareNormalization({
           source: makeSource(),
           sourceRecord: makeRawRecord({ fullTransaction: payload, walletTransferEvidence }),
@@ -1817,7 +1816,7 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
     const result = await runProvider(
       Effect.gen(function* () {
         const provider = yield* HeliusSolanaSourceSyncProvider
-        const lookups = yield* provider.loadNormalizationLookups()
+        const lookups = yield* provider.loadNormalizationLookups
         return yield* provider.prepareNormalization({
           source: makeSource(),
           sourceRecord: makeRawRecord({ fullTransaction: payload, walletTransferEvidence }),
@@ -1861,7 +1860,7 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
     const ambiguousResult = await runProvider(
       Effect.gen(function* () {
         const provider = yield* HeliusSolanaSourceSyncProvider
-        const lookups = yield* provider.loadNormalizationLookups()
+        const lookups = yield* provider.loadNormalizationLookups
         return yield* provider.prepareNormalization({
           source: makeSource(),
           sourceRecord: makeRawRecord({
@@ -1948,7 +1947,7 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
     const result = await runProvider(
       Effect.gen(function* () {
         const provider = yield* HeliusSolanaSourceSyncProvider
-        const lookups = yield* provider.loadNormalizationLookups()
+        const lookups = yield* provider.loadNormalizationLookups
         return yield* provider.prepareNormalization({
           source: makeSource(),
           sourceRecord: makeRawRecord({ fullTransaction: payload, walletTransferEvidence }),
@@ -2014,7 +2013,7 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
     const result = await runProvider(
       Effect.gen(function* () {
         const provider = yield* HeliusSolanaSourceSyncProvider
-        const lookups = yield* provider.loadNormalizationLookups()
+        const lookups = yield* provider.loadNormalizationLookups
         return yield* provider.prepareNormalization({
           source: makeSource(),
           sourceRecord: makeRawRecord({ fullTransaction: payload }),
@@ -2061,7 +2060,7 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
     const result = await runProvider(
       Effect.gen(function* () {
         const provider = yield* HeliusSolanaSourceSyncProvider
-        const lookups = yield* provider.loadNormalizationLookups()
+        const lookups = yield* provider.loadNormalizationLookups
         return yield* provider.prepareNormalization({
           source: makeSource(),
           sourceRecord: makeRawRecord({ fullTransaction: payload }),
@@ -2104,7 +2103,7 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
     const result = await runProvider(
       Effect.gen(function* () {
         const provider = yield* HeliusSolanaSourceSyncProvider
-        const lookups = yield* provider.loadNormalizationLookups()
+        const lookups = yield* provider.loadNormalizationLookups
         return yield* provider.prepareNormalization({
           source: makeSource(),
           sourceRecord: makeRawRecord({ fullTransaction: payload }),
@@ -2151,7 +2150,7 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
     const result = await runProvider(
       Effect.gen(function* () {
         const provider = yield* HeliusSolanaSourceSyncProvider
-        const lookups = yield* provider.loadNormalizationLookups()
+        const lookups = yield* provider.loadNormalizationLookups
         return yield* provider.prepareNormalization({
           source: makeSource(),
           sourceRecord: makeRawRecord({ fullTransaction: payload }),
@@ -2218,7 +2217,7 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
     const result = await runProvider(
       Effect.gen(function* () {
         const provider = yield* HeliusSolanaSourceSyncProvider
-        const lookups = yield* provider.loadNormalizationLookups()
+        const lookups = yield* provider.loadNormalizationLookups
         return yield* provider.prepareNormalization({
           source: makeSource(),
           sourceRecord: makeRawRecord({ fullTransaction: payload, walletTransferEvidence }),
@@ -2337,7 +2336,7 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
     const result = await runProvider(
       Effect.gen(function* () {
         const provider = yield* HeliusSolanaSourceSyncProvider
-        const lookups = yield* provider.loadNormalizationLookups()
+        const lookups = yield* provider.loadNormalizationLookups
         return yield* provider.prepareNormalization({
           source: makeSource(),
           sourceRecord: makeRawRecord({ fullTransaction: payload }),
@@ -2439,7 +2438,7 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
     const result = await runProvider(
       Effect.gen(function* () {
         const provider = yield* HeliusSolanaSourceSyncProvider
-        const lookups = yield* provider.loadNormalizationLookups()
+        const lookups = yield* provider.loadNormalizationLookups
         return yield* provider.prepareNormalization({
           source: makeSource(),
           sourceRecord: makeRawRecord({ fullTransaction: payload, walletTransferEvidence }),
@@ -2572,7 +2571,7 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
     const result = await runProvider(
       Effect.gen(function* () {
         const provider = yield* HeliusSolanaSourceSyncProvider
-        const lookups = yield* provider.loadNormalizationLookups()
+        const lookups = yield* provider.loadNormalizationLookups
         return yield* provider.prepareNormalization({
           source: makeSource(),
           sourceRecord: makeRawRecord({ fullTransaction: payload, walletTransferEvidence }),
@@ -2697,7 +2696,7 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
     const result = await runProvider(
       Effect.gen(function* () {
         const provider = yield* HeliusSolanaSourceSyncProvider
-        const lookups = yield* provider.loadNormalizationLookups()
+        const lookups = yield* provider.loadNormalizationLookups
         return yield* provider.prepareNormalization({
           source: makeSource(),
           sourceRecord: makeRawRecord({ fullTransaction: payload }),
@@ -2858,7 +2857,7 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
     const result = await runProvider(
       Effect.gen(function* () {
         const provider = yield* HeliusSolanaSourceSyncProvider
-        const lookups = yield* provider.loadNormalizationLookups()
+        const lookups = yield* provider.loadNormalizationLookups
         return yield* provider.prepareNormalization({
           source: makeSource(),
           sourceRecord: makeRawRecord({ fullTransaction: payload, walletTransferEvidence }),
@@ -3027,7 +3026,7 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
     const result = await runProvider(
       Effect.gen(function* () {
         const provider = yield* HeliusSolanaSourceSyncProvider
-        const lookups = yield* provider.loadNormalizationLookups()
+        const lookups = yield* provider.loadNormalizationLookups
         return yield* provider.prepareNormalization({
           source: makeSource(),
           sourceRecord: makeRawRecord({ fullTransaction: payload }),
@@ -3128,7 +3127,7 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
       const result = await runProvider(
         Effect.gen(function* () {
           const provider = yield* HeliusSolanaSourceSyncProvider
-          const lookups = yield* provider.loadNormalizationLookups()
+          const lookups = yield* provider.loadNormalizationLookups
           return yield* provider
             .prepareNormalization({
               source: makeSource(),
@@ -3212,7 +3211,7 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
     const result = await runProvider(
       Effect.gen(function* () {
         const provider = yield* HeliusSolanaSourceSyncProvider
-        const lookups = yield* provider.loadNormalizationLookups()
+        const lookups = yield* provider.loadNormalizationLookups
         return yield* provider.prepareNormalization({
           source: makeSource(),
           sourceRecord: makeRawRecord({ fullTransaction: payload, walletTransferEvidence }),
@@ -3296,7 +3295,7 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
     const result = await runProvider(
       Effect.gen(function* () {
         const provider = yield* HeliusSolanaSourceSyncProvider
-        const lookups = yield* provider.loadNormalizationLookups()
+        const lookups = yield* provider.loadNormalizationLookups
         return yield* provider.prepareNormalization({
           source: makeSource(),
           sourceRecord: makeRawRecord({ fullTransaction: payload, walletTransferEvidence }),
@@ -3384,7 +3383,7 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
     const result = await runProvider(
       Effect.gen(function* () {
         const provider = yield* HeliusSolanaSourceSyncProvider
-        const lookups = yield* provider.loadNormalizationLookups()
+        const lookups = yield* provider.loadNormalizationLookups
         return yield* provider.prepareNormalization({
           source: makeSource(),
           sourceRecord: makeRawRecord({ fullTransaction: payload }),
@@ -3499,7 +3498,7 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
     const result = await runProvider(
       Effect.gen(function* () {
         const provider = yield* HeliusSolanaSourceSyncProvider
-        const lookups = yield* provider.loadNormalizationLookups()
+        const lookups = yield* provider.loadNormalizationLookups
         return yield* provider.prepareNormalization({
           source: makeSource(),
           sourceRecord: makeRawRecord({ fullTransaction: payload, walletTransferEvidence }),
@@ -3646,7 +3645,7 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
     const result = await runProvider(
       Effect.gen(function* () {
         const provider = yield* HeliusSolanaSourceSyncProvider
-        const lookups = yield* provider.loadNormalizationLookups()
+        const lookups = yield* provider.loadNormalizationLookups
         return yield* provider.prepareNormalization({
           source: makeSource(),
           sourceRecord: makeRawRecord({ fullTransaction: payload, walletTransferEvidence }),
@@ -3777,7 +3776,7 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
     const result = await runProvider(
       Effect.gen(function* () {
         const provider = yield* HeliusSolanaSourceSyncProvider
-        const lookups = yield* provider.loadNormalizationLookups()
+        const lookups = yield* provider.loadNormalizationLookups
         return yield* provider.prepareNormalization({
           source: makeSource(),
           sourceRecord: makeRawRecord({ fullTransaction: payload, walletTransferEvidence }),
@@ -3883,7 +3882,7 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
     const result = await runProvider(
       Effect.gen(function* () {
         const provider = yield* HeliusSolanaSourceSyncProvider
-        const lookups = yield* provider.loadNormalizationLookups()
+        const lookups = yield* provider.loadNormalizationLookups
         return yield* provider.prepareNormalization({
           source: makeSource(),
           sourceRecord: makeRawRecord({ fullTransaction: payload }),
@@ -3960,7 +3959,7 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
     const result = await runProvider(
       Effect.gen(function* () {
         const provider = yield* HeliusSolanaSourceSyncProvider
-        const lookups = yield* provider.loadNormalizationLookups()
+        const lookups = yield* provider.loadNormalizationLookups
         return yield* provider.prepareNormalization({
           source: makeSource(),
           sourceRecord: makeRawRecord({ fullTransaction: payload, walletTransferEvidence }),
@@ -4031,7 +4030,7 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
     const result = await runProvider(
       Effect.gen(function* () {
         const provider = yield* HeliusSolanaSourceSyncProvider
-        const lookups = yield* provider.loadNormalizationLookups()
+        const lookups = yield* provider.loadNormalizationLookups
         return yield* provider.prepareNormalization({
           source: makeSource(),
           sourceRecord: makeRawRecord({ fullTransaction: payload }),
@@ -4100,7 +4099,7 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
     const result = await runProvider(
       Effect.gen(function* () {
         const provider = yield* HeliusSolanaSourceSyncProvider
-        const lookups = yield* provider.loadNormalizationLookups()
+        const lookups = yield* provider.loadNormalizationLookups
         return yield* provider.prepareNormalization({
           source: makeSource(),
           sourceRecord: makeRawRecord({ fullTransaction: payload }),
@@ -4168,7 +4167,7 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
     const result = await Effect.runPromise(
       Effect.gen(function* () {
         const provider = yield* HeliusSolanaSourceSyncProvider
-        const lookups = yield* provider.loadNormalizationLookups()
+        const lookups = yield* provider.loadNormalizationLookups
         return yield* provider.prepareNormalization({
           source: makeSource(),
           sourceRecord: makeRawRecord({ fullTransaction: payload }),
@@ -4300,7 +4299,7 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
     const prepared = await runProvider(
       Effect.gen(function* () {
         const provider = yield* HeliusSolanaSourceSyncProvider
-        const lookups = yield* provider.loadNormalizationLookups()
+        const lookups = yield* provider.loadNormalizationLookups
         return yield* provider.prepareNormalization({
           source: makeSource(),
           sourceRecord: makeRawRecord({ fullTransaction: payload, walletTransferEvidence }),
@@ -4382,7 +4381,7 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
     const result = await runProvider(
       Effect.gen(function* () {
         const provider = yield* HeliusSolanaSourceSyncProvider
-        const lookups = yield* provider.loadNormalizationLookups()
+        const lookups = yield* provider.loadNormalizationLookups
         return yield* provider.prepareNormalization({
           source: makeSource(),
           sourceRecord: makeRawRecord({ fullTransaction: payload }),
@@ -4458,7 +4457,7 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
     const result = await runProvider(
       Effect.gen(function* () {
         const provider = yield* HeliusSolanaSourceSyncProvider
-        const lookups = yield* provider.loadNormalizationLookups()
+        const lookups = yield* provider.loadNormalizationLookups
         return yield* provider.prepareNormalization({
           source: makeSource(),
           sourceRecord: makeRawRecord({ fullTransaction: payload }),
@@ -4532,7 +4531,7 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
     const result = await runProvider(
       Effect.gen(function* () {
         const provider = yield* HeliusSolanaSourceSyncProvider
-        const lookups = yield* provider.loadNormalizationLookups()
+        const lookups = yield* provider.loadNormalizationLookups
         return yield* provider.prepareNormalization({
           source: makeSource(),
           sourceRecord: makeRawRecord({ fullTransaction: payload }),
@@ -4611,7 +4610,7 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
     const result = await runProvider(
       Effect.gen(function* () {
         const provider = yield* HeliusSolanaSourceSyncProvider
-        const lookups = yield* provider.loadNormalizationLookups()
+        const lookups = yield* provider.loadNormalizationLookups
         return yield* provider.prepareNormalization({
           source: makeSource(),
           sourceRecord: makeRawRecord({ fullTransaction: payload, walletTransferEvidence }),
@@ -4710,7 +4709,7 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
     const result = await runProvider(
       Effect.gen(function* () {
         const provider = yield* HeliusSolanaSourceSyncProvider
-        const lookups = yield* provider.loadNormalizationLookups()
+        const lookups = yield* provider.loadNormalizationLookups
         return yield* provider.prepareNormalization({
           source: makeSource(),
           sourceRecord: makeRawRecord({ fullTransaction: payload }),
@@ -4819,7 +4818,7 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
     const result = await runProvider(
       Effect.gen(function* () {
         const provider = yield* HeliusSolanaSourceSyncProvider
-        const lookups = yield* provider.loadNormalizationLookups()
+        const lookups = yield* provider.loadNormalizationLookups
         return yield* provider.prepareNormalization({
           source: makeSource(),
           sourceRecord: makeRawRecord({ fullTransaction: payload }),
@@ -4875,7 +4874,7 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
       const result = await runProvider(
         Effect.gen(function* () {
           const provider = yield* HeliusSolanaSourceSyncProvider
-          const lookups = yield* provider.loadNormalizationLookups()
+          const lookups = yield* provider.loadNormalizationLookups
           return yield* provider
             .prepareNormalization({
               source: makeSource(),
@@ -4920,7 +4919,7 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
       const result = await runProvider(
         Effect.gen(function* () {
           const provider = yield* HeliusSolanaSourceSyncProvider
-          const lookups = yield* provider.loadNormalizationLookups()
+          const lookups = yield* provider.loadNormalizationLookups
           return yield* provider
             .prepareNormalization({
               source: makeSource(),
@@ -4996,7 +4995,7 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
     const result = await runProvider(
       Effect.gen(function* () {
         const provider = yield* HeliusSolanaSourceSyncProvider
-        const lookups = yield* provider.loadNormalizationLookups()
+        const lookups = yield* provider.loadNormalizationLookups
         return yield* provider
           .prepareNormalization({
             source: makeSource(),
@@ -5055,7 +5054,7 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
     const result = await runProvider(
       Effect.gen(function* () {
         const provider = yield* HeliusSolanaSourceSyncProvider
-        const lookups = yield* provider.loadNormalizationLookups()
+        const lookups = yield* provider.loadNormalizationLookups
         return yield* provider.prepareNormalization({
           source: makeSource(),
           sourceRecord: makeRawRecord({ fullTransaction: payload, walletTransferEvidence }),
@@ -5097,7 +5096,7 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
     const result = await runProvider(
       Effect.gen(function* () {
         const provider = yield* HeliusSolanaSourceSyncProvider
-        const lookups = yield* provider.loadNormalizationLookups()
+        const lookups = yield* provider.loadNormalizationLookups
         return yield* provider
           .prepareNormalization({
             source: makeSource(),
@@ -5124,7 +5123,7 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
     const result = await runProvider(
       Effect.gen(function* () {
         const provider = yield* HeliusSolanaSourceSyncProvider
-        const lookups = yield* provider.loadNormalizationLookups()
+        const lookups = yield* provider.loadNormalizationLookups
         return yield* provider
           .prepareNormalization({
             source: makeSource(),

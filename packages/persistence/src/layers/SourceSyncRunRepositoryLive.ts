@@ -7,6 +7,7 @@
 import { and, eq, sql } from "drizzle-orm"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
+import * as Schema from "effect/Schema"
 import * as Option from "effect/Option"
 import { schema } from "../schema/index.ts"
 import { drizzle } from "./PgClientLive.ts"
@@ -511,7 +512,7 @@ const make = Effect.gen(function* () {
       )
       .pipe(
         Effect.mapError((error) =>
-          error instanceof SourceSyncRunRecordNotFoundError
+          Schema.is(SourceSyncRunRecordNotFoundError)(error)
             ? error
             : toSyncEngineStorageError({
                 error,

@@ -14,7 +14,7 @@ import type {
 
 export class SolanaDuneError extends Schema.TaggedError<SolanaDuneError>()("SolanaDuneError", {
   message: Schema.String,
-  queryId: Schema.optional(Schema.Number),
+  queryId: Schema.optional(Schema.Finite),
 }) {}
 
 export interface ExecuteSolanaDuneQueryParams {

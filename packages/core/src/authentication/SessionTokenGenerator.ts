@@ -35,7 +35,7 @@ export class SessionTokenConfig extends Schema.Class<SessionTokenConfig>("Sessio
    * Number of random bytes to generate for the token
    * Minimum 32 bytes ensures sufficient entropy for security
    */
-  byteLength: Schema.Number.pipe(
+  byteLength: Schema.Finite.pipe(
     Schema.check(Schema.isInt()),
     Schema.check(Schema.isGreaterThanOrEqualTo(32)),
     Schema.annotate({
@@ -94,7 +94,7 @@ export interface SessionTokenGeneratorService {
    *
    * @returns Effect containing a new SessionId (never fails)
    */
-  readonly generate: () => Effect.Effect<SessionId>
+  readonly generate: Effect.Effect<SessionId>
 }
 
 /**
@@ -104,7 +104,7 @@ export interface SessionTokenGeneratorService {
  * ```typescript
  * const program = Effect.gen(function* () {
  *   const generator = yield* SessionTokenGenerator
- *   const sessionId = yield* generator.generate()
+ *   const sessionId = yield* generator.generate
  *   // sessionId is a branded SessionId type
  * })
  *
@@ -180,12 +180,11 @@ const makeSessionTokenGenerator = Effect.gen(function* () {
   const crypto = yield* CryptoRandomAdapterTag
 
   const service: SessionTokenGeneratorService = {
-    generate: () =>
-      Effect.gen(function* () {
-        const bytes = yield* crypto.getRandomBytes(config.byteLength)
-        const token = encodeBase64Url(bytes)
-        return SessionId.make(token)
-      }),
+    generate: Effect.gen(function* () {
+      const bytes = yield* crypto.getRandomBytes(config.byteLength)
+      const token = encodeBase64Url(bytes)
+      return SessionId.make(token)
+    }),
   }
   return service
 })

@@ -550,48 +550,47 @@ const make = Effect.gen(function* () {
       })
     })
 
-  const ensureDefaultMappings = (): Effect.Effect<
+  const ensureDefaultMappings: Effect.Effect<
     HeliusSolanaAssetReferenceDataRefreshResult,
     SyncEngineStorageError
-  > =>
-    Effect.gen(function* () {
-      const providerAssets = yield* Effect.forEach(defaultAssetMappings, (mapping) =>
-        ensureProviderAssetRecord(providerAssetCatalogEntryForDefault(mapping))
+  > = Effect.gen(function* () {
+    const providerAssets = yield* Effect.forEach(defaultAssetMappings, (mapping) =>
+      ensureProviderAssetRecord(providerAssetCatalogEntryForDefault(mapping))
+    )
+
+    const mappingDrafts = yield* Effect.forEach(providerAssets, (providerAsset) => {
+      const mapping = defaultAssetMappings.find(
+        (candidate) =>
+          candidate.mintAddress === providerAsset.providerAssetId ||
+          candidate.naturalKey === providerAsset.naturalKey
       )
 
-      const mappingDrafts = yield* Effect.forEach(providerAssets, (providerAsset) => {
-        const mapping = defaultAssetMappings.find(
-          (candidate) =>
-            candidate.mintAddress === providerAsset.providerAssetId ||
-            candidate.naturalKey === providerAsset.naturalKey
-        )
-
-        return mapping === undefined
-          ? Effect.fail(
-              toStorageError({
-                operation: "heliusSolanaAssetResolutionService.ensureDefaultMappings",
-                cause: {
-                  providerAssetId: providerAsset.providerAssetId,
-                  naturalKey: providerAsset.naturalKey,
-                  message: "Default Helius Solana provider asset was not recognized.",
-                },
-              })
-            )
-          : defaultProviderAssetMappingDraft({
-              mapping,
-              providerAssetRowId: providerAsset.id,
+      return mapping === undefined
+        ? Effect.fail(
+            toStorageError({
+              operation: "heliusSolanaAssetResolutionService.ensureDefaultMappings",
+              cause: {
+                providerAssetId: providerAsset.providerAssetId,
+                naturalKey: providerAsset.naturalKey,
+                message: "Default Helius Solana provider asset was not recognized.",
+              },
             })
-      })
-
-      yield* providerAssetRepository.seedProviderAssetMappingsIfMissing({
-        mappings: mappingDrafts,
-      })
-
-      return {
-        providerAssetCatalogCount: defaultAssetMappings.length,
-        defaultProviderAssetMappingCount: defaultAssetMappings.length,
-      } satisfies HeliusSolanaAssetReferenceDataRefreshResult
+          )
+        : defaultProviderAssetMappingDraft({
+            mapping,
+            providerAssetRowId: providerAsset.id,
+          })
     })
+
+    yield* providerAssetRepository.seedProviderAssetMappingsIfMissing({
+      mappings: mappingDrafts,
+    })
+
+    return {
+      providerAssetCatalogCount: defaultAssetMappings.length,
+      defaultProviderAssetMappingCount: defaultAssetMappings.length,
+    } satisfies HeliusSolanaAssetReferenceDataRefreshResult
+  })
 
   const providerAssetEntryFromDasAsset = (asset: DecodedDasAsset): ProviderAssetCatalogEntry => ({
     providerAssetId: asset.mintAddress,

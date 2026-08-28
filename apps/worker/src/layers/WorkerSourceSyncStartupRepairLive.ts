@@ -175,7 +175,7 @@ const loadConfig = Effect.gen(function* () {
       Config.orElse(() => Config.int("SYNC_WORKER_MAX_ATTEMPTS")),
       Config.withDefault(DEFAULT_QUEUE_ATTEMPTS),
       Config.mapOrFail((value) =>
-        Schema.decodeUnknownEffect(
+        Schema.decodeEffect(
           Schema.Int.check(
             Schema.isGreaterThan(0, {
               message: "SOURCE_SYNC_QUEUE_ATTEMPTS must be greater than zero",
@@ -263,13 +263,7 @@ const acquireLiveQueue = ({
     return {
       add: (name, payload, options) => queue.add(name, payload, options),
       close: Effect.tryPromise({
-        try: async () => {
-          try {
-            await queue.close()
-          } finally {
-            connection.disconnect()
-          }
-        },
+        try: () => queue.close().finally(() => connection.disconnect()),
         catch: (cause) =>
           new WorkerSourceSyncStartupRepairError({
             operation: "workerSourceSyncStartupRepair.close",
@@ -328,7 +322,7 @@ const toRepairError = ({
   readonly operation: string
   readonly cause: unknown
 }): WorkerSourceSyncStartupRepairError =>
-  cause instanceof WorkerSourceSyncStartupRepairError
+  Schema.is(WorkerSourceSyncStartupRepairError)(cause)
     ? cause
     : new WorkerSourceSyncStartupRepairError({ operation, cause })
 

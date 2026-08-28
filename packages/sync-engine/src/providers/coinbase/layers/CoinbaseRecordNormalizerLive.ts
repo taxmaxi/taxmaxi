@@ -5,6 +5,7 @@
  */
 
 import * as Effect from "effect/Effect"
+import * as DateTime from "effect/DateTime"
 import * as Layer from "effect/Layer"
 import * as Option from "effect/Option"
 import * as Schema from "effect/Schema"
@@ -123,7 +124,7 @@ const parseTimestamp = (value: string, field: string) =>
       })
     }
 
-    return new Date(epochMillis)
+    return DateTime.toDateUtc(DateTime.makeUnsafe(epochMillis))
   })
 
 /**

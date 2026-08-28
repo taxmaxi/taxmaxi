@@ -92,14 +92,11 @@ export class TaxMaxiInternal implements TaxMaxiInternalPromiseResources {
     return makeTaxMaxiInternalEffectClient(options)
   }
 
-  private readonly run = async <A>(
+  private readonly run = <A>(
     effect: Effect.Effect<A, unknown, never>,
     options?: AssetRequestOptions
-  ): Promise<A> => {
-    try {
-      return await Effect.runPromise(effect, options)
-    } catch (error) {
+  ): Promise<A> =>
+    Effect.runPromise(effect, options).catch((error: unknown) => {
       throw toTaxMaxiError(error)
-    }
-  }
+    })
 }

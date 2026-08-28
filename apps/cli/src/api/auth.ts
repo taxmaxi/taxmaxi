@@ -1,5 +1,6 @@
-import { Duration, Effect } from "effect"
+import { Duration, Effect, Schema } from "effect"
 import * as Option from "effect/Option"
+import { FetchHttpClient, HttpClient, HttpClientRequest } from "effect/unstable/http"
 import { type AuthAuthorizeRedirectResponse, type AuthOAuthSessionResponse } from "taxmaxi"
 import { CliCommandError, mapUnknownToCliCommandError } from "../errors.ts"
 import { nowMillis } from "../time.ts"
@@ -141,36 +142,35 @@ export const validateSessionToken = ({
   readonly apiUrl: string
   readonly sessionToken: string | undefined
 }) =>
-  Effect.tryPromise({
-    try: async () => {
-      if (sessionToken === undefined || sessionToken === "") {
-        return false
-      }
+  Effect.gen(function* () {
+    if (sessionToken === undefined || sessionToken === "") {
+      return false
+    }
 
-      const response = await fetch(new URL("/auth/me", apiUrl), {
-        headers: {
-          authorization: `Bearer ${sessionToken}`,
-        },
-      })
-
-      if (response.status >= 200 && response.status < 300) {
-        return true
-      }
-
-      if (response.status === 401 || response.status === 403) {
-        return false
-      }
-
-      const body = await response.text()
-      return new CliCommandError({
-        message: `Failed to validate existing session (${response.status}): ${body}`,
-      })
-    },
-    catch: toCliApiError("Failed to validate existing session."),
-  }).pipe(
-    Effect.flatMap((result) =>
-      result instanceof CliCommandError ? Effect.fail(result) : Effect.succeed(result)
+    const request = HttpClientRequest.get(new URL("/auth/me", apiUrl)).pipe(
+      HttpClientRequest.setHeader("authorization", `Bearer ${sessionToken}`)
     )
+    const response = yield* HttpClient.execute(request)
+
+    if (response.status >= 200 && response.status < 300) {
+      return true
+    }
+
+    if (response.status === 401 || response.status === 403) {
+      return false
+    }
+
+    const body = yield* response.text
+    return yield* new CliCommandError({
+      message: `Failed to validate existing session (${response.status}): ${body}`,
+    })
+  }).pipe(
+    Effect.mapError((error) =>
+      Schema.is(CliCommandError)(error)
+        ? error
+        : toCliApiError("Failed to validate existing session.")(error)
+    ),
+    Effect.provide(FetchHttpClient.layer)
   )
 
 export const getCurrentAccount = ({

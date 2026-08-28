@@ -7,6 +7,7 @@
 import { eq } from "drizzle-orm"
 import { AuthUserId } from "@my/core/authentication"
 import { Principal, PrincipalId } from "@my/core/ownership"
+import * as DateTime from "effect/DateTime"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import * as Option from "effect/Option"
@@ -53,7 +54,7 @@ const make = Effect.gen(function* () {
 
   const createUserPrincipal: PrincipalRepositoryService["createUserPrincipal"] = (userId) =>
     Effect.gen(function* () {
-      const now = new Date()
+      const now = yield* DateTime.nowAsDate
       const [row] = yield* db
         .insert(schema.principals)
         .values({
@@ -79,28 +80,27 @@ const make = Effect.gen(function* () {
     }).pipe(wrapSqlError("principalRepository.createUserPrincipal"))
 
   const createAnonymousWalletPrincipal: PrincipalRepositoryService["createAnonymousWalletPrincipal"] =
-    () =>
-      Effect.gen(function* () {
-        const now = new Date()
-        const [row] = yield* db
-          .insert(schema.principals)
-          .values({
-            kind: "anonymous_wallet",
-            userId: null,
-            createdAt: now,
-            updatedAt: now,
-          })
-          .returning(selectPrincipalFields)
+    Effect.gen(function* () {
+      const now = yield* DateTime.nowAsDate
+      const [row] = yield* db
+        .insert(schema.principals)
+        .values({
+          kind: "anonymous_wallet",
+          userId: null,
+          createdAt: now,
+          updatedAt: now,
+        })
+        .returning(selectPrincipalFields)
 
-        if (row === undefined) {
-          return yield* new PersistenceError({
-            operation: "principalRepository.createAnonymousWalletPrincipal",
-            cause: "failed to create anonymous wallet principal",
-          })
-        }
+      if (row === undefined) {
+        return yield* new PersistenceError({
+          operation: "principalRepository.createAnonymousWalletPrincipal",
+          cause: "failed to create anonymous wallet principal",
+        })
+      }
 
-        return rowToPrincipal(row)
-      }).pipe(wrapSqlError("principalRepository.createAnonymousWalletPrincipal"))
+      return rowToPrincipal(row)
+    }).pipe(wrapSqlError("principalRepository.createAnonymousWalletPrincipal"))
 
   return PrincipalRepository.of({
     findUserPrincipal,

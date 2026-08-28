@@ -7,7 +7,7 @@
  *
  * Usage:
  * - Set via middleware after session validation
- * - Access via getCurrentUser() helper in business logic
+ * - Access via the getCurrentUser helper in business logic
  *
  * @module CurrentUser
  */
@@ -35,7 +35,7 @@ import type { AuthUser } from "./AuthUser.ts"
  *
  * // In business logic:
  * const program = Effect.gen(function* () {
- *   const user = yield* getCurrentUser()
+ *   const user = yield* getCurrentUser
  *   console.log(`Current user: ${user.displayName}`)
  * })
  * ```
@@ -60,7 +60,7 @@ export class CurrentUser extends Context.Service<CurrentUser, AuthUser>()(
  * @example
  * ```typescript
  * const program = Effect.gen(function* () {
- *   const user = yield* getCurrentUser()
+ *   const user = yield* getCurrentUser
  *   console.log(`Hello, ${user.displayName}!`)
  *   return user.id
  * })
@@ -69,7 +69,7 @@ export class CurrentUser extends Context.Service<CurrentUser, AuthUser>()(
  * // program: Effect<AuthUserId, never, CurrentUser>
  * ```
  */
-export const getCurrentUser = (): Effect.Effect<AuthUser, never, CurrentUser> => CurrentUser
+export const getCurrentUser: Effect.Effect<AuthUser, never, CurrentUser> = CurrentUser
 
 /**
  * withCurrentUser - Run an effect with a specific user in context
@@ -83,7 +83,7 @@ export const getCurrentUser = (): Effect.Effect<AuthUser, never, CurrentUser> =>
  * @example
  * ```typescript
  * const program = Effect.gen(function* () {
- *   const user = yield* getCurrentUser()
+ *   const user = yield* getCurrentUser
  *   return `Welcome ${user.displayName}`
  * })
  *

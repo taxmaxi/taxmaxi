@@ -74,25 +74,30 @@ const make = Effect.gen(function* () {
     code,
   }) =>
     Effect.tryPromise({
-      try: async () => {
-        const result = await resend.emails.send({
+      try: () =>
+        resend.emails.send({
           from: fromAddress,
           to: [email],
           subject: "Your TaxMaxi verification code",
           text: `Your TaxMaxi verification code is: ${code}`,
           html: verificationEmailHtml(code),
-        })
-
-        if (result.error) {
-          throw result.error
-        }
-      },
+        }),
       catch: (cause) =>
         new EmailVerificationDeliveryError({
           message: "Failed to send verification email",
           cause,
         }),
     }).pipe(
+      Effect.flatMap((result) =>
+        result.error === null
+          ? Effect.void
+          : Effect.fail(
+              new EmailVerificationDeliveryError({
+                message: "Failed to send verification email",
+                cause: result.error,
+              })
+            )
+      ),
       Effect.tap(() => Effect.logInfo({ email }, "Sent verification email")),
       Effect.tapError((error) =>
         Effect.logError(

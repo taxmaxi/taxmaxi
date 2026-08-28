@@ -5,6 +5,7 @@
  */
 
 import * as Effect from "effect/Effect"
+import * as DateTime from "effect/DateTime"
 import * as Layer from "effect/Layer"
 import { ProviderAssetRepository } from "../../../services/ProviderAssetRepository.ts"
 import {
@@ -88,7 +89,7 @@ const make = Effect.gen(function* () {
     }))
 
   const fetchCoinbaseFiatCurrencies = () =>
-    coinbaseSyncClient.fetchFiatCurrencies().pipe(
+    coinbaseSyncClient.fetchFiatCurrencies.pipe(
       Effect.mapError(
         (cause) =>
           new CoinbaseReferenceDataError({
@@ -99,7 +100,7 @@ const make = Effect.gen(function* () {
     )
 
   const fetchCoinbaseCryptoCurrencies = () =>
-    coinbaseSyncClient.fetchCryptoCurrencies().pipe(
+    coinbaseSyncClient.fetchCryptoCurrencies.pipe(
       Effect.mapError(
         (cause) =>
           new CoinbaseReferenceDataError({
@@ -112,7 +113,8 @@ const make = Effect.gen(function* () {
   /** Upsert the checked-in Coinbase transaction-type catalog snapshot. */
   const syncTransactionTypeCatalog = () =>
     Effect.gen(function* () {
-      const retrievedAt = new Date(COINBASE_TRANSACTION_TYPE_SNAPSHOT_RETRIEVED_AT)
+      const retrievedAt = DateTime.makeUnsafe(COINBASE_TRANSACTION_TYPE_SNAPSHOT_RETRIEVED_AT)
+      const observedRetrievedAt = yield* DateTime.now
 
       const docEntries = coinbaseTransactionTypeCatalogSnapshot.map((entry) => ({
         providerKey: COINBASE_PROVIDER,
@@ -121,7 +123,7 @@ const make = Effect.gen(function* () {
         payload: {
           source: "coinbase_docs_snapshot",
           sourceUrl: COINBASE_TRANSACTION_TYPE_SOURCE_URL,
-          retrievedAt: retrievedAt.toISOString(),
+          retrievedAt: DateTime.formatIso(retrievedAt),
           providerTransactionType: entry.providerTransactionType,
           description: entry.description,
         },
@@ -134,7 +136,7 @@ const make = Effect.gen(function* () {
         payload: {
           source: "coinbase_observed_live_type",
           sourceUrl: null,
-          retrievedAt: new Date().toISOString(),
+          retrievedAt: DateTime.formatIso(observedRetrievedAt),
           providerTransactionType: entry.providerTransactionType,
           description: entry.description,
         },
@@ -191,8 +193,8 @@ const make = Effect.gen(function* () {
         )
     })
 
-  const refreshDefaultMappings: CoinbaseReferenceDataServiceShape["refreshDefaultMappings"] = () =>
-    coinbaseReferenceMappingService.ensureDefaultMappings().pipe(
+  const refreshDefaultMappings: CoinbaseReferenceDataServiceShape["refreshDefaultMappings"] =
+    coinbaseReferenceMappingService.ensureDefaultMappings.pipe(
       Effect.map(
         (mappings) =>
           ({
@@ -209,11 +211,11 @@ const make = Effect.gen(function* () {
       )
     )
 
-  const refreshReferenceData: CoinbaseReferenceDataServiceShape["refreshReferenceData"] = () =>
+  const refreshReferenceData: CoinbaseReferenceDataServiceShape["refreshReferenceData"] =
     Effect.gen(function* () {
       const transactionTypeCatalogCount = yield* syncTransactionTypeCatalog()
       const providerAssetCatalogCount = yield* syncProviderAssetCatalog()
-      const defaultMappings = yield* refreshDefaultMappings()
+      const defaultMappings = yield* refreshDefaultMappings
 
       return {
         transactionTypeCatalogCount,

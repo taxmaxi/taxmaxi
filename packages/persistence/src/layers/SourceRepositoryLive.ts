@@ -1,4 +1,7 @@
 import { and, eq } from "drizzle-orm"
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto"
+import * as Crypto from "effect/Crypto"
+import * as DateTime from "effect/DateTime"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import * as Option from "effect/Option"
@@ -46,6 +49,7 @@ const providerKeyForOnchainSource = (chainType: OnchainSourceChainType): string 
 
 const make = Effect.gen(function* () {
   const db = yield* drizzle
+  const crypto = yield* Crypto.Crypto
 
   const selectSourceFields = {
     id: sources.id,
@@ -223,7 +227,7 @@ const make = Effect.gen(function* () {
     name,
   }) =>
     Effect.gen(function* () {
-      const now = new Date()
+      const now = yield* DateTime.nowAsDate
       const [addressRow] = yield* db
         .insert(addresses)
         .values({
@@ -260,7 +264,7 @@ const make = Effect.gen(function* () {
         return { source: maybeExistingSource.value, created: false }
       }
 
-      const sourceId = SourceId.make(crypto.randomUUID())
+      const sourceId = SourceId.make(yield* crypto.randomUUIDv4.pipe(Effect.orDie))
       const providerKey = providerKeyForOnchainSource(chainType)
       const [created] = yield* db
         .insert(sources)
@@ -302,7 +306,7 @@ const make = Effect.gen(function* () {
 
   const create: SourceRepositoryService["create"] = (source) =>
     Effect.gen(function* () {
-      const now = new Date()
+      const now = yield* DateTime.nowAsDate
       const baseValues = {
         id: source.id,
         principalId: source.principalId,
@@ -346,4 +350,6 @@ const make = Effect.gen(function* () {
   } satisfies SourceRepositoryService
 })
 
-export const SourceRepositoryLive = Layer.effect(SourceRepository, make)
+export const SourceRepositoryLive = Layer.effect(SourceRepository, make).pipe(
+  Layer.provide(NodeCrypto.layer)
+)

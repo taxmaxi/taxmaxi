@@ -21,7 +21,7 @@ export class SourceSyncCreditExhaustedError extends Schema.TaggedError<SourceSyn
   "SourceSyncCreditExhaustedError",
   {
     reasonCode: SyncCreditReasonCode,
-    availableCredits: Schema.Number,
+    availableCredits: Schema.Finite,
   }
 ) {}
 

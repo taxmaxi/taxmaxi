@@ -5,6 +5,7 @@
  */
 
 import { and, desc, eq, inArray, ne, or, sql } from "drizzle-orm"
+import * as DateTime from "effect/DateTime"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import * as Option from "effect/Option"
@@ -171,18 +172,17 @@ const make = Effect.gen(function* () {
         return Option.fromNullishOr(representation)
       })
 
-  const listBlockchains: AssetRepositoryShape["listBlockchains"] = () =>
-    db
-      .select({ id: schema.blockchains.id, name: schema.blockchains.name })
-      .from(schema.blockchains)
-      .pipe(wrapSyncEngineSqlError("assetRepository.listBlockchains"))
+  const listBlockchains: AssetRepositoryShape["listBlockchains"] = db
+    .select({ id: schema.blockchains.id, name: schema.blockchains.name })
+    .from(schema.blockchains)
+    .pipe(wrapSyncEngineSqlError("assetRepository.listBlockchains"))
 
   const upsertEconomicAssetRepresentation: AssetRepositoryShape["upsertEconomicAssetRepresentation"] =
     ({ blockchain, asset, representation }) =>
       db
         .transaction((tx) =>
           Effect.gen(function* () {
-            const now = new Date()
+            const now = yield* DateTime.nowAsDate
 
             yield* tx
               .insert(schema.blockchains)

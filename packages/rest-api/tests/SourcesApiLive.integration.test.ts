@@ -22,10 +22,12 @@ import {
   type TransferReconciliationServiceShape,
 } from "@my/sync-engine/services"
 import * as Chunk from "effect/Chunk"
+import * as DateTime from "effect/DateTime"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import * as Option from "effect/Option"
 import * as EffectSchema from "effect/Schema"
+import { TestClock } from "effect/testing"
 import { SourceSyncServiceLive } from "@my/sync-engine/layers"
 import { drizzle } from "../../persistence/src/layers/PgClientLive.ts"
 import { RepositoriesLive } from "../../persistence/src/layers/RepositoriesLive.ts"
@@ -154,7 +156,7 @@ const AuthServiceTestLive = Layer.succeed(AuthService, {
   logout: () => Effect.die("AuthService test stub: logout not implemented"),
   validateSession: () => Effect.die("AuthService test stub: validateSession not implemented"),
   linkIdentity: () => Effect.die("AuthService test stub: linkIdentity not implemented"),
-  getEnabledProviders: () => Effect.succeed(Chunk.fromIterable(["local", "coinbase"] as const)),
+  getEnabledProviders: Effect.succeed(Chunk.fromIterable(["local", "coinbase"] as const)),
 } satisfies AuthServiceShape)
 
 const PasswordHasherTestLive = Layer.succeed(PasswordHasher, {
@@ -2060,6 +2062,9 @@ describe("SourcesApiLive", () => {
 
   it.effect("rejects an expired authenticated CLI claim token", () =>
     Effect.gen(function* () {
+      yield* TestClock.setTime(
+        DateTime.toEpochMillis(DateTime.makeUnsafe("2026-01-01T00:00:00.000Z"))
+      )
       const anonymousClient = yield* makeUnauthenticatedClientWithPayment()
       const created = yield* anonymousClient.sources.createSource({
         payload: {

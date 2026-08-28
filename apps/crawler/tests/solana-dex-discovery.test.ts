@@ -32,7 +32,7 @@ const PHOENIX_PROGRAM = "PhoeNiXZ8ByJGLkxNfZRnkUfjvmuYqLR89jjFHGqdXY"
 const protocolCandidateReadOnlyStub = {
   listPendingReviewCandidates: () => Effect.succeed([]),
   getReviewDetail: () => Effect.succeed(Option.none()),
-  listTransactionTypes: () => Effect.succeed([]),
+  listTransactionTypes: Effect.succeed([]),
 }
 
 const completedRows = (rows: ReadonlyArray<unknown>) => ({

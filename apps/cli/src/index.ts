@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { NodeRuntime, NodeServices } from "@effect/platform-node"
-import { Console, Effect } from "effect"
+import { Console, Effect, Schema } from "effect"
 import { Command } from "effect/unstable/cli"
 
 import { command } from "./commands/root.ts"
@@ -19,7 +19,7 @@ program.pipe(
       process.exitCode = 1
     })
 
-    if (error instanceof CliCommandError) {
+    if (Schema.is(CliCommandError)(error)) {
       return Console.error(`Error: ${error.message}`).pipe(Effect.andThen(markFailedExit))
     }
 
