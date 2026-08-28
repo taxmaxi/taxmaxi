@@ -18,10 +18,10 @@ import {
   SourceSyncJobExecutionNotFoundError,
   SourceSyncJobExecutor,
   SourceSyncQueuePayload,
+  SyncEngineStorageError,
   type ExecuteSourceSyncJobParams,
   type SourceSyncJobExecutorShape,
   type SourceSyncJobSummary,
-  SourceSyncJobRetryableExecutionError,
 } from "@my/sync-engine/services"
 
 class WorkerTestPromiseRejectionError extends Schema.TaggedError<WorkerTestPromiseRejectionError>()(
@@ -243,20 +243,11 @@ describe("WorkerBullMqSourceSyncConsumerLive", () => {
     expect(syncExecution).toMatchObject({
       jobId: "job-1",
       workerId: "worker-test-1",
-      retryPolicy: {
-        attemptNumber: 1,
-        maxAttempts: 5,
-      },
     })
     expect(replayExecution).toMatchObject({
       jobId: "job-2",
       workerId: "worker-test-1",
-      retryPolicy: {
-        attemptNumber: 2,
-        maxAttempts: 5,
-      },
     })
-    expect(syncExecution.retryPolicy?.nextRetryAt).toBeInstanceOf(Date)
   })
 
   it("dispatches only the completed job's materialized follow-up work", async () => {
@@ -341,18 +332,15 @@ describe("WorkerBullMqSourceSyncConsumerLive", () => {
     expect(executeCount).toBe(0)
   })
 
-  it("propagates executor failures to BullMQ so retry policy remains transport-owned", async () => {
+  it("propagates storage failures to BullMQ as retryable transport errors", async () => {
     let processor: WorkerBullMqSourceSyncProcessor | null = null
-    const retryError = new SourceSyncJobRetryableExecutionError({
-      jobId: "job-1",
-      message: "provider unavailable",
-      attemptNumber: 1,
-      maxAttempts: 3,
-      nextRetryAt: new Date("2026-01-01T00:05:00.000Z"),
+    const storageError = new SyncEngineStorageError({
+      operation: "test.execute",
+      cause: "database unavailable",
     })
 
     const executor: SourceSyncJobExecutorShape = {
-      execute: () => Effect.fail(retryError),
+      execute: () => Effect.fail(storageError),
     }
 
     await runWithConsumer({
@@ -377,9 +365,6 @@ describe("WorkerBullMqSourceSyncConsumerLive", () => {
         if (Result.isFailure(result)) {
           expect(result.failure.cause).toBeInstanceOf(Error)
           expect(result.failure.cause).not.toBeInstanceOf(UnrecoverableError)
-          if (result.failure.cause instanceof Error) {
-            expect(result.failure.cause.message).toContain("provider unavailable")
-          }
         }
       }),
     })

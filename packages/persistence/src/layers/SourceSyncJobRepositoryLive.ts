@@ -5,7 +5,7 @@
  */
 
 import { SyncCreditReasonCode } from "@my/core/billing"
-import { and, asc, eq, inArray, isNotNull, isNull, lt, ne, or, sql } from "drizzle-orm"
+import { and, asc, eq, inArray, isNotNull, isNull, lt, lte, ne, or, sql } from "drizzle-orm"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import * as Schema from "effect/Schema"
@@ -27,6 +27,7 @@ import {
   SourceSyncJobRepository,
   SyncEngineStorageError,
   toPublicSourceSyncJobStatus,
+  type SourceSyncClaimableJob,
   type SourceSyncJobRepositoryShape,
   type SourceSyncPendingDispatchJob,
   type SourceSyncRepairableActiveJob,
@@ -64,6 +65,8 @@ interface PersistedExecutionJobRow {
   readonly principalId: string
   readonly mode: SourceSyncExecutionJob["mode"]
   readonly status: SourceSyncJobStatus
+  readonly attemptCount: number
+  readonly maxAttempts: number
 }
 
 const decodeCreditReasonCode = Schema.decodeUnknownEffect(SyncCreditReasonCode)
@@ -111,6 +114,8 @@ const toExecutionJob = ({
       principalId: job.principalId,
       mode: job.mode,
       status: job.status,
+      attemptCount: job.attemptCount,
+      maxAttempts: job.maxAttempts,
     } satisfies SourceSyncExecutionJob
   })
 
@@ -360,7 +365,13 @@ const make = Effect.gen(function* () {
     principalId: schema.processingJobs.principalId,
     mode: schema.processingJobs.mode,
     status: schema.processingJobs.status,
+    attemptCount: schema.processingJobs.attemptCount,
+    maxAttempts: schema.processingJobs.maxAttempts,
   } as const
+
+  /** A pending job whose retry delay has not passed yet is not claimable. */
+  const retryIsDue = (dueBefore: Date) =>
+    or(isNull(schema.processingJobs.nextRetryAt), lte(schema.processingJobs.nextRetryAt, dueBefore))
 
   const loadExecutionJobById = ({
     jobId,
@@ -621,21 +632,41 @@ const make = Effect.gen(function* () {
     db
       .transaction((tx) =>
         Effect.gen(function* () {
+          // skipLocked makes a concurrent claimer see no row instead of
+          // waiting on the row lock; it then reports the conflict below.
           const [job] = yield* tx
-            .select(selectExecutionJobFields)
+            .select({ ...selectExecutionJobFields, nextRetryAt: schema.processingJobs.nextRetryAt })
             .from(schema.processingJobs)
             .where(eq(schema.processingJobs.id, jobId))
             .limit(1)
-            .for("update")
+            .for("update", { skipLocked: true })
             .pipe(wrapSyncEngineSqlError("sourceSyncJobRepository.claimJob.lock"))
 
           if (job === undefined) {
-            return yield* new SourceSyncJobExecutionRecordNotFoundError({ jobId })
+            const [lockedJob] = yield* tx
+              .select({ id: schema.processingJobs.id })
+              .from(schema.processingJobs)
+              .where(eq(schema.processingJobs.id, jobId))
+              .limit(1)
+              .pipe(wrapSyncEngineSqlError("sourceSyncJobRepository.claimJob.checkExists"))
+
+            return yield* lockedJob === undefined
+              ? new SourceSyncJobExecutionRecordNotFoundError({ jobId })
+              : new SourceSyncJobExecutionRecordConflictError({
+                  jobId,
+                  reason: "Another worker is claiming the job.",
+                })
           }
           if (job.status !== "pending") {
             return yield* new SourceSyncJobExecutionRecordConflictError({
               jobId,
               reason: `Job status ${job.status} is not claimable.`,
+            })
+          }
+          if (job.nextRetryAt !== null && job.nextRetryAt > startedAt) {
+            return yield* new SourceSyncJobExecutionRecordConflictError({
+              jobId,
+              reason: "Job retry is not due yet.",
             })
           }
           const prerequisitesSucceeded = yield* jobPrerequisitesSucceeded({ executor: tx, jobId })
@@ -656,6 +687,7 @@ const make = Effect.gen(function* () {
               completedAt: null,
               nextRetryAt: null,
               errorMessage: null,
+              attemptCount: sql`${schema.processingJobs.attemptCount} + 1`,
               updatedAt: startedAt,
             })
             .where(
@@ -663,6 +695,7 @@ const make = Effect.gen(function* () {
                 eq(schema.processingJobs.id, jobId),
                 eq(schema.processingJobs.status, "pending"),
                 isNotNull(schema.processingJobs.principalId),
+                retryIsDue(startedAt),
                 processingJobPrerequisitesSucceeded
               )
             )
@@ -1322,6 +1355,33 @@ const make = Effect.gen(function* () {
           )
         )
 
+  const listClaimableJobs: SourceSyncJobRepositoryShape["listClaimableJobs"] = ({
+    dueBefore,
+    limit,
+  }) =>
+    db
+      .select({
+        id: schema.processingJobs.id,
+        sourceId: schema.processingJobs.sourceId,
+        principalId: schema.processingJobs.principalId,
+        mode: schema.processingJobs.mode,
+      })
+      .from(schema.processingJobs)
+      .where(
+        and(
+          eq(schema.processingJobs.status, "pending"),
+          isNotNull(schema.processingJobs.principalId),
+          retryIsDue(dueBefore),
+          processingJobPrerequisitesSucceeded
+        )
+      )
+      .orderBy(asc(schema.processingJobs.createdAt))
+      .limit(limit)
+      .pipe(
+        wrapSyncEngineSqlError("sourceSyncJobRepository.listClaimableJobs"),
+        Effect.map((jobs) => jobs.map((job) => job satisfies SourceSyncClaimableJob))
+      )
+
   return SourceSyncJobRepository.of({
     findActiveJob,
     createOrReuseJob,
@@ -1338,6 +1398,7 @@ const make = Effect.gen(function* () {
     listStaleActiveJobs,
     listRepairableActiveJobs,
     listPendingJobsNeedingDispatch,
+    listClaimableJobs,
   } satisfies SourceSyncJobRepositoryShape)
 })
 

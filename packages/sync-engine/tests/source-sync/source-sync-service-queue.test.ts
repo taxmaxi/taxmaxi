@@ -35,6 +35,7 @@ const unusedJobLifecycleMethods = {
   listRepairableActiveJobs: () => Effect.die("listRepairableActiveJobs should not be called"),
   listPendingJobsNeedingDispatch: () =>
     Effect.die("listPendingJobsNeedingDispatch should not be called"),
+  listClaimableJobs: () => Effect.die("listClaimableJobs should not be called"),
 }
 
 const makeActiveJob = ({
@@ -105,6 +106,7 @@ const makeServiceLayer = ({
     listStaleActiveJobs: unusedJobLifecycleMethods.listStaleActiveJobs,
     listRepairableActiveJobs: unusedJobLifecycleMethods.listRepairableActiveJobs,
     listPendingJobsNeedingDispatch: unusedJobLifecycleMethods.listPendingJobsNeedingDispatch,
+    listClaimableJobs: unusedJobLifecycleMethods.listClaimableJobs,
     failJob: () => Effect.die("failJob should not be called"),
     failCreditRequiredJob: () => Effect.die("failCreditRequiredJob should not be called"),
     completeJob: () => Effect.die("completeJob should not be called"),
@@ -123,6 +125,8 @@ const makeServiceLayer = ({
             principalId: source.principalId,
             mode: "replay" as const,
             status: "pending" as const,
+            attemptCount: 0,
+            maxAttempts: 3,
           }),
   })
 

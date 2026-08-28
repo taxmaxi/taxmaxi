@@ -187,8 +187,7 @@ const toJobFailure = (error: unknown): Error =>
 
 const isRetryableWorkerError = (
   error: SourceSyncJobExecutorError | WorkerBullMqMalformedSourceSyncPayloadError
-): boolean =>
-  error._tag === "SourceSyncJobRetryableExecutionError" || error._tag === "SyncEngineStorageError"
+): boolean => error._tag === "SyncEngineStorageError"
 
 const processJob = Effect.fn("worker.source-sync.process", {
   attributes: {
@@ -214,10 +213,6 @@ const processJob = Effect.fn("worker.source-sync.process", {
   )
   const attemptNumber = job.attemptsMade + 1
   const maxAttempts = resolveMaxAttempts(job)
-  const nextRetryAt = yield* DateTime.now.pipe(
-    Effect.map(DateTime.add({ milliseconds: resolveBackoffDelayMs(job) })),
-    Effect.map(DateTime.toDateUtc)
-  )
 
   yield* Effect.logInfo(
     {
@@ -234,14 +229,11 @@ const processJob = Effect.fn("worker.source-sync.process", {
     "source-sync-worker:job-started"
   )
 
+  // Retry bookkeeping now lives on the DB job row: a retryable failure comes
+  // back as a `queued` summary and the delayed-redispatch path below handles it.
   const summary = yield* executor.execute({
     jobId: payload.jobId,
     workerId: config.workerId,
-    retryPolicy: {
-      attemptNumber,
-      maxAttempts,
-      nextRetryAt,
-    },
   })
 
   const logPayload = {

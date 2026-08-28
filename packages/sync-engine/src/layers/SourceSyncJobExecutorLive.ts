@@ -45,7 +45,6 @@ import {
   SourceSyncJobExecutionConflictError,
   SourceSyncJobExecutionNotFoundError,
   SourceSyncJobExecutionPayloadError,
-  SourceSyncJobRetryableExecutionError,
   SourceSyncJobExecutor,
   SourceSyncJobRepository,
   makePlainSourceSyncJobSummary,
@@ -121,6 +120,8 @@ type SourceSyncExecutionError =
 
 const DEFAULT_SYNC_PAGE_SIZE = 100
 const DEFAULT_SOURCE_SYNC_WORKER_ID = "source-sync-inline-executor"
+const DEFAULT_SOURCE_SYNC_RETRY_BASE_DELAY_MS = 5_000
+const REPLAY_SCHEDULING_RETRY_DELAY_MS = 30_000
 
 const UnknownSyncErrorSchema = Schema.Struct({
   message: Schema.Trimmed.check(Schema.isNonEmpty()),
@@ -140,6 +141,13 @@ const SOURCE_SYNC_HEARTBEAT_INTERVAL_MS_CONFIG = Config.int(
 ).pipe(
   Config.map((configuredInterval) => (configuredInterval > 0 ? configuredInterval : 10_000)),
   Config.orElse(() => Config.succeed(10_000))
+)
+
+const SOURCE_SYNC_RETRY_BASE_DELAY_MS_CONFIG = Config.int("SOURCE_SYNC_RETRY_BASE_DELAY_MS").pipe(
+  Config.map((configuredDelay) =>
+    configuredDelay > 0 ? configuredDelay : DEFAULT_SOURCE_SYNC_RETRY_BASE_DELAY_MS
+  ),
+  Config.orElse(() => Config.succeed(DEFAULT_SOURCE_SYNC_RETRY_BASE_DELAY_MS))
 )
 
 const errorMessage = (error: unknown): string => {
@@ -166,8 +174,7 @@ const errorMessage = (error: unknown): string => {
 }
 
 const isRetryableExecutionError = (error: SourceSyncExecutionError): boolean =>
-  error._tag === "SourceReplaySchedulingPendingError" ||
-  (error._tag === "SourceSyncProviderFailureError" && "retryable" in error && error.retryable)
+  error._tag === "SourceSyncProviderFailureError" && "retryable" in error && error.retryable
 
 const make = Effect.gen(function* () {
   const sourceProviderRegistry = yield* SourceProviderRegistry
@@ -182,6 +189,7 @@ const make = Effect.gen(function* () {
   const transferReconciliationService = yield* TransferReconciliationService
   const pageSize = yield* SOURCE_SYNC_PAGE_SIZE_CONFIG
   const heartbeatIntervalMs = yield* SOURCE_SYNC_HEARTBEAT_INTERVAL_MS_CONFIG
+  const retryBaseDelayMs = yield* SOURCE_SYNC_RETRY_BASE_DELAY_MS_CONFIG
 
   const loadSource = ({
     principalId,
@@ -1458,32 +1466,12 @@ const make = Effect.gen(function* () {
       })
     )
 
-  const recordRetryableSyncFailure = (
-    params: Parameters<typeof persistRetryableSyncFailure>[0]
-  ): Effect.Effect<
-    never,
-    | SyncEngineStorageError
-    | SourceSyncJobExecutionNotFoundError
-    | SourceSyncJobExecutionConflictError
-    | SourceSyncJobRetryableExecutionError
-  > =>
-    persistRetryableSyncFailure(params).pipe(
-      Effect.andThen(
-        Effect.fail(
-          new SourceSyncJobRetryableExecutionError({
-            jobId: params.jobId,
-            message: errorMessage(params.error),
-            attemptNumber: params.attemptNumber,
-            maxAttempts: params.maxAttempts,
-            nextRetryAt: params.nextRetryAt,
-          })
-        )
-      )
-    )
-
-  const returnReplaySchedulingToDispatcher = (
-    params: Parameters<typeof persistRetryableSyncFailure>[0]
-  ) =>
+  /**
+   * Persist a retryable outcome and report the job as queued. The DB row keeps
+   * the retry bookkeeping and the worker poll loop re-claims the job once
+   * `next_retry_at` has passed.
+   */
+  const returnRetryableToDispatcher = (params: Parameters<typeof persistRetryableSyncFailure>[0]) =>
     persistRetryableSyncFailure(params).pipe(
       Effect.as(
         makePlainSourceSyncJobSummary({
@@ -1494,10 +1482,17 @@ const make = Effect.gen(function* () {
       )
     )
 
+  const retryDelayAfter = (attemptNumber: number): Date =>
+    DateTime.toDateUtc(
+      DateTime.addDuration(
+        DateTime.makeUnsafe(nowDate()),
+        retryBaseDelayMs * 2 ** Math.max(attemptNumber - 1, 0)
+      )
+    )
+
   const execute: SourceSyncJobExecutorShape["execute"] = ({
     jobId,
     workerId = DEFAULT_SOURCE_SYNC_WORKER_ID,
-    retryPolicy,
   }) =>
     Effect.gen(function* () {
       const executionReadiness = yield* sourceSyncJobRepository.getExecutionJob({ jobId }).pipe(
@@ -1582,36 +1577,39 @@ const make = Effect.gen(function* () {
             })
           }
 
-          if (
-            retryPolicy !== undefined &&
-            retryPolicy.attemptNumber < retryPolicy.maxAttempts &&
-            isRetryableExecutionError(error)
-          ) {
-            return recordRetryableSyncFailure({
+          // Waiting for replay scheduling is not a failed attempt: hand the
+          // attempt back so a long wait cannot exhaust the retry budget.
+          if (error._tag === "SourceReplaySchedulingPendingError") {
+            return returnRetryableToDispatcher({
               sourceId: source.id,
               jobId,
               provider,
               mode,
               error,
-              attemptNumber: retryPolicy.attemptNumber,
-              maxAttempts: retryPolicy.maxAttempts,
-              nextRetryAt: retryPolicy.nextRetryAt,
+              attemptNumber: Math.max(executionJob.attemptCount - 1, 0),
+              maxAttempts: executionJob.maxAttempts,
+              nextRetryAt: DateTime.toDateUtc(
+                DateTime.addDuration(
+                  DateTime.makeUnsafe(nowDate()),
+                  REPLAY_SCHEDULING_RETRY_DELAY_MS
+                )
+              ),
             })
           }
 
-          if (error._tag === "SourceReplaySchedulingPendingError") {
-            const nextRetryAt =
-              retryPolicy?.nextRetryAt ??
-              DateTime.toDateUtc(DateTime.addDuration(DateTime.makeUnsafe(nowDate()), 30_000))
-            return returnReplaySchedulingToDispatcher({
+          if (
+            isRetryableExecutionError(error) &&
+            executionJob.attemptCount < executionJob.maxAttempts
+          ) {
+            return returnRetryableToDispatcher({
               sourceId: source.id,
               jobId,
               provider,
               mode,
               error,
-              attemptNumber: retryPolicy?.attemptNumber ?? 0,
-              maxAttempts: retryPolicy?.maxAttempts ?? 3,
-              nextRetryAt,
+              attemptNumber: executionJob.attemptCount,
+              maxAttempts: executionJob.maxAttempts,
+              nextRetryAt: retryDelayAfter(executionJob.attemptCount),
             })
           }
 

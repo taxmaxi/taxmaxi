@@ -93,6 +93,7 @@ const unusedJobLifecycleMethods = {
   listRepairableActiveJobs: () => Effect.die("listRepairableActiveJobs should not be called"),
   listPendingJobsNeedingDispatch: () =>
     Effect.die("listPendingJobsNeedingDispatch should not be called"),
+  listClaimableJobs: () => Effect.die("listClaimableJobs should not be called"),
 }
 
 const makeExecutorLayer = ({
@@ -123,6 +124,8 @@ const makeExecutorLayer = ({
   heartbeatIntervalMs = 10_000,
   pageSize = 100,
   prepareReplayTransactions = false,
+  claimAttemptCount = 1,
+  claimMaxAttempts = 3,
   events,
 }: {
   readonly mode: SourceSyncJobMode
@@ -152,6 +155,8 @@ const makeExecutorLayer = ({
   readonly heartbeatIntervalMs?: number
   readonly pageSize?: number
   readonly prepareReplayTransactions?: boolean
+  readonly claimAttemptCount?: number
+  readonly claimMaxAttempts?: number
   readonly events: Array<string>
 }) => {
   let heartbeatCount = 0
@@ -204,6 +209,8 @@ const makeExecutorLayer = ({
             principalId: source.principalId,
             mode,
             status: "processing",
+            attemptCount: claimAttemptCount,
+            maxAttempts: claimMaxAttempts,
           })
       }
     },
@@ -218,6 +225,8 @@ const makeExecutorLayer = ({
               principalId: source.principalId,
               mode,
               status: "processing" as const,
+              attemptCount: claimAttemptCount,
+              maxAttempts: claimMaxAttempts,
             }
           }),
     heartbeatJob: ({ jobId, workerId }) =>
@@ -240,6 +249,7 @@ const makeExecutorLayer = ({
     listStaleActiveJobs: unusedJobLifecycleMethods.listStaleActiveJobs,
     listRepairableActiveJobs: unusedJobLifecycleMethods.listRepairableActiveJobs,
     listPendingJobsNeedingDispatch: unusedJobLifecycleMethods.listPendingJobsNeedingDispatch,
+    listClaimableJobs: unusedJobLifecycleMethods.listClaimableJobs,
     completeJob: ({ state }) =>
       Effect.sync(() => {
         events.push(`complete:${state.fetchedRecords}:${state.normalizedRecords}`)
@@ -1370,34 +1380,29 @@ describe("SourceSyncJobExecutor", () => {
     ).toHaveLength(2)
   })
 
-  it("records retry metadata and returns a retryable error before the final attempt", async () => {
+  it("records retry metadata and returns the job as queued before the final attempt", async () => {
     const events: Array<string> = []
-    const nextRetryAt = new Date("2026-01-01T00:05:00.000Z")
 
     const result = await Effect.runPromise(
       Effect.gen(function* () {
         const executor = yield* SourceSyncJobExecutor
-        return yield* executor.execute({
-          jobId: "job-1",
-          workerId: "worker-1",
-          retryPolicy: {
-            attemptNumber: 1,
-            maxAttempts: 3,
-            nextRetryAt,
-          },
-        })
+        return yield* executor.execute({ jobId: "job-1", workerId: "worker-1" })
       }).pipe(
-        Effect.result,
-        Effect.provide(makeExecutorLayer({ mode: "sync", failFetch: true, events }))
+        Effect.provide(
+          makeExecutorLayer({
+            mode: "sync",
+            failFetch: true,
+            claimAttemptCount: 1,
+            claimMaxAttempts: 3,
+            events,
+          })
+        )
       )
     )
 
-    expect(result._tag).toBe("Failure")
-    if (result._tag === "Failure") {
-      expect(result.failure._tag).toBe("SourceSyncJobRetryableExecutionError")
-    }
+    expect(result).toMatchObject({ jobId: "job-1", status: "queued" })
     expect(events).toContain("failure-metadata:provider unavailable")
-    expect(events).toContain("retry:provider unavailable:1:2026-01-01T00:05:00.000Z")
+    expect(events.some((event) => event.startsWith("retry:provider unavailable:1:"))).toBe(true)
     expect(events).not.toContain("fail:provider unavailable")
   })
 
@@ -1407,7 +1412,11 @@ describe("SourceSyncJobExecutor", () => {
       Effect.gen(function* () {
         const executor = yield* SourceSyncJobExecutor
         return yield* executor.execute({ jobId: "job-1" })
-      }).pipe(Effect.provide(makeExecutorLayer({ mode: "sync", failFetch: true, events })))
+      }).pipe(
+        Effect.provide(
+          makeExecutorLayer({ mode: "sync", failFetch: true, claimMaxAttempts: 1, events })
+        )
+      )
     )
 
     expect(result.status).toBe("failed")
@@ -1440,50 +1449,56 @@ describe("SourceSyncJobExecutor", () => {
     const result = await Effect.runPromise(
       Effect.gen(function* () {
         const executor = yield* SourceSyncJobExecutor
-        return yield* executor.execute({
-          jobId: "job-1",
-          workerId: "worker-1",
-          retryPolicy: {
-            attemptNumber: 3,
-            maxAttempts: 3,
-            nextRetryAt: new Date("2026-01-01T00:05:00.000Z"),
-          },
-        })
-      }).pipe(Effect.provide(makeExecutorLayer({ mode: "sync", failFetch: true, events })))
+        return yield* executor.execute({ jobId: "job-1", workerId: "worker-1" })
+      }).pipe(
+        Effect.provide(
+          makeExecutorLayer({
+            mode: "sync",
+            failFetch: true,
+            claimAttemptCount: 3,
+            claimMaxAttempts: 3,
+            events,
+          })
+        )
+      )
     )
 
     expect(result.status).toBe("failed")
     expect(result.message).toBe("provider unavailable")
     expect(events).toContain("failure-metadata:provider unavailable")
     expect(events).toContain("fail:provider unavailable")
-    expect(events).not.toContain("retry:provider unavailable:3:2026-01-01T00:05:00.000Z")
+    expect(events.some((event) => event.startsWith("retry:"))).toBe(false)
   })
 
-  it("returns replay scheduling to the dispatcher after the final queue attempt", async () => {
+  it("returns replay scheduling to the dispatcher without consuming an attempt", async () => {
     const events: Array<string> = []
-    const nextRetryAt = new Date("2026-01-01T00:05:00.000Z")
 
     const result = await Effect.runPromise(
       Effect.gen(function* () {
         const executor = yield* SourceSyncJobExecutor
-        return yield* executor.execute({
-          jobId: "job-1",
-          workerId: "worker-1",
-          retryPolicy: {
-            attemptNumber: 3,
-            maxAttempts: 3,
-            nextRetryAt,
-          },
-        })
+        return yield* executor.execute({ jobId: "job-1", workerId: "worker-1" })
       }).pipe(
-        Effect.provide(makeExecutorLayer({ mode: "replay", waitForDependentReplay: true, events }))
+        Effect.provide(
+          makeExecutorLayer({
+            mode: "replay",
+            waitForDependentReplay: true,
+            claimAttemptCount: 3,
+            claimMaxAttempts: 3,
+            events,
+          })
+        )
       )
     )
 
     expect(result).toMatchObject({ jobId: "job-1", status: "queued" })
-    expect(events).toContain(
-      "retry:Replay source source-1 after the active job finishes for dependent source dependent-source-1.:3:2026-01-01T00:05:00.000Z"
-    )
+    // The claim counted attempt 3; waiting hands it back as attempt 2.
+    expect(
+      events.some((event) =>
+        event.startsWith(
+          "retry:Replay source source-1 after the active job finishes for dependent source dependent-source-1.:2:"
+        )
+      )
+    ).toBe(true)
     expect(events.some((event) => event.startsWith("fail:"))).toBe(false)
   })
 

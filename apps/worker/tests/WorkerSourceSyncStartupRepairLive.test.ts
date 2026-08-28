@@ -153,6 +153,7 @@ const makeRepositoryLayer = ({
     listRepairableActiveJobs: ({ limit }) => Effect.sync(() => remainingJobs.slice(0, limit)),
     listPendingJobsNeedingDispatch: ({ limit }) =>
       Effect.sync(() => remainingJobs.filter(isPendingDispatchJob).slice(0, limit)),
+    listClaimableJobs: () => Effect.die(new Error("listClaimableJobs should not be called")),
   } satisfies SourceSyncJobRepositoryShape)
 }
 
@@ -289,6 +290,8 @@ const runDispatchFollowUp = ({
     principalId: "principal-1",
     mode: "replay",
     status: "pending",
+    attemptCount: 0,
+    maxAttempts: 3,
   } satisfies SourceSyncExecutionJob
 
   return Effect.runPromise(

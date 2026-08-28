@@ -122,7 +122,9 @@ const make = Effect.gen(function* () {
             })
             .from(schema.assetResolutionJobs)
             .where(eq(schema.assetResolutionJobs.id, jobId))
-            .for("update")
+            // skipLocked: a job another worker is claiming right now shows up
+            // as no row, which the not_claimable branch already handles.
+            .for("update", { skipLocked: true })
             .limit(1)
             .pipe(wrapSyncEngineSqlError("assetResolutionJobRepository.claimResolutionJob.job"))
 
@@ -273,7 +275,7 @@ const make = Effect.gen(function* () {
                   eq(schema.assetResolutionJobs.workerId, workerId)
                 )
               )
-              .for("update")
+              .for("update", { skipLocked: true })
               .limit(1)
               .pipe(
                 wrapSyncEngineSqlError(

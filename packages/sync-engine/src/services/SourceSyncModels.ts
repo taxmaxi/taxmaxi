@@ -171,6 +171,9 @@ export interface SourceSyncActiveJob {
 
 /**
  * SourceSyncExecutionJob - Active DB job projection needed by worker-side execution.
+ *
+ * `attemptCount` is the number of the attempt that owns the current claim
+ * (claiming increments it), and `maxAttempts` caps retryable failures.
  */
 export interface SourceSyncExecutionJob {
   readonly id: string
@@ -178,6 +181,19 @@ export interface SourceSyncExecutionJob {
   readonly principalId: string
   readonly mode: SourceSyncJobMode
   readonly status: ActiveSourceSyncJobStatus
+  readonly attemptCount: number
+  readonly maxAttempts: number
+}
+
+/**
+ * SourceSyncClaimableJob - Pending job that a worker can claim right now:
+ * prerequisites are met and any retry delay has passed.
+ */
+export interface SourceSyncClaimableJob {
+  readonly id: string
+  readonly sourceId: string
+  readonly principalId: string
+  readonly mode: SourceSyncJobMode
 }
 
 /**

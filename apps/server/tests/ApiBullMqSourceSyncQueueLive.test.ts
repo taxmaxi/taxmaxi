@@ -90,6 +90,7 @@ const makeRepositoryLayer = ({
       Effect.die(new Error("listRepairableActiveJobs should not be called")),
     listPendingJobsNeedingDispatch: () =>
       Effect.die(new Error("listPendingJobsNeedingDispatch should not be called")),
+    listClaimableJobs: () => Effect.die(new Error("listClaimableJobs should not be called")),
   } satisfies SourceSyncJobRepositoryShape)
 
 const makeProducerLayer = ({

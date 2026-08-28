@@ -12,6 +12,7 @@ import { SyncEngineStorageError } from "./SyncEngineStorageError.ts"
 import type {
   CreateOrReuseSourceSyncJobResult,
   SourceSyncActiveJob,
+  SourceSyncClaimableJob,
   SourceSyncExecutionState,
   SourceSyncExecutionJob,
   SourceSyncJobDetails,
@@ -201,6 +202,15 @@ export interface ListPendingSourceSyncJobsNeedingDispatchParams {
 }
 
 /**
+ * ListClaimableSourceSyncJobsParams - Input for the worker poll loop.
+ */
+export interface ListClaimableSourceSyncJobsParams {
+  /** Jobs with `next_retry_at` after this moment are not yet due and are skipped. */
+  readonly dueBefore: Date
+  readonly limit: number
+}
+
+/**
  * SourceSyncJobRepositoryShape - Processing-job repository operations used by sync orchestration.
  */
 export interface SourceSyncJobRepositoryShape {
@@ -360,6 +370,14 @@ export interface SourceSyncJobRepositoryShape {
   readonly listPendingJobsNeedingDispatch: (
     params: ListPendingSourceSyncJobsNeedingDispatchParams
   ) => Effect.Effect<ReadonlyArray<SourceSyncPendingDispatchJob>, SyncEngineStorageError>
+
+  /**
+   * List pending jobs a worker can claim right now: prerequisites are met and
+   * any retry delay has passed. Oldest first.
+   */
+  readonly listClaimableJobs: (
+    params: ListClaimableSourceSyncJobsParams
+  ) => Effect.Effect<ReadonlyArray<SourceSyncClaimableJob>, SyncEngineStorageError>
 }
 
 /**
