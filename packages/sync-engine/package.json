@@ -103,6 +103,6 @@
     "@my/typescript-config": "workspace:*",
     "@types/node": "26.0.1",
     "drizzle-orm": "1.0.0-rc.5-169397b",
-    "typescript": "6.0.3"
+    "typescript": "7.0.2"
   }
 }

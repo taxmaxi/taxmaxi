@@ -82,7 +82,4 @@ const nativeCopy = (text: string) => {
 export const writeClipboard = (
   text: string
 ): Effect.Effect<void, never, ChildProcessSpawner.ChildProcessSpawner> =>
-  writeOsc52(text).pipe(
-    Effect.andThen(nativeCopy(text)),
-    Effect.catch(() => Effect.void)
-  )
+  writeOsc52(text).pipe(Effect.andThen(nativeCopy(text)), Effect.ignore)

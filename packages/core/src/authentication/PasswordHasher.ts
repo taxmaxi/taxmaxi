@@ -42,7 +42,7 @@ export class PasswordHasherConfig extends Schema.Class<PasswordHasherConfig>(
    * For bcrypt: number of rounds (2^cost iterations)
    * For argon2: time cost parameter
    */
-  workFactor: Schema.Number.pipe(
+  workFactor: Schema.Finite.pipe(
     Schema.check(Schema.isInt()),
     Schema.check(Schema.isBetween({ minimum: 4, maximum: 31 })),
     Schema.annotate({

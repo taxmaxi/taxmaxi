@@ -7,6 +7,7 @@
  */
 
 import { desc, eq, lte } from "drizzle-orm"
+import * as DateTime from "effect/DateTime"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import * as Option from "effect/Option"
@@ -71,7 +72,7 @@ const make = Effect.gen(function* () {
     db
       .transaction((tx) =>
         Effect.gen(function* () {
-          const now = new Date()
+          const now = yield* DateTime.nowAsDate
 
           yield* tx
             .delete(emailVerificationRequests)

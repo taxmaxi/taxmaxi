@@ -8,6 +8,8 @@ import {
   HttpServerResponse,
 } from "effect/unstable/http"
 import { HttpApiScalar, OpenApi } from "effect/unstable/httpapi"
+// NodeHttpServer requires the Node server constructor as its platform adapter.
+// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { createServer } from "node:http"
 import { LoggerLive } from "@my/observability"
 import {

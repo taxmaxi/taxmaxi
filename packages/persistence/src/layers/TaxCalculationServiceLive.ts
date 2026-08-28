@@ -11,6 +11,7 @@ import { and, count, eq, gte, inArray, isNull, lt, notInArray, or, sql } from "d
 import { EUR } from "@my/core/currency"
 import { withObservedOperation } from "@my/core/shared/observability/ObservedOperation"
 import * as BigDecimal from "effect/BigDecimal"
+import * as DateTime from "effect/DateTime"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import * as Metric from "effect/Metric"
@@ -70,14 +71,18 @@ const emptyTotals = (): TaxSummaryTotals => ({
   taxFreeGains: zeroAmount(),
 })
 
-const startOfYearUtc = (year: number): Date => new Date(Date.UTC(year, 0, 1, 0, 0, 0, 0))
+const startOfYearUtc = (year: number): Date =>
+  DateTime.toDateUtc(DateTime.makeUnsafe({ year, month: 1, day: 1 }))
 
-const endOfYearUtc = (year: number): Date => new Date(Date.UTC(year + 1, 0, 1, 0, 0, 0, 0))
+const endOfYearUtc = (year: number): Date =>
+  DateTime.toDateUtc(DateTime.makeUnsafe({ year: year + 1, month: 1, day: 1 }))
 
 const holdingPeriodEnd = (acquiredAt: Date): Date => {
-  const end = new Date(acquiredAt.getTime())
-  end.setUTCFullYear(end.getUTCFullYear() + HOLDING_PERIOD_YEARS)
-  return end
+  const acquiredDateTime = DateTime.makeUnsafe(acquiredAt)
+  const { year } = DateTime.toPartsUtc(acquiredDateTime)
+  return DateTime.toDateUtc(
+    DateTime.setParts(acquiredDateTime, { year: year + HOLDING_PERIOD_YEARS })
+  )
 }
 
 const isTaxFreeDisposal = ({
@@ -87,12 +92,12 @@ const isTaxFreeDisposal = ({
   disposedAt.getTime() >= holdingPeriodEnd(acquiredAt).getTime()
 
 const normalizeTaxCalculationError = (error: unknown): TaxCalculationServiceError =>
-  error instanceof SourceNotFoundError ||
-  error instanceof UnsupportedJurisdictionError ||
-  error instanceof TaxCalculationIncompleteDataError ||
-  error instanceof TaxCalculationPendingObservationsError ||
-  error instanceof TaxCalculationUnsupportedCurrencyError ||
-  error instanceof PersistenceError
+  Schema.is(SourceNotFoundError)(error) ||
+  Schema.is(UnsupportedJurisdictionError)(error) ||
+  Schema.is(TaxCalculationIncompleteDataError)(error) ||
+  Schema.is(TaxCalculationPendingObservationsError)(error) ||
+  Schema.is(TaxCalculationUnsupportedCurrencyError)(error) ||
+  Schema.is(PersistenceError)(error)
     ? error
     : new PersistenceError({
         operation: "taxCalculationService.calculateTax",

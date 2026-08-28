@@ -291,14 +291,11 @@ export class TaxMaxi implements TaxMaxiPromiseResources {
     })
   }
 
-  private readonly run = async <A>(
+  private readonly run = <A>(
     effect: Effect.Effect<A, unknown, never>,
     options?: AssetRequestOptions
-  ): Promise<A> => {
-    try {
-      return await Effect.runPromise(effect, options)
-    } catch (error) {
+  ): Promise<A> =>
+    Effect.runPromise(effect, options).catch((error: unknown) => {
       throw toTaxMaxiError(error)
-    }
-  }
+    })
 }

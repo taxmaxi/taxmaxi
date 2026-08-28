@@ -5,8 +5,10 @@
  */
 
 import * as Effect from "effect/Effect"
+import * as DateTime from "effect/DateTime"
 import * as Layer from "effect/Layer"
 import * as Option from "effect/Option"
+import * as Schema from "effect/Schema"
 import {
   SourceNotFoundError,
   SourceRepository,
@@ -80,7 +82,12 @@ const make = Effect.gen(function* () {
     Effect.gen(function* () {
       const message = "Recovered stale source sync job after a previous execution stopped."
       const completedAt = nowDate()
-      const staleBefore = new Date(completedAt.getTime() - ACTIVE_SYNC_JOB_STALE_AFTER_MILLIS)
+      const staleBefore = DateTime.toDateUtc(
+        DateTime.subtractDuration(
+          DateTime.makeUnsafe(completedAt),
+          ACTIVE_SYNC_JOB_STALE_AFTER_MILLIS
+        )
+      )
 
       yield* Effect.logWarning(
         {
@@ -138,10 +145,12 @@ const make = Effect.gen(function* () {
     Effect.gen(function* () {
       const readyForDispatch = yield* sourceSyncJobRepository.getExecutionJob({ jobId }).pipe(
         Effect.as(true),
-        Effect.catchTag("SourceSyncJobPrerequisitesPendingError", () => Effect.succeed(false)),
-        Effect.catchTag("SourceSyncJobExecutionRecordConflictError", () => Effect.succeed(false)),
+        Effect.catchTags({
+          SourceSyncJobPrerequisitesPendingError: () => Effect.succeed(false),
+          SourceSyncJobExecutionRecordConflictError: () => Effect.succeed(false),
+        }),
         Effect.mapError((cause) =>
-          cause instanceof SyncEngineStorageError
+          Schema.is(SyncEngineStorageError)(cause)
             ? cause
             : new SyncEngineStorageError({
                 operation: "sourceSyncService.enqueuePendingJob.checkPrerequisites",

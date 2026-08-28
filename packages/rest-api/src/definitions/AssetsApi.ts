@@ -52,7 +52,7 @@ export class AssetStaleRevisionError extends Schema.TaggedError<AssetStaleRevisi
   "AssetStaleRevisionError",
   {
     code: Schema.Literal("stale_revision"),
-    evidenceRevision: Schema.Number,
+    evidenceRevision: Schema.Finite,
     currentConclusionRevision: Schema.String,
     currentPolicyEvaluationRevision: Schema.String,
   },
@@ -78,12 +78,12 @@ export class AssetDecisionValidationError extends Schema.TaggedError<AssetDecisi
 export class AssetExceptionImpactResponse extends Schema.Class<AssetExceptionImpactResponse>(
   "AssetExceptionImpactResponse"
 )({
-  blockedReports: Schema.Number,
-  affectedPrincipals: Schema.Number,
-  affectedTransactions: Schema.Number,
-  affectedSources: Schema.Number,
-  affectedCalculations: Schema.Number,
-  existingGeneratedReportSnapshots: Schema.Number,
+  blockedReports: Schema.Finite,
+  affectedPrincipals: Schema.Finite,
+  affectedTransactions: Schema.Finite,
+  affectedSources: Schema.Finite,
+  affectedCalculations: Schema.Finite,
+  existingGeneratedReportSnapshots: Schema.Finite,
   affectedTransactionValueEur: Schema.NullOr(Schema.String),
 }) {}
 
@@ -99,16 +99,16 @@ export class AssetExceptionListRowResponse extends Schema.Class<AssetExceptionLi
   providerType: Schema.NullOr(Schema.String),
   reason: AssetExceptionReason,
   severity: AssetExceptionSeverity,
-  evidenceRevision: Schema.Number,
+  evidenceRevision: Schema.Finite,
   policyRevision: Schema.String,
   currentConclusionRevision: Schema.String,
   currentPolicyEvaluationRevision: Schema.String,
-  blockedReports: Schema.Number,
-  affectedPrincipals: Schema.Number,
-  affectedTransactions: Schema.Number,
-  affectedSources: Schema.Number,
-  affectedCalculations: Schema.Number,
-  existingGeneratedReportSnapshots: Schema.Number,
+  blockedReports: Schema.Finite,
+  affectedPrincipals: Schema.Finite,
+  affectedTransactions: Schema.Finite,
+  affectedSources: Schema.Finite,
+  affectedCalculations: Schema.Finite,
+  existingGeneratedReportSnapshots: Schema.Finite,
   affectedTransactionValueEur: Schema.NullOr(Schema.String),
   oldestAt: Schema.DateTimeUtcFromString,
 }) {}
@@ -131,7 +131,7 @@ export class AssetExceptionEvidenceResponse extends Schema.Class<AssetExceptionE
   claimKind: Schema.String,
   sourceLocator: Schema.NullOr(Schema.String),
   retrievedAt: Schema.DateTimeUtcFromString,
-  evidenceRevision: Schema.Number,
+  evidenceRevision: Schema.Finite,
   decodedClaim: Schema.Unknown,
   rawPayload: Schema.Unknown,
 }) {}
@@ -158,7 +158,7 @@ export class AssetExceptionDecisionHistoryResponse extends Schema.Class<AssetExc
   assetRepresentationId: Schema.NullOr(Schema.String.check(Schema.isUUID())),
   actorId: Schema.String,
   policyRevision: Schema.String,
-  evidenceRevision: Schema.Number,
+  evidenceRevision: Schema.Finite,
   evidenceSnapshotIds: Schema.Array(Schema.String.check(Schema.isUUID())),
   createdAt: Schema.DateTimeUtcFromString,
 }) {}
@@ -167,13 +167,13 @@ export class AssetExceptionRematerializationResponse extends Schema.Class<AssetE
   "AssetExceptionRematerializationResponse"
 )({
   status: AssetExceptionRematerializationStatus,
-  affectedSourceCount: Schema.Number,
-  pendingSourceCount: Schema.Number,
-  runningSourceCount: Schema.Number,
-  completedSourceCount: Schema.Number,
-  failedSourceCount: Schema.Number,
-  retryingSourceCount: Schema.Number,
-  remainingSourceCount: Schema.Number,
+  affectedSourceCount: Schema.Finite,
+  pendingSourceCount: Schema.Finite,
+  runningSourceCount: Schema.Finite,
+  completedSourceCount: Schema.Finite,
+  failedSourceCount: Schema.Finite,
+  retryingSourceCount: Schema.Finite,
+  remainingSourceCount: Schema.Finite,
   lastFailureAt: Schema.NullOr(Schema.DateTimeUtcFromString),
   failureCode: Schema.NullOr(Schema.String),
 }) {}
@@ -187,10 +187,10 @@ export class AssetExceptionDetailResponse extends Schema.Class<AssetExceptionDet
   naturalKey: Schema.NullOr(Schema.String),
   currencyCode: Schema.String,
   name: Schema.NullOr(Schema.String),
-  exponent: Schema.NullOr(Schema.Number),
+  exponent: Schema.NullOr(Schema.Finite),
   providerType: Schema.NullOr(Schema.String),
   rawProviderPayload: Schema.Unknown,
-  evidenceRevision: Schema.Number,
+  evidenceRevision: Schema.Finite,
   currentConclusionRevision: Schema.String,
   currentPolicyEvaluationRevision: Schema.String,
   reviewStatus: Schema.Literals(["unresolved", "approved", "excluded"]),
@@ -212,14 +212,14 @@ export class AssetExceptionPreviewResponse extends Schema.Class<AssetExceptionPr
   representationOutcome: Schema.Literals(["none", "reuse", "create", "reassign"]),
   supersededConclusion: Schema.NullOr(AssetExceptionDecisionHistoryResponse),
   impact: AssetExceptionImpactResponse,
-  rematerializationSourceCount: Schema.Number,
-  evidenceRevision: Schema.Number,
+  rematerializationSourceCount: Schema.Finite,
+  evidenceRevision: Schema.Finite,
   currentConclusionRevision: Schema.String,
   currentPolicyEvaluationRevision: Schema.String,
   affectedObservationRevisions: Schema.Array(
     Schema.Struct({
       providerAssetRowId: Schema.String.check(Schema.isUUID()),
-      evidenceRevision: Schema.Number,
+      evidenceRevision: Schema.Finite,
       currentConclusionRevision: Schema.String,
       currentPolicyEvaluationRevision: Schema.String,
     })
@@ -242,7 +242,7 @@ export class ProviderAssetReviewRow extends Schema.Class<ProviderAssetReviewRow>
   naturalKey: Schema.NullOr(Schema.String),
   currencyCode: Schema.String,
   name: Schema.NullOr(Schema.String),
-  exponent: Schema.NullOr(Schema.Number),
+  exponent: Schema.NullOr(Schema.Finite),
   providerType: Schema.NullOr(Schema.String),
   mappingKind: Schema.NullOr(Schema.Literals(["asset", "fiat"])),
   canonicalAssetId: Schema.NullOr(Schema.String),
@@ -324,13 +324,13 @@ export class AssetRepresentationResponse extends Schema.Class<AssetRepresentatio
   blockchainId: Schema.String,
   blockchainName: Schema.String,
   blockchainChainType: Schema.String,
-  blockchainChainId: Schema.NullOr(Schema.Number),
+  blockchainChainId: Schema.NullOr(Schema.Finite),
   blockchainExplorerUrl: Schema.NullOr(Schema.String),
   blockchainLogoUrl: Schema.NullOr(Schema.String),
   type: Schema.Literals(["native", "token", "nft"]),
   contractAddress: Schema.NullOr(Schema.String),
   mintAddress: Schema.NullOr(Schema.String),
-  decimals: Schema.Number,
+  decimals: Schema.Finite,
   logoUrl: Schema.NullOr(Schema.String),
   metadata: Schema.Unknown,
 }) {}
@@ -381,7 +381,7 @@ export class CanonicalAssetResponse extends Schema.Class<CanonicalAssetResponse>
   name: Schema.String,
   symbol: Schema.String,
   type: Schema.Literals(["fungible", "nft"]),
-  decimals: Schema.Number,
+  decimals: Schema.Finite,
   contractAddress: Schema.NullOr(Schema.String),
   mintAddress: Schema.NullOr(Schema.String),
   representationType: Schema.Literals(["native", "token", "nft"]),
@@ -412,7 +412,7 @@ const ProviderAssetReviewQuery = Schema.Struct({
   status: Schema.optional(ProviderAssetMappingStatus),
   cursor: Schema.optional(Schema.String),
   limit: Schema.optional(
-    Schema.NumberFromString.check(
+    Schema.FiniteFromString.check(
       Schema.isInt(),
       Schema.isGreaterThanOrEqualTo(1),
       Schema.isLessThanOrEqualTo(100)
@@ -424,7 +424,7 @@ const UnresolvedTransferReconciliationQuery = Schema.Struct({
   status: Schema.optional(Schema.Literals(["pending", "needs_review"])),
   cursor: Schema.optional(Schema.String),
   limit: Schema.optional(
-    Schema.NumberFromString.check(
+    Schema.FiniteFromString.check(
       Schema.isInt(),
       Schema.isGreaterThanOrEqualTo(1),
       Schema.isLessThanOrEqualTo(100)
@@ -437,7 +437,7 @@ const PendingAssetListQuery = Schema.Struct({
   provider: Schema.optional(Schema.String),
   cursor: Schema.optional(Schema.String),
   limit: Schema.optional(
-    Schema.NumberFromString.check(
+    Schema.FiniteFromString.check(
       Schema.isInt(),
       Schema.isGreaterThanOrEqualTo(1),
       Schema.isLessThanOrEqualTo(100)
@@ -449,7 +449,7 @@ const AssetCatalogListQuery = Schema.Struct({
   q: Schema.optional(AssetCatalogSearchQuery),
   cursor: Schema.optional(Schema.String),
   limit: Schema.optional(
-    Schema.NumberFromString.check(
+    Schema.FiniteFromString.check(
       Schema.isInt(),
       Schema.isGreaterThanOrEqualTo(1),
       Schema.isLessThanOrEqualTo(500)
@@ -461,7 +461,7 @@ const AssetExceptionListQuery = Schema.Struct({
   q: Schema.optional(AssetCatalogSearchQuery),
   cursor: Schema.optional(Schema.String),
   limit: Schema.optional(
-    Schema.NumberFromString.check(
+    Schema.FiniteFromString.check(
       Schema.isInt(),
       Schema.isGreaterThanOrEqualTo(1),
       Schema.isLessThanOrEqualTo(100)
@@ -479,7 +479,7 @@ export class AssetExceptionDecisionRequest extends Schema.Class<AssetExceptionDe
   "AssetExceptionDecisionRequest"
 )({
   claim: AssetExceptionClaim,
-  evidenceRevision: Schema.Number.pipe(
+  evidenceRevision: Schema.Finite.pipe(
     Schema.check(Schema.isInt()),
     Schema.check(Schema.isGreaterThanOrEqualTo(1))
   ),
@@ -499,7 +499,7 @@ export class AssetExceptionDecisionConfirmationRequest extends Schema.Class<Asse
   expectedAffectedObservationRevisions: Schema.Array(
     Schema.Struct({
       providerAssetRowId: Schema.String.check(Schema.isUUID()),
-      evidenceRevision: Schema.Number,
+      evidenceRevision: Schema.Finite,
       currentConclusionRevision: Schema.String,
       currentPolicyEvaluationRevision: Schema.String,
     })

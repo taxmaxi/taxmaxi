@@ -337,81 +337,78 @@ const makeExecutorLayer = ({
               done: true,
             })
           }),
-    refreshReferenceData: () =>
-      Effect.succeed({
-        transactionTypeCatalogCount: 0,
-        providerAssetCatalogCount: 0,
-        defaultTransactionMappingCount: 0,
-        defaultProviderAssetMappingCount: 0,
-      }),
-    refreshDefaultMappings: () =>
-      Effect.succeed({
-        defaultTransactionMappingCount: 0,
-        defaultProviderAssetMappingCount: 0,
-      }),
-    makeRawRecordNormalizer: () =>
-      Effect.succeed(({ source, sourceRecord }) => {
-        events.push(`normalize:${sourceRecord.id}`)
-        if (prepareReplayTransactions) {
-          return Effect.succeed({
-            kind: "prepared",
-            providerAssetRowIds: [],
-            transaction: {
-              sourceId: source.id,
-              sourceRawRecordId: sourceRecord.id,
-              externalId: sourceRecord.externalRecordId,
-              externalGroupId: null,
-              timestamp: sourceRecord.occurredAt,
-              transactionType: null,
-              providerTransactionType: "test",
-              providerStatus: "completed",
-              providerResourcePath: null,
-              providerDescription: null,
-              providerCreatedAt: sourceRecord.occurredAt,
-              providerUpdatedAt: sourceRecord.occurredAt,
-              metadata: null,
-              providerFiatAmount: null,
-              providerFiatCurrency: null,
-              principalId: source.principalId,
-            },
-            venueContext: {
-              venueType: "cex",
-              cexAccountId: source.cexAccountId,
-              externalAccountId: sourceRecord.externalAccountId,
-              externalOrderId: null,
-              externalFillId: null,
-              side: null,
-              instrument: null,
-              fillPrice: null,
-              commissionAmount: null,
-              commissionCurrency: null,
-              metadata: null,
-            },
-            providerTransfers: [],
-            canonicalTransfers: [],
-            transactionReview: null,
-            resolvedTransactionType: {
-              providerTransactionType: "test",
-              transactionType: null,
-              inventoryEffect: "unknown",
-              taxTreatment: "requires_additional_rule_logic",
-              resolutionStrategy: "no_leg",
-              pairedRecordRequired: false,
-              mappingStatus: "pending_review",
-            },
-            deriveLegs: () =>
-              sourceRecord.id === failReplayPersistenceRawRecordId
-                ? Effect.fail(
-                    new SourceProviderRecoverableNormalizationError({
-                      providerKey: "coinbase",
-                      message: "Prepared replay persistence failed.",
-                    })
-                  )
-                : Effect.succeed([]),
-          } as const)
-        }
-        return Effect.succeed({ kind: "skipped" } as const)
-      }),
+    refreshReferenceData: Effect.succeed({
+      transactionTypeCatalogCount: 0,
+      providerAssetCatalogCount: 0,
+      defaultTransactionMappingCount: 0,
+      defaultProviderAssetMappingCount: 0,
+    }),
+    refreshDefaultMappings: Effect.succeed({
+      defaultTransactionMappingCount: 0,
+      defaultProviderAssetMappingCount: 0,
+    }),
+    makeRawRecordNormalizer: Effect.succeed(({ source, sourceRecord }) => {
+      events.push(`normalize:${sourceRecord.id}`)
+      if (prepareReplayTransactions) {
+        return Effect.succeed({
+          kind: "prepared",
+          providerAssetRowIds: [],
+          transaction: {
+            sourceId: source.id,
+            sourceRawRecordId: sourceRecord.id,
+            externalId: sourceRecord.externalRecordId,
+            externalGroupId: null,
+            timestamp: sourceRecord.occurredAt,
+            transactionType: null,
+            providerTransactionType: "test",
+            providerStatus: "completed",
+            providerResourcePath: null,
+            providerDescription: null,
+            providerCreatedAt: sourceRecord.occurredAt,
+            providerUpdatedAt: sourceRecord.occurredAt,
+            metadata: null,
+            providerFiatAmount: null,
+            providerFiatCurrency: null,
+            principalId: source.principalId,
+          },
+          venueContext: {
+            venueType: "cex",
+            cexAccountId: source.cexAccountId,
+            externalAccountId: sourceRecord.externalAccountId,
+            externalOrderId: null,
+            externalFillId: null,
+            side: null,
+            instrument: null,
+            fillPrice: null,
+            commissionAmount: null,
+            commissionCurrency: null,
+            metadata: null,
+          },
+          providerTransfers: [],
+          canonicalTransfers: [],
+          transactionReview: null,
+          resolvedTransactionType: {
+            providerTransactionType: "test",
+            transactionType: null,
+            inventoryEffect: "unknown",
+            taxTreatment: "requires_additional_rule_logic",
+            resolutionStrategy: "no_leg",
+            pairedRecordRequired: false,
+            mappingStatus: "pending_review",
+          },
+          deriveLegs: () =>
+            sourceRecord.id === failReplayPersistenceRawRecordId
+              ? Effect.fail(
+                  new SourceProviderRecoverableNormalizationError({
+                    providerKey: "coinbase",
+                    message: "Prepared replay persistence failed.",
+                  })
+                )
+              : Effect.succeed([]),
+        } as const)
+      }
+      return Effect.succeed({ kind: "skipped" } as const)
+    }),
   })
 
   const makeStubModule = (): SourceProviderModuleShape => ({
@@ -425,40 +422,37 @@ const makeExecutorLayer = ({
           done: true,
         })
       }),
-    refreshReferenceData: () =>
-      Effect.sync(() => {
-        events.push("stub:refresh-reference-data")
-        return {
-          transactionTypeCatalogCount: 0,
-          providerAssetCatalogCount: 0,
-          defaultTransactionMappingCount: 0,
-          defaultProviderAssetMappingCount: 0,
-        }
-      }),
-    refreshDefaultMappings: () =>
-      Effect.succeed({
+    refreshReferenceData: Effect.sync(() => {
+      events.push("stub:refresh-reference-data")
+      return {
+        transactionTypeCatalogCount: 0,
+        providerAssetCatalogCount: 0,
         defaultTransactionMappingCount: 0,
         defaultProviderAssetMappingCount: 0,
-      }),
-    makeRawRecordNormalizer: () =>
-      Effect.sync(() => {
-        events.push("stub:make-normalizer")
-        let normalizeAttempts = 0
-        return ({ source, sourceRecord }) =>
-          Effect.gen(function* () {
-            normalizeAttempts += 1
-            events.push(`stub:normalize:${source.providerKey}:${sourceRecord.recordType}`)
+      }
+    }),
+    refreshDefaultMappings: Effect.succeed({
+      defaultTransactionMappingCount: 0,
+      defaultProviderAssetMappingCount: 0,
+    }),
+    makeRawRecordNormalizer: Effect.sync(() => {
+      events.push("stub:make-normalizer")
+      let normalizeAttempts = 0
+      return ({ source, sourceRecord }) =>
+        Effect.gen(function* () {
+          normalizeAttempts += 1
+          events.push(`stub:normalize:${source.providerKey}:${sourceRecord.recordType}`)
 
-            if (failNormalizeOnce && normalizeAttempts === 1) {
-              return yield* new SourceProviderRecoverableNormalizationError({
-                providerKey: "stub-chain",
-                message: "Paired sibling row is not cached yet.",
-              })
-            }
+          if (failNormalizeOnce && normalizeAttempts === 1) {
+            return yield* new SourceProviderRecoverableNormalizationError({
+              providerKey: "stub-chain",
+              message: "Paired sibling row is not cached yet.",
+            })
+          }
 
-            return { kind: "skipped" } as const
-          })
-      }),
+          return { kind: "skipped" } as const
+        })
+    }),
   })
 
   const makeHeliusModule = (): SourceProviderModuleShape => ({
@@ -472,38 +466,35 @@ const makeExecutorLayer = ({
           done: true,
         })
       }),
-    refreshReferenceData: () =>
-      Effect.sync(() => {
-        events.push("helius:refresh-reference-data")
-        return {
-          transactionTypeCatalogCount: 0,
-          providerAssetCatalogCount: 0,
-          defaultTransactionMappingCount: 0,
-          defaultProviderAssetMappingCount: 0,
-        }
-      }),
-    refreshDefaultMappings: () =>
-      Effect.succeed({
+    refreshReferenceData: Effect.sync(() => {
+      events.push("helius:refresh-reference-data")
+      return {
+        transactionTypeCatalogCount: 0,
+        providerAssetCatalogCount: 0,
         defaultTransactionMappingCount: 0,
         defaultProviderAssetMappingCount: 0,
-      }),
-    makeRawRecordNormalizer: () =>
-      Effect.sync(() => {
-        events.push("helius:make-normalizer")
-        return ({ source, sourceRecord }) =>
-          Effect.sync(() => {
-            events.push(`helius:normalize:${source.providerKey}:${sourceRecord.recordType}`)
-          }).pipe(
-            Effect.flatMap(() =>
-              Effect.fail(
-                new SourceProviderRecoverableNormalizationError({
-                  providerKey: "helius-solana",
-                  message: "Helius Solana normalization is not implemented yet.",
-                })
-              )
+      }
+    }),
+    refreshDefaultMappings: Effect.succeed({
+      defaultTransactionMappingCount: 0,
+      defaultProviderAssetMappingCount: 0,
+    }),
+    makeRawRecordNormalizer: Effect.sync(() => {
+      events.push("helius:make-normalizer")
+      return ({ source, sourceRecord }) =>
+        Effect.sync(() => {
+          events.push(`helius:normalize:${source.providerKey}:${sourceRecord.recordType}`)
+        }).pipe(
+          Effect.flatMap(() =>
+            Effect.fail(
+              new SourceProviderRecoverableNormalizationError({
+                providerKey: "helius-solana",
+                message: "Helius Solana normalization is not implemented yet.",
+              })
             )
           )
-      }),
+        )
+    }),
   })
 
   const SourceProviderRegistryTestLive = Layer.succeed(SourceProviderRegistry, {

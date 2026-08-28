@@ -15,6 +15,7 @@
  */
 
 import * as Effect from "effect/Effect"
+import * as DateTime from "effect/DateTime"
 import * as Layer from "effect/Layer"
 import * as Option from "effect/Option"
 import {
@@ -848,7 +849,12 @@ const make = Effect.gen(function* () {
   }) =>
     Effect.gen(function* () {
       const startedAt = nowDate()
-      const staleBefore = new Date(startedAt.getTime() - ASSET_RESOLUTION_JOB_STALE_AFTER_MS)
+      const staleBefore = DateTime.toDateUtc(
+        DateTime.subtractDuration(
+          DateTime.makeUnsafe(startedAt),
+          ASSET_RESOLUTION_JOB_STALE_AFTER_MS
+        )
+      )
       const claim = yield* assetResolutionJobRepository.claimResolutionJob({
         jobId,
         workerId,

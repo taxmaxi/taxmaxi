@@ -294,7 +294,7 @@ const userRepositoryStub: UserRepositoryService = {
   create: () => Effect.die("unused user repository create"),
   update: () => Effect.die("unused user repository update"),
   delete: () => Effect.die("unused user repository delete"),
-  findPlatformAdmins: () => Effect.succeed([]),
+  findPlatformAdmins: Effect.succeed([]),
   isPlatformAdmin: () => Effect.succeed(false),
 }
 

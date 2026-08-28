@@ -5,7 +5,7 @@
  */
 
 import { Queue, type JobsOptions } from "bullmq"
-import { Config, Effect, Layer, Schema } from "effect"
+import { Config, DateTime, Effect, Layer, Schema } from "effect"
 import { Redis } from "ioredis"
 import {
   SOURCE_SYNC_JOB_NAME,
@@ -102,7 +102,7 @@ const loadConfig = Effect.gen(function* () {
       Config.orElse(() => Config.int("SYNC_WORKER_MAX_ATTEMPTS")),
       Config.withDefault(DEFAULT_QUEUE_ATTEMPTS),
       Config.mapOrFail((value) =>
-        Schema.decodeUnknownEffect(
+        Schema.decodeEffect(
           Schema.Int.check(
             Schema.isGreaterThan(0, {
               message: "SOURCE_SYNC_QUEUE_ATTEMPTS must be greater than zero",
@@ -168,13 +168,7 @@ const acquireLiveQueue = ({
     return {
       add: (name, payload, options) => queue.add(name, payload, options),
       close: Effect.tryPromise({
-        try: async () => {
-          try {
-            await queue.close()
-          } finally {
-            connection.disconnect()
-          }
-        },
+        try: () => queue.close().finally(() => connection.disconnect()),
         catch: (cause) =>
           new SourceSyncQueueError({
             operation: "apiBullMqSourceSyncQueue.close",
@@ -211,10 +205,7 @@ const makeJobOptions = ({
   },
 })
 
-const currentDate = Effect.map(
-  Effect.clockWith((clock) => clock.currentTimeMillis),
-  (currentTimeMillis) => new Date(currentTimeMillis)
-)
+const currentDate = DateTime.now.pipe(Effect.map(DateTime.toDateUtc))
 
 /**
  * Construct a BullMQ-backed source sync queue producer layer.

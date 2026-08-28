@@ -38,7 +38,7 @@ export class ProtocolCandidateReviewRow extends Schema.Class<ProtocolCandidateRe
   mappingStatus: Schema.Literals(["approved", "pending_review", "rejected"]),
   firstSeenAt: Schema.DateTimeUtc,
   lastSeenAt: Schema.DateTimeUtc,
-  observationCount: Schema.Number,
+  observationCount: Schema.Finite,
 }) {}
 
 export class ProtocolCandidateReviewListResponse extends Schema.Class<ProtocolCandidateReviewListResponse>(
@@ -55,9 +55,9 @@ export class ProtocolCandidateObservationSourceMetadataResponse extends Schema.C
   "ProtocolCandidateObservationSourceMetadataResponse"
 )({
   source: Schema.Literal("dune"),
-  queryId: Schema.Number,
+  queryId: Schema.Finite,
   queryName: Schema.String,
-  queryVersion: Schema.Number,
+  queryVersion: Schema.Finite,
 }) {}
 
 export class ProtocolCandidateObservationResponse extends Schema.Class<ProtocolCandidateObservationResponse>(
@@ -108,7 +108,7 @@ export class TaxMaxiTransactionTypeListResponse extends Schema.Class<TaxMaxiTran
 const CandidateListQuery = Schema.Struct({
   cursor: Schema.optional(Schema.String),
   limit: Schema.optional(
-    Schema.NumberFromString.check(
+    Schema.FiniteFromString.check(
       Schema.isInt(),
       Schema.isGreaterThanOrEqualTo(1),
       Schema.isLessThanOrEqualTo(100)
@@ -119,7 +119,7 @@ const CandidateListQuery = Schema.Struct({
 const CandidateDetailQuery = Schema.Struct({
   observationCursor: Schema.optional(Schema.String),
   observationLimit: Schema.optional(
-    Schema.NumberFromString.check(
+    Schema.FiniteFromString.check(
       Schema.isInt(),
       Schema.isGreaterThanOrEqualTo(1),
       Schema.isLessThanOrEqualTo(25)

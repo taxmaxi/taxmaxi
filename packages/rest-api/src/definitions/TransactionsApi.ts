@@ -18,7 +18,7 @@ export class TransactionBadRequestError extends Schema.TaggedError<TransactionBa
 export const TransactionListQuery = Schema.Struct({
   cursor: Schema.optional(Schema.String),
   limit: Schema.optional(
-    Schema.NumberFromString.check(
+    Schema.FiniteFromString.check(
       Schema.isInt(),
       Schema.isGreaterThanOrEqualTo(1),
       Schema.isLessThanOrEqualTo(100)
@@ -72,7 +72,7 @@ export class TransactionListResponse extends Schema.Class<TransactionListRespons
 )({
   transactions: Schema.Array(TransactionListItem),
   page: TransactionListPageInfo,
-  totalCount: Schema.Number,
+  totalCount: Schema.Finite,
 }) {}
 
 const listTransactions = HttpApiEndpoint.get("listTransactions", "/transactions", {

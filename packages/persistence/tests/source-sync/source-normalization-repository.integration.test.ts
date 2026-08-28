@@ -82,50 +82,48 @@ const runTransferReconciliationRepository = <A, E>(
 const CoinbaseSyncClientTestLive = Layer.succeed(CoinbaseSyncClient, {
   fetchAccountsPage: () => Effect.die("CoinbaseSyncClient test stub: fetchAccountsPage"),
   fetchTransactionsPage: () => Effect.die("CoinbaseSyncClient test stub: fetchTransactionsPage"),
-  fetchFiatCurrencies: () =>
-    Effect.succeed([
-      {
-        currencyCode: "EUR",
+  fetchFiatCurrencies: Effect.succeed([
+    {
+      currencyCode: "EUR",
+      name: "Euro",
+      minSize: "0.01",
+      payload: {
+        id: "EUR",
         name: "Euro",
-        minSize: "0.01",
-        payload: {
-          id: "EUR",
-          name: "Euro",
-          min_size: "0.01",
-        },
+        min_size: "0.01",
       },
-    ] as const),
-  fetchCryptoCurrencies: () =>
-    Effect.succeed([
-      {
-        currencyCode: "BTC",
+    },
+  ] as const),
+  fetchCryptoCurrencies: Effect.succeed([
+    {
+      currencyCode: "BTC",
+      name: "Bitcoin",
+      providerAssetId: "btc-provider-asset",
+      exponent: 8,
+      providerType: "crypto",
+      payload: {
+        code: "BTC",
         name: "Bitcoin",
-        providerAssetId: "btc-provider-asset",
         exponent: 8,
-        providerType: "crypto",
-        payload: {
-          code: "BTC",
-          name: "Bitcoin",
-          exponent: 8,
-          type: "crypto",
-          asset_id: "btc-provider-asset",
-        },
+        type: "crypto",
+        asset_id: "btc-provider-asset",
       },
-      {
-        currencyCode: "SOL",
+    },
+    {
+      currencyCode: "SOL",
+      name: "Solana",
+      providerAssetId: "sol-provider-asset",
+      exponent: 9,
+      providerType: "crypto",
+      payload: {
+        code: "SOL",
         name: "Solana",
-        providerAssetId: "sol-provider-asset",
         exponent: 9,
-        providerType: "crypto",
-        payload: {
-          code: "SOL",
-          name: "Solana",
-          exponent: 9,
-          type: "crypto",
-          asset_id: "sol-provider-asset",
-        },
+        type: "crypto",
+        asset_id: "sol-provider-asset",
       },
-    ] as const),
+    },
+  ] as const),
 })
 
 const CoinbaseReferenceMappingWithDepsLive = CoinbaseReferenceMappingServiceLive.pipe(
@@ -273,8 +271,8 @@ const persistCoinbaseNormalization = ({
     const coinbaseSourceSyncProvider = yield* CoinbaseSourceSyncProvider
     const sourceNormalizationRepository = yield* SourceNormalizationRepository
 
-    yield* referenceDataService.refreshReferenceData()
-    const lookups = yield* coinbaseSourceSyncProvider.loadNormalizationLookups()
+    yield* referenceDataService.refreshReferenceData
+    const lookups = yield* coinbaseSourceSyncProvider.loadNormalizationLookups
     const prepared = yield* coinbaseSourceSyncProvider.prepareNormalization({
       source,
       sourceRecord,

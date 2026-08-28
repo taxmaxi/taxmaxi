@@ -13,7 +13,7 @@ export const syncOnchainSourceProgram = ({
   readonly json: boolean
 }) =>
   Effect.gen(function* () {
-    const session = yield* readSession()
+    const session = yield* readSession
     const created = yield* createOnchainSource({
       apiUrl: session.apiUrl,
       sessionToken: session.sessionToken,

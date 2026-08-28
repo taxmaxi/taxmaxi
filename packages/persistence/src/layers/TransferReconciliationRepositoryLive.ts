@@ -21,6 +21,7 @@ import {
   type SQLWrapper,
 } from "drizzle-orm"
 import * as BigDecimal from "effect/BigDecimal"
+import * as DateTime from "effect/DateTime"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import * as Option from "effect/Option"
@@ -193,7 +194,7 @@ const make = Effect.gen(function* () {
     readonly value: unknown
     readonly operation: string
   }) =>
-    Schema.decodeUnknownEffect(Schema.Union([Schema.String, Schema.Number]))(value).pipe(
+    Schema.decodeUnknownEffect(Schema.Union([Schema.String, Schema.Finite]))(value).pipe(
       Effect.map(String),
       Effect.mapError(
         () =>
@@ -2065,7 +2066,7 @@ const make = Effect.gen(function* () {
       .pipe(
         Effect.retry({
           times: 2,
-          while: (error) => error instanceof ReconciliationSourceSetChanged,
+          while: (error) => Schema.is(ReconciliationSourceSetChanged)(error),
         }),
         wrapSyncEngineSqlError("transferReconciliationRepository.upsertTransferReconciliation")
       )
@@ -2371,11 +2372,17 @@ const make = Effect.gen(function* () {
                     principalId,
                     direction: row.providerDirection,
                     walletAddress,
-                    timestampStart: new Date(
-                      row.providerTimestamp.getTime() - RECONCILIATION_TIME_WINDOW_MILLIS
+                    timestampStart: DateTime.toDateUtc(
+                      DateTime.subtractDuration(
+                        DateTime.makeUnsafe(row.providerTimestamp),
+                        RECONCILIATION_TIME_WINDOW_MILLIS
+                      )
                     ),
-                    timestampEnd: new Date(
-                      row.providerTimestamp.getTime() + RECONCILIATION_TIME_WINDOW_MILLIS
+                    timestampEnd: DateTime.toDateUtc(
+                      DateTime.addDuration(
+                        DateTime.makeUnsafe(row.providerTimestamp),
+                        RECONCILIATION_TIME_WINDOW_MILLIS
+                      )
                     ),
                     networkName: row.providerNetworkName,
                     networkHash: row.providerNetworkHash,

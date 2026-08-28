@@ -47,7 +47,7 @@ export class LocalAuthConfig extends Schema.Class<LocalAuthConfig>("LocalAuthCon
   /**
    * Minimum password length
    */
-  minPasswordLength: Schema.Number.pipe(
+  minPasswordLength: Schema.Finite.pipe(
     Schema.check(Schema.isInt()),
     Schema.check(Schema.isGreaterThan(0))
   ).annotate({

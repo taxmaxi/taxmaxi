@@ -101,7 +101,7 @@ const make = Effect.gen(function* () {
       ),
       Effect.timeout(requestTimeoutMs),
       Effect.mapError((cause) =>
-        cause instanceof AssetResolutionJupiterRetryableError
+        Schema.is(AssetResolutionJupiterRetryableError)(cause)
           ? cause
           : new AssetResolutionJupiterRetryableError({ status: null, cause })
       )

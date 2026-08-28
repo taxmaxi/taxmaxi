@@ -8,6 +8,7 @@
  */
 
 import { and, eq, ilike } from "drizzle-orm"
+import * as DateTime from "effect/DateTime"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import { EntityNotFoundError, wrapSqlError } from "../errors/RepositoryError.ts"
@@ -57,8 +58,10 @@ const make = Effect.gen(function* () {
           return yield* new EntityNotFoundError({ entityType: "Cex", entityId: params.cexName })
         }
 
-        const credentialsUpdatedAt = new Date()
-        const expiresAt = new Date(params.oauthCredentials.expiresAtEpochMillis)
+        const credentialsUpdatedAt = yield* DateTime.nowAsDate
+        const expiresAt = DateTime.toDateUtc(
+          DateTime.makeUnsafe(params.oauthCredentials.expiresAtEpochMillis)
+        )
 
         const [existing] = yield* db
           .select(selectCexAccountFields)

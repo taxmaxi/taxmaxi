@@ -94,7 +94,7 @@ export class MonetaryAmount extends Schema.Class<MonetaryAmount>("MonetaryAmount
     currency: CurrencyCode
   ): Effect.Effect<MonetaryAmount, Schema.SchemaError> {
     return Effect.gen(function* () {
-      const bd = yield* Schema.decodeUnknownEffect(Schema.BigDecimalFromString)(amountStr)
+      const bd = yield* Schema.decodeEffect(Schema.BigDecimalFromString)(amountStr)
       return MonetaryAmount.fromBigDecimal(bd, currency)
     })
   }

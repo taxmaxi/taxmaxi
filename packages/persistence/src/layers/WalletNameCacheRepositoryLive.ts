@@ -8,6 +8,7 @@
  */
 
 import { and, eq } from "drizzle-orm"
+import * as DateTime from "effect/DateTime"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import { wrapSqlError } from "../errors/RepositoryError.ts"
@@ -23,7 +24,7 @@ const make = Effect.gen(function* () {
 
   const get: WalletNameCacheRepositoryShape["get"] = ({ name, namespace }) =>
     Effect.gen(function* () {
-      const now = new Date()
+      const now = yield* DateTime.nowAsDate
       const [cached] = yield* db
         .select({
           resolvedAddress: walletNameCache.resolvedAddress,
@@ -43,7 +44,7 @@ const make = Effect.gen(function* () {
     resolvedAddress,
   }) =>
     Effect.gen(function* () {
-      const now = new Date()
+      const now = yield* DateTime.nowAsDate
 
       yield* db
         .insert(walletNameCache)

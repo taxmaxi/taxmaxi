@@ -73,19 +73,19 @@ const runWithProvider = <A, E>(
 
               return Effect.die(`Unexpected cursor: ${String(cursor)}`)
             },
-            fetchFiatCurrencies: () => Effect.die("fetchFiatCurrencies should not be called"),
-            fetchCryptoCurrencies: () => Effect.die("fetchCryptoCurrencies should not be called"),
+            fetchFiatCurrencies: Effect.die("fetchFiatCurrencies should not be called"),
+            fetchCryptoCurrencies: Effect.die("fetchCryptoCurrencies should not be called"),
           } satisfies CoinbaseSyncClientShape)
         ),
         Layer.provide(
           Layer.succeed(CoinbaseReferenceDataService, {
-            refreshReferenceData: () => Effect.die("refreshReferenceData should not be called"),
-            refreshDefaultMappings: () => Effect.die("refreshDefaultMappings should not be called"),
+            refreshReferenceData: Effect.die("refreshReferenceData should not be called"),
+            refreshDefaultMappings: Effect.die("refreshDefaultMappings should not be called"),
           })
         ),
         Layer.provide(
           Layer.succeed(CoinbaseReferenceMappingService, {
-            ensureDefaultMappings: () => Effect.die("ensureDefaultMappings should not be called"),
+            ensureDefaultMappings: Effect.die("ensureDefaultMappings should not be called"),
             resolveTransactionType: () => Effect.die("resolveTransactionType should not be called"),
             resolveCurrency: () => Effect.die("resolveCurrency should not be called"),
             resolveAssetId: () => Effect.die("resolveAssetId should not be called"),
@@ -110,7 +110,7 @@ const runWithProvider = <A, E>(
               Effect.die("findNativeRepresentationForBlockchain should not be called"),
             findRepresentationByBlockchainAndAddress: () =>
               Effect.die("findRepresentationByBlockchainAndAddress should not be called"),
-            listBlockchains: () => Effect.die("listBlockchains should not be called"),
+            listBlockchains: Effect.die("listBlockchains should not be called"),
             upsertEconomicAssetRepresentation: () =>
               Effect.die("upsertEconomicAssetRepresentation should not be called"),
             findAssetResolutionCandidatesByDisplay: () =>

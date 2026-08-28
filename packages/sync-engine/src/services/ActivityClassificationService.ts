@@ -169,11 +169,11 @@ export class ActivityOnchainFacts extends Schema.Class<ActivityOnchainFacts>(
  * ActivityUtxoFacts - Bitcoin/UTXO pattern facts without committing result shape to Bitcoin.
  */
 export class ActivityUtxoFacts extends Schema.Class<ActivityUtxoFacts>("ActivityUtxoFacts")({
-  inputCount: Schema.Number,
-  outputCount: Schema.Number,
-  ownedInputCount: Schema.Number,
-  ownedOutputCount: Schema.Number,
-  changeOutputCount: Schema.Number,
+  inputCount: Schema.Finite,
+  outputCount: Schema.Finite,
+  ownedInputCount: Schema.Finite,
+  ownedOutputCount: Schema.Finite,
+  changeOutputCount: Schema.Finite,
   metadata: Schema.Unknown,
 }) {}
 

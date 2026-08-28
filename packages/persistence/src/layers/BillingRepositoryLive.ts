@@ -6,6 +6,7 @@
 
 import { and, asc, eq, gt, inArray, isNull, lte, or, sql } from "drizzle-orm"
 import * as BigDecimal from "effect/BigDecimal"
+import * as DateTime from "effect/DateTime"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import * as Option from "effect/Option"
@@ -220,7 +221,10 @@ const make = Effect.gen(function* () {
       .values({ userId: input.userId, stripeCustomerId: input.stripeCustomerId })
       .onConflictDoUpdate({
         target: billingAccounts.userId,
-        set: { stripeCustomerId: input.stripeCustomerId, updatedAt: new Date() },
+        set: {
+          stripeCustomerId: input.stripeCustomerId,
+          updatedAt: DateTime.toDateUtc(DateTime.nowUnsafe()),
+        },
       })
       .pipe(Effect.asVoid, wrapSqlError("billing.saveCustomer"))
 
@@ -251,7 +255,7 @@ const make = Effect.gen(function* () {
                   then null
                   else ${billingAccounts.annualCheckoutPriceId}
                 end`,
-          updatedAt: new Date(),
+          updatedAt: DateTime.toDateUtc(DateTime.nowUnsafe()),
         })
         .where(
           and(
@@ -275,7 +279,7 @@ const make = Effect.gen(function* () {
         .set({
           subscriptionSyncGeneration: sql`${billingAccounts.subscriptionSyncGeneration} + 1`,
           lastSubscriptionEventCreatedAt: input.eventCreatedAt,
-          updatedAt: new Date(),
+          updatedAt: DateTime.toDateUtc(DateTime.nowUnsafe()),
         })
         .where(
           and(
@@ -300,7 +304,7 @@ const make = Effect.gen(function* () {
         currentPeriodEnd: null,
         cancelAtPeriodEnd: false,
         lastSubscriptionEventCreatedAt: input.eventCreatedAt,
-        updatedAt: new Date(),
+        updatedAt: DateTime.toDateUtc(DateTime.nowUnsafe()),
       })
       .where(
         and(
@@ -332,7 +336,7 @@ const make = Effect.gen(function* () {
         lastSubscriptionEventCreatedAt: null,
         annualCheckoutExpiresAt: null,
         annualCheckoutPriceId: null,
-        updatedAt: new Date(),
+        updatedAt: DateTime.toDateUtc(DateTime.nowUnsafe()),
       })
       .where(eq(billingAccounts.stripeCustomerId, stripeCustomerId))
       .pipe(Effect.asVoid, wrapSqlError("billing.clearCustomer"))
@@ -354,7 +358,7 @@ const make = Effect.gen(function* () {
             return yield* Effect.die("Billing account missing after customer creation")
           }
 
-          const now = new Date()
+          const now = yield* DateTime.nowAsDate
           if (account.expiresAt !== null && account.expiresAt > now && account.priceId !== null) {
             return {
               generation: account.generation,
@@ -364,7 +368,9 @@ const make = Effect.gen(function* () {
           }
 
           const generation = account.generation + 1
-          const expiresAt = new Date(now.getTime() + 23 * 60 * 60 * 1_000)
+          const expiresAt = DateTime.toDateUtc(
+            DateTime.addDuration(DateTime.makeUnsafe(now), 23 * 60 * 60 * 1_000)
+          )
           yield* tx
             .update(billingAccounts)
             .set({
@@ -387,7 +393,7 @@ const make = Effect.gen(function* () {
         .set({
           annualCheckoutExpiresAt: null,
           annualCheckoutPriceId: null,
-          updatedAt: new Date(),
+          updatedAt: DateTime.toDateUtc(DateTime.nowUnsafe()),
         })
         .where(
           and(
@@ -750,7 +756,7 @@ const make = Effect.gen(function* () {
               eventCreatedAt: input.eventCreatedAt,
               stripeInvoiceId: input.stripeInvoiceId ?? null,
               terminal: input.terminal,
-              updatedAt: new Date(),
+              updatedAt: DateTime.toDateUtc(DateTime.nowUnsafe()),
             })
             .onConflictDoUpdate({
               target: [
@@ -767,7 +773,7 @@ const make = Effect.gen(function* () {
                 eventCreatedAt: input.eventCreatedAt,
                 stripeInvoiceId: input.stripeInvoiceId ?? null,
                 terminal: input.terminal,
-                updatedAt: new Date(),
+                updatedAt: DateTime.toDateUtc(DateTime.nowUnsafe()),
               },
               setWhere: sql`${billingPaymentReversals.terminal} = false and ${billingPaymentReversals.eventCreatedAt} <= ${input.eventCreatedAt}`,
             })
@@ -788,7 +794,10 @@ const make = Effect.gen(function* () {
         .where(
           and(
             eq(creditLedger.userId, userId),
-            or(isNull(creditLedger.expiresAt), gt(creditLedger.expiresAt, new Date()))
+            or(
+              isNull(creditLedger.expiresAt),
+              gt(creditLedger.expiresAt, DateTime.toDateUtc(DateTime.nowUnsafe()))
+            )
           )
         )
 

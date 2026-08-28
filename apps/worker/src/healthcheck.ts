@@ -1,6 +1,6 @@
-import { NodeRuntime } from "@effect/platform-node"
+import { NodeHttpClient, NodeRuntime } from "@effect/platform-node"
 import { Config, Effect, Schema } from "effect"
-import { request } from "node:http"
+import { HttpClient } from "effect/unstable/http"
 
 const DEFAULT_WORKER_HEALTH_PORT = 4001
 const HEALTHCHECK_TIMEOUT_MS = 4_000
@@ -16,36 +16,11 @@ const healthPort = Config.schema(
 ).pipe(Config.withDefault(DEFAULT_WORKER_HEALTH_PORT))
 
 const checkHealth = (port: number) =>
-  Effect.callback<boolean>((resume) => {
-    let settled = false
-    const complete = (healthy: boolean) => {
-      if (settled) {
-        return
-      }
-
-      settled = true
-      resume(Effect.succeed(healthy))
-    }
-    const healthRequest = request(
-      { host: "127.0.0.1", port, path: "/health", method: "GET" },
-      (response) => {
-        response.resume()
-        complete(response.statusCode === 200)
-      }
-    )
-
-    healthRequest.once("error", () => complete(false))
-    healthRequest.setTimeout(HEALTHCHECK_TIMEOUT_MS, () => {
-      complete(false)
-      healthRequest.destroy()
-    })
-    healthRequest.end()
-
-    return Effect.sync(() => {
-      settled = true
-      healthRequest.destroy()
-    })
-  })
+  HttpClient.get(`http://127.0.0.1:${port}/health`).pipe(
+    Effect.flatMap((response) => response.text.pipe(Effect.as(response.status === 200))),
+    Effect.timeout(HEALTHCHECK_TIMEOUT_MS),
+    Effect.orElseSucceed(() => false)
+  )
 
 const program = Effect.gen(function* () {
   const port = yield* healthPort
@@ -56,4 +31,4 @@ const program = Effect.gen(function* () {
   })
 })
 
-NodeRuntime.runMain(program)
+program.pipe(Effect.provide(NodeHttpClient.layerNodeHttp), NodeRuntime.runMain)

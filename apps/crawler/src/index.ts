@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { NodeHttpClient, NodeRuntime, NodeServices } from "@effect/platform-node"
-import { Console, Effect, Layer } from "effect"
+import { Console, Effect, Layer, Schema } from "effect"
 import { Command } from "effect/unstable/cli"
 import { PgClientLive, ProtocolCandidateRepositoryLive } from "@my/persistence/layers"
 import { CrawlerCommandError } from "./errors.ts"
@@ -44,7 +44,7 @@ cli(process.argv.slice(2)).pipe(
       process.exitCode = 1
     })
 
-    if (error instanceof CrawlerCommandError) {
+    if (Schema.is(CrawlerCommandError)(error)) {
       return Console.error(`Error: ${error.message}`).pipe(Effect.andThen(markFailedExit))
     }
 

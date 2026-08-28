@@ -5,6 +5,7 @@
  */
 
 import { and, asc, eq, gte, inArray, isNull, lte, sql } from "drizzle-orm"
+import * as DateTime from "effect/DateTime"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import { drizzle } from "./PgClientLive.ts"
@@ -174,11 +175,18 @@ const make = Effect.gen(function* () {
             eq(schema.sourceRecordsRaw.recordType, recordType),
             gte(
               schema.sourceRecordsRaw.occurredAt,
-              new Date(occurredAt.getTime() - pairingWindowMilliseconds)
+              DateTime.toDateUtc(
+                DateTime.subtractDuration(
+                  DateTime.makeUnsafe(occurredAt),
+                  pairingWindowMilliseconds
+                )
+              )
             ),
             lte(
               schema.sourceRecordsRaw.occurredAt,
-              new Date(occurredAt.getTime() + pairingWindowMilliseconds)
+              DateTime.toDateUtc(
+                DateTime.addDuration(DateTime.makeUnsafe(occurredAt), pairingWindowMilliseconds)
+              )
             )
           )
         )

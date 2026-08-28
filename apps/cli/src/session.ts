@@ -54,46 +54,44 @@ export const saveSession = (session: CliSession) =>
     )
   })
 
-export const readSession = () =>
-  Effect.gen(function* () {
-    const fs = yield* FileSystem.FileSystem
-    const sessionFilePath = yield* getSessionFilePath
-    const raw = yield* fs.readFileString(sessionFilePath).pipe(
-      Effect.mapError(
-        () =>
-          new CliCommandError({
-            message: "No local CLI session found. Run `tax coinbase connect` first.",
-          })
-      )
+export const readSession = Effect.gen(function* () {
+  const fs = yield* FileSystem.FileSystem
+  const sessionFilePath = yield* getSessionFilePath
+  const raw = yield* fs.readFileString(sessionFilePath).pipe(
+    Effect.mapError(
+      () =>
+        new CliCommandError({
+          message: "No local CLI session found. Run `tax coinbase connect` first.",
+        })
     )
+  )
 
-    return yield* Schema.decodeUnknownEffect(CliSessionJson)(raw).pipe(
-      Effect.mapError(
-        () =>
-          new CliCommandError({
-            message: "CLI session file is invalid. Run `tax coinbase connect` again.",
-          })
-      )
+  return yield* Schema.decodeEffect(CliSessionJson)(raw).pipe(
+    Effect.mapError(
+      () =>
+        new CliCommandError({
+          message: "CLI session file is invalid. Run `tax coinbase connect` again.",
+        })
     )
-  })
+  )
+})
 
-export const readSessionOption = () => readSession().pipe(Effect.option)
+export const readSessionOption = readSession.pipe(Effect.option)
 
-export const deleteSession = () =>
-  Effect.gen(function* () {
-    const fs = yield* FileSystem.FileSystem
-    const sessionFilePath = yield* getSessionFilePath
-    const exists = yield* fs.exists(sessionFilePath).pipe(Effect.orElseSucceed(() => false))
-    if (!exists) {
-      return
-    }
+export const deleteSession = Effect.gen(function* () {
+  const fs = yield* FileSystem.FileSystem
+  const sessionFilePath = yield* getSessionFilePath
+  const exists = yield* fs.exists(sessionFilePath).pipe(Effect.orElseSucceed(() => false))
+  if (!exists) {
+    return
+  }
 
-    yield* fs.remove(sessionFilePath).pipe(
-      Effect.mapError(
-        () =>
-          new CliCommandError({
-            message: "Failed to delete the local CLI session file.",
-          })
-      )
+  yield* fs.remove(sessionFilePath).pipe(
+    Effect.mapError(
+      () =>
+        new CliCommandError({
+          message: "Failed to delete the local CLI session file.",
+        })
     )
-  })
+  )
+})

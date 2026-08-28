@@ -57,7 +57,7 @@ export interface AnonSessionServiceShape {
   /**
    * Create a signed SIWX challenge token and public nonce.
    */
-  readonly createChallenge: () => Effect.Effect<AnonSessionChallenge, AnonSessionTokenError>
+  readonly createChallenge: Effect.Effect<AnonSessionChallenge, AnonSessionTokenError>
 
   /**
    * Verify a signed challenge token and return the expected SIWX nonce.

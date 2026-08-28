@@ -11,14 +11,14 @@ import * as Schema from "effect/Schema"
 
 const TokenAmountSchema = Schema.Struct({
   amount: Schema.String,
-  decimals: Schema.Number,
+  decimals: Schema.Finite,
   uiAmountString: Schema.optional(Schema.String),
 })
 
-const RpcIntegerSchema = Schema.Union([Schema.Number, Schema.BigInt])
+const RpcIntegerSchema = Schema.Union([Schema.Finite, Schema.BigInt])
 
 const TokenBalanceSchema = Schema.Struct({
-  accountIndex: Schema.Number,
+  accountIndex: Schema.Finite,
   mint: Schema.String,
   owner: Schema.optional(Schema.String),
   uiTokenAmount: TokenAmountSchema,
@@ -37,7 +37,7 @@ const InstructionSchema = Schema.Struct({
 })
 
 const InnerInstructionsSchema = Schema.Struct({
-  index: Schema.Number,
+  index: Schema.Finite,
   instructions: Schema.Array(InstructionSchema),
 })
 
@@ -72,7 +72,7 @@ const TransactionPayloadSchema = Schema.Struct({
 const decodeTransactionPayloadResult = Schema.decodeUnknownResult(TransactionPayloadSchema)
 
 export const SolanaNativeBalanceDeltaEvidence = Schema.Struct({
-  accountIndex: Schema.Number,
+  accountIndex: Schema.Finite,
   account: Schema.NullOr(Schema.String),
   preLamports: Schema.String,
   postLamports: Schema.String,
@@ -80,10 +80,10 @@ export const SolanaNativeBalanceDeltaEvidence = Schema.Struct({
 })
 
 export const SolanaTokenBalanceDeltaEvidence = Schema.Struct({
-  accountIndex: Schema.Number,
+  accountIndex: Schema.Finite,
   owner: Schema.NullOr(Schema.String),
   mint: Schema.String,
-  decimals: Schema.Number,
+  decimals: Schema.Finite,
   preAmount: Schema.String,
   postAmount: Schema.String,
   deltaAmount: Schema.String,
@@ -96,7 +96,7 @@ export const SolanaProviderLabelEvidence = Schema.Struct({
 
 export const SolanaBehaviorSample = Schema.Struct({
   signature: Schema.String,
-  slot: Schema.NullOr(Schema.Number),
+  slot: Schema.NullOr(Schema.Finite),
   status: Schema.Struct({
     ok: Schema.Boolean,
     error: Schema.NullOr(Schema.Unknown),
@@ -113,11 +113,11 @@ export const SolanaBehaviorSamplingInput = Schema.Struct({
   programs: Schema.Array(Schema.String),
   slotRange: Schema.NullOr(
     Schema.Struct({
-      fromSlot: Schema.Number,
-      toSlot: Schema.Number,
+      fromSlot: Schema.Finite,
+      toSlot: Schema.Finite,
     })
   ),
-  sampleLimit: Schema.Number,
+  sampleLimit: Schema.Finite,
 })
 export type SolanaBehaviorSamplingInput = typeof SolanaBehaviorSamplingInput.Type
 
@@ -366,8 +366,8 @@ export const extractSolanaBehaviorSample = ({
 
   return Effect.gen(function* () {
     if (Result.isFailure(decoded)) {
-      return yield* Effect.fail(
-        toPayloadDecodeError(`Invalid Solana transaction payload: ${decoded.failure.message}`)
+      return yield* toPayloadDecodeError(
+        `Invalid Solana transaction payload: ${decoded.failure.message}`
       )
     }
 
@@ -375,9 +375,7 @@ export const extractSolanaBehaviorSample = ({
     const signature = signatureFromPayload(transaction)
 
     if (signature === null) {
-      return yield* Effect.fail(
-        toPayloadDecodeError("Invalid Solana transaction payload: missing signature")
-      )
+      return yield* toPayloadDecodeError("Invalid Solana transaction payload: missing signature")
     }
 
     const nativeBalanceDeltas = yield* nativeBalanceDeltasFromPayload(transaction)

@@ -80,7 +80,7 @@ export interface SessionRepositoryService {
    *
    * @returns Effect containing the number of deleted sessions
    */
-  readonly deleteExpired: () => Effect.Effect<number, PersistenceError>
+  readonly deleteExpired: Effect.Effect<number, PersistenceError>
 
   /**
    * Delete all sessions for a user (logout from all devices)

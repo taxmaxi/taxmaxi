@@ -6,6 +6,7 @@
  */
 
 import * as BigDecimal from "effect/BigDecimal"
+import * as DateTime from "effect/DateTime"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import * as Option from "effect/Option"
@@ -76,8 +77,12 @@ const candidateWalletAddress = (
     : providerTransfer.fromAddress
 
 const toTimestampWindow = (timestamp: Date) => ({
-  timestampStart: new Date(timestamp.getTime() - RECONCILIATION_TIME_WINDOW_MILLIS),
-  timestampEnd: new Date(timestamp.getTime() + RECONCILIATION_TIME_WINDOW_MILLIS),
+  timestampStart: DateTime.toDateUtc(
+    DateTime.subtractDuration(DateTime.makeUnsafe(timestamp), RECONCILIATION_TIME_WINDOW_MILLIS)
+  ),
+  timestampEnd: DateTime.toDateUtc(
+    DateTime.addDuration(DateTime.makeUnsafe(timestamp), RECONCILIATION_TIME_WINDOW_MILLIS)
+  ),
 })
 
 const buildPendingMetadata = ({

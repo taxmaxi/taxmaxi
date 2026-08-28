@@ -11,6 +11,7 @@
 
 import * as Arr from "effect/Array"
 import * as Config from "effect/Config"
+import * as DateTime from "effect/DateTime"
 import * as Exit from "effect/Exit"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
@@ -146,11 +147,11 @@ const errorMessage = (error: unknown): string => {
     return error
   }
 
-  if (error instanceof UnsupportedProviderError) {
+  if (Schema.is(UnsupportedProviderError)(error)) {
     return `Unsupported sync provider: ${error.provider}`
   }
 
-  if (error instanceof SyncEngineStorageError) {
+  if (Schema.is(SyncEngineStorageError)(error)) {
     return error.message
   }
 
@@ -737,7 +738,7 @@ const make = Effect.gen(function* () {
     Effect.gen(function* () {
       const provider = source.providerKey ?? "unknown"
       const providerModule = yield* resolveProviderModule({ providerKey: provider })
-      const referenceRefresh = yield* providerModule.refreshReferenceData().pipe(
+      const referenceRefresh = yield* providerModule.refreshReferenceData.pipe(
         sourceSyncSpan({
           name: "source-sync.refresh-reference-data",
           attributes: { sourceId: source.id, jobId, provider },
@@ -767,7 +768,7 @@ const make = Effect.gen(function* () {
             kind: "client",
           })
         )
-      const normalizeRecord = yield* providerModule.makeRawRecordNormalizer().pipe(
+      const normalizeRecord = yield* providerModule.makeRawRecordNormalizer.pipe(
         sourceSyncSpan({
           name: "source-sync.make-raw-record-normalizer",
           attributes: { sourceId: source.id, jobId, provider },
@@ -1022,7 +1023,7 @@ const make = Effect.gen(function* () {
     Effect.gen(function* () {
       const provider = source.providerKey ?? "unknown"
       const providerModule = yield* resolveProviderModule({ providerKey: provider })
-      const mappingRefresh = yield* providerModule.refreshDefaultMappings().pipe(
+      const mappingRefresh = yield* providerModule.refreshDefaultMappings.pipe(
         sourceSyncSpan({
           name: "source-replay.refresh-default-mappings",
           attributes: { sourceId: source.id, jobId, provider },
@@ -1050,7 +1051,7 @@ const make = Effect.gen(function* () {
             kind: "client",
           })
         )
-      const normalizeRecord = yield* providerModule.makeRawRecordNormalizer().pipe(
+      const normalizeRecord = yield* providerModule.makeRawRecordNormalizer.pipe(
         sourceSyncSpan({
           name: "source-replay.make-raw-record-normalizer",
           attributes: { sourceId: source.id, jobId, provider },
@@ -1501,18 +1502,16 @@ const make = Effect.gen(function* () {
     Effect.gen(function* () {
       const executionReadiness = yield* sourceSyncJobRepository.getExecutionJob({ jobId }).pipe(
         Effect.as({ _tag: "Ready" as const }),
-        Effect.catchTag("SourceSyncJobPrerequisitesPendingError", ({ sourceId }) =>
-          Effect.succeed({ _tag: "Waiting" as const, sourceId })
-        ),
-        Effect.catchTag("SourceSyncJobExecutionRecordNotFoundError", () =>
-          Effect.fail(new SourceSyncJobExecutionNotFoundError({ jobId }))
-        ),
-        Effect.catchTag("SourceSyncJobExecutionRecordConflictError", (error) =>
-          Effect.fail(new SourceSyncJobExecutionConflictError({ jobId, reason: error.reason }))
-        ),
-        Effect.catchTag("SourceSyncJobExecutionRecordPayloadError", (error) =>
-          Effect.fail(new SourceSyncJobExecutionPayloadError({ jobId, reason: error.reason }))
-        )
+        Effect.catchTags({
+          SourceSyncJobPrerequisitesPendingError: ({ sourceId }) =>
+            Effect.succeed({ _tag: "Waiting" as const, sourceId }),
+          SourceSyncJobExecutionRecordNotFoundError: () =>
+            Effect.fail(new SourceSyncJobExecutionNotFoundError({ jobId })),
+          SourceSyncJobExecutionRecordConflictError: (error) =>
+            Effect.fail(new SourceSyncJobExecutionConflictError({ jobId, reason: error.reason })),
+          SourceSyncJobExecutionRecordPayloadError: (error) =>
+            Effect.fail(new SourceSyncJobExecutionPayloadError({ jobId, reason: error.reason })),
+        })
       )
 
       if (executionReadiness._tag === "Waiting") {
@@ -1527,15 +1526,14 @@ const make = Effect.gen(function* () {
         .claimJob({ jobId, workerId, startedAt: nowDate() })
         .pipe(
           Effect.map((job) => ({ _tag: "Claimed" as const, job })),
-          Effect.catchTag("SourceSyncJobPrerequisitesPendingError", ({ sourceId }) =>
-            Effect.succeed({ _tag: "Waiting" as const, sourceId })
-          ),
-          Effect.catchTag("SourceSyncJobExecutionRecordNotFoundError", () =>
-            Effect.fail(new SourceSyncJobExecutionNotFoundError({ jobId }))
-          ),
-          Effect.catchTag("SourceSyncJobExecutionRecordConflictError", (error) =>
-            Effect.fail(new SourceSyncJobExecutionConflictError({ jobId, reason: error.reason }))
-          )
+          Effect.catchTags({
+            SourceSyncJobPrerequisitesPendingError: ({ sourceId }) =>
+              Effect.succeed({ _tag: "Waiting" as const, sourceId }),
+            SourceSyncJobExecutionRecordNotFoundError: () =>
+              Effect.fail(new SourceSyncJobExecutionNotFoundError({ jobId })),
+            SourceSyncJobExecutionRecordConflictError: (error) =>
+              Effect.fail(new SourceSyncJobExecutionConflictError({ jobId, reason: error.reason })),
+          })
         )
 
       if (claimResult._tag === "Waiting") {
@@ -1602,7 +1600,9 @@ const make = Effect.gen(function* () {
           }
 
           if (error._tag === "SourceReplaySchedulingPendingError") {
-            const nextRetryAt = retryPolicy?.nextRetryAt ?? new Date(nowDate().getTime() + 30_000)
+            const nextRetryAt =
+              retryPolicy?.nextRetryAt ??
+              DateTime.toDateUtc(DateTime.addDuration(DateTime.makeUnsafe(nowDate()), 30_000))
             return returnReplaySchedulingToDispatcher({
               sourceId: source.id,
               jobId,

@@ -46,12 +46,12 @@ export type CoinbaseReferenceDataServiceError = CoinbaseReferenceDataError | Syn
  */
 export interface CoinbaseReferenceDataServiceShape {
   /** Apply checked-in defaults without calling Coinbase. */
-  readonly refreshDefaultMappings: () => Effect.Effect<
+  readonly refreshDefaultMappings: Effect.Effect<
     RefreshCoinbaseDefaultMappingsResult,
     CoinbaseReferenceDataServiceError
   >
 
-  readonly refreshReferenceData: () => Effect.Effect<
+  readonly refreshReferenceData: Effect.Effect<
     RefreshCoinbaseReferenceDataResult,
     CoinbaseReferenceDataServiceError
   >

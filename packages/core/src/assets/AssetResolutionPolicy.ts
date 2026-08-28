@@ -32,7 +32,7 @@ export const ASSET_RESOLUTION_POLICY_ACTOR = "system:asset-resolution-policy"
 const NonEmptyString = Schema.String.check(Schema.isNonEmpty())
 
 /** Non-negative integer decimal places for a network representation. */
-export const AssetDecimals = Schema.Number.pipe(
+export const AssetDecimals = Schema.Finite.pipe(
   Schema.check(Schema.isInt()),
   Schema.check(Schema.isGreaterThanOrEqualTo(0))
 ).annotate({

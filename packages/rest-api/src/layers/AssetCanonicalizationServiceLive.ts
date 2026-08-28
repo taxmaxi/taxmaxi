@@ -16,6 +16,7 @@ import {
   type ProviderAssetReviewRecord,
   type SyncEngineAssetRepresentation,
 } from "@my/sync-engine/services"
+import * as DateTime from "effect/DateTime"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import * as Option from "effect/Option"
@@ -81,7 +82,7 @@ const appendSourceNote = ({
 
 const CoinGeckoAssetPlatform = Schema.Struct({
   id: Schema.String,
-  chain_identifier: Schema.NullOr(Schema.Number),
+  chain_identifier: Schema.NullOr(Schema.Finite),
   name: Schema.String,
   shortname: Schema.NullOr(Schema.String),
   native_coin_id: Schema.NullOr(Schema.String),
@@ -821,7 +822,7 @@ const make = Effect.gen(function* () {
                 })
               }
 
-              const reviewedAt = new Date()
+              const reviewedAt = yield* DateTime.nowAsDate
               const conclusion =
                 providerAssetReview.mapping?.mappingStatus === "pending_review"
                   ? {
@@ -1188,7 +1189,7 @@ const make = Effect.gen(function* () {
                 }
               }
 
-              const reviewedAt = new Date()
+              const reviewedAt = yield* DateTime.nowAsDate
               const conclusion =
                 providerAssetReview.mapping?.mappingStatus === "pending_review"
                   ? {

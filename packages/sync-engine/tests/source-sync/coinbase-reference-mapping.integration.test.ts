@@ -207,60 +207,58 @@ const CoinbaseSyncClientTestLive = Layer.succeed(CoinbaseSyncClient, {
         })),
       nextCursor: null,
     }),
-  fetchFiatCurrencies: () =>
-    Effect.succeed([
-      {
-        currencyCode: "EUR",
+  fetchFiatCurrencies: Effect.succeed([
+    {
+      currencyCode: "EUR",
+      name: "Euro",
+      minSize: "0.01",
+      payload: {
+        id: "EUR",
         name: "Euro",
-        minSize: "0.01",
-        payload: {
-          id: "EUR",
-          name: "Euro",
-          min_size: "0.01",
-        },
+        min_size: "0.01",
       },
-      {
-        currencyCode: "USD",
+    },
+    {
+      currencyCode: "USD",
+      name: "US Dollar",
+      minSize: "0.01",
+      payload: {
+        id: "USD",
         name: "US Dollar",
-        minSize: "0.01",
-        payload: {
-          id: "USD",
-          name: "US Dollar",
-          min_size: "0.01",
-        },
+        min_size: "0.01",
       },
-    ] as const),
-  fetchCryptoCurrencies: () =>
-    Effect.succeed([
-      {
-        currencyCode: "ETH",
+    },
+  ] as const),
+  fetchCryptoCurrencies: Effect.succeed([
+    {
+      currencyCode: "ETH",
+      name: "Ethereum",
+      providerAssetId: "eth-provider-asset",
+      exponent: 8,
+      providerType: "crypto",
+      payload: {
+        code: "ETH",
         name: "Ethereum",
-        providerAssetId: "eth-provider-asset",
         exponent: 8,
-        providerType: "crypto",
-        payload: {
-          code: "ETH",
-          name: "Ethereum",
-          exponent: 8,
-          type: "crypto",
-          asset_id: "eth-provider-asset",
-        },
+        type: "crypto",
+        asset_id: "eth-provider-asset",
       },
-      {
-        currencyCode: "ETH2",
+    },
+    {
+      currencyCode: "ETH2",
+      name: "Ethereum 2",
+      providerAssetId: "eth2-provider-asset",
+      exponent: 8,
+      providerType: "crypto",
+      payload: {
+        code: "ETH2",
         name: "Ethereum 2",
-        providerAssetId: "eth2-provider-asset",
         exponent: 8,
-        providerType: "crypto",
-        payload: {
-          code: "ETH2",
-          name: "Ethereum 2",
-          exponent: 8,
-          type: "crypto",
-          asset_id: "eth2-provider-asset",
-        },
+        type: "crypto",
+        asset_id: "eth2-provider-asset",
       },
-    ] as const),
+    },
+  ] as const),
 })
 
 const CoinbaseReferenceMappingWithDepsLive = CoinbaseReferenceMappingServiceLive.pipe(
@@ -523,7 +521,7 @@ describe("coinbase reference mappings", () => {
     )
 
     await runReferenceMapping(
-      Effect.flatMap(CoinbaseReferenceMappingService, (service) => service.ensureDefaultMappings())
+      Effect.flatMap(CoinbaseReferenceMappingService, (service) => service.ensureDefaultMappings)
     )
 
     const mappings = await Effect.runPromise(fetchProviderAssetMappingRows())
@@ -576,7 +574,7 @@ describe("coinbase reference mappings", () => {
     )
 
     await runReferenceMapping(
-      Effect.flatMap(CoinbaseReferenceMappingService, (service) => service.ensureDefaultMappings())
+      Effect.flatMap(CoinbaseReferenceMappingService, (service) => service.ensureDefaultMappings)
     )
 
     const mappings = await Effect.runPromise(fetchProviderAssetMappingRows())
@@ -616,13 +614,13 @@ describe("coinbase reference mappings", () => {
   it("resolves Coinbase and Solana USDC to one catalog-seeded economic asset", async () => {
     await context.runPg(seedData)
     await runReferenceMapping(
-      Effect.flatMap(CoinbaseReferenceMappingService, (service) => service.ensureDefaultMappings())
+      Effect.flatMap(CoinbaseReferenceMappingService, (service) => service.ensureDefaultMappings)
     )
 
     const solanaUsdc = await runHeliusAssetResolution(
       Effect.flatMap(HeliusSolanaAssetResolutionService, (service) =>
         Effect.gen(function* () {
-          yield* service.ensureDefaultMappings()
+          yield* service.ensureDefaultMappings
           return yield* service.resolveAsset({
             kind: "spl",
             mintAddress: SOLANA_USDC_MINT,
@@ -658,7 +656,7 @@ describe("coinbase reference mappings", () => {
     )
 
     await runReferenceMapping(
-      Effect.flatMap(CoinbaseReferenceMappingService, (service) => service.ensureDefaultMappings())
+      Effect.flatMap(CoinbaseReferenceMappingService, (service) => service.ensureDefaultMappings)
     )
 
     const [adaMapping] = (await Effect.runPromise(fetchProviderAssetMappingRows())).filter(
@@ -699,7 +697,7 @@ describe("coinbase reference mappings", () => {
     )
 
     await runReferenceMapping(
-      Effect.flatMap(CoinbaseReferenceMappingService, (service) => service.ensureDefaultMappings())
+      Effect.flatMap(CoinbaseReferenceMappingService, (service) => service.ensureDefaultMappings)
     )
 
     const refreshedAdaMapping = (await Effect.runPromise(fetchProviderAssetMappingRows())).find(
@@ -726,7 +724,7 @@ describe("coinbase reference mappings", () => {
     )
 
     await runReferenceMapping(
-      Effect.flatMap(CoinbaseReferenceMappingService, (service) => service.ensureDefaultMappings())
+      Effect.flatMap(CoinbaseReferenceMappingService, (service) => service.ensureDefaultMappings)
     )
 
     const btcMapping = await runReferenceMapping(
@@ -745,7 +743,7 @@ describe("coinbase reference mappings", () => {
 
   it("returns a settled exclusion without scheduling more resolution work", async () => {
     await runReferenceMapping(
-      Effect.flatMap(CoinbaseReferenceMappingService, (service) => service.ensureDefaultMappings())
+      Effect.flatMap(CoinbaseReferenceMappingService, (service) => service.ensureDefaultMappings)
     )
 
     const adaMapping = (await Effect.runPromise(fetchProviderAssetMappingRows())).find(
@@ -806,7 +804,7 @@ describe("coinbase reference mappings", () => {
       })
     )
     await runReferenceMapping(
-      Effect.flatMap(CoinbaseReferenceMappingService, (service) => service.ensureDefaultMappings())
+      Effect.flatMap(CoinbaseReferenceMappingService, (service) => service.ensureDefaultMappings)
     )
 
     // A later catalog refresh can reopen policy evaluation, but it must not
@@ -853,7 +851,7 @@ describe("coinbase reference mappings", () => {
 
   it("resolves EUR as fiat without requiring a canonical asset row", async () => {
     await runReferenceMapping(
-      Effect.flatMap(CoinbaseReferenceMappingService, (service) => service.ensureDefaultMappings())
+      Effect.flatMap(CoinbaseReferenceMappingService, (service) => service.ensureDefaultMappings)
     )
 
     const eurMapping = await runReferenceMapping(

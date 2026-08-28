@@ -355,14 +355,12 @@ const CoinbaseSyncClientTestLive = Layer.succeed(CoinbaseSyncClient, {
         })),
       nextCursor: null,
     }),
-  fetchFiatCurrencies: () =>
-    remoteReferenceCatalogAvailable
-      ? Effect.succeed(activeFiatCurrencies)
-      : Effect.die("Remote fiat reference catalog should not be called during replay"),
-  fetchCryptoCurrencies: () =>
-    remoteReferenceCatalogAvailable
-      ? Effect.succeed(activeCryptoCurrencies)
-      : Effect.die("Remote crypto reference catalog should not be called during replay"),
+  fetchFiatCurrencies: remoteReferenceCatalogAvailable
+    ? Effect.succeed(activeFiatCurrencies)
+    : Effect.die("Remote fiat reference catalog should not be called during replay"),
+  fetchCryptoCurrencies: remoteReferenceCatalogAvailable
+    ? Effect.succeed(activeCryptoCurrencies)
+    : Effect.die("Remote crypto reference catalog should not be called during replay"),
 })
 
 const CoinbaseReferenceMappingWithDepsLive = CoinbaseReferenceMappingServiceLive.pipe(
@@ -2153,8 +2151,8 @@ describe("coinbase normalization persistence", () => {
     const fixture = await Effect.runPromise(
       Effect.gen(function* () {
         const provider = yield* CoinbaseSourceSyncProvider
-        yield* provider.refreshReferenceData()
-        const lookups = yield* provider.loadNormalizationLookups()
+        yield* provider.refreshReferenceData
+        const lookups = yield* provider.loadNormalizationLookups
         const db = yield* drizzle
         const [providerAsset] = yield* db
           .select({ id: schema.providerAssets.id, retrievedAt: schema.providerAssets.retrievedAt })

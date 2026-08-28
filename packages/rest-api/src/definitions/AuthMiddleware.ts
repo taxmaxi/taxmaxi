@@ -69,7 +69,7 @@ export class CurrentUser extends Context.Service<CurrentUser, User>()(
  * anonymous behavior when a caller sends a bad token.
  */
 export interface OptionalCurrentUserService {
-  readonly resolve: () => Effect.Effect<
+  readonly resolve: Effect.Effect<
     Option.Option<User>,
     UnauthorizedError,
     HttpServerRequest.HttpServerRequest

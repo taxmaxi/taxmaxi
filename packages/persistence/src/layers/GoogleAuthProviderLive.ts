@@ -48,7 +48,7 @@ const GOOGLE_SCOPES = ["openid", "email", "profile"]
  */
 const GoogleTokenResponse = Schema.Struct({
   access_token: Schema.String,
-  expires_in: Schema.Number,
+  expires_in: Schema.Finite,
   token_type: Schema.String,
   scope: Schema.String,
   id_token: Schema.optional(Schema.String),

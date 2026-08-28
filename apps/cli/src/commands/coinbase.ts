@@ -23,7 +23,7 @@ const forceOption = Options.boolean("force").pipe(
 )
 const yearOption = Options.integer("year").pipe(Options.withDescription("Tax year (YYYY)"))
 const yearWithDefaultOption = Options.integer("year").pipe(
-  Options.withDefault(new Date().getUTCFullYear()),
+  Options.withDefault(DateTime.toPartsUtc(DateTime.nowUnsafe()).year),
   Options.withDescription("Tax year (YYYY)")
 )
 
@@ -76,7 +76,7 @@ export const syncProgram = ({
   readonly emitConsoleOutput?: boolean
 }) =>
   Effect.gen(function* () {
-    const session = yield* readSession()
+    const session = yield* readSession
     const sourceId = yield* resolveCoinbaseSourceId({
       apiUrl: session.apiUrl,
       sessionToken: session.sessionToken,
@@ -119,7 +119,7 @@ export const replayProgram = ({
   readonly emitConsoleOutput?: boolean
 }) =>
   Effect.gen(function* () {
-    const session = yield* readSession()
+    const session = yield* readSession
     const sourceId = yield* resolveCoinbaseSourceId({
       apiUrl: session.apiUrl,
       sessionToken: session.sessionToken,
@@ -164,7 +164,7 @@ export const calculateProgram = ({
   readonly emitConsoleOutput?: boolean
 }) =>
   Effect.gen(function* () {
-    const session = yield* readSession()
+    const session = yield* readSession
     const sourceId = yield* resolveCoinbaseSourceId({
       apiUrl: session.apiUrl,
       sessionToken: session.sessionToken,
@@ -212,7 +212,7 @@ export const connectProgram = ({
     const apiUrl = yield* resolveApiUrl
 
     if (!force) {
-      const maybeSession = yield* readSessionOption()
+      const maybeSession = yield* readSessionOption
 
       if (Option.isSome(maybeSession) && maybeSession.value.apiUrl === apiUrl) {
         const isValidSession = yield* validateSessionToken({
@@ -250,7 +250,7 @@ export const connectProgram = ({
       yield* Console.log(`Open this URL to continue: ${authorizationUrl}`)
     }
 
-    const didOpenBrowser = noBrowser ? false : openBrowser(authorizationUrl)
+    const didOpenBrowser = noBrowser ? false : yield* openBrowser(authorizationUrl)
     if (!json && !noBrowser && !didOpenBrowser) {
       yield* Console.log("Could not open browser automatically. Please open the URL manually.")
     }

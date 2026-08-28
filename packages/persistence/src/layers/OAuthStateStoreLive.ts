@@ -8,6 +8,7 @@
  */
 
 import { and, eq, gt, isNull, lte } from "drizzle-orm"
+import * as DateTime from "effect/DateTime"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import * as Option from "effect/Option"
@@ -83,7 +84,7 @@ const make = Effect.gen(function* () {
    */
   const consume: OAuthStateStoreService["consume"] = (state) =>
     Effect.gen(function* () {
-      const now = new Date()
+      const now = yield* DateTime.nowAsDate
       const [row] = yield* db
         .update(oauthStates)
         .set({ consumedAt: now })
@@ -169,16 +170,15 @@ const make = Effect.gen(function* () {
   /**
    * Delete all expired OAuth state records
    */
-  const deleteExpired: OAuthStateStoreService["deleteExpired"] = () =>
-    Effect.gen(function* () {
-      const now = new Date()
-      const deleted = yield* db
-        .delete(oauthStates)
-        .where(lte(oauthStates.expiresAt, now))
-        .returning({ state: oauthStates.state })
+  const deleteExpired: OAuthStateStoreService["deleteExpired"] = Effect.gen(function* () {
+    const now = yield* DateTime.nowAsDate
+    const deleted = yield* db
+      .delete(oauthStates)
+      .where(lte(oauthStates.expiresAt, now))
+      .returning({ state: oauthStates.state })
 
-      return deleted.length
-    }).pipe(wrapSqlError("deleteExpired"))
+    return deleted.length
+  }).pipe(wrapSqlError("deleteExpired"))
 
   return {
     create,

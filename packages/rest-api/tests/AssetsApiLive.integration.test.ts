@@ -103,7 +103,7 @@ const AuthServiceTestLive = Layer.succeed(AuthService, {
   logout: () => Effect.die("AuthService test stub: logout not implemented"),
   validateSession: () => Effect.die("AuthService test stub: validateSession not implemented"),
   linkIdentity: () => Effect.die("AuthService test stub: linkIdentity not implemented"),
-  getEnabledProviders: () => Effect.succeed(Chunk.fromIterable(["local", "coinbase"] as const)),
+  getEnabledProviders: Effect.succeed(Chunk.fromIterable(["local", "coinbase"] as const)),
 } satisfies AuthServiceShape)
 
 const PasswordHasherTestLive = Layer.succeed(PasswordHasher, {

@@ -22,17 +22,17 @@ import * as SchemaTransformation from "effect/SchemaTransformation"
  * Encoded as ISO 8601 date string (YYYY-MM-DD).
  */
 export class LocalDate extends Schema.Class<LocalDate>("LocalDate")({
-  year: Schema.Number.pipe(
+  year: Schema.Finite.pipe(
     Schema.check(Schema.isInt()),
     Schema.check(Schema.isGreaterThanOrEqualTo(1)),
     Schema.check(Schema.isLessThanOrEqualTo(9999))
   ),
-  month: Schema.Number.pipe(
+  month: Schema.Finite.pipe(
     Schema.check(Schema.isInt()),
     Schema.check(Schema.isGreaterThanOrEqualTo(1)),
     Schema.check(Schema.isLessThanOrEqualTo(12))
   ),
-  day: Schema.Number.pipe(
+  day: Schema.Finite.pipe(
     Schema.check(Schema.isInt()),
     Schema.check(Schema.isGreaterThanOrEqualTo(1)),
     Schema.check(Schema.isLessThanOrEqualTo(31))
@@ -66,7 +66,7 @@ export class LocalDate extends Schema.Class<LocalDate>("LocalDate")({
    * Convert to JavaScript Date at midnight UTC
    */
   toDate(): Date {
-    return new Date(Date.UTC(this.year, this.month - 1, this.day))
+    return DateTime.toDateUtc(this.toDateTime())
   }
 }
 
@@ -113,7 +113,7 @@ export const fromString = (
   const month = parseInt(monthStr, 10)
   const day = parseInt(dayStr, 10)
 
-  return Schema.decodeUnknownEffect(LocalDate)({ year, month, day })
+  return Schema.decodeEffect(LocalDate)({ year, month, day })
 }
 
 /**
@@ -141,18 +141,14 @@ export const fromDateTime = (dateTime: DateTime.DateTime): LocalDate => {
  * Get the current date (UTC)
  */
 export const today = (): LocalDate => {
-  const now = new Date()
-  return fromDate(now)
+  return fromDateTime(DateTime.nowUnsafe())
 }
 
 /**
  * Get the current date (UTC) as an Effect using the Clock service
  * This is testable with TestClock
  */
-export const todayEffect: Effect.Effect<LocalDate> = Effect.map(
-  Effect.clockWith((clock) => clock.currentTimeMillis),
-  (millis) => fromDate(new Date(Number(millis)))
-)
+export const todayEffect: Effect.Effect<LocalDate> = Effect.map(DateTime.now, fromDateTime)
 
 /**
  * Order for LocalDate - compares chronologically
@@ -233,8 +229,7 @@ export const startOfMonth = (date: LocalDate): LocalDate => {
  * Get the end of the month for a LocalDate
  */
 export const endOfMonth = (date: LocalDate): LocalDate => {
-  const d = new Date(Date.UTC(date.year, date.month, 0))
-  return fromDate(d)
+  return fromDateTime(DateTime.endOf(date.toDateTime(), "month"))
 }
 
 /**
@@ -262,7 +257,8 @@ export const isLeapYear = (year: number): boolean => {
  * Get the number of days in a month
  */
 export const daysInMonth = (year: number, month: number): number => {
-  return new Date(Date.UTC(year, month, 0)).getUTCDate()
+  const end = DateTime.endOf(DateTime.makeUnsafe({ year, month, day: 1 }), "month")
+  return DateTime.getPartUtc(end, "day")
 }
 
 /**

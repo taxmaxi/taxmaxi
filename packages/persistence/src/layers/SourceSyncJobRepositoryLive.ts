@@ -120,17 +120,17 @@ const make = Effect.gen(function* () {
 
   const preserveExpectedExecutionError = (operation: string) =>
     Effect.mapError((error: unknown) =>
-      error instanceof SourceSyncJobExecutionRecordNotFoundError ||
-      error instanceof SourceSyncJobExecutionRecordConflictError
+      Schema.is(SourceSyncJobExecutionRecordNotFoundError)(error) ||
+      Schema.is(SourceSyncJobExecutionRecordConflictError)(error)
         ? error
         : toSyncEngineStorageError({ error, operation })
     )
 
   const preserveClaimExecutionError = (operation: string) =>
     Effect.mapError((error: unknown) =>
-      error instanceof SourceSyncJobExecutionRecordNotFoundError ||
-      error instanceof SourceSyncJobExecutionRecordConflictError ||
-      error instanceof SourceSyncJobPrerequisitesPendingError
+      Schema.is(SourceSyncJobExecutionRecordNotFoundError)(error) ||
+      Schema.is(SourceSyncJobExecutionRecordConflictError)(error) ||
+      Schema.is(SourceSyncJobPrerequisitesPendingError)(error)
         ? error
         : toSyncEngineStorageError({ error, operation })
     )

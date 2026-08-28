@@ -7,7 +7,7 @@
     "apps/*"
   ],
   "scripts": {
-    "prepare": "effect-language-service patch && husky",
+    "prepare": "effect-tsgo patch --typescript --oxlint && husky",
     "generate": "plop",
     "test": "vitest",
     "test:watch": "vitest watch",
@@ -34,16 +34,16 @@
     "www:build-deps": "turbo run build --filter=www^..."
   },
   "devDependencies": {
-    "@effect/language-service": "0.87.2",
+    "@effect/tsgo": "0.37.0",
     "@vitest/coverage-v8": "4.1.9",
     "husky": "9.1.7",
     "lint-staged": "17.0.8",
     "oxfmt": "0.57.0",
-    "oxlint": "1.72.0",
-    "oxlint-tsgolint": "0.23.0",
+    "oxlint": "1.80.0",
+    "oxlint-tsgolint": "7.0.2001",
     "plop": "4.0.5",
     "turbo": "2.10.2",
-    "typescript": "6.0.3",
+    "typescript": "7.0.2",
     "vite": "8.1.2",
     "vitest": "4.1.9"
   },

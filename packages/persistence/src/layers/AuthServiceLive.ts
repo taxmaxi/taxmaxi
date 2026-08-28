@@ -16,10 +16,12 @@
  */
 
 import * as Chunk from "effect/Chunk"
+import * as Crypto from "effect/Crypto"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import * as Option from "effect/Option"
 import * as Redacted from "effect/Redacted"
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto"
 import {
   AuthService,
   AuthUserId,
@@ -96,10 +98,7 @@ const hasUniqueConstraint = (error: unknown, constraintName: string): boolean =>
   return cause.includes(constraintName)
 }
 
-const generateEmailVerificationCode = (): typeof EmailVerificationCode.Type => {
-  const bytes = new Uint8Array(8)
-  crypto.getRandomValues(bytes)
-
+const generateEmailVerificationCode = (bytes: Uint8Array): EmailVerificationCode => {
   const code = Array.from(
     bytes,
     (byte) => EMAIL_VERIFICATION_CODE_ALPHABET[byte % EMAIL_VERIFICATION_CODE_ALPHABET.length]
@@ -151,6 +150,7 @@ const make = Effect.gen(function* () {
   const principalRepository = yield* PrincipalRepository
   const tokenGenerator = yield* SessionTokenGenerator
   const passwordHasher = yield* PasswordHasher
+  const crypto = yield* Crypto.Crypto
 
   // Build provider registry
   const providerRegistry = buildProviderRegistry(config.providers)
@@ -186,7 +186,7 @@ const make = Effect.gen(function* () {
     userAgent: Option.Option<string>
   ) =>
     Effect.gen(function* () {
-      const sessionId = yield* tokenGenerator.generate()
+      const sessionId = yield* tokenGenerator.generate
       const now = Timestamp.now()
       const duration = config.sessionDurations.getForProvider(provider)
       const expiresAt = Timestamp.addMillis(now, duration)
@@ -394,7 +394,7 @@ const make = Effect.gen(function* () {
         })
       }
 
-      const identityId = UserIdentityId.make(crypto.randomUUID())
+      const identityId = UserIdentityId.make(yield* crypto.randomUUIDv4.pipe(Effect.orDie))
 
       const identity = yield* identityRepo
         .create({
@@ -437,7 +437,7 @@ const make = Effect.gen(function* () {
     authResult: AuthResult
   ): Effect.Effect<AuthUser, ProviderAuthFailedError> =>
     Effect.gen(function* () {
-      const userId = AuthUserId.make(crypto.randomUUID())
+      const userId = AuthUserId.make(yield* crypto.randomUUIDv4.pipe(Effect.orDie))
 
       // Create the user
       yield* userRepo
@@ -495,14 +495,15 @@ const make = Effect.gen(function* () {
   /**
    * Generate URL-safe OAuth state token for CSRF protection
    */
-  const generateOAuthState = (): string => {
-    const stateBytes = new Uint8Array(32)
-    crypto.getRandomValues(stateBytes)
-    return btoa(String.fromCharCode(...stateBytes))
-      .replace(/\+/g, "-")
-      .replace(/\//g, "_")
-      .replace(/=+$/, "")
-  }
+  const generateOAuthState: Effect.Effect<string> = crypto.randomBytes(32).pipe(
+    Effect.orDie,
+    Effect.map((stateBytes) =>
+      btoa(String.fromCharCode(...stateBytes))
+        .replace(/\+/g, "-")
+        .replace(/\//g, "_")
+        .replace(/=+$/, "")
+    )
+  )
 
   /**
    * Extract redirect URI from provider authorization URL
@@ -556,7 +557,7 @@ const make = Effect.gen(function* () {
       )
 
       const provider = yield* getProvider(providerType)
-      const state = generateOAuthState()
+      const state = yield* generateOAuthState
       const authorizationUrlOption = provider.getAuthorizationUrl(state, redirectUri)
 
       if (Option.isNone(authorizationUrlOption)) {
@@ -735,14 +736,17 @@ const make = Effect.gen(function* () {
   }): Effect.Effect<EmailVerificationRequest, AuthProcessingError> =>
     Effect.gen(function* () {
       const now = Timestamp.now()
-      const requestId = EmailVerificationRequestId.make(crypto.randomUUID())
+      const requestId = EmailVerificationRequestId.make(
+        yield* crypto.randomUUIDv4.pipe(Effect.orDie)
+      )
+      const verificationCodeBytes = yield* crypto.randomBytes(8).pipe(Effect.orDie)
 
       return yield* emailVerificationRequestRepo
         .create({
           id: requestId,
           userId,
           email,
-          code: generateEmailVerificationCode(),
+          code: generateEmailVerificationCode(verificationCodeBytes),
           expiresAt: Timestamp.addMillis(now, EMAIL_VERIFICATION_TTL_MILLIS),
         })
         .pipe(Effect.mapError((cause) => authProcessingError("create-email-verification", cause)))
@@ -838,7 +842,7 @@ const make = Effect.gen(function* () {
         const hashedPassword = yield* passwordHasher.hash(Redacted.make(password))
 
         // Create user
-        const userId = AuthUserId.make(crypto.randomUUID())
+        const userId = AuthUserId.make(yield* crypto.randomUUIDv4.pipe(Effect.orDie))
         const displayName = providedDisplayName ?? inferDisplayNameFromEmail(email)
 
         const user = yield* userRepo
@@ -857,7 +861,7 @@ const make = Effect.gen(function* () {
           .pipe(Effect.mapError(() => new UserAlreadyExistsError({ email })))
 
         // Create local identity with password hash
-        const identityId = UserIdentityId.make(crypto.randomUUID())
+        const identityId = UserIdentityId.make(yield* crypto.randomUUIDv4.pipe(Effect.orDie))
         const providerId = ProviderId.make(email)
 
         yield* identityRepo
@@ -1219,7 +1223,7 @@ const make = Effect.gen(function* () {
         }
 
         // Create the identity link
-        const identityId = UserIdentityId.make(crypto.randomUUID())
+        const identityId = UserIdentityId.make(yield* crypto.randomUUIDv4.pipe(Effect.orDie))
 
         const identity = yield* identityRepo
           .create({
@@ -1245,7 +1249,7 @@ const make = Effect.gen(function* () {
     /**
      * Get all enabled authentication providers
      */
-    getEnabledProviders: () => Effect.succeed(Chunk.fromIterable(providerRegistry.keys())),
+    getEnabledProviders: Effect.succeed(Chunk.fromIterable(providerRegistry.keys())),
   }
 
   return service
@@ -1299,4 +1303,4 @@ export const AuthServiceLive: Layer.Layer<
   | PrincipalRepository
   | SessionTokenGenerator
   | PasswordHasher
-> = Layer.effect(AuthService, make)
+> = Layer.effect(AuthService, make).pipe(Layer.provide(NodeCrypto.layer))

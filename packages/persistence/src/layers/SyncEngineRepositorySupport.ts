@@ -20,7 +20,7 @@ import {
 import { drizzle } from "./PgClientLive.ts"
 import { schema } from "../schema/index.ts"
 
-const ProgressCounterSchema = Schema.Union([Schema.Number, Schema.NumberFromString])
+const ProgressCounterSchema = Schema.Union([Schema.Finite, Schema.FiniteFromString])
 
 const SourceSyncProgressDetailsSchema = Schema.Struct({
   mode: Schema.optional(SourceSyncJobModeSchema),
@@ -60,7 +60,7 @@ export const toSyncEngineStorageError = ({
   readonly error: PersistenceError | unknown
   readonly operation?: string
 }): SyncEngineStorageError =>
-  error instanceof SyncEngineStorageError
+  Schema.is(SyncEngineStorageError)(error)
     ? error
     : isPersistenceError(error)
       ? new SyncEngineStorageError({

@@ -14,6 +14,7 @@ import type {
 import * as BigDecimal from "effect/BigDecimal"
 import * as Config from "effect/Config"
 import * as Data from "effect/Data"
+import * as DateTime from "effect/DateTime"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import * as Option from "effect/Option"
@@ -204,7 +205,7 @@ const StripeErrorLogSchema = Schema.Struct({
   message: Schema.String,
   code: Schema.optional(Schema.String),
   requestId: Schema.optional(Schema.String),
-  statusCode: Schema.optional(Schema.Number),
+  statusCode: Schema.optional(Schema.Finite),
 })
 
 const ErrorLogSchema = Schema.Struct({
@@ -276,7 +277,7 @@ const subscriptionPeriodEnd = (subscription: Stripe.Subscription): Date | null =
     (latest, item) => Math.max(latest, item.current_period_end),
     0
   )
-  return end === 0 ? null : new Date(end * 1_000)
+  return end === 0 ? null : DateTime.toDateUtc(DateTime.makeUnsafe(end * 1_000))
 }
 
 const isTopUpEligibleSubscription = (status: string | null): boolean =>
@@ -487,7 +488,7 @@ export const resolvePaidFulfillmentUserId = ({
       return Option.isSome(account) ? account.value.userId : null
     }
 
-    const userId = yield* Schema.decodeUnknownEffect(AuthUserId)(metadataUserId).pipe(
+    const userId = yield* Schema.decodeEffect(AuthUserId)(metadataUserId).pipe(
       Effect.mapError(() => stripeError("Invalid TaxMaxi user metadata on paid Stripe object"))
     )
     const account = yield* findByUserId(userId)
@@ -891,7 +892,7 @@ export const persistAnnualCreditAllocations = <E>({
           paymentReference,
           paymentAmount,
           stripeInvoiceId,
-          expiresAt: new Date(periodEnd * 1_000),
+          expiresAt: DateTime.toDateUtc(DateTime.makeUnsafe(periodEnd * 1_000)),
         })
         if (paymentReference !== null) {
           yield* reconcilePaymentCreditReversals(paymentReference)
@@ -924,19 +925,19 @@ const StripeCatalogPricePayloadSchema = Schema.Struct({
   billing_scheme: Schema.String,
   lookup_key: Schema.NullOr(Schema.String),
   currency: Schema.String,
-  unit_amount: Schema.NullOr(Schema.Number),
+  unit_amount: Schema.NullOr(Schema.Finite),
   tax_behavior: Schema.NullOr(Schema.String),
   recurring: Schema.NullOr(
     Schema.Struct({
       interval: Schema.String,
-      interval_count: Schema.Number,
+      interval_count: Schema.Finite,
       usage_type: Schema.String,
-      trial_period_days: Schema.NullOr(Schema.Number),
+      trial_period_days: Schema.NullOr(Schema.Finite),
     })
   ),
   transform_quantity: Schema.NullOr(
     Schema.Struct({
-      divide_by: Schema.Number,
+      divide_by: Schema.Finite,
       round: Schema.String,
     })
   ),
@@ -947,14 +948,14 @@ const StripeCatalogPriceListPayloadSchema = Schema.Struct({
 })
 const AnnualCheckoutMetadataSchema = Schema.Struct({
   annual_checkout_generation: Schema.optional(
-    Schema.NumberFromString.check(Schema.isInt(), Schema.isGreaterThan(0))
+    Schema.FiniteFromString.check(Schema.isInt(), Schema.isGreaterThan(0))
   ),
 })
 
 const annualCheckoutGenerationFromMetadata = (
   metadata: Readonly<Record<string, string>>
 ): number | null => {
-  const decoded = Schema.decodeUnknownOption(AnnualCheckoutMetadataSchema)(metadata)
+  const decoded = Schema.decodeOption(AnnualCheckoutMetadataSchema)(metadata)
   return Option.isSome(decoded) ? (decoded.value.annual_checkout_generation ?? null) : null
 }
 
@@ -971,12 +972,12 @@ const StripeDeletedSubscriptionWebhookObjectSchema = Schema.Struct({
   items: Schema.Struct({
     data: Schema.Array(
       Schema.Struct({
-        current_period_end: Schema.Number,
+        current_period_end: Schema.Finite,
         price: Schema.Struct({
           lookup_key: Schema.NullOr(Schema.String),
           product: StripeReferenceSchema,
           recurring: Schema.NullOr(
-            Schema.Struct({ interval: Schema.String, interval_count: Schema.Number })
+            Schema.Struct({ interval: Schema.String, interval_count: Schema.Finite })
           ),
         }),
       })
@@ -1009,11 +1010,11 @@ const StripeInvoiceLineSchema = Schema.Struct({
       })
     )
   ),
-  period: Schema.Struct({ start: Schema.Number, end: Schema.Number }),
+  period: Schema.Struct({ start: Schema.Finite, end: Schema.Finite }),
 })
 const StripeInvoiceWebhookObjectSchema = Schema.Struct({
   id: Schema.String,
-  amount_due: Schema.Number,
+  amount_due: Schema.Finite,
   billing_reason: Schema.NullOr(Schema.String),
   customer: NullableStripeReferenceSchema,
   parent: Schema.optional(
@@ -1034,13 +1035,13 @@ const StripeInvoiceWebhookObjectSchema = Schema.Struct({
 })
 const StripeChargeWebhookObjectSchema = Schema.Struct({
   id: Schema.String,
-  amount: Schema.Number,
-  amount_refunded: Schema.Number,
+  amount: Schema.Finite,
+  amount_refunded: Schema.Finite,
   payment_intent: NullableStripeReferenceSchema,
 })
 const StripeRefundWebhookObjectSchema = Schema.Struct({
   id: Schema.String,
-  amount: Schema.Number,
+  amount: Schema.Finite,
   charge: NullableStripeReferenceSchema,
   payment_intent: NullableStripeReferenceSchema,
   status: Schema.NullOr(Schema.String),
@@ -1049,11 +1050,11 @@ const StripeCreditNoteWebhookObjectSchema = Schema.Struct({
   id: Schema.String,
   currency: Schema.String,
   invoice: StripeReferenceSchema,
-  post_payment_amount: Schema.Number.check(Schema.isInt(), Schema.isGreaterThanOrEqualTo(0)),
+  post_payment_amount: Schema.Finite.check(Schema.isInt(), Schema.isGreaterThanOrEqualTo(0)),
   status: Schema.String,
   refunds: Schema.Array(
     Schema.Struct({
-      amount_refunded: Schema.Number.check(Schema.isInt(), Schema.isGreaterThanOrEqualTo(0)),
+      amount_refunded: Schema.Finite.check(Schema.isInt(), Schema.isGreaterThanOrEqualTo(0)),
       payment_record_refund: Schema.NullOr(
         Schema.Struct({ payment_record: Schema.String, refund_group: Schema.String })
       ),
@@ -1065,7 +1066,7 @@ const StripeCreditNoteWebhookObjectSchema = Schema.Struct({
 const StripeIdWebhookObjectSchema = Schema.Struct({ id: Schema.String })
 const StripeWebhookEnvelopeSchema = Schema.Struct({
   id: Schema.String,
-  created: Schema.Number,
+  created: Schema.Finite,
   type: Schema.String,
   data: Schema.Struct({ object: Schema.Unknown }),
 })
@@ -2184,7 +2185,7 @@ const make = Effect.gen(function* () {
         .pipe(Effect.mapError(() => stripeError("Could not check Stripe event")))
       if (processed) return
 
-      const eventCreatedAt = new Date(event.created * 1_000)
+      const eventCreatedAt = DateTime.toDateUtc(DateTime.makeUnsafe(event.created * 1_000))
       switch (event.type) {
         case "customer.subscription.created":
         case "customer.subscription.updated":

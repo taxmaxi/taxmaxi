@@ -19,7 +19,7 @@ import { ProviderData } from "./UserIdentity.ts"
 export class OAuthCredentials extends Schema.Class<OAuthCredentials>("OAuthCredentials")({
   accessToken: Schema.Trimmed.check(Schema.isNonEmpty()),
   refreshToken: Schema.NullOr(Schema.String),
-  expiresAtEpochMillis: Schema.Number,
+  expiresAtEpochMillis: Schema.Finite,
   scopes: Schema.NullOr(Schema.String),
 }) {}
 
@@ -122,7 +122,7 @@ export class LoginResult extends Schema.Class<LoginResult>("LoginResult")({
   /**
    * When the session expires
    */
-  expiresAt: Schema.Number.annotate({
+  expiresAt: Schema.Finite.annotate({
     title: "Expires At",
     description: "Session expiration time in epoch milliseconds",
   }),

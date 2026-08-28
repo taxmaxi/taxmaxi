@@ -403,45 +403,42 @@ const make = Effect.gen(function* () {
             return yield* toPaymentError(processResult.response)
           case "payment-verified":
             return {
-              settle: () =>
-                Effect.gen(function* () {
-                  const settlement = yield* Effect.tryPromise({
-                    try: () =>
-                      httpResourceServer.processSettlement(
-                        processResult.paymentPayload,
-                        processResult.paymentRequirements,
-                        processResult.declaredExtensions ?? {},
-                        {
-                          request: {
-                            adapter: makeAdapter(paymentHeader.value),
-                            method: "POST",
-                            path: DEFAULT_SOURCE_CREATION_PATH,
-                            paymentHeader: paymentHeader.value,
-                          },
-                        }
-                      ),
-                    catch: (cause) =>
-                      buildSettlementError({
-                        message:
-                          cause instanceof Error
-                            ? cause.message
-                            : "x402 payment settlement failed.",
-                      }),
-                  })
+              settle: Effect.gen(function* () {
+                const settlement = yield* Effect.tryPromise({
+                  try: () =>
+                    httpResourceServer.processSettlement(
+                      processResult.paymentPayload,
+                      processResult.paymentRequirements,
+                      processResult.declaredExtensions ?? {},
+                      {
+                        request: {
+                          adapter: makeAdapter(paymentHeader.value),
+                          method: "POST",
+                          path: DEFAULT_SOURCE_CREATION_PATH,
+                          paymentHeader: paymentHeader.value,
+                        },
+                      }
+                    ),
+                  catch: (cause) =>
+                    buildSettlementError({
+                      message:
+                        cause instanceof Error ? cause.message : "x402 payment settlement failed.",
+                    }),
+                })
 
-                  if (!settlement.success) {
-                    return yield* toSettlementError(settlement)
-                  }
+                if (!settlement.success) {
+                  return yield* toSettlementError(settlement)
+                }
 
-                  const payerIdentity = yield* payerIdentityFromSettlement(settlement)
+                const payerIdentity = yield* payerIdentityFromSettlement(settlement)
 
-                  return {
-                    receiptValue: receiptValueFromSettlement(settlement),
-                    paymentResponseHeader: encodePaymentResponseHeader(settlement),
-                    response: settlement,
-                    ...payerIdentity,
-                  } satisfies X402PaymentSettlement
-                }),
+                return {
+                  receiptValue: receiptValueFromSettlement(settlement),
+                  paymentResponseHeader: encodePaymentResponseHeader(settlement),
+                  response: settlement,
+                  ...payerIdentity,
+                } satisfies X402PaymentSettlement
+              }),
             }
         }
       })

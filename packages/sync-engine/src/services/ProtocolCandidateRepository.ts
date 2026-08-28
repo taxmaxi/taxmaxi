@@ -171,7 +171,7 @@ export interface ProtocolCandidateRepositoryShape {
   /**
    * List TaxMaxi transaction types available for later protocol mapping work.
    */
-  readonly listTransactionTypes: () => Effect.Effect<
+  readonly listTransactionTypes: Effect.Effect<
     ReadonlyArray<TaxMaxiTransactionTypeReference>,
     SyncEngineStorageError
   >

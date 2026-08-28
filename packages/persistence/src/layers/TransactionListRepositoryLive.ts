@@ -61,7 +61,7 @@ const parseCursor = (
 ): Effect.Effect<Option.Option<CursorParts>, TransactionListInvalidCursorError> =>
   cursor === null
     ? Effect.succeed(Option.none())
-    : Schema.decodeUnknownEffect(TransactionCursor)(cursor).pipe(
+    : Schema.decodeEffect(TransactionCursor)(cursor).pipe(
         Effect.map(({ id, timestamp }) => Option.some({ id, timestamp })),
         Effect.mapError(() => new TransactionListInvalidCursorError({ cursor }))
       )

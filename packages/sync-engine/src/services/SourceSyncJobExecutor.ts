@@ -68,8 +68,8 @@ export class SourceSyncJobRetryableExecutionError extends Schema.TaggedError<Sou
   {
     jobId: Schema.String,
     message: Schema.String,
-    attemptNumber: Schema.Number,
-    maxAttempts: Schema.Number,
+    attemptNumber: Schema.Finite,
+    maxAttempts: Schema.Finite,
     nextRetryAt: Schema.Date,
   }
 ) {}

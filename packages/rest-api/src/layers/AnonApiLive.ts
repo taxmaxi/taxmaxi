@@ -9,6 +9,7 @@ import { HttpEffect, HttpServerRequest, HttpServerResponse } from "effect/unstab
 import { SourceId } from "@my/core/source"
 import { PrincipalClaimRepository } from "@my/persistence/services"
 import * as Config from "effect/Config"
+import * as DateTime from "effect/DateTime"
 import * as Duration from "effect/Duration"
 import * as Effect from "effect/Effect"
 import * as Option from "effect/Option"
@@ -114,7 +115,7 @@ const clearCookie = ({
     Effect.orDie(
       HttpServerResponse.setCookie(response, name, "", {
         ...baseCookieOptions,
-        expires: new Date(0),
+        expires: DateTime.toDateUtc(DateTime.makeUnsafe(0)),
       })
     )
   )
@@ -147,7 +148,7 @@ export const AnonApiLive = HttpApiBuilder.group(TaxMaxiApi, "anon", (handlers) =
     const findSource = (sourceId: string) =>
       Effect.gen(function* () {
         const session = yield* resolveSession
-        const decodedSourceId = yield* Schema.decodeUnknownEffect(SourceId)(sourceId).pipe(
+        const decodedSourceId = yield* Schema.decodeEffect(SourceId)(sourceId).pipe(
           Effect.mapError(() => new AnonNotFoundError({ message: "Anonymous source not found." }))
         )
         const maybeSource = yield* principalClaimRepository
@@ -218,9 +219,9 @@ export const AnonApiLive = HttpApiBuilder.group(TaxMaxiApi, "anon", (handlers) =
       )
       .handle("createAnonSessionChallenge", () =>
         Effect.gen(function* () {
-          const challenge = yield* anonSessionService
-            .createChallenge()
-            .pipe(Effect.mapError(() => toInternalServerError("Failed to create SIWX challenge.")))
+          const challenge = yield* anonSessionService.createChallenge.pipe(
+            Effect.mapError(() => toInternalServerError("Failed to create SIWX challenge."))
+          )
           yield* setCookie({
             name: ANON_CHALLENGE_COOKIE_NAME,
             value: challenge.token,

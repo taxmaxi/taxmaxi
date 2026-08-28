@@ -240,13 +240,13 @@ const toProviderFailureError = (
   new SourceSyncProviderFailureError({
     providerKey: COINBASE_PROVIDER_KEY,
     message: error.message,
-    retryable: error instanceof CoinbaseSyncProviderError ? error.retryable : false,
+    retryable: Schema.is(CoinbaseSyncProviderError)(error) ? error.retryable : false,
   })
 
 const mapCoinbaseClientError = (
   error: CoinbaseSyncClientError
 ): SourceSyncProviderFailureError | SyncEngineStorageError => {
-  if (error instanceof SyncEngineStorageError) {
+  if (Schema.is(SyncEngineStorageError)(error)) {
     return error
   }
 
@@ -261,7 +261,7 @@ const decodeCoinbaseCursorPayload = (
       return defaultCoinbaseCursorPayload
     }
 
-    const decoded = yield* Schema.decodeUnknownEffect(CoinbaseCursorPayloadSchema)(payload).pipe(
+    const decoded = yield* Schema.decodeEffect(CoinbaseCursorPayloadSchema)(payload).pipe(
       Effect.mapError((error) =>
         toCursorDecodeError(`Invalid persisted Coinbase cursor payload: ${error.message}`)
       )
@@ -853,18 +853,15 @@ const make = Effect.gen(function* () {
     })
 
   const loadNormalizationLookups: CoinbaseSourceSyncProviderShape["loadNormalizationLookups"] =
-    () =>
-      assetRepository.listBlockchains().pipe(
-        Effect.map(
-          (blockchains): CoinbaseNormalizationLookups => ({
-            blockchainIdByName: new Map(
-              blockchains.map(
-                (blockchain) => [blockchain.name.toLowerCase(), blockchain.id] as const
-              )
-            ),
-          })
-        )
+    assetRepository.listBlockchains.pipe(
+      Effect.map(
+        (blockchains): CoinbaseNormalizationLookups => ({
+          blockchainIdByName: new Map(
+            blockchains.map((blockchain) => [blockchain.name.toLowerCase(), blockchain.id] as const)
+          ),
+        })
       )
+    )
 
   const determineCoinbaseReview = ({
     providerTransactionType,
@@ -1015,20 +1012,20 @@ const make = Effect.gen(function* () {
             mapping.canonicalAssetId === null,
           excluded: mapping.kind === "excluded",
         })),
-        Effect.catchTag("CoinbaseProviderAssetMappingNotFoundError", () =>
-          Effect.succeed({
-            assetId: Option.none(),
-            requiresReview: true,
-            excluded: false,
-          })
-        ),
-        Effect.catchTag("CoinbasePendingProviderAssetMappingError", () =>
-          Effect.succeed({
-            assetId: Option.none(),
-            requiresReview: true,
-            excluded: false,
-          })
-        )
+        Effect.catchTags({
+          CoinbaseProviderAssetMappingNotFoundError: () =>
+            Effect.succeed({
+              assetId: Option.none(),
+              requiresReview: true,
+              excluded: false,
+            }),
+          CoinbasePendingProviderAssetMappingError: () =>
+            Effect.succeed({
+              assetId: Option.none(),
+              requiresReview: true,
+              excluded: false,
+            }),
+        })
       )
 
   const loadProviderAssetIdentity = ({ currencyCode }: { readonly currencyCode: string }) =>

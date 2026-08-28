@@ -55,7 +55,7 @@ describe("AssetRepositoryLive", () => {
       )
     )
     const blockchains = await runRepository(
-      Effect.flatMap(AssetRepository, (repository) => repository.listBlockchains())
+      Effect.flatMap(AssetRepository, (repository) => repository.listBlockchains)
     )
 
     expect(Option.isSome(asset)).toBe(true)

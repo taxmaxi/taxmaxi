@@ -1,4 +1,5 @@
 import { and, asc, eq, ilike } from "drizzle-orm"
+import * as DateTime from "effect/DateTime"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import * as Option from "effect/Option"
@@ -120,7 +121,7 @@ const make = Effect.gen(function* () {
 
   const create: UserRepositoryService["create"] = (user) =>
     Effect.gen(function* () {
-      const now = new Date()
+      const now = yield* DateTime.nowAsDate
 
       const [created] = yield* db
         .insert(users)
@@ -155,7 +156,7 @@ const make = Effect.gen(function* () {
         ...(data.displayName !== undefined ? { name: data.displayName } : {}),
         ...(data.role !== undefined ? { role: fromAuthRole(data.role) } : {}),
         ...(data.emailVerified !== undefined ? { emailVerified: data.emailVerified } : {}),
-        updatedAt: new Date(),
+        updatedAt: yield* DateTime.nowAsDate,
       }
 
       const [updated] = yield* db
@@ -180,16 +181,15 @@ const make = Effect.gen(function* () {
       }
     }).pipe(wrapSqlError("delete"))
 
-  const findPlatformAdmins: UserRepositoryService["findPlatformAdmins"] = () =>
-    Effect.gen(function* () {
-      const rows = yield* db
-        .select(selectAuthUserFields)
-        .from(users)
-        .where(eq(users.role, "admin"))
-        .orderBy(asc(users.email))
+  const findPlatformAdmins: UserRepositoryService["findPlatformAdmins"] = Effect.gen(function* () {
+    const rows = yield* db
+      .select(selectAuthUserFields)
+      .from(users)
+      .where(eq(users.role, "admin"))
+      .orderBy(asc(users.email))
 
-      return yield* Effect.forEach(rows, (row) => rowToAuthUserWithPrimaryProvider(row))
-    }).pipe(wrapSqlError("findPlatformAdmins"))
+    return yield* Effect.forEach(rows, (row) => rowToAuthUserWithPrimaryProvider(row))
+  }).pipe(wrapSqlError("findPlatformAdmins"))
 
   const isPlatformAdmin: UserRepositoryService["isPlatformAdmin"] = (id) =>
     Effect.gen(function* () {

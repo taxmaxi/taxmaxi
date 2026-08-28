@@ -770,21 +770,20 @@ const make = Effect.gen(function* () {
       })
     })
 
-  const listTransactionTypes: ProtocolCandidateRepositoryShape["listTransactionTypes"] = () =>
-    db
-      .select({
-        typeKey: schema.transactionTypes.typeKey,
-        categoryKey: schema.transactionTypes.categoryKey,
-        subcategoryKey: schema.transactionTypes.subcategoryKey,
-        labelEn: schema.transactionTypes.labelEn,
-        labelDe: schema.transactionTypes.labelDe,
-      })
-      .from(schema.transactionTypes)
-      .orderBy(asc(schema.transactionTypes.typeKey))
-      .pipe(
-        wrapSyncEngineSqlError(listTransactionTypesOperation),
-        Effect.map((rows): ReadonlyArray<TaxMaxiTransactionTypeReference> => rows)
-      )
+  const listTransactionTypes: ProtocolCandidateRepositoryShape["listTransactionTypes"] = db
+    .select({
+      typeKey: schema.transactionTypes.typeKey,
+      categoryKey: schema.transactionTypes.categoryKey,
+      subcategoryKey: schema.transactionTypes.subcategoryKey,
+      labelEn: schema.transactionTypes.labelEn,
+      labelDe: schema.transactionTypes.labelDe,
+    })
+    .from(schema.transactionTypes)
+    .orderBy(asc(schema.transactionTypes.typeKey))
+    .pipe(
+      wrapSyncEngineSqlError(listTransactionTypesOperation),
+      Effect.map((rows): ReadonlyArray<TaxMaxiTransactionTypeReference> => rows)
+    )
 
   return ProtocolCandidateRepository.of({
     importObservations,

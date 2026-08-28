@@ -63,7 +63,7 @@ export class HeliusSolanaProviderError extends Schema.TaggedError<HeliusSolanaPr
   "HeliusSolanaProviderError",
   {
     message: Schema.String,
-    statusCode: Schema.NullOr(Schema.Number),
+    statusCode: Schema.NullOr(Schema.Finite),
     retryable: Schema.Boolean,
   }
 ) {}

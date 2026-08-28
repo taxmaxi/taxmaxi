@@ -74,55 +74,56 @@ const makeCoinbaseProviderModule = (
   coinbaseSourceSyncProvider: CoinbaseSourceSyncProviderShape
 ): SourceProviderModuleShape => ({
   fetchRawBatch: coinbaseSourceSyncProvider.fetchRawBatch,
-  refreshReferenceData: () =>
-    coinbaseSourceSyncProvider.refreshReferenceData().pipe(Effect.mapError(toReferenceDataError)),
-  refreshDefaultMappings: () =>
-    coinbaseSourceSyncProvider.refreshDefaultMappings().pipe(Effect.mapError(toReferenceDataError)),
-  makeRawRecordNormalizer: () =>
-    coinbaseSourceSyncProvider.loadNormalizationLookups().pipe(
-      Effect.map(
-        (lookups): SourceProviderRawRecordNormalizer =>
-          ({ source, sourceRecord }) =>
-            Effect.gen(function* () {
-              if (sourceRecord.recordType !== COINBASE_TRANSACTION_RECORD_TYPE) {
-                return { kind: "skipped" } as const
-              }
+  refreshReferenceData: coinbaseSourceSyncProvider.refreshReferenceData.pipe(
+    Effect.mapError(toReferenceDataError)
+  ),
+  refreshDefaultMappings: coinbaseSourceSyncProvider.refreshDefaultMappings.pipe(
+    Effect.mapError(toReferenceDataError)
+  ),
+  makeRawRecordNormalizer: coinbaseSourceSyncProvider.loadNormalizationLookups.pipe(
+    Effect.map(
+      (lookups): SourceProviderRawRecordNormalizer =>
+        ({ source, sourceRecord }) =>
+          Effect.gen(function* () {
+            if (sourceRecord.recordType !== COINBASE_TRANSACTION_RECORD_TYPE) {
+              return { kind: "skipped" } as const
+            }
 
-              const prepared = yield* coinbaseSourceSyncProvider
-                .prepareNormalization({
-                  source,
-                  sourceRecord,
-                  lookups,
-                })
-                .pipe(Effect.mapError(toCoinbaseRecoverableNormalizationError))
+            const prepared = yield* coinbaseSourceSyncProvider
+              .prepareNormalization({
+                source,
+                sourceRecord,
+                lookups,
+              })
+              .pipe(Effect.mapError(toCoinbaseRecoverableNormalizationError))
 
-              return {
-                kind: "prepared",
-                providerAssetRowIds: prepared.providerAssetRowIds,
-                transaction: prepared.transaction,
-                venueContext: prepared.venueContext,
-                onchainContext: null,
-                providerTransfers: prepared.providerTransfers,
-                canonicalTransfers: prepared.canonicalTransfers,
-                transactionReview: prepared.transactionReview,
-                resolvedTransactionType: prepared.resolvedTransactionType,
-                deriveLegs:
-                  prepared.legDerivationStrategy === "derive"
-                    ? ({ transaction, venueContext, canonicalTransfers }) =>
-                        coinbaseSourceSyncProvider
-                          .deriveLegs({
-                            transaction,
-                            venueContext,
-                            primaryAsset: prepared.primaryAsset,
-                            canonicalTransfers,
-                            deriveMainLeg: prepared.deriveMainLeg,
-                          })
-                          .pipe(Effect.mapError(toCoinbaseRecoverableNormalizationError))
-                    : () => Effect.succeed([]),
-              } as const
-            })
-      )
-    ),
+            return {
+              kind: "prepared",
+              providerAssetRowIds: prepared.providerAssetRowIds,
+              transaction: prepared.transaction,
+              venueContext: prepared.venueContext,
+              onchainContext: null,
+              providerTransfers: prepared.providerTransfers,
+              canonicalTransfers: prepared.canonicalTransfers,
+              transactionReview: prepared.transactionReview,
+              resolvedTransactionType: prepared.resolvedTransactionType,
+              deriveLegs:
+                prepared.legDerivationStrategy === "derive"
+                  ? ({ transaction, venueContext, canonicalTransfers }) =>
+                      coinbaseSourceSyncProvider
+                        .deriveLegs({
+                          transaction,
+                          venueContext,
+                          primaryAsset: prepared.primaryAsset,
+                          canonicalTransfers,
+                          deriveMainLeg: prepared.deriveMainLeg,
+                        })
+                        .pipe(Effect.mapError(toCoinbaseRecoverableNormalizationError))
+                  : () => Effect.succeed([]),
+            } as const
+          })
+    )
+  ),
 })
 
 const makeHeliusSolanaProviderModule = (
@@ -130,51 +131,50 @@ const makeHeliusSolanaProviderModule = (
 ): SourceProviderModuleShape => ({
   fetchRawBatch: heliusSolanaSourceSyncProvider.fetchRawBatch,
   refreshReferenceData: heliusSolanaSourceSyncProvider.refreshReferenceData,
-  refreshDefaultMappings: () => Effect.succeed(EMPTY_DEFAULT_MAPPINGS_REFRESH),
-  makeRawRecordNormalizer: () =>
-    heliusSolanaSourceSyncProvider.loadNormalizationLookups().pipe(
-      Effect.map(
-        (lookups): SourceProviderRawRecordNormalizer =>
-          ({ source, sourceRecord }) =>
-            Effect.gen(function* () {
-              if (sourceRecord.recordType !== HELIUS_SOLANA_RECORD_TYPE_TRANSACTION_FULL) {
-                return { kind: "skipped" } as const
-              }
+  refreshDefaultMappings: Effect.succeed(EMPTY_DEFAULT_MAPPINGS_REFRESH),
+  makeRawRecordNormalizer: heliusSolanaSourceSyncProvider.loadNormalizationLookups.pipe(
+    Effect.map(
+      (lookups): SourceProviderRawRecordNormalizer =>
+        ({ source, sourceRecord }) =>
+          Effect.gen(function* () {
+            if (sourceRecord.recordType !== HELIUS_SOLANA_RECORD_TYPE_TRANSACTION_FULL) {
+              return { kind: "skipped" } as const
+            }
 
-              const prepared = yield* heliusSolanaSourceSyncProvider
-                .prepareNormalization({
-                  source,
-                  sourceRecord,
-                  lookups,
-                })
-                .pipe(Effect.mapError(toHeliusSolanaRecoverableNormalizationError))
+            const prepared = yield* heliusSolanaSourceSyncProvider
+              .prepareNormalization({
+                source,
+                sourceRecord,
+                lookups,
+              })
+              .pipe(Effect.mapError(toHeliusSolanaRecoverableNormalizationError))
 
-              return {
-                kind: "prepared",
-                providerAssetRowIds: prepared.providerAssetRowIds,
-                transaction: prepared.transaction,
-                venueContext: prepared.venueContext,
-                onchainContext: prepared.onchainContext,
-                providerTransfers: prepared.providerTransfers,
-                canonicalTransfers: prepared.canonicalTransfers,
-                transactionReview: prepared.transactionReview,
-                resolvedTransactionType: prepared.resolvedTransactionType,
-                deriveLegs:
-                  prepared.legDerivationStrategy === "derive"
-                    ? ({ transaction, venueContext, canonicalTransfers }) =>
-                        heliusSolanaSourceSyncProvider
-                          .deriveLegs({
-                            transaction,
-                            venueContext,
-                            canonicalTransfers,
-                            legPlans: prepared.legPlans,
-                          })
-                          .pipe(Effect.mapError(toHeliusSolanaRecoverableNormalizationError))
-                    : () => Effect.succeed([]),
-              } as const
-            })
-      )
-    ),
+            return {
+              kind: "prepared",
+              providerAssetRowIds: prepared.providerAssetRowIds,
+              transaction: prepared.transaction,
+              venueContext: prepared.venueContext,
+              onchainContext: prepared.onchainContext,
+              providerTransfers: prepared.providerTransfers,
+              canonicalTransfers: prepared.canonicalTransfers,
+              transactionReview: prepared.transactionReview,
+              resolvedTransactionType: prepared.resolvedTransactionType,
+              deriveLegs:
+                prepared.legDerivationStrategy === "derive"
+                  ? ({ transaction, venueContext, canonicalTransfers }) =>
+                      heliusSolanaSourceSyncProvider
+                        .deriveLegs({
+                          transaction,
+                          venueContext,
+                          canonicalTransfers,
+                          legPlans: prepared.legPlans,
+                        })
+                        .pipe(Effect.mapError(toHeliusSolanaRecoverableNormalizationError))
+                  : () => Effect.succeed([]),
+            } as const
+          })
+    )
+  ),
 })
 
 const make = Effect.gen(function* () {

@@ -5,6 +5,7 @@
  */
 
 import { and, asc, desc, eq, gt, isNotNull, isNull, or, sql } from "drizzle-orm"
+import * as DateTime from "effect/DateTime"
 import { PrincipalId } from "@my/core/ownership"
 import type { ChainType } from "@my/core/source"
 import { SourceId } from "@my/core/source"
@@ -104,11 +105,11 @@ const SourceSyncJobProgressSnapshot = Schema.Struct({
   phase: Schema.optional(
     Schema.Literals(["discovering", "classifying", "reconciling", "completed"])
   ),
-  processedRecords: Schema.optional(Schema.Number),
-  totalRecords: Schema.optional(Schema.NullOr(Schema.Number)),
-  fetchedRecords: Schema.optional(Schema.Number),
-  normalizedRecords: Schema.optional(Schema.Number),
-  failedRecords: Schema.optional(Schema.Number),
+  processedRecords: Schema.optional(Schema.Finite),
+  totalRecords: Schema.optional(Schema.NullOr(Schema.Finite)),
+  fetchedRecords: Schema.optional(Schema.Finite),
+  normalizedRecords: Schema.optional(Schema.Finite),
+  failedRecords: Schema.optional(Schema.Finite),
 })
 
 const toPublicJobStatus = (
@@ -141,16 +142,14 @@ const decodeProgress = (progressDetails: unknown) =>
           normalizedRecords: progress.normalizedRecords ?? null,
           failedRecords: progress.failedRecords ?? null,
         })),
-        Effect.catch(() =>
-          Effect.succeed({
-            phase: null,
-            processedRecords: null,
-            totalRecords: null,
-            fetchedRecords: null,
-            normalizedRecords: null,
-            failedRecords: null,
-          })
-        )
+        Effect.orElseSucceed(() => ({
+          phase: null,
+          processedRecords: null,
+          totalRecords: null,
+          fetchedRecords: null,
+          normalizedRecords: null,
+          failedRecords: null,
+        }))
       )
 
 const findPrincipalClaimTransferError = (error: unknown): PrincipalClaimTransferError | null => {
@@ -180,7 +179,7 @@ const make = Effect.gen(function* () {
 
   const create: PrincipalClaimRepositoryService["create"] = (params) =>
     Effect.gen(function* () {
-      const now = new Date()
+      const now = yield* DateTime.nowAsDate
       const [row] = yield* db
         .insert(schema.principalClaims)
         .values({
@@ -216,7 +215,7 @@ const make = Effect.gen(function* () {
     params
   ) =>
     Effect.gen(function* () {
-      const now = new Date()
+      const now = yield* DateTime.nowAsDate
       const [row] = yield* db
         .select(selectPrincipalClaimFields)
         .from(schema.principalClaims)
@@ -478,7 +477,7 @@ const make = Effect.gen(function* () {
       db
         .transaction((tx) =>
           Effect.gen(function* () {
-            const now = new Date()
+            const now = yield* DateTime.nowAsDate
             yield* tx
               .select({ id: schema.sources.id })
               .from(schema.sources)
@@ -735,7 +734,7 @@ const make = Effect.gen(function* () {
       db
         .transaction((tx) =>
           Effect.gen(function* () {
-            const now = new Date()
+            const now = yield* DateTime.nowAsDate
             yield* tx
               .select({ id: schema.sources.id })
               .from(schema.sources)

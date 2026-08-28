@@ -103,7 +103,7 @@ export interface HeliusSolanaAssetResolutionServiceShape {
   /**
    * Ensure built-in SOL/USDC/USDT provider assets and default mapping rows exist.
    */
-  readonly ensureDefaultMappings: () => Effect.Effect<
+  readonly ensureDefaultMappings: Effect.Effect<
     HeliusSolanaAssetReferenceDataRefreshResult,
     HeliusSolanaAssetResolutionError
   >

@@ -146,32 +146,30 @@ const CoinbaseSyncClientTestLive = Layer.succeed(CoinbaseSyncClient, {
 
       return { records, nextCursor: null }
     }),
-  fetchFiatCurrencies: () =>
-    Effect.succeed([
-      {
-        currencyCode: "EUR",
-        name: "Euro",
-        minSize: "0.01",
-        payload: { id: "EUR", name: "Euro", min_size: "0.01" },
-      },
-    ] as const),
-  fetchCryptoCurrencies: () =>
-    Effect.succeed([
-      {
-        currencyCode: "ORB",
+  fetchFiatCurrencies: Effect.succeed([
+    {
+      currencyCode: "EUR",
+      name: "Euro",
+      minSize: "0.01",
+      payload: { id: "EUR", name: "Euro", min_size: "0.01" },
+    },
+  ] as const),
+  fetchCryptoCurrencies: Effect.succeed([
+    {
+      currencyCode: "ORB",
+      name: "Orb Test Coin",
+      providerAssetId: "orb-provider-asset",
+      exponent: 8,
+      providerType: "crypto",
+      payload: {
+        code: "ORB",
         name: "Orb Test Coin",
-        providerAssetId: "orb-provider-asset",
         exponent: 8,
-        providerType: "crypto",
-        payload: {
-          code: "ORB",
-          name: "Orb Test Coin",
-          exponent: 8,
-          type: "crypto",
-          asset_id: "orb-provider-asset",
-        },
+        type: "crypto",
+        asset_id: "orb-provider-asset",
       },
-    ] as const),
+    },
+  ] as const),
 })
 
 const orbCoinGeckoUpstreamFailure = new AssetResolutionUpstreamFailure({ source: "coingecko" })

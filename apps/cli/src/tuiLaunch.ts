@@ -7,9 +7,12 @@
  * inherited stdio. Subcommands never pay this cost; they skip the TUI
  * path entirely.
  */
-import { spawnSync } from "node:child_process"
 import { Config, Effect } from "effect"
 import * as Option from "effect/Option"
+// spawnSync exposes the terminating signal so the parent CLI can mirror it.
+// Effect ChildProcess exposes exit codes but not the raw child signal.
+// @effect-diagnostics-next-line nodeBuiltinImport:off
+import { spawnSync } from "node:child_process"
 import { CliCommandError, mapUnknownToCliCommandError } from "./errors.ts"
 
 const RESPAWN_ENV_VAR = "TAX_TUI_FFI_RESPAWN"
@@ -36,7 +39,7 @@ const isFfiAvailable = Effect.tryPromise({
   catch: () => new CliCommandError({ message: "Node FFI is not available." }),
 }).pipe(
   Effect.as(true),
-  Effect.catch(() => Effect.succeed(false))
+  Effect.orElseSucceed(() => false)
 )
 
 const runTuiInProcess = Effect.gen(function* () {

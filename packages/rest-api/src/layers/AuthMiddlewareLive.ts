@@ -8,6 +8,7 @@
  */
 
 import * as Config from "effect/Config"
+import * as DateTime from "effect/DateTime"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import * as Option from "effect/Option"
@@ -50,7 +51,7 @@ const markInvalidSessionRequest = () =>
 const markInvalidCookieOnUnauthorized = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
   effect.pipe(
     Effect.tapError((error) =>
-      error instanceof UnauthorizedError ? markInvalidSessionRequest() : Effect.void
+      Schema.is(UnauthorizedError)(error) ? markInvalidSessionRequest() : Effect.void
     )
   )
 
@@ -79,7 +80,7 @@ export const invalidSessionCookieCleanup = HttpMiddleware.make(
         )
 
         return yield* HttpServerResponse.setCookie(response, SESSION_COOKIE_NAME, "", {
-          expires: new Date(0),
+          expires: DateTime.toDateUtc(DateTime.makeUnsafe(0)),
           httpOnly: true,
           path: "/",
           sameSite: "lax",
@@ -268,31 +269,30 @@ export const OptionalCurrentUserLive: Layer.Layer<OptionalCurrentUser, never, To
     Effect.gen(function* () {
       const tokenValidator = yield* TokenValidator
 
-      const resolve: OptionalCurrentUserService["resolve"] = () =>
-        Effect.gen(function* () {
-          const request = yield* HttpServerRequest.HttpServerRequest
-          const maybeAuthorization = Headers.get(request.headers, "authorization")
-          const maybeBearerToken = maybeAuthorization.pipe(Option.flatMap(extractBearerToken))
-          const maybeSessionToken = Option.fromNullishOr(request.cookies[SESSION_COOKIE_NAME])
+      const resolve: OptionalCurrentUserService["resolve"] = Effect.gen(function* () {
+        const request = yield* HttpServerRequest.HttpServerRequest
+        const maybeAuthorization = Headers.get(request.headers, "authorization")
+        const maybeBearerToken = maybeAuthorization.pipe(Option.flatMap(extractBearerToken))
+        const maybeSessionToken = Option.fromNullishOr(request.cookies[SESSION_COOKIE_NAME])
 
-          if (Option.isSome(maybeAuthorization) && Option.isNone(maybeBearerToken)) {
-            return yield* new UnauthorizedError({ message: "Invalid authorization header" })
-          }
+        if (Option.isSome(maybeAuthorization) && Option.isNone(maybeBearerToken)) {
+          return yield* new UnauthorizedError({ message: "Invalid authorization header" })
+        }
 
-          if (Option.isSome(maybeBearerToken)) {
-            const user = yield* tokenValidator.validate(Redacted.make(maybeBearerToken.value))
-            return Option.some(user)
-          }
+        if (Option.isSome(maybeBearerToken)) {
+          const user = yield* tokenValidator.validate(Redacted.make(maybeBearerToken.value))
+          return Option.some(user)
+        }
 
-          if (Option.isSome(maybeSessionToken)) {
-            const user = yield* markInvalidCookieOnUnauthorized(
-              tokenValidator.validate(Redacted.make(maybeSessionToken.value))
-            )
-            return Option.some(user)
-          }
+        if (Option.isSome(maybeSessionToken)) {
+          const user = yield* markInvalidCookieOnUnauthorized(
+            tokenValidator.validate(Redacted.make(maybeSessionToken.value))
+          )
+          return Option.some(user)
+        }
 
-          return Option.none<User>()
-        })
+        return Option.none<User>()
+      })
 
       return OptionalCurrentUser.of({ resolve })
     })
@@ -332,7 +332,7 @@ export const SimpleTokenValidatorLive: Layer.Layer<TokenValidator> = Layer.succe
       }
 
       // Decode the userId as AuthUserId (UUID format)
-      const userId = yield* Schema.decodeUnknownEffect(AuthUserId)(userIdStr).pipe(
+      const userId = yield* Schema.decodeEffect(AuthUserId)(userIdStr).pipe(
         Effect.mapError(
           () => new UnauthorizedError({ message: "Invalid token: user ID must be a valid UUID" })
         )
@@ -410,7 +410,7 @@ const makeSessionTokenValidator = Effect.gen(function* () {
 
       // Validate and create a SessionId from the token
       // Using decodeUnknown to gracefully handle invalid token formats
-      const sessionId = yield* Schema.decodeUnknownEffect(SessionId)(tokenValue).pipe(
+      const sessionId = yield* Schema.decodeEffect(SessionId)(tokenValue).pipe(
         Effect.mapError(() => new UnauthorizedError({ message: "Invalid session token format" }))
       )
 

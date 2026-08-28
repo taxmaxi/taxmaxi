@@ -99,17 +99,17 @@ export interface CoinbaseSourceSyncProviderShape {
     params: FetchProviderRawBatchParams
   ) => Effect.Effect<FetchProviderRawBatchResult, SourceSyncProviderError>
 
-  readonly refreshReferenceData: () => Effect.Effect<
+  readonly refreshReferenceData: Effect.Effect<
     RefreshCoinbaseReferenceDataResult,
     CoinbaseReferenceDataServiceError
   >
 
-  readonly refreshDefaultMappings: () => Effect.Effect<
+  readonly refreshDefaultMappings: Effect.Effect<
     RefreshCoinbaseDefaultMappingsResult,
     CoinbaseReferenceDataServiceError
   >
 
-  readonly loadNormalizationLookups: () => Effect.Effect<
+  readonly loadNormalizationLookups: Effect.Effect<
     CoinbaseNormalizationLookups,
     SyncEngineStorageError
   >

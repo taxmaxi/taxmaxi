@@ -11,11 +11,12 @@
 import { assetReferenceCatalogProjections } from "@my/core/assets"
 import { and, eq, inArray, ne, sql } from "drizzle-orm"
 import * as Data from "effect/Data"
+import * as DateTime from "effect/DateTime"
 import * as Effect from "effect/Effect"
 import { drizzle } from "../layers/PgClientLive.ts"
 import { schema } from "../schema/index.ts"
 
-const seedTimestamp = new Date("2026-01-01T00:00:00.000Z")
+const seedTimestamp = DateTime.toDateUtc(DateTime.makeUnsafe("2026-01-01T00:00:00.000Z"))
 
 /** Trusted catalog reference required by persistence seeding was not available. */
 export class PersistenceSeedReferenceError extends Data.TaggedError(
@@ -309,8 +310,8 @@ const legalSource = {
   language: "de",
   sourceUrl:
     "https://www.bundesfinanzministerium.de/Content/DE/Downloads/BMF_Schreiben/Steuerarten/Einkommensteuer/2025-03-06-einzelfragen-kryptowerte-bmf-schreiben.pdf",
-  publishedAt: new Date("2025-03-06T00:00:00.000Z"),
-  effectiveFrom: new Date("2025-03-06T00:00:00.000Z"),
+  publishedAt: DateTime.toDateUtc(DateTime.makeUnsafe("2025-03-06T00:00:00.000Z")),
+  effectiveFrom: DateTime.toDateUtc(DateTime.makeUnsafe("2025-03-06T00:00:00.000Z")),
   effectiveTo: null,
   checksumSha256: null,
 } as const
@@ -717,7 +718,7 @@ const jurisdictionRuleSet = {
   name: "DE Crypto Income Tax Ruleset (BMF 2025-03-06)",
   description:
     "Deterministic citation-backed DE crypto tax ruleset based on BMF letter 2025-03-06.",
-  effectiveFrom: new Date("2025-03-06T00:00:00.000Z"),
+  effectiveFrom: DateTime.toDateUtc(DateTime.makeUnsafe("2025-03-06T00:00:00.000Z")),
   effectiveTo: null,
   isActive: true,
 } as const

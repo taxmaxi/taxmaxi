@@ -7,6 +7,7 @@ import {
   AuthValidationError,
   SourceCreditRequiredError,
 } from "@my/rest-api/contracts"
+import * as Effect from "effect/Effect"
 import * as Exit from "effect/Exit"
 import * as Option from "effect/Option"
 import * as Schema from "effect/Schema"
@@ -14,40 +15,26 @@ import type * as SchemaAST from "effect/SchemaAST"
 import { resolveAt } from "effect/SchemaAST"
 import { HttpClientError } from "effect/unstable/http"
 
-export type TaxMaxiFieldError = {
-  readonly field?: string
-  readonly message: string
-}
+const TaxMaxiFieldError = Schema.Struct({
+  field: Schema.optional(Schema.String),
+  message: Schema.String,
+})
 
-export class TaxMaxiError extends Error {
-  readonly status: number
-  readonly code: string | undefined
-  readonly requestId: string | undefined
-  readonly fieldErrors: ReadonlyArray<TaxMaxiFieldError>
+export type TaxMaxiFieldError = typeof TaxMaxiFieldError.Type
 
-  constructor({
-    cause,
-    code,
-    fieldErrors = [],
-    message,
-    requestId,
-    status,
-  }: {
-    readonly cause?: unknown
-    readonly code?: string | undefined
-    readonly fieldErrors?: ReadonlyArray<TaxMaxiFieldError>
-    readonly message: string
-    readonly requestId?: string | undefined
-    readonly status: number
-  }) {
-    super(message, { cause })
-    this.name = "TaxMaxiError"
-    this.status = status
-    this.code = code
-    this.requestId = requestId
-    this.fieldErrors = fieldErrors
-  }
-}
+export class TaxMaxiError extends Schema.Error<TaxMaxiError>("TaxMaxiError")({
+  cause: Schema.optional(Schema.Unknown),
+  code: Schema.optional(Schema.String),
+  fieldErrors: Schema.Array(TaxMaxiFieldError).pipe(
+    Schema.withConstructorDefault(Effect.succeed([]))
+  ),
+  message: Schema.String,
+  requestId: Schema.optional(Schema.String),
+  status: Schema.Finite,
+}) {}
+
+const isTaxMaxiError = Schema.is(TaxMaxiError)
+const isAuthValidationError = Schema.is(AuthValidationError)
 
 const getErrorRecord = (error: unknown): Readonly<Record<string, unknown>> | undefined =>
   typeof error === "object" && error !== null
@@ -84,7 +71,7 @@ const getCauseMessage = (cause: unknown): string | undefined => {
 }
 
 const getFieldErrors = (error: unknown): ReadonlyArray<TaxMaxiFieldError> => {
-  if (!(error instanceof AuthValidationError)) {
+  if (!isAuthValidationError(error)) {
     return []
   }
 
@@ -134,8 +121,7 @@ const getErrorStatusFromCode = (code: string | undefined): number | undefined =>
 }
 
 export const isTaxMaxiUnauthorizedError = (error: unknown): error is TaxMaxiError =>
-  error instanceof TaxMaxiError &&
-  (error.status === 401 || getErrorStatusFromCode(error.code) === 401)
+  isTaxMaxiError(error) && (error.status === 401 || getErrorStatusFromCode(error.code) === 401)
 
 export type TaxMaxiCreditRequired = {
   readonly reasonCode: SourceCreditRequiredError["reasonCode"]
@@ -150,7 +136,7 @@ const decodeCreditRequired = Schema.decodeUnknownExit(SourceCreditRequiredError)
  * their own recovery copy instead of the error message.
  */
 export const getTaxMaxiCreditRequired = (error: unknown): TaxMaxiCreditRequired | null => {
-  const candidate = error instanceof TaxMaxiError ? error.cause : error
+  const candidate = isTaxMaxiError(error) ? error.cause : error
 
   return Exit.match(decodeCreditRequired(candidate), {
     onFailure: () => null,
@@ -182,7 +168,7 @@ const decodeAssetLookupError = Schema.decodeUnknownExit(
 export const getTaxMaxiAssetLookupErrorCode = (
   error: unknown
 ): TaxMaxiAssetLookupErrorCode | null => {
-  const candidate = error instanceof TaxMaxiError ? error.cause : error
+  const candidate = isTaxMaxiError(error) ? error.cause : error
 
   return Exit.match(decodeAssetLookupError(candidate), {
     onFailure: () => null,
@@ -194,7 +180,7 @@ export const getTaxMaxiAssetLookupErrorCode = (
 export const getTaxMaxiAssetDecisionErrorCode = (
   error: unknown
 ): TaxMaxiAssetDecisionErrorCode | null => {
-  const candidate = error instanceof TaxMaxiError ? error.cause : error
+  const candidate = isTaxMaxiError(error) ? error.cause : error
 
   return Exit.match(decodeAssetDecisionError(candidate), {
     onFailure: () => null,
@@ -213,7 +199,7 @@ export const getTaxMaxiAssetDecisionConflict = (
 }
 
 export const toTaxMaxiError = (error: unknown): TaxMaxiError => {
-  if (error instanceof TaxMaxiError) {
+  if (isTaxMaxiError(error)) {
     return error
   }
 

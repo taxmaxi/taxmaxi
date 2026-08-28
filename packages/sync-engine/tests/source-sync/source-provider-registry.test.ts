@@ -47,11 +47,9 @@ const CoinbaseSourceSyncProviderTestLive = Layer.succeed(
   CoinbaseSourceSyncProvider,
   CoinbaseSourceSyncProvider.of({
     fetchRawBatch: () => Effect.die("Coinbase fetchRawBatch should not be called"),
-    refreshReferenceData: () => Effect.die("Coinbase refreshReferenceData should not be called"),
-    refreshDefaultMappings: () =>
-      Effect.die("Coinbase refreshDefaultMappings should not be called"),
-    loadNormalizationLookups: () =>
-      Effect.die("Coinbase loadNormalizationLookups should not be called"),
+    refreshReferenceData: Effect.die("Coinbase refreshReferenceData should not be called"),
+    refreshDefaultMappings: Effect.die("Coinbase refreshDefaultMappings should not be called"),
+    loadNormalizationLookups: Effect.die("Coinbase loadNormalizationLookups should not be called"),
     prepareNormalization: () => Effect.die("Coinbase prepareNormalization should not be called"),
     deriveLegs: () => Effect.die("Coinbase deriveLegs should not be called"),
   })
@@ -79,18 +77,16 @@ const HeliusSolanaSourceSyncProviderTestLive = Layer.succeed(
           done: true,
         })
       ),
-    refreshReferenceData: () =>
-      Effect.succeed({
-        transactionTypeCatalogCount: 0,
-        providerAssetCatalogCount: 0,
-        defaultTransactionMappingCount: 0,
-        defaultProviderAssetMappingCount: 0,
-      }),
-    loadNormalizationLookups: () =>
-      Effect.succeed({
-        providerKey: HELIUS_SOLANA_PROVIDER_KEY,
-        solanaBlockchainId: "solana-blockchain-id",
-      }),
+    refreshReferenceData: Effect.succeed({
+      transactionTypeCatalogCount: 0,
+      providerAssetCatalogCount: 0,
+      defaultTransactionMappingCount: 0,
+      defaultProviderAssetMappingCount: 0,
+    }),
+    loadNormalizationLookups: Effect.succeed({
+      providerKey: HELIUS_SOLANA_PROVIDER_KEY,
+      solanaBlockchainId: "solana-blockchain-id",
+    }),
     prepareNormalization: () =>
       Effect.succeed({
         providerAssetRowIds: [],
@@ -174,7 +170,7 @@ describe("SourceProviderRegistryLive", () => {
       Effect.gen(function* () {
         const registry = yield* SourceProviderRegistry
         const provider = yield* registry.resolveProviderModule({ providerKey: "helius-solana" })
-        yield* provider.refreshReferenceData()
+        yield* provider.refreshReferenceData
         return yield* provider.fetchRawBatch(
           FetchProviderRawBatchParams.make({
             providerKey: "helius-solana",
@@ -198,7 +194,7 @@ describe("SourceProviderRegistryLive", () => {
       Effect.gen(function* () {
         const registry = yield* SourceProviderRegistry
         const provider = yield* registry.resolveProviderModule({ providerKey: "helius-solana" })
-        const normalize = yield* provider.makeRawRecordNormalizer()
+        const normalize = yield* provider.makeRawRecordNormalizer
         return yield* normalize({ source, sourceRecord })
       }).pipe(Effect.provide(RegistryLive))
     )

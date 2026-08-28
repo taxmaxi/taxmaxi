@@ -26,7 +26,7 @@ const CoinGeckoSearchResponse = Schema.Struct({
 })
 
 const CoinGeckoDetailPlatform = Schema.Struct({
-  decimal_place: Schema.NullOr(Schema.Number),
+  decimal_place: Schema.NullOr(Schema.Finite),
   contract_address: Schema.String,
 })
 
@@ -49,7 +49,7 @@ const CoinGeckoCoin = Schema.Struct({
 const CoinGeckoMarket = Schema.Struct({
   id: Schema.String,
   image: Schema.String,
-  current_price: Schema.NullOr(Schema.Number),
+  current_price: Schema.NullOr(Schema.Finite),
 })
 
 const CoinGeckoMarketsResponse = Schema.Array(CoinGeckoMarket)

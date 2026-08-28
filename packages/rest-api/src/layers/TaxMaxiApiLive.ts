@@ -8,6 +8,7 @@
 
 import { HttpApiBuilder } from "effect/unstable/httpapi"
 import { FetchHttpClient } from "effect/unstable/http"
+import * as DateTime from "effect/DateTime"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import * as Option from "effect/Option"
@@ -50,7 +51,7 @@ const HealthApiLive = HttpApiBuilder.group(TaxMaxiApi, "health", (handlers) =>
       Effect.succeed(
         HealthCheckResponse.make({
           status: "ok",
-          timestamp: new Date().toISOString(),
+          timestamp: DateTime.formatIso(DateTime.nowUnsafe()),
           version: Option.some("0.0.1"),
         })
       )

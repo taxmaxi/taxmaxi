@@ -10,6 +10,7 @@
  */
 
 import { HttpApiEndpoint, HttpApiGroup, OpenApi } from "effect/unstable/httpapi"
+import * as DateTime from "effect/DateTime"
 import * as Schema from "effect/Schema"
 import { AuthMiddleware } from "./AuthMiddleware.ts"
 import { ReportReviewReasonCode } from "@my/core/report"
@@ -83,7 +84,7 @@ export class SourceCreditRequiredError extends Schema.TaggedError<SourceCreditRe
   {
     message: Schema.String,
     reasonCode: SyncCreditReasonCode,
-    availableCredits: Schema.Number,
+    availableCredits: Schema.Finite,
   },
   { httpApiStatus: 402 }
 ) {}
@@ -160,9 +161,9 @@ export class SourceSyncCreditOutcomeResponse extends Schema.Class<SourceSyncCred
   "SourceSyncCreditOutcomeResponse"
 )({
   reasonCode: SyncCreditReasonCode,
-  availableCredits: Schema.Number,
-  creditsConsumed: Schema.Number,
-  additionalCreditsRequired: Schema.NullOr(Schema.Number),
+  availableCredits: Schema.Finite,
+  creditsConsumed: Schema.Finite,
+  additionalCreditsRequired: Schema.NullOr(Schema.Finite),
 }) {}
 
 /**
@@ -213,20 +214,20 @@ export class SourceSyncJobResponse extends Schema.Class<SourceSyncJobResponse>(
   jobId: Schema.String,
   status: Schema.Literals(["queued", "running", "completed", "failed", "credit_required"]),
   phase: Schema.NullOr(Schema.Literals(["discovering", "classifying", "reconciling", "completed"])),
-  processedRecords: Schema.NullOr(Schema.Number),
-  totalRecords: Schema.NullOr(Schema.Number),
-  progressPercent: Schema.NullOr(Schema.Number),
+  processedRecords: Schema.NullOr(Schema.Finite),
+  totalRecords: Schema.NullOr(Schema.Finite),
+  progressPercent: Schema.NullOr(Schema.Finite),
   /** Raw provider records fetched and cached so far, not the count of persisted transactions. */
-  fetchedRecords: Schema.NullOr(Schema.Number),
-  normalizedRecords: Schema.NullOr(Schema.Number),
-  failedRecords: Schema.NullOr(Schema.Number),
+  fetchedRecords: Schema.NullOr(Schema.Finite),
+  normalizedRecords: Schema.NullOr(Schema.Finite),
+  failedRecords: Schema.NullOr(Schema.Finite),
   message: Schema.NullOr(Schema.String),
   /** True when the caller can resume progress with a new sync call, e.g. after topping up credits. */
   resumable: Schema.Boolean,
   creditOutcome: Schema.NullOr(SourceSyncCreditOutcomeResponse),
 }) {}
 
-const currentTaxYear = new Date().getUTCFullYear()
+const currentTaxYear = DateTime.toPartsUtc(DateTime.nowUnsafe()).year
 
 /**
  * TaxCalculationRequest - Request body for calculating tax of a source
@@ -247,12 +248,12 @@ export class TaxCalculationRequest extends Schema.Class<TaxCalculationRequest>(
 export class TaxCalculationResponse extends Schema.Class<TaxCalculationResponse>(
   "TaxCalculationResponse"
 )({
-  year: Schema.Number,
+  year: Schema.Finite,
   currency: Schema.String,
-  taxableGains: Schema.Number,
-  taxableLosses: Schema.Number,
-  taxFreeGains: Schema.Number,
-  incomeTotal: Schema.Number,
+  taxableGains: Schema.Finite,
+  taxableLosses: Schema.Finite,
+  taxFreeGains: Schema.Finite,
+  incomeTotal: Schema.Finite,
 }) {}
 
 const SourceReportCursor = Schema.NullOr(Schema.String)
@@ -272,7 +273,7 @@ const SourceReportTaxableTreatment = Schema.Literals([
 export const SourceReportPageParams = Schema.Struct({
   cursor: Schema.optional(Schema.String),
   limit: Schema.optional(
-    Schema.NumberFromString.check(
+    Schema.FiniteFromString.check(
       Schema.isInt(),
       Schema.isGreaterThanOrEqualTo(1),
       Schema.isLessThanOrEqualTo(100)
@@ -315,9 +316,9 @@ export class SourceReportSyncStatus extends Schema.Class<SourceReportSyncStatus>
   lastSyncedAt: Schema.NullOr(Schema.String),
   lastErrorMessage: Schema.NullOr(Schema.String),
   /** Raw provider records fetched and cached so far, not the count of persisted transactions. */
-  fetchedRecords: Schema.NullOr(Schema.Number),
-  normalizedRecords: Schema.NullOr(Schema.Number),
-  failedRecords: Schema.NullOr(Schema.Number),
+  fetchedRecords: Schema.NullOr(Schema.Finite),
+  normalizedRecords: Schema.NullOr(Schema.Finite),
+  failedRecords: Schema.NullOr(Schema.Finite),
 }) {}
 
 /**
@@ -327,7 +328,7 @@ export class SourceReportReviewIssue extends Schema.Class<SourceReportReviewIssu
   "SourceReportReviewIssue"
 )({
   code: ReportReviewReasonCode,
-  count: Schema.Number,
+  count: Schema.Finite,
   blocking: Schema.Boolean,
   summary: Schema.String,
 }) {}
@@ -336,8 +337,8 @@ export class SourceReportReviewSummary extends Schema.Class<SourceReportReviewSu
   "SourceReportReviewSummary"
 )({
   status: Schema.Literals(["ok", "needs_review"]),
-  needsReviewCount: Schema.Number,
-  blockingIssueCount: Schema.Number,
+  needsReviewCount: Schema.Finite,
+  blockingIssueCount: Schema.Finite,
   issues: Schema.Array(SourceReportReviewIssue),
 }) {}
 
@@ -345,13 +346,13 @@ export class SourceReportReviewSummary extends Schema.Class<SourceReportReviewSu
  * SourceReportTotals - High-level source report counters and totals.
  */
 export class SourceReportTotals extends Schema.Class<SourceReportTotals>("SourceReportTotals")({
-  transactionCount: Schema.Number,
-  legCount: Schema.Number,
-  assetCount: Schema.Number,
-  fifoLotCount: Schema.Number,
-  disposalCount: Schema.Number,
-  incomeCount: Schema.Number,
-  feeCount: Schema.Number,
+  transactionCount: Schema.Finite,
+  legCount: Schema.Finite,
+  assetCount: Schema.Finite,
+  fifoLotCount: Schema.Finite,
+  disposalCount: Schema.Finite,
+  incomeCount: Schema.Finite,
+  feeCount: Schema.Finite,
   realizedGainLoss: SourceReportAmount,
   incomeTotal: SourceReportAmount,
   currency: Schema.NullOr(Schema.String),

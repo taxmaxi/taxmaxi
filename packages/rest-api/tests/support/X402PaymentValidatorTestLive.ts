@@ -60,36 +60,35 @@ export const makeX402PaymentValidatorTestLive = ({
           }
 
           return {
-            settle: () =>
-              Effect.gen(function* () {
-                yield* Effect.sync(() => {
-                  onSettle?.(paymentHeader.value)
+            settle: Effect.gen(function* () {
+              yield* Effect.sync(() => {
+                onSettle?.(paymentHeader.value)
+              })
+
+              if (failSettlement) {
+                return yield* new X402PaymentSettlementError({
+                  message: "x402 payment settlement failed.",
+                  paymentRequired: paymentRequired("Settlement failed"),
+                  paymentRequiredHeader: "encoded-test-settlement-failure",
                 })
+              }
 
-                if (failSettlement) {
-                  return yield* new X402PaymentSettlementError({
-                    message: "x402 payment settlement failed.",
-                    paymentRequired: paymentRequired("Settlement failed"),
-                    paymentRequiredHeader: "encoded-test-settlement-failure",
-                  })
-                }
-
-                settlementCount += 1
-                const transaction = `test-settlement-${paymentHeader.value}-${settlementCount}`
-                return {
-                  receiptValue: `${TEST_NETWORK}:${transaction}`,
-                  paymentResponseHeader: "encoded-test-payment-response",
-                  response: {
-                    success: true,
-                    transaction,
-                    network: TEST_NETWORK,
-                    payer: includePayerIdentity ? TEST_PAYER_WALLET : "",
-                    amount: "100000",
-                  } satisfies SettleResponse,
-                  payerChainType: includePayerIdentity ? "solana" : null,
-                  payerWalletAddress: includePayerIdentity ? TEST_PAYER_WALLET : null,
-                }
-              }),
+              settlementCount += 1
+              const transaction = `test-settlement-${paymentHeader.value}-${settlementCount}`
+              return {
+                receiptValue: `${TEST_NETWORK}:${transaction}`,
+                paymentResponseHeader: "encoded-test-payment-response",
+                response: {
+                  success: true,
+                  transaction,
+                  network: TEST_NETWORK,
+                  payer: includePayerIdentity ? TEST_PAYER_WALLET : "",
+                  amount: "100000",
+                } satisfies SettleResponse,
+                payerChainType: includePayerIdentity ? "solana" : null,
+                payerWalletAddress: includePayerIdentity ? TEST_PAYER_WALLET : null,
+              }
+            }),
           }
         }),
     } satisfies X402PaymentValidatorService)

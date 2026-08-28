@@ -1,4 +1,4 @@
-import { Effect } from "effect"
+import { DateTime, Effect } from "effect"
 import {
   type SourceAssetPnl,
   type SourceCreate,
@@ -38,20 +38,22 @@ export const createOnchainSource = ({
   readonly sessionToken: string
   readonly walletAddress: string
 }): Effect.Effect<SourceCreate, CliCommandError> =>
-  makeCliTaxMaxiClient({ apiUrl, sessionToken }).pipe(
-    Effect.flatMap((resolved) =>
-      resolved.sources.createSource({
+  Effect.gen(function* () {
+    const resolved = yield* makeCliTaxMaxiClient({ apiUrl, sessionToken })
+    const year = DateTime.toPartsUtc(yield* DateTime.now).year
+
+    return yield* resolved.sources
+      .createSource({
         payload: {
           type: "onchain",
           walletAddress,
           sync: true,
           jurisdiction: TAX_JURISDICTION,
-          year: new Date().getUTCFullYear(),
+          year,
         },
       })
-    ),
-    Effect.mapError(toCliApiError("Failed to create onchain source."))
-  )
+      .pipe(Effect.mapError(toCliApiError("Failed to create onchain source.")))
+  })
 
 export const startSourceSync = ({
   apiUrl,

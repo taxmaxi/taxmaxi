@@ -2,8 +2,10 @@ import { Schema } from "effect"
 
 export class CliCommandError extends Schema.TaggedError<CliCommandError>()("CliCommandError", {
   message: Schema.String,
-  status: Schema.optional(Schema.Number),
+  status: Schema.optional(Schema.Finite),
 }) {}
+
+const isCliCommandError = Schema.is(CliCommandError)
 
 export const getErrorMessage = (error: unknown, fallback: string): string => {
   if (typeof error === "object" && error !== null && "message" in error) {
@@ -16,7 +18,7 @@ export const getErrorMessage = (error: unknown, fallback: string): string => {
 }
 
 export const mapUnknownToCliCommandError = (fallback: string) => (error: unknown) =>
-  error instanceof CliCommandError
+  isCliCommandError(error)
     ? error
     : new CliCommandError({
         message: getErrorMessage(error, fallback),

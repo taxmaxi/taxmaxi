@@ -21,7 +21,7 @@ export class NoUsableCreditsError extends Schema.TaggedError<NoUsableCreditsErro
   "NoUsableCreditsError",
   {
     reasonCode: SyncCreditReasonCode,
-    availableCredits: Schema.Number,
+    availableCredits: Schema.Finite,
   }
 ) {}
 

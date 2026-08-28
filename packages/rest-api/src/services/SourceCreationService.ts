@@ -70,7 +70,7 @@ export class SourceCreationCreditRequiredError extends Schema.TaggedError<Source
   {
     message: Schema.String,
     reasonCode: SyncCreditReasonCode,
-    availableCredits: Schema.Number,
+    availableCredits: Schema.Finite,
   }
 ) {}
 

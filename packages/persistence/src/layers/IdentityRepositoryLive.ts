@@ -1,5 +1,6 @@
 import { and, eq } from "drizzle-orm"
 import * as Chunk from "effect/Chunk"
+import * as DateTime from "effect/DateTime"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import * as Option from "effect/Option"
@@ -33,7 +34,7 @@ const rowToUserIdentity = (row: SelectedIdentityRow): UserIdentity =>
     providerId: ProviderId.make(row.providerId),
     providerData: Option.fromNullishOr(row.providerData).pipe(
       // eslint-disable-next-line @typescript-eslint/consistent-type-assertions -- JSONB from DB is typed as unknown but validated on write
-      Option.map((data) => ProviderData.make(data as typeof ProviderData.Type))
+      Option.map((data) => ProviderData.make(data as ProviderData))
     ),
     createdAt: Timestamp.make({ epochMillis: row.createdAt.getTime() }),
   })
@@ -91,7 +92,7 @@ const make = Effect.gen(function* () {
 
   const create: IdentityRepositoryService["create"] = (identity) =>
     Effect.gen(function* () {
-      const now = new Date()
+      const now = yield* DateTime.nowAsDate
       const providerDataValue = Option.match(identity.providerData, {
         onNone: () => null,
         onSome: (data) => data,

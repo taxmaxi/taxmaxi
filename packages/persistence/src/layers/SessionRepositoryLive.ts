@@ -1,5 +1,6 @@
 import { eq, lte } from "drizzle-orm"
 import * as Chunk from "effect/Chunk"
+import * as DateTime from "effect/DateTime"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import * as Option from "effect/Option"
@@ -83,7 +84,7 @@ const make = Effect.gen(function* () {
 
   const create: SessionRepositoryService["create"] = (session) =>
     Effect.gen(function* () {
-      const now = new Date()
+      const now = yield* DateTime.nowAsDate
       yield* db.insert(sessions).values({
         id: session.id,
         userId: session.userId,
@@ -105,15 +106,14 @@ const make = Effect.gen(function* () {
   const deleteSession: SessionRepositoryService["delete"] = (id) =>
     db.delete(sessions).where(eq(sessions.id, id)).pipe(Effect.asVoid, wrapSqlError("delete"))
 
-  const deleteExpired: SessionRepositoryService["deleteExpired"] = () =>
-    Effect.gen(function* () {
-      const now = new Date()
-      const deleted = yield* db
-        .delete(sessions)
-        .where(lte(sessions.expiresAt, now))
-        .returning({ id: sessions.id })
-      return deleted.length
-    }).pipe(wrapSqlError("deleteExpired"))
+  const deleteExpired: SessionRepositoryService["deleteExpired"] = Effect.gen(function* () {
+    const now = yield* DateTime.nowAsDate
+    const deleted = yield* db
+      .delete(sessions)
+      .where(lte(sessions.expiresAt, now))
+      .returning({ id: sessions.id })
+    return deleted.length
+  }).pipe(wrapSqlError("deleteExpired"))
 
   const deleteByUserId: SessionRepositoryService["deleteByUserId"] = (userId) =>
     Effect.gen(function* () {

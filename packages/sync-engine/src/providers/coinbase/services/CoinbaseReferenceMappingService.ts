@@ -122,7 +122,7 @@ export interface ResolveCoinbaseCurrencyParams {
  * CoinbaseReferenceMappingServiceShape - Coinbase mapping lifecycle and deterministic resolution.
  */
 export interface CoinbaseReferenceMappingServiceShape {
-  readonly ensureDefaultMappings: () => Effect.Effect<
+  readonly ensureDefaultMappings: Effect.Effect<
     EnsureCoinbaseReferenceMappingsResult,
     SyncEngineStorageError
   >

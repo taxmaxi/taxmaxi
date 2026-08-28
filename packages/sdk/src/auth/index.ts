@@ -9,7 +9,7 @@ import * as Effect from "effect/Effect"
 import * as Schema from "effect/Schema"
 import type { TaxMaxiEffectClient } from "../client.ts"
 
-type DecodedAccountResponse = typeof AccountResponse.Type
+type DecodedAccountResponse = AccountResponse
 
 export type Account = {
   readonly account: {
@@ -33,8 +33,8 @@ export type Account = {
   }>
 }
 export type AuthLogoutResponse = Schema.Codec.Encoded<typeof LogoutResponse>
-export type AuthAuthorizeRedirectResponse = typeof AuthorizeRedirectResponse.Type
-export type AuthOAuthSessionResponse = typeof OAuthSessionResponse.Type
+export type AuthAuthorizeRedirectResponse = AuthorizeRedirectResponse
+export type AuthOAuthSessionResponse = OAuthSessionResponse
 
 export type AuthEffectResource = {
   readonly account: () => Effect.Effect<Account, unknown, never>

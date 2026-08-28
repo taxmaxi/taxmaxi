@@ -48,7 +48,7 @@ const COINBASE_RETRYABLE_STATUS_CODES = new Set([429, 500, 502, 503, 504])
 
 const CoinbaseTokenResponseSchema = Schema.Struct({
   access_token: Schema.String,
-  expires_in: Schema.Number,
+  expires_in: Schema.Finite,
   token_type: Schema.String,
   scope: Schema.optional(Schema.String),
   refresh_token: Schema.optional(Schema.String),
@@ -82,7 +82,7 @@ const CoinbaseFiatCurrencyEnvelopeSchema = Schema.Struct({
 const CoinbaseCryptoCurrencySchema = Schema.Struct({
   code: Schema.String,
   name: Schema.optional(Schema.NullOr(Schema.String)),
-  exponent: Schema.optional(Schema.NullOr(Schema.Number)),
+  exponent: Schema.optional(Schema.NullOr(Schema.Finite)),
   type: Schema.optional(Schema.NullOr(Schema.String)),
   asset_id: Schema.optional(Schema.NullOr(Schema.String)),
 })
@@ -487,7 +487,7 @@ const make = Effect.gen(function* () {
       Effect.retry(
         Schedule.recurs(2).pipe(
           Schedule.while(
-            ({ input: error }) => error instanceof CoinbaseSyncProviderError && error.retryable
+            ({ input: error }) => Schema.is(CoinbaseSyncProviderError)(error) && error.retryable
           )
         )
       )
@@ -521,7 +521,7 @@ const make = Effect.gen(function* () {
       Effect.retry(
         Schedule.recurs(2).pipe(
           Schedule.while(
-            ({ input: error }) => error instanceof CoinbaseSyncProviderError && error.retryable
+            ({ input: error }) => Schema.is(CoinbaseSyncProviderError)(error) && error.retryable
           )
         )
       )
@@ -635,8 +635,8 @@ const make = Effect.gen(function* () {
       } satisfies CoinbasePageResult<CoinbaseTransactionPageRecord>
     })
 
-  const fetchFiatCurrencies: CoinbaseSyncClientShape["fetchFiatCurrencies"] = () =>
-    Effect.gen(function* () {
+  const fetchFiatCurrencies: CoinbaseSyncClientShape["fetchFiatCurrencies"] = Effect.gen(
+    function* () {
       const endpoint = "/currencies"
       const json = yield* executePublicGetJson({ endpoint })
       const envelope = yield* Schema.decodeUnknownEffect(CoinbaseFiatCurrencyEnvelopeSchema)(
@@ -659,10 +659,11 @@ const make = Effect.gen(function* () {
           payload: currency,
         })
       )
-    })
+    }
+  )
 
-  const fetchCryptoCurrencies: CoinbaseSyncClientShape["fetchCryptoCurrencies"] = () =>
-    Effect.gen(function* () {
+  const fetchCryptoCurrencies: CoinbaseSyncClientShape["fetchCryptoCurrencies"] = Effect.gen(
+    function* () {
       const endpoint = "/currencies/crypto"
       const json = yield* executePublicGetJson({ endpoint })
       const envelope = yield* Schema.decodeUnknownEffect(
@@ -691,7 +692,8 @@ const make = Effect.gen(function* () {
           payload: currency,
         })
       )
-    })
+    }
+  )
 
   return CoinbaseSyncClient.of({
     fetchAccountsPage,

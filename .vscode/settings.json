@@ -9,8 +9,6 @@
   "oxc.typeAware": true,
   "oxc.fmt.configPath": ".oxfmtrc.jsonc",
   "tailwindCSS.rootFontSize": 14,
-  "typescript.tsdk": "node_modules/typescript/lib",
-  "typescript.enablePromptUseWorkspaceTsdk": true,
   "editor.insertSpaces": true,
   "editor.tabSize": 2,
   "editor.defaultFormatter": "oxc.oxc-vscode",
@@ -30,9 +28,11 @@
   "files.readonlyInclude": {
     "**/routeTree.gen.ts": true
   },
-  "typescript.preferences.autoImportFileExcludePatterns": ["repos/**"],
-  "javascript.preferences.autoImportFileExcludePatterns": ["repos/**"],
+  "js/ts.preferences.autoImportFileExcludePatterns": ["repos/**"],
   "files.exclude": {
     "repos/**": true
-  }
+  },
+  "js/ts.tsdk.promptToUseWorkspaceVersion": true,
+  "js/ts.tsdk.path": "./node_modules/typescript/bin",
+  "js/ts.experimental.useTsgo": true
 }
