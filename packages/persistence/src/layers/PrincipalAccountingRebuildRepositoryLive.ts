@@ -1271,12 +1271,10 @@ const make = Effect.gen(function* () {
         )
         .pipe(
           Effect.mapError((error) =>
-            error instanceof SyncEngineStorageError
-              ? error
-              : toSyncEngineStorageError({
-                  operation: "principalAccountingRebuildRepository.transaction",
-                  error,
-                })
+            toSyncEngineStorageError({
+              operation: "principalAccountingRebuildRepository.transaction",
+              error,
+            })
           )
         )
     }
