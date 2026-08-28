@@ -221,15 +221,9 @@ importers:
       '@opentelemetry/semantic-conventions':
         specifier: 1.41.1
         version: 1.41.1
-      bullmq:
-        specifier: 5.76.4
-        version: 5.76.4
       effect:
         specifier: 4.0.0-rc.109
         version: 4.0.0-rc.109
-      ioredis:
-        specifier: 5.10.1
-        version: 5.10.1
     devDependencies:
       '@my/typescript-config':
         specifier: workspace:*
