@@ -63,6 +63,8 @@ interface RebuildMovement {
   readonly purpose: "principal" | "fee" | "reward"
 }
 
+type MovementMatchingLeg = Pick<RebuildLeg, "transactionId" | "assetId" | "amount" | "kind">
+
 type OwnerSourceIdsByRecordId = Map<string, Set<string>>
 
 type RebuildEvent =
@@ -83,7 +85,7 @@ type RebuildEvent =
 
 interface RebuildEventSet {
   readonly events: ReadonlyArray<RebuildEvent>
-  readonly transactionLegs: ReadonlyMap<string, ReadonlyArray<RebuildLeg>>
+  readonly transactionLegs: ReadonlyMap<string, ReadonlyArray<MovementMatchingLeg>>
 }
 
 interface RebuildEventResult {
@@ -1216,8 +1218,36 @@ const make = Effect.gen(function* () {
         .orderBy(asc(schema.inventoryMovements.timestamp), asc(schema.inventoryMovements.id))
         .pipe(wrapSyncEngineSqlError("principalAccountingRebuildRepository.loadAffectedMovements"))
 
-      const transactionLegs = new Map<string, Array<RebuildLeg>>()
-      for (const leg of legs) {
+      const movementTransactionIds = [
+        ...new Set(movements.map(({ transactionId }) => transactionId)),
+      ]
+      const movementMatchingLegs =
+        movementTransactionIds.length === 0
+          ? []
+          : yield* tx
+              .select({
+                transactionId: schema.transactionLegs.transactionId,
+                assetId: schema.transactionLegs.assetId,
+                amount: schema.transactionLegs.amount,
+                kind: schema.transactionLegs.kind,
+              })
+              .from(schema.transactionLegs)
+              .where(
+                and(
+                  eq(schema.transactionLegs.principalId, principalId),
+                  inArray(schema.transactionLegs.assetId, assetIds),
+                  inArray(schema.transactionLegs.transactionId, movementTransactionIds)
+                )
+              )
+              .orderBy(asc(schema.transactionLegs.timestamp), asc(schema.transactionLegs.id))
+              .pipe(
+                wrapSyncEngineSqlError(
+                  "principalAccountingRebuildRepository.loadMovementMatchingLegs"
+                )
+              )
+
+      const transactionLegs = new Map<string, Array<MovementMatchingLeg>>()
+      for (const leg of movementMatchingLegs) {
         if (leg.transactionId === null) continue
         const stored = transactionLegs.get(leg.transactionId) ?? []
         stored.push(leg)
@@ -1391,7 +1421,7 @@ const make = Effect.gen(function* () {
     readonly tx: SyncEngineDbTransaction
     readonly principalId: string
     readonly movement: RebuildMovement
-    readonly transactionLegs: ReadonlyMap<string, ReadonlyArray<RebuildLeg>>
+    readonly transactionLegs: ReadonlyMap<string, ReadonlyArray<MovementMatchingLeg>>
     readonly ownerSourceIdsByMovementId: OwnerSourceIdsByRecordId
   }): Effect.Effect<RebuildEventResult, SyncEngineStorageError> =>
     Effect.gen(function* () {

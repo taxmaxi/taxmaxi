@@ -1565,6 +1565,106 @@ describe("PrincipalAccountingRebuildService", () => {
     expect(review).toEqual({ matchedLayer: "classification" })
   })
 
+  it("does not duplicate a provider movement whose equivalent leg is before the rebuild boundary", async () => {
+    await seedFifoReviewState({
+      acquisitionAssetId: TEST_BTC_ASSET_ID,
+      existingFifoReview: true,
+    })
+    const feeLegId = "00000000-0000-0000-0000-000000000959"
+    const feeProviderTransferId = "00000000-0000-0000-0000-000000000960"
+    const providerMovementId = "00000000-0000-0000-0000-000000000961"
+    await context.runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const [lot] = yield* db
+          .select({ id: schema.fifoLots.id })
+          .from(schema.fifoLots)
+          .where(eq(schema.fifoLots.sourceLegId, FIFO_REVIEW_ACQUISITION_LEG_ID))
+        if (lot === undefined) return yield* Effect.die("Failed to seed FIFO lot")
+        yield* db
+          .update(schema.transactionLegs)
+          .set({ amount: "1.2", fiatAmount: "120" })
+          .where(eq(schema.transactionLegs.id, FIFO_REVIEW_ACQUISITION_LEG_ID))
+        yield* db
+          .update(schema.fifoLots)
+          .set({ originalAmount: "1.2", remainingAmount: "0.1" })
+          .where(eq(schema.fifoLots.id, lot.id))
+        yield* db.insert(schema.transactionLegs).values({
+          id: feeLegId,
+          sourceId: TEST_SOURCE_ID,
+          externalId: "fifo-review-disposal:pre-boundary-fee",
+          timestamp: new Date("2025-01-31T23:00:00.000Z"),
+          principalId: TEST_PRINCIPAL_ID,
+          assetId: TEST_BTC_ASSET_ID,
+          amount: "0.1",
+          kind: "fee",
+          provenance: "deterministic",
+          transactionId: FIFO_REVIEW_TRANSACTION_ID,
+          fiatAmount: "10",
+          fiatCurrency: "EUR",
+        })
+        yield* db.insert(schema.disposalMatches).values({
+          disposalLegId: feeLegId,
+          fifoLotId: lot.id,
+          matchedAmount: "0.1",
+          costBasis: "10",
+          proceeds: "0",
+          gainLoss: "-10",
+        })
+        yield* db.insert(schema.providerTransfers).values({
+          id: feeProviderTransferId,
+          sourceId: TEST_SOURCE_ID,
+          transactionId: FIFO_REVIEW_TRANSACTION_ID,
+          externalId: "fifo-review-disposal:post-boundary-provider-fee",
+          timestamp: new Date("2025-03-01T10:00:00.000Z"),
+          direction: "outbound",
+          processingMode: "accounting_only",
+          fromAccountRef: "principal",
+          toAccountRef: "provider",
+          amount: "0.1",
+        })
+        yield* db.insert(schema.inventoryMovements).values({
+          id: providerMovementId,
+          principalId: TEST_PRINCIPAL_ID,
+          sourceId: TEST_SOURCE_ID,
+          transactionId: FIFO_REVIEW_TRANSACTION_ID,
+          providerTransferId: feeProviderTransferId,
+          assetId: TEST_BTC_ASSET_ID,
+          timestamp: new Date("2025-03-01T10:00:00.000Z"),
+          direction: "outbound",
+          purpose: "fee",
+          taxTreatment: "pending_review",
+          reconciliationStatus: "unmatched",
+          amount: "0.1",
+        })
+      })
+    )
+
+    const result = await runTest(
+      Effect.gen(function* () {
+        const service = yield* PrincipalAccountingRebuildService
+        const db = yield* drizzle
+        yield* service.rebuildPrincipalAccounting({
+          principalId: TEST_PRINCIPAL_ID,
+          affectedAssetIds: [TEST_BTC_ASSET_ID],
+          rebuildFrom,
+        })
+        const allocations = yield* db
+          .select({ id: schema.inventoryMovementAllocations.id })
+          .from(schema.inventoryMovementAllocations)
+          .where(eq(schema.inventoryMovementAllocations.inventoryMovementId, providerMovementId))
+        const [lot] = yield* db
+          .select({ remainingAmount: schema.fifoLots.remainingAmount })
+          .from(schema.fifoLots)
+          .where(eq(schema.fifoLots.sourceLegId, FIFO_REVIEW_ACQUISITION_LEG_ID))
+        return { allocations, lot }
+      })
+    )
+
+    expect(result.allocations).toEqual([])
+    expect(Number(result.lot?.remainingAmount)).toBe(0.1)
+  })
+
   it("keeps a FIFO review while another effect remains only partially allocated", async () => {
     await seedFifoReviewState({
       acquisitionAssetId: TEST_BTC_ASSET_ID,
