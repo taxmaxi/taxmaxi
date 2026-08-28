@@ -134,9 +134,25 @@ const make = Effect.gen(function* () {
     readonly sourceId: string
     readonly principalId: string
     readonly mode: SourceSyncJobMode
-  }): Effect.Effect<void, SourceSyncQueueError> =>
-    sourceSyncQueue
-      .enqueueSourceSyncJob(
+  }): Effect.Effect<void, SourceSyncQueueError | SyncEngineStorageError> =>
+    Effect.gen(function* () {
+      const readyForDispatch = yield* sourceSyncJobRepository.getExecutionJob({ jobId }).pipe(
+        Effect.as(true),
+        Effect.catchTag("SourceSyncJobPrerequisitesPendingError", () => Effect.succeed(false)),
+        Effect.catchTag("SourceSyncJobExecutionRecordConflictError", () => Effect.succeed(false)),
+        Effect.mapError((cause) =>
+          cause instanceof SyncEngineStorageError
+            ? cause
+            : new SyncEngineStorageError({
+                operation: "sourceSyncService.enqueuePendingJob.checkPrerequisites",
+                cause,
+              })
+        )
+      )
+
+      if (!readyForDispatch) return
+
+      yield* sourceSyncQueue.enqueueSourceSyncJob(
         SourceSyncQueuePayload.make({
           jobId,
           sourceId,
@@ -144,13 +160,13 @@ const make = Effect.gen(function* () {
           mode,
         })
       )
-      .pipe(
-        sourceSyncSpan({
-          name: "source-sync.enqueue-job",
-          attributes: { jobId, sourceId, principalId, mode },
-          kind: "producer",
-        })
-      )
+    }).pipe(
+      sourceSyncSpan({
+        name: "source-sync.enqueue-job",
+        attributes: { jobId, sourceId, principalId, mode },
+        kind: "producer",
+      })
+    )
 
   const runSourceJob = ({
     principalId,

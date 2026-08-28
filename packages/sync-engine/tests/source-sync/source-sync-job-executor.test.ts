@@ -16,11 +16,13 @@ import {
   SourceProviderRecoverableNormalizationError,
   SourceProviderRegistry,
   SourceRawRecordRepository,
+  SourceReplaySchedulingPendingError,
   SourceReplayRepository,
   SourceRepository,
   SourceSyncJobExecutionRecordConflictError,
   SourceSyncJobExecutionRecordNotFoundError,
   SourceSyncJobExecutionRecordPayloadError,
+  SourceSyncJobPrerequisitesPendingError,
   SourceSyncCreditExhaustedError,
   SourceSyncJobExecutor,
   SourceSyncJobRepository,
@@ -113,6 +115,8 @@ const makeExecutorLayer = ({
   fetchHighWatermark = null,
   replayCreditReference,
   failReplayReset = false,
+  waitForDependentReplay = false,
+  waitForPrerequisites = false,
   holdReplayCreditReservation = false,
   holdReplayReset = false,
   heartbeatFailureAt,
@@ -140,6 +144,8 @@ const makeExecutorLayer = ({
   readonly fetchHighWatermark?: Date | null
   readonly replayCreditReference?: (sourceRawRecordId: string) => string
   readonly failReplayReset?: boolean
+  readonly waitForDependentReplay?: boolean
+  readonly waitForPrerequisites?: boolean
   readonly holdReplayCreditReservation?: boolean
   readonly holdReplayReset?: boolean
   readonly heartbeatFailureAt?: number
@@ -201,17 +207,19 @@ const makeExecutorLayer = ({
           })
       }
     },
-    claimJob: ({ workerId }) =>
-      Effect.sync(() => {
-        events.push(`claim:${workerId}`)
-        return {
-          id: "job-1",
-          sourceId: source.id,
-          principalId: source.principalId,
-          mode,
-          status: "processing" as const,
-        }
-      }),
+    claimJob: ({ jobId, workerId }) =>
+      waitForPrerequisites
+        ? Effect.fail(new SourceSyncJobPrerequisitesPendingError({ jobId, sourceId: source.id }))
+        : Effect.sync(() => {
+            events.push(`claim:${workerId}`)
+            return {
+              id: "job-1",
+              sourceId: source.id,
+              principalId: source.principalId,
+              mode,
+              status: "processing" as const,
+            }
+          }),
     heartbeatJob: ({ jobId, workerId }) =>
       Effect.suspend(() => {
         heartbeatCount += 1
@@ -526,6 +534,13 @@ const makeExecutorLayer = ({
             cause: "Replay reset failed",
           })
         }
+        if (waitForDependentReplay) {
+          return yield* new SourceReplaySchedulingPendingError({
+            sourceId: source.id,
+            dependentSourceId: "dependent-source-1",
+          })
+        }
+        return { dependentReplays: [] }
       }),
   })
 
@@ -1453,6 +1468,51 @@ describe("SourceSyncJobExecutor", () => {
     expect(events).toContain("failure-metadata:provider unavailable")
     expect(events).toContain("fail:provider unavailable")
     expect(events).not.toContain("retry:provider unavailable:3:2026-01-01T00:05:00.000Z")
+  })
+
+  it("returns replay scheduling to the dispatcher after the final queue attempt", async () => {
+    const events: Array<string> = []
+    const nextRetryAt = new Date("2026-01-01T00:05:00.000Z")
+
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const executor = yield* SourceSyncJobExecutor
+        return yield* executor.execute({
+          jobId: "job-1",
+          workerId: "worker-1",
+          retryPolicy: {
+            attemptNumber: 3,
+            maxAttempts: 3,
+            nextRetryAt,
+          },
+        })
+      }).pipe(
+        Effect.provide(makeExecutorLayer({ mode: "replay", waitForDependentReplay: true, events }))
+      )
+    )
+
+    expect(result).toMatchObject({ jobId: "job-1", status: "queued" })
+    expect(events).toContain(
+      "retry:Replay source source-1 after the active job finishes for dependent source dependent-source-1.:3:2026-01-01T00:05:00.000Z"
+    )
+    expect(events.some((event) => event.startsWith("fail:"))).toBe(false)
+  })
+
+  it("returns jobs with active prerequisites to the queue without failing them", async () => {
+    const events: Array<string> = []
+
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const executor = yield* SourceSyncJobExecutor
+        return yield* executor.execute({ jobId: "job-1", workerId: "worker-1" })
+      }).pipe(
+        Effect.provide(makeExecutorLayer({ mode: "replay", waitForPrerequisites: true, events }))
+      )
+    )
+
+    expect(result).toMatchObject({ sourceId: source.id, jobId: "job-1", status: "queued" })
+    expect(events.some((event) => event.startsWith("fail:"))).toBe(false)
+    expect(events.some((event) => event.startsWith("retry:"))).toBe(false)
   })
 
   it("maps execution job load failures to executor errors", async () => {

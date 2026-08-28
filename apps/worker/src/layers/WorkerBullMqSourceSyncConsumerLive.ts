@@ -5,7 +5,14 @@
  */
 
 import { Config, DateTime, Effect, Exit, Layer, Result, Schedule, Schema } from "effect"
-import { UnrecoverableError, Worker, type Job, type JobsOptions, type Processor } from "bullmq"
+import {
+  DelayedError,
+  UnrecoverableError,
+  Worker,
+  type Job,
+  type JobsOptions,
+  type Processor,
+} from "bullmq"
 import { Redis } from "ioredis"
 import { randomUUID } from "node:crypto"
 import {
@@ -47,13 +54,15 @@ export interface WorkerBullMqSourceSyncJob {
   readonly data: unknown
   readonly attemptsMade: number
   readonly opts: Pick<JobsOptions, "attempts" | "backoff">
+  readonly moveToDelayed?: (timestamp: number, token?: string) => Promise<void>
 }
 
 /**
  * WorkerBullMqSourceSyncProcessor - Job processor installed into BullMQ.
  */
 export type WorkerBullMqSourceSyncProcessor = (
-  job: WorkerBullMqSourceSyncJob
+  job: WorkerBullMqSourceSyncJob,
+  token?: string
 ) => Promise<SourceSyncJobSummary>
 
 /**
@@ -276,7 +285,8 @@ const acquireLiveWorker = (
           unknown,
           SourceSyncJobSummary,
           typeof SOURCE_SYNC_JOB_NAME
-        > = (job: Job<unknown, SourceSyncJobSummary, typeof SOURCE_SYNC_JOB_NAME>) => processor(job)
+        > = (job: Job<unknown, SourceSyncJobSummary, typeof SOURCE_SYNC_JOB_NAME>, token) =>
+          processor(job, token)
 
         return new Worker<unknown, SourceSyncJobSummary, typeof SOURCE_SYNC_JOB_NAME>(
           SOURCE_SYNC_QUEUE_NAME,
@@ -328,10 +338,31 @@ export const makeWorkerBullMqSourceSyncConsumerLive = (
       const context = yield* Effect.context<SourceSyncJobExecutor>()
       const runPromise = Effect.runPromiseWith(context)
       const acquireWorker = options.acquireWorker ?? acquireLiveWorker
-      const processor: WorkerBullMqSourceSyncProcessor = async (job) => {
+      const processor: WorkerBullMqSourceSyncProcessor = async (job, token) => {
         const result = await runPromise(processJob({ job, config }).pipe(Effect.result))
 
         if (Result.isSuccess(result)) {
+          if (result.success.summary.status === "queued") {
+            if (job.moveToDelayed === undefined) {
+              return Promise.reject(
+                new WorkerBullMqSourceSyncConsumerError({
+                  operation: "workerBullMqSourceSyncConsumer.delayJob",
+                  cause: "Source sync queue job cannot be delayed",
+                })
+              )
+            }
+
+            const delayedUntil = await runPromise(
+              DateTime.now.pipe(
+                Effect.map(DateTime.add({ milliseconds: resolveBackoffDelayMs(job) })),
+                Effect.map(DateTime.toDateUtc),
+                Effect.map((date) => date.getTime())
+              )
+            )
+            await job.moveToDelayed(delayedUntil, token)
+            return Promise.reject(new DelayedError())
+          }
+
           await runPromise(
             startupRepair
               .dispatchFollowUp({

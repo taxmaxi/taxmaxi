@@ -54,6 +54,17 @@ export class SourceSyncJobExecutionRecordConflictError extends Schema.TaggedErro
 ) {}
 
 /**
+ * SourceSyncJobPrerequisitesPendingError - The job must wait for active prerequisite jobs.
+ */
+export class SourceSyncJobPrerequisitesPendingError extends Schema.TaggedError<SourceSyncJobPrerequisitesPendingError>()(
+  "SourceSyncJobPrerequisitesPendingError",
+  {
+    jobId: Schema.String,
+    sourceId: Schema.String,
+  }
+) {}
+
+/**
  * SourceSyncJobExecutionRecordPayloadError - Persisted execution metadata is malformed.
  */
 export class SourceSyncJobExecutionRecordPayloadError extends Schema.TaggedError<SourceSyncJobExecutionRecordPayloadError>()(
@@ -229,6 +240,7 @@ export interface SourceSyncJobRepositoryShape {
     SourceSyncExecutionJob,
     | SourceSyncJobExecutionRecordNotFoundError
     | SourceSyncJobExecutionRecordConflictError
+    | SourceSyncJobPrerequisitesPendingError
     | SyncEngineStorageError
   >
 
@@ -323,6 +335,7 @@ export interface SourceSyncJobRepositoryShape {
     SourceSyncExecutionJob,
     | SourceSyncJobExecutionRecordNotFoundError
     | SourceSyncJobExecutionRecordConflictError
+    | SourceSyncJobPrerequisitesPendingError
     | SourceSyncJobExecutionRecordPayloadError
     | SyncEngineStorageError
   >

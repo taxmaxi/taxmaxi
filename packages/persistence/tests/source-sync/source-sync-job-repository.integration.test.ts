@@ -71,6 +71,52 @@ const seedSourceFixture = ({
   readonly principalId: string
 }) => runPg(seedSyncEngineRepositoryFixture({ sourceId, userId: sourceId, principalId }))
 
+const seedOwnedSource = ({
+  sourceId,
+  address,
+}: {
+  readonly sourceId: string
+  readonly address: string
+}) =>
+  runPg(
+    Effect.gen(function* () {
+      const db = yield* drizzle
+      const [addressRow] = yield* db
+        .insert(schema.addresses)
+        .values({
+          address,
+          type: "bitcoin",
+          name: address,
+          principalId: TEST_PRINCIPAL_ID,
+        })
+        .returning({ id: schema.addresses.id })
+
+      if (addressRow === undefined) return yield* Effect.die("Failed to create source address")
+
+      yield* db.insert(schema.sources).values({
+        id: sourceId,
+        principalId: TEST_PRINCIPAL_ID,
+        name: address,
+        providerKey: "bitcoin-rpc",
+        sourceableType: "onchain",
+        addressId: addressRow.id,
+      })
+    })
+  )
+
+const recordJobDependency = ({
+  jobId,
+  prerequisiteJobId,
+}: {
+  readonly jobId: string
+  readonly prerequisiteJobId: string
+}) =>
+  runPg(
+    Effect.flatMap(drizzle, (db) =>
+      db.insert(schema.processingJobDependencies).values({ jobId, prerequisiteJobId })
+    )
+  )
+
 const selectProcessingJob = ({ jobId }: { readonly jobId: string }) =>
   runPg(
     Effect.gen(function* () {
@@ -190,6 +236,81 @@ describe("SourceSyncJobRepositoryLive", () => {
       queueName: null,
       queueJobId: null,
     })
+  })
+
+  it.each(["failed", "credit_required", "completed_with_failed_records"] as const)(
+    "fails pending dependents when their prerequisite becomes %s and frees the active slot",
+    async (terminalState) => {
+      const dependentSourceId = "00000000-0000-0000-0000-000000009901"
+      await seedOwnedSource({
+        sourceId: dependentSourceId,
+        address: "bc1qfailed-prerequisite-dependent",
+      })
+
+      const prerequisite = await createJob({ mode: "replay" })
+      await claimJob({ jobId: prerequisite.id })
+      const dependent = await createJob({ mode: "replay", sourceId: dependentSourceId })
+      await recordJobDependency({ jobId: dependent.id, prerequisiteJobId: prerequisite.id })
+
+      await runRepository(
+        Effect.flatMap(SourceSyncJobRepository, (repository) => {
+          switch (terminalState) {
+            case "failed":
+              return repository.failJob({
+                jobId: prerequisite.id,
+                message: "prerequisite failed",
+                completedAt: new Date("2025-01-02T00:00:00.000Z"),
+              })
+            case "credit_required":
+              return repository.failCreditRequiredJob({
+                jobId: prerequisite.id,
+                completedAt: new Date("2025-01-02T00:00:00.000Z"),
+                reasonCode: "no_usable_credits",
+                availableCredits: 0,
+                creditsConsumed: 1,
+                additionalCreditsRequired: 1,
+              })
+            case "completed_with_failed_records":
+              return repository.completeJob({ jobId: prerequisite.id, state: completedState })
+          }
+        })
+      )
+
+      expect(await selectProcessingJob({ jobId: dependent.id })).toMatchObject({
+        status: "failed",
+        errorMessage: "Prerequisite processing job did not complete successfully.",
+      })
+      expect((await createJob({ mode: "replay", sourceId: dependentSourceId }))._tag).toBe(
+        "CreatedSourceSyncJob"
+      )
+    }
+  )
+
+  it("fails the full pending dependency chain when an upstream prerequisite fails", async () => {
+    const middleSourceId = "00000000-0000-0000-0000-000000009902"
+    const downstreamSourceId = "00000000-0000-0000-0000-000000009903"
+    await seedOwnedSource({ sourceId: middleSourceId, address: "bc1qdependency-middle" })
+    await seedOwnedSource({ sourceId: downstreamSourceId, address: "bc1qdependency-downstream" })
+
+    const prerequisite = await createJob({ mode: "replay" })
+    await claimJob({ jobId: prerequisite.id })
+    const middle = await createJob({ mode: "replay", sourceId: middleSourceId })
+    const downstream = await createJob({ mode: "replay", sourceId: downstreamSourceId })
+    await recordJobDependency({ jobId: middle.id, prerequisiteJobId: prerequisite.id })
+    await recordJobDependency({ jobId: downstream.id, prerequisiteJobId: middle.id })
+
+    await runRepository(
+      Effect.flatMap(SourceSyncJobRepository, (repository) =>
+        repository.failJob({
+          jobId: prerequisite.id,
+          message: "upstream replay failed",
+          completedAt: new Date("2025-01-02T00:00:00.000Z"),
+        })
+      )
+    )
+
+    expect(await selectProcessingJob({ jobId: middle.id })).toMatchObject({ status: "failed" })
+    expect(await selectProcessingJob({ jobId: downstream.id })).toMatchObject({ status: "failed" })
   })
 
   it("does not create a second active row when replay is requested while sync is active", async () => {
@@ -345,6 +466,43 @@ describe("SourceSyncJobRepositoryLive", () => {
     expect(job.workerId).toBe("worker-1")
     expect(job.startedAt?.toISOString()).toBe("2025-01-02T00:00:00.000Z")
     expect(job.heartbeatAt?.toISOString()).toBe("2025-01-02T00:00:00.000Z")
+  })
+
+  it("returns a typed waiting result when a pending job has active prerequisites", async () => {
+    const dependentSourceId = "00000000-0000-0000-0000-000000009911"
+    await seedOwnedSource({
+      sourceId: dependentSourceId,
+      address: "bc1qwaiting-prerequisite-dependent",
+    })
+
+    const prerequisite = await createJob({ mode: "replay" })
+    const dependent = await createJob({ mode: "replay", sourceId: dependentSourceId })
+    await recordJobDependency({ jobId: dependent.id, prerequisiteJobId: prerequisite.id })
+
+    const result = await runRepository(
+      Effect.flatMap(SourceSyncJobRepository, (repository) =>
+        repository
+          .claimJob({
+            jobId: dependent.id,
+            workerId: "worker-1",
+            startedAt: new Date("2025-01-02T00:00:00.000Z"),
+          })
+          .pipe(Effect.result)
+      )
+    )
+
+    expect(result).toMatchObject({
+      _tag: "Failure",
+      failure: {
+        _tag: "SourceSyncJobPrerequisitesPendingError",
+        jobId: dependent.id,
+        sourceId: dependentSourceId,
+      },
+    })
+    expect(await selectProcessingJob({ jobId: dependent.id })).toMatchObject({
+      status: "pending",
+      workerId: null,
+    })
   })
 
   it("returns a typed conflict when a second worker claims the same job", async () => {
