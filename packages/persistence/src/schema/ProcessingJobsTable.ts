@@ -59,8 +59,6 @@ export const processingJobs = pgTable(
     creditsConsumed: integer("credits_consumed"), // Credits this run already spent before it stopped.
     additionalCreditsRequired: integer("additional_credits_required"), // Null until the billable total for this run is known.
     progressDetails: jsonb("progress_details"), // Optional run metrics/stage counters for UI and debugging.
-    queueName: text("queue_name"),
-    queueJobId: text("queue_job_id"),
     workerId: text("worker_id"),
     checkpointExternalId: text("checkpoint_external_id"), // Lightweight provider-facing resume anchor.
     checkpointPayload: jsonb("checkpoint_payload"), // Opaque provider-specific checkpoint/cursor blob.
@@ -72,14 +70,14 @@ export const processingJobs = pgTable(
     index("idx_processing_jobs_source_id").on(table.sourceId),
     index("idx_processing_jobs_principal_id").on(table.principalId),
     index("idx_processing_jobs_status").on(table.status),
-    index("idx_processing_jobs_queue_job").on(table.queueName, table.queueJobId),
     index("idx_processing_jobs_heartbeat_at").on(table.heartbeatAt),
+    // Serves the worker poll loop's claimable-job listing.
+    index("idx_processing_jobs_pending_next_retry")
+      .on(table.status, table.nextRetryAt)
+      .where(sql`${table.status} = 'pending'`),
     uniqueIndex("processing_jobs_active_source_unique")
       .on(table.sourceId)
       .where(sql`${table.status} in ('pending', 'processing')`),
-    uniqueIndex("processing_jobs_queue_job_unique")
-      .on(table.queueName, table.queueJobId)
-      .where(sql`${table.queueName} is not null and ${table.queueJobId} is not null`),
     foreignKey({
       columns: [table.followUpJobId],
       foreignColumns: [table.id],
