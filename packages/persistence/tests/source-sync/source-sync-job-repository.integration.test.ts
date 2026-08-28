@@ -461,6 +461,103 @@ describe("SourceSyncJobRepositoryLive", () => {
     })
   })
 
+  it("lets exactly one of two concurrently racing claims win", async () => {
+    const created = await createJob()
+
+    const results = await Promise.all(
+      ["worker-1", "worker-2"].map((workerId) =>
+        runRepository(
+          Effect.flatMap(SourceSyncJobRepository, (repository) =>
+            repository
+              .claimJob({
+                jobId: created.id,
+                workerId,
+                startedAt: new Date("2025-01-02T00:00:00.000Z"),
+              })
+              .pipe(Effect.result)
+          )
+        )
+      )
+    )
+
+    const wins = results.filter((result) => result._tag === "Success")
+    const conflicts = results.filter(
+      (result) =>
+        result._tag === "Failure" &&
+        result.failure._tag === "SourceSyncJobExecutionRecordConflictError"
+    )
+
+    expect(wins).toHaveLength(1)
+    expect(conflicts).toHaveLength(1)
+
+    const job = await selectProcessingJob({ jobId: created.id })
+    expect(job.status).toBe("processing")
+    // The claim of the losing worker never committed: one attempt counted.
+    expect(job.attemptCount).toBe(1)
+  })
+
+  it("recovering a stale job materializes its follow-up and cascade-fails dependents", async () => {
+    const dependentSourceId = "00000000-0000-0000-0000-000000009921"
+    await seedOwnedSource({
+      sourceId: dependentSourceId,
+      address: "bc1qstale-recovery-dependent",
+    })
+
+    const staleBefore = new Date("2025-01-02T00:10:00.000Z")
+    const staleAt = new Date("2025-01-02T00:00:00.000Z")
+
+    const crashed = await createJob({ mode: "sync" })
+    await claimJob({ jobId: crashed.id, workerId: "worker-crashed" })
+    // A replay was requested while the job ran, so it owes a follow-up.
+    await runPg(
+      Effect.flatMap(drizzle, (db) =>
+        db
+          .update(schema.processingJobs)
+          .set({ followUpMode: "replay" })
+          .where(eq(schema.processingJobs.id, crashed.id))
+      )
+    )
+    const dependent = await createJob({ mode: "replay", sourceId: dependentSourceId })
+    await recordJobDependency({ jobId: dependent.id, prerequisiteJobId: crashed.id })
+    await updateProcessingJobStaleTimestamps({
+      jobId: crashed.id,
+      heartbeatAt: staleAt,
+      updatedAt: staleAt,
+    })
+
+    await runRepository(
+      Effect.flatMap(SourceSyncJobRepository, (repository) =>
+        repository.recoverStaleActiveJob({
+          sourceId: TEST_SOURCE_ID,
+          jobId: crashed.id,
+          staleBefore,
+          message: "Stale-job sweep failed a processing source sync job without a heartbeat.",
+          completedAt: new Date("2025-01-02T00:30:00.000Z"),
+        })
+      )
+    )
+
+    expect(await selectProcessingJob({ jobId: crashed.id })).toMatchObject({ status: "failed" })
+    expect(await selectProcessingJob({ jobId: dependent.id })).toMatchObject({
+      status: "failed",
+      errorMessage: "Prerequisite processing job did not complete successfully.",
+    })
+
+    // The owed replay exists as a fresh pending row the poll loop can claim.
+    const followUpJobId = (await selectProcessingJob({ jobId: crashed.id })).followUpJobId
+    expect(followUpJobId).toEqual(expect.any(String))
+    if (followUpJobId !== null) {
+      expect(await selectProcessingJob({ jobId: followUpJobId })).toMatchObject({
+        mode: "replay",
+        status: "pending",
+      })
+      const claimable = await listClaimableJobs({
+        dueBefore: new Date("2025-01-02T01:00:00.000Z"),
+      })
+      expect(claimable.map((job) => job.id)).toContain(followUpJobId)
+    }
+  })
+
   it("returns a typed conflict when a second worker claims the same job", async () => {
     const created = await createJob()
     await claimJob({ jobId: created.id, workerId: "worker-1" })
