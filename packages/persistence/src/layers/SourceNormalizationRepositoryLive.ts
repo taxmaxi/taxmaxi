@@ -14,13 +14,14 @@ import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import * as Schema from "effect/Schema"
 import { canonicalizeAddress } from "@my/core/assets"
+import { makeFixedPointErrorFactory } from "./SourceNormalizationFixedPoint.ts"
 import {
-  divideToScale,
-  formatScaled,
-  makeFixedPointErrorFactory,
-  parseDecimal,
-  powerOfTen,
-} from "./SourceNormalizationFixedPoint.ts"
+  buildFifoAllocations,
+  type FifoAllocation,
+  compareDecimalQuantities as compareFifoDecimalQuantities,
+  subtractDecimalQuantities as subtractFifoDecimalQuantities,
+  toCostBasisPerToken as toFifoCostBasisPerToken,
+} from "./FifoAccounting.ts"
 import { drizzle } from "./PgClientLive.ts"
 import { schema } from "../schema/index.ts"
 import {
@@ -69,15 +70,6 @@ interface OpenFifoLotRecord {
   readonly originalAmount: string
   readonly remainingAmount: string
   readonly costBasisPerToken: string
-}
-
-interface FifoLotAllocation {
-  readonly fifoLotId: string
-  readonly matchedAmount: string
-  readonly costBasis: string
-  readonly proceeds: string
-  readonly gainLoss: string
-  readonly remainingAmount: string
 }
 
 const INSUFFICIENT_FIFO_INVENTORY_OPERATION =
@@ -239,51 +231,13 @@ const fixedPointErrorFactory = makeFixedPointErrorFactory(({ kind, message }) =>
   })
 )
 
-const signedDigits = (params: { readonly sign: 1 | -1; readonly digits: bigint }): bigint =>
-  params.sign === -1 ? -params.digits : params.digits
-
-const subtractScaledDecimals = ({
-  left,
-  right,
-  scale,
-}: {
-  readonly left: string
-  readonly right: string
-  readonly scale: number
-}) =>
-  Effect.gen(function* () {
-    const parsedLeft = yield* parseDecimal(left, fixedPointErrorFactory)
-    const parsedRight = yield* parseDecimal(right, fixedPointErrorFactory)
-    const leftDigits = parsedLeft.digits * powerOfTen(scale - parsedLeft.scale)
-    const rightDigits = parsedRight.digits * powerOfTen(scale - parsedRight.scale)
-
-    return formatScaled({ digits: leftDigits - rightDigits, scale })
-  })
-
 const compareDecimalQuantities = ({
   left,
   right,
 }: {
   readonly left: string
   readonly right: string
-}) =>
-  Effect.gen(function* () {
-    const parsedLeft = yield* parseDecimal(left, fixedPointErrorFactory)
-    const parsedRight = yield* parseDecimal(right, fixedPointErrorFactory)
-    const scale = Math.max(parsedLeft.scale, parsedRight.scale)
-    const leftDigits = signedDigits(parsedLeft) * powerOfTen(scale - parsedLeft.scale)
-    const rightDigits = signedDigits(parsedRight) * powerOfTen(scale - parsedRight.scale)
-
-    if (leftDigits < rightDigits) {
-      return -1
-    }
-
-    if (leftDigits > rightDigits) {
-      return 1
-    }
-
-    return 0
-  })
+}) => compareFifoDecimalQuantities({ left, right, errorFactory: fixedPointErrorFactory })
 
 const subtractDecimalQuantities = ({
   left,
@@ -291,16 +245,7 @@ const subtractDecimalQuantities = ({
 }: {
   readonly left: string
   readonly right: string
-}) =>
-  Effect.gen(function* () {
-    const parsedLeft = yield* parseDecimal(left, fixedPointErrorFactory)
-    const parsedRight = yield* parseDecimal(right, fixedPointErrorFactory)
-    const scale = Math.max(parsedLeft.scale, parsedRight.scale)
-    const leftDigits = signedDigits(parsedLeft) * powerOfTen(scale - parsedLeft.scale)
-    const rightDigits = signedDigits(parsedRight) * powerOfTen(scale - parsedRight.scale)
-
-    return formatScaled({ digits: leftDigits - rightDigits, scale })
-  })
+}) => subtractFifoDecimalQuantities({ left, right, errorFactory: fixedPointErrorFactory })
 
 const toCostBasisPerToken = ({
   fiatAmount,
@@ -308,61 +253,7 @@ const toCostBasisPerToken = ({
 }: {
   readonly fiatAmount: string | null
   readonly quantityAmount: string
-}) =>
-  Effect.gen(function* () {
-    if (fiatAmount === null) {
-      return "0.000000000000000000"
-    }
-
-    const parsedFiat = yield* parseDecimal(fiatAmount, fixedPointErrorFactory)
-    const parsedQuantity = yield* parseDecimal(quantityAmount, fixedPointErrorFactory)
-    return divideToScale({
-      numerator: parsedFiat.digits * powerOfTen(parsedQuantity.scale),
-      denominator: parsedQuantity.digits * powerOfTen(parsedFiat.scale),
-      scale: 18,
-    })
-  })
-
-const allocateProceeds = ({
-  totalFiat,
-  matchedAmount,
-  totalAmount,
-}: {
-  readonly totalFiat: string | null
-  readonly matchedAmount: string
-  readonly totalAmount: string
-}) =>
-  Effect.gen(function* () {
-    if (totalFiat === null) {
-      return "0.00000000"
-    }
-
-    const parsedFiat = yield* parseDecimal(totalFiat, fixedPointErrorFactory)
-    const parsedMatched = yield* parseDecimal(matchedAmount, fixedPointErrorFactory)
-    const parsedTotal = yield* parseDecimal(totalAmount, fixedPointErrorFactory)
-    return divideToScale({
-      numerator: parsedFiat.digits * parsedMatched.digits * powerOfTen(parsedTotal.scale),
-      denominator: parsedTotal.digits * powerOfTen(parsedFiat.scale + parsedMatched.scale),
-      scale: 8,
-    })
-  })
-
-const calculateMatchedCostBasis = ({
-  costBasisPerToken,
-  matchedAmount,
-}: {
-  readonly costBasisPerToken: string
-  readonly matchedAmount: string
-}) =>
-  Effect.gen(function* () {
-    const parsedCostBasisPerToken = yield* parseDecimal(costBasisPerToken, fixedPointErrorFactory)
-    const parsedMatched = yield* parseDecimal(matchedAmount, fixedPointErrorFactory)
-    return divideToScale({
-      numerator: parsedCostBasisPerToken.digits * parsedMatched.digits,
-      denominator: powerOfTen(parsedCostBasisPerToken.scale + parsedMatched.scale),
-      scale: 8,
-    })
-  })
+}) => toFifoCostBasisPerToken({ fiatAmount, quantityAmount, errorFactory: fixedPointErrorFactory })
 
 const make = Effect.gen(function* () {
   const db = yield* drizzle
@@ -1494,90 +1385,17 @@ const make = Effect.gen(function* () {
     readonly lots: ReadonlyArray<OpenFifoLotRecord>
     readonly disposalAmount: string
     readonly disposalFiatAmount: string | null
-  }) =>
-    Effect.gen(function* () {
-      const allocations = yield* Effect.reduce(
-        lots,
-        () => ({
-          remainingAmount: disposalAmount,
-          items: [] as ReadonlyArray<FifoLotAllocation>,
+  }): Effect.Effect<ReadonlyArray<FifoAllocation>, SyncEngineStorageError> =>
+    buildFifoAllocations<SyncEngineStorageError>({
+      lots,
+      amount: disposalAmount,
+      fiatAmount: disposalFiatAmount,
+      errorFactory: fixedPointErrorFactory,
+      insufficientInventoryError: (remainingAmount) =>
+        toSyncEngineStorageError({
+          operation: INSUFFICIENT_FIFO_INVENTORY_OPERATION,
+          error: `Insufficient FIFO inventory for outbound amount ${remainingAmount}`,
         }),
-        (state, lot) =>
-          Effect.gen(function* () {
-            const remainingComparison = yield* compareDecimalQuantities({
-              left: state.remainingAmount,
-              right: "0",
-            })
-            if (remainingComparison === 0) {
-              return state
-            }
-
-            const lotComparison = yield* compareDecimalQuantities({
-              left: lot.remainingAmount,
-              right: "0",
-            })
-            if (lotComparison === 0) {
-              return state
-            }
-
-            const matchedAmountComparison = yield* compareDecimalQuantities({
-              left: lot.remainingAmount,
-              right: state.remainingAmount,
-            })
-            const matchedAmount =
-              matchedAmountComparison <= 0 ? lot.remainingAmount : state.remainingAmount
-            const costBasis = yield* calculateMatchedCostBasis({
-              costBasisPerToken: lot.costBasisPerToken,
-              matchedAmount,
-            })
-            const proceeds = yield* allocateProceeds({
-              totalFiat: disposalFiatAmount,
-              matchedAmount,
-              totalAmount: disposalAmount,
-            })
-            const gainLoss = yield* subtractScaledDecimals({
-              left: proceeds,
-              right: costBasis,
-              scale: 8,
-            })
-            const nextRemainingAmount = yield* subtractDecimalQuantities({
-              left: state.remainingAmount,
-              right: matchedAmount,
-            })
-            const nextLotRemainingAmount = yield* subtractDecimalQuantities({
-              left: lot.remainingAmount,
-              right: matchedAmount,
-            })
-
-            return {
-              remainingAmount: nextRemainingAmount,
-              items: [
-                ...state.items,
-                {
-                  fifoLotId: lot.id,
-                  matchedAmount,
-                  costBasis,
-                  proceeds,
-                  gainLoss,
-                  remainingAmount: nextLotRemainingAmount,
-                },
-              ],
-            }
-          })
-      )
-
-      const remainingComparison = yield* compareDecimalQuantities({
-        left: allocations.remainingAmount,
-        right: "0",
-      })
-      if (remainingComparison > 0) {
-        return yield* toSyncEngineStorageError({
-          operation: "sourceNormalizationRepository.buildFifoLotAllocations",
-          error: `Insufficient FIFO inventory for outbound amount ${allocations.remainingAmount}`,
-        })
-      }
-
-      return allocations.items
     })
 
   const ensureFifoLotForLeg = ({

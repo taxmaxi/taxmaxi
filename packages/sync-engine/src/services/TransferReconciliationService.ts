@@ -16,6 +16,8 @@ import { SyncEngineStorageError } from "./SyncEngineStorageError.ts"
 export interface ReconcileTransferCandidatesParams {
   readonly principalId: string
   readonly sourceId: string
+  readonly affectedAssetIds?: ReadonlyArray<string>
+  readonly rebuildFrom?: Date
 }
 
 /**

@@ -215,6 +215,8 @@ export interface TransferReconciliationRepositoryShape {
     readonly principalId: string
     readonly sourceId: string
     readonly reconciliationId?: string
+    readonly affectedAssetIds?: ReadonlyArray<string>
+    readonly rebuildFrom?: Date
   }) => Effect.Effect<DeterministicTransferCanonicalizationSummary, SyncEngineStorageError>
 }
 

@@ -2251,7 +2251,7 @@ const make = Effect.gen(function* () {
       })
 
   const applyDeterministicInternalTransferCanonicalization: TransferReconciliationRepositoryShape["applyDeterministicInternalTransferCanonicalization"] =
-    ({ principalId, sourceId, reconciliationId }) =>
+    ({ principalId, sourceId, reconciliationId, affectedAssetIds, rebuildFrom }) =>
       db
         .transaction((tx) =>
           Effect.gen(function* () {
@@ -2329,7 +2329,13 @@ const make = Effect.gen(function* () {
                     inArray(schema.providerTransfers.processingMode, [
                       "accounting_and_evidence",
                       "accounting_only",
-                    ])
+                    ]),
+                    affectedAssetIds === undefined
+                      ? sql`true`
+                      : inArray(schema.transfers.assetId, affectedAssetIds),
+                    rebuildFrom === undefined
+                      ? sql`true`
+                      : gte(schema.providerTransfers.timestamp, rebuildFrom)
                   )
                 )
                 .orderBy(asc(schema.providerTransfers.timestamp))

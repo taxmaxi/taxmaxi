@@ -511,13 +511,21 @@ const make = Effect.gen(function* () {
     })
 
   const reconcileTransferCandidates: TransferReconciliationServiceShape["reconcileTransferCandidates"] =
-    ({ principalId, sourceId }) =>
+    ({ principalId, sourceId, affectedAssetIds, rebuildFrom }) =>
       Effect.gen(function* () {
-        const providerTransfers =
+        const listedProviderTransfers =
           yield* transferReconciliationRepository.listProviderTransfersForReconciliation({
             principalId,
             sourceId,
           })
+        const affectedAssetIdSet = affectedAssetIds === undefined ? null : new Set(affectedAssetIds)
+        const providerTransfers = listedProviderTransfers.filter(
+          (transfer) =>
+            (rebuildFrom === undefined || transfer.timestamp >= rebuildFrom) &&
+            (affectedAssetIdSet === null ||
+              (transfer.canonicalAssetId !== null &&
+                affectedAssetIdSet.has(transfer.canonicalAssetId)))
+        )
 
         const summary = yield* Effect.reduce(
           providerTransfers,

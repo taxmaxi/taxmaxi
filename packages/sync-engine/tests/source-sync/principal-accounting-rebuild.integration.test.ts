@@ -1,0 +1,716 @@
+import * as Effect from "effect/Effect"
+import * as Layer from "effect/Layer"
+import { beforeEach, describe, expect, it } from "vitest"
+import { PrincipalAccountingRebuildServiceLive } from "../../src/layers/PrincipalAccountingRebuildServiceLive.ts"
+import { TransferReconciliationServiceLive } from "../../src/layers/TransferReconciliationServiceLive.ts"
+import { PortfolioRepositoryLive } from "../../../persistence/src/layers/PortfolioRepositoryLive.ts"
+import { PrincipalAccountingRebuildRepositoryLive } from "../../../persistence/src/layers/PrincipalAccountingRebuildRepositoryLive.ts"
+import { SourceRawRecordRepositoryLive } from "../../../persistence/src/layers/SourceRawRecordRepositoryLive.ts"
+import { SyncEngineSourceRepositoryLive } from "../../../persistence/src/layers/SyncEngineSourceRepositoryLive.ts"
+import { TaxCalculationServiceLive } from "../../../persistence/src/layers/TaxCalculationServiceLive.ts"
+import { TransferReconciliationRepositoryLive } from "../../../persistence/src/layers/TransferReconciliationRepositoryLive.ts"
+import { drizzle } from "../../../persistence/src/layers/PgClientLive.ts"
+import { schema } from "../../../persistence/src/schema/index.ts"
+import {
+  PortfolioRepository,
+  TaxCalculationService,
+} from "../../../persistence/src/services/index.ts"
+import {
+  TEST_BTC_ASSET_ID,
+  TEST_EUR_ASSET_ID,
+  TEST_PRINCIPAL_ID,
+  TEST_SOURCE_ID,
+  makeIntegrationTestDatabaseContext,
+  seedSyncEngineAssets,
+  seedSyncEngineRepositoryFixture,
+} from "../../../persistence/tests/support/integration-test-kit.ts"
+import {
+  PrincipalAccountingRebuildService,
+  SourceRawRecordRepository,
+  TransferReconciliationRepository,
+} from "@my/sync-engine/services"
+
+const context = makeIntegrationTestDatabaseContext({
+  databaseNamePrefix: "taxmaxi_principal_accounting_rebuild",
+})
+
+const TransferReconciliationTestLayer = TransferReconciliationServiceLive.pipe(
+  Layer.provide(TransferReconciliationRepositoryLive)
+)
+
+const PrincipalAccountingRebuildTestLayer = PrincipalAccountingRebuildServiceLive.pipe(
+  Layer.provide(PrincipalAccountingRebuildRepositoryLive),
+  Layer.provide(SyncEngineSourceRepositoryLive),
+  Layer.provide(TransferReconciliationTestLayer)
+)
+
+const TestLayer = Layer.mergeAll(
+  PrincipalAccountingRebuildTestLayer,
+  PortfolioRepositoryLive,
+  SourceRawRecordRepositoryLive,
+  TaxCalculationServiceLive,
+  TransferReconciliationRepositoryLive
+).pipe(Layer.provideMerge(context.TestPgClientLive))
+
+const rebuildFrom = new Date("2025-02-01T00:00:00.000Z")
+const OLD_BTC_ASSET_ID = "00000000-0000-4000-8000-000000000480"
+const SECONDARY_SOURCE_ID = "00000000-0000-0000-0000-000000000681"
+const SECONDARY_ADDRESS_ID = "00000000-0000-0000-0000-000000000682"
+const BTC_PROVIDER_ASSET_ID = "00000000-0000-0000-0000-000000000683"
+const EUR_PROVIDER_ASSET_ID = "00000000-0000-0000-0000-000000000684"
+
+await Effect.runPromise(context.recreateTestDatabase())
+
+const runTest = <A, E>(
+  effect: Effect.Effect<
+    A,
+    E,
+    | PrincipalAccountingRebuildService
+    | PortfolioRepository
+    | SourceRawRecordRepository
+    | TaxCalculationService
+    | TransferReconciliationRepository
+  >
+) => Effect.runPromise(effect.pipe(Effect.provide(TestLayer), Effect.scoped))
+
+type TestDb = Effect.Success<typeof drizzle>
+
+const ACCOUNTING_TRANSACTIONS = [
+  ["00000000-0000-0000-0000-000000000601", "pre-acquisition", "2025-01-01"],
+  ["00000000-0000-0000-0000-000000000602", "pre-disposal", "2025-01-15"],
+  ["00000000-0000-0000-0000-000000000603", "post-acquisition", "2025-02-01"],
+  ["00000000-0000-0000-0000-000000000604", "post-disposal", "2025-03-01"],
+  ["00000000-0000-0000-0000-000000000605", "post-income", "2025-03-15"],
+  ["00000000-0000-0000-0000-000000000606", "post-fee", "2025-04-01"],
+  ["00000000-0000-0000-0000-000000000607", "unrelated-acquisition", "2025-03-01"],
+] as const
+
+const PRE_ACQUISITION_LEG_ID = "00000000-0000-0000-0000-000000000701"
+const PRE_DISPOSAL_LEG_ID = "00000000-0000-0000-0000-000000000702"
+const POST_ACQUISITION_LEG_ID = "00000000-0000-0000-0000-000000000703"
+const POST_DISPOSAL_LEG_ID = "00000000-0000-0000-0000-000000000704"
+const POST_INCOME_LEG_ID = "00000000-0000-0000-0000-000000000705"
+const POST_FEE_LEG_ID = "00000000-0000-0000-0000-000000000706"
+const UNRELATED_ACQUISITION_LEG_ID = "00000000-0000-0000-0000-000000000707"
+const SECONDARY_ACQUISITION_LEG_ID = "00000000-0000-0000-0000-000000000708"
+const PRE_LOT_ID = "00000000-0000-0000-0000-000000000801"
+const SECONDARY_LOT_ID = "00000000-0000-0000-0000-000000000803"
+
+const seedAccountingReferences = (db: TestDb) =>
+  Effect.gen(function* () {
+    yield* db.insert(schema.assets).values({
+      id: OLD_BTC_ASSET_ID,
+      name: "Old Bitcoin identity",
+      symbol: "OLD-BTC",
+    })
+    yield* db.insert(schema.providerAssets).values([
+      {
+        id: BTC_PROVIDER_ASSET_ID,
+        provider: "coinbase",
+        providerAssetId: "btc-accounting-rebuild",
+        currencyCode: "BTC",
+        retrievedAt: new Date("2025-01-01T00:00:00.000Z"),
+      },
+      {
+        id: EUR_PROVIDER_ASSET_ID,
+        provider: "coinbase",
+        providerAssetId: "eur-accounting-rebuild",
+        currencyCode: "EUR",
+        retrievedAt: new Date("2025-01-01T00:00:00.000Z"),
+      },
+    ])
+    yield* db.insert(schema.providerAssetMappings).values([
+      {
+        providerAssetRowId: BTC_PROVIDER_ASSET_ID,
+        mappingKind: "asset",
+        canonicalAssetId: TEST_BTC_ASSET_ID,
+        mappingStatus: "approved",
+      },
+      {
+        providerAssetRowId: EUR_PROVIDER_ASSET_ID,
+        mappingKind: "asset",
+        canonicalAssetId: TEST_EUR_ASSET_ID,
+        mappingStatus: "approved",
+      },
+    ])
+    yield* db.insert(schema.addresses).values({
+      id: SECONDARY_ADDRESS_ID,
+      principalId: TEST_PRINCIPAL_ID,
+      address: "bc1q-secondary-accounting-rebuild",
+      type: "bitcoin",
+      name: "Secondary accounting source",
+    })
+    yield* db.insert(schema.sources).values({
+      id: SECONDARY_SOURCE_ID,
+      principalId: TEST_PRINCIPAL_ID,
+      name: "Secondary accounting source",
+      providerKey: "bitcoin-rpc",
+      sourceableType: "onchain",
+      addressId: SECONDARY_ADDRESS_ID,
+    })
+  })
+
+const seedAccountingTransactions = (db: TestDb) =>
+  Effect.gen(function* () {
+    yield* db.insert(schema.transactions).values(
+      ACCOUNTING_TRANSACTIONS.map(([id, externalId, date]) => ({
+        id,
+        sourceId: TEST_SOURCE_ID,
+        externalId,
+        timestamp: new Date(`${date}T10:00:00.000Z`),
+        principalId: TEST_PRINCIPAL_ID,
+        providerStatus: "completed",
+      }))
+    )
+    yield* db.insert(schema.transactions).values({
+      id: "00000000-0000-0000-0000-000000000608",
+      sourceId: SECONDARY_SOURCE_ID,
+      externalId: "secondary-pre-acquisition",
+      timestamp: new Date("2025-01-05T10:00:00.000Z"),
+      principalId: TEST_PRINCIPAL_ID,
+      providerStatus: "completed",
+    })
+  })
+
+const seedAccountingLegs = (db: TestDb) =>
+  db.insert(schema.transactionLegs).values([
+    {
+      id: PRE_ACQUISITION_LEG_ID,
+      sourceId: TEST_SOURCE_ID,
+      externalId: "pre-acquisition-leg",
+      timestamp: new Date("2025-01-01T10:00:00.000Z"),
+      principalId: TEST_PRINCIPAL_ID,
+      assetId: TEST_BTC_ASSET_ID,
+      amount: "10",
+      kind: "acquisition",
+      provenance: "deterministic",
+      transactionId: ACCOUNTING_TRANSACTIONS[0][0],
+      fiatAmount: "1000",
+      fiatCurrency: "EUR",
+    },
+    {
+      id: PRE_DISPOSAL_LEG_ID,
+      sourceId: TEST_SOURCE_ID,
+      externalId: "pre-disposal-leg",
+      timestamp: new Date("2025-01-15T10:00:00.000Z"),
+      principalId: TEST_PRINCIPAL_ID,
+      assetId: TEST_BTC_ASSET_ID,
+      amount: "2",
+      kind: "disposal",
+      provenance: "deterministic",
+      transactionId: ACCOUNTING_TRANSACTIONS[1][0],
+      fiatAmount: "300",
+      fiatCurrency: "EUR",
+    },
+    {
+      id: POST_ACQUISITION_LEG_ID,
+      sourceId: TEST_SOURCE_ID,
+      externalId: "post-acquisition-leg",
+      timestamp: new Date("2025-02-01T10:00:00.000Z"),
+      principalId: TEST_PRINCIPAL_ID,
+      assetId: TEST_BTC_ASSET_ID,
+      amount: "5",
+      kind: "acquisition",
+      provenance: "deterministic",
+      transactionId: ACCOUNTING_TRANSACTIONS[2][0],
+      fiatAmount: "500",
+      fiatCurrency: "EUR",
+    },
+    {
+      id: POST_DISPOSAL_LEG_ID,
+      sourceId: TEST_SOURCE_ID,
+      externalId: "post-disposal-leg",
+      timestamp: new Date("2025-03-01T10:00:00.000Z"),
+      principalId: TEST_PRINCIPAL_ID,
+      assetId: TEST_BTC_ASSET_ID,
+      amount: "6",
+      kind: "disposal",
+      provenance: "deterministic",
+      transactionId: ACCOUNTING_TRANSACTIONS[3][0],
+      fiatAmount: "1200",
+      fiatCurrency: "EUR",
+    },
+    {
+      id: POST_INCOME_LEG_ID,
+      sourceId: TEST_SOURCE_ID,
+      externalId: "post-income-leg",
+      timestamp: new Date("2025-03-15T10:00:00.000Z"),
+      principalId: TEST_PRINCIPAL_ID,
+      assetId: TEST_BTC_ASSET_ID,
+      amount: "2",
+      kind: "income",
+      provenance: "deterministic",
+      transactionId: ACCOUNTING_TRANSACTIONS[4][0],
+      fiatAmount: "300",
+      fiatCurrency: "EUR",
+    },
+    {
+      id: POST_FEE_LEG_ID,
+      sourceId: TEST_SOURCE_ID,
+      externalId: "post-fee-leg",
+      timestamp: new Date("2025-04-01T10:00:00.000Z"),
+      principalId: TEST_PRINCIPAL_ID,
+      assetId: TEST_BTC_ASSET_ID,
+      amount: "1",
+      kind: "fee",
+      provenance: "deterministic",
+      transactionId: ACCOUNTING_TRANSACTIONS[5][0],
+      fiatAmount: "100",
+      fiatCurrency: "EUR",
+    },
+    {
+      id: UNRELATED_ACQUISITION_LEG_ID,
+      sourceId: TEST_SOURCE_ID,
+      externalId: "unrelated-acquisition-leg",
+      timestamp: new Date("2025-03-01T10:00:00.000Z"),
+      principalId: TEST_PRINCIPAL_ID,
+      assetId: TEST_EUR_ASSET_ID,
+      amount: "3",
+      kind: "acquisition",
+      provenance: "deterministic",
+      transactionId: ACCOUNTING_TRANSACTIONS[6][0],
+      fiatAmount: "30",
+      fiatCurrency: "EUR",
+    },
+  ])
+
+const seedSecondaryAccountingLeg = (db: TestDb) =>
+  db.insert(schema.transactionLegs).values({
+    id: SECONDARY_ACQUISITION_LEG_ID,
+    sourceId: SECONDARY_SOURCE_ID,
+    externalId: "secondary-pre-acquisition-leg",
+    timestamp: new Date("2025-01-05T10:00:00.000Z"),
+    principalId: TEST_PRINCIPAL_ID,
+    assetId: TEST_BTC_ASSET_ID,
+    amount: "6",
+    kind: "acquisition",
+    provenance: "deterministic",
+    transactionId: "00000000-0000-0000-0000-000000000608",
+    fiatAmount: "600",
+    fiatCurrency: "EUR",
+  })
+
+const seedAccountingLots = (db: TestDb) =>
+  Effect.gen(function* () {
+    yield* db.insert(schema.fifoLots).values([
+      {
+        id: PRE_LOT_ID,
+        principalId: TEST_PRINCIPAL_ID,
+        sourceId: TEST_SOURCE_ID,
+        assetId: TEST_BTC_ASSET_ID,
+        acquiredAt: new Date("2025-01-01T10:00:00.000Z"),
+        originalAmount: "10",
+        remainingAmount: "8",
+        costBasisPerToken: "100",
+        costBasisCurrency: "EUR",
+        costBasisStatus: "known",
+        sourceLegId: PRE_ACQUISITION_LEG_ID,
+      },
+      {
+        id: "00000000-0000-0000-0000-000000000802",
+        principalId: TEST_PRINCIPAL_ID,
+        sourceId: TEST_SOURCE_ID,
+        assetId: TEST_EUR_ASSET_ID,
+        acquiredAt: new Date("2025-03-01T10:00:00.000Z"),
+        originalAmount: "3",
+        remainingAmount: "3",
+        costBasisPerToken: "10",
+        costBasisCurrency: "EUR",
+        costBasisStatus: "known",
+        sourceLegId: UNRELATED_ACQUISITION_LEG_ID,
+      },
+      {
+        id: SECONDARY_LOT_ID,
+        principalId: TEST_PRINCIPAL_ID,
+        sourceId: SECONDARY_SOURCE_ID,
+        assetId: TEST_BTC_ASSET_ID,
+        acquiredAt: new Date("2025-01-05T10:00:00.000Z"),
+        originalAmount: "6",
+        remainingAmount: "0",
+        costBasisPerToken: "100",
+        costBasisCurrency: "EUR",
+        costBasisStatus: "known",
+        sourceLegId: SECONDARY_ACQUISITION_LEG_ID,
+      },
+      {
+        id: "00000000-0000-0000-0000-000000000804",
+        principalId: TEST_PRINCIPAL_ID,
+        sourceId: TEST_SOURCE_ID,
+        assetId: OLD_BTC_ASSET_ID,
+        acquiredAt: new Date("2025-02-01T10:00:00.000Z"),
+        originalAmount: "5",
+        remainingAmount: "5",
+        costBasisPerToken: "1",
+        costBasisCurrency: "EUR",
+        costBasisStatus: "known",
+        sourceLegId: POST_ACQUISITION_LEG_ID,
+      },
+    ])
+
+    yield* db.insert(schema.disposalMatches).values({
+      disposalLegId: PRE_DISPOSAL_LEG_ID,
+      fifoLotId: PRE_LOT_ID,
+      matchedAmount: "2",
+      costBasis: "200",
+      proceeds: "300",
+      gainLoss: "100",
+    })
+    yield* db.insert(schema.disposalMatches).values({
+      disposalLegId: POST_DISPOSAL_LEG_ID,
+      fifoLotId: SECONDARY_LOT_ID,
+      matchedAmount: "6",
+      costBasis: "6",
+      proceeds: "12",
+      gainLoss: "6",
+    })
+  })
+
+const seedAccountingTransfers = (db: TestDb) =>
+  Effect.gen(function* () {
+    const [matchingProviderTransfer] = yield* db
+      .insert(schema.providerTransfers)
+      .values({
+        sourceId: TEST_SOURCE_ID,
+        transactionId: ACCOUNTING_TRANSACTIONS[3][0],
+        externalId: "post-disposal-provider-transfer",
+        timestamp: new Date("2025-03-01T10:00:00.000Z"),
+        direction: "outbound",
+        processingMode: "accounting_only",
+        providerAssetId: BTC_PROVIDER_ASSET_ID,
+        fromAccountRef: "coinbase-account-1",
+        toAccountRef: "external",
+        amount: "6.0",
+      })
+      .returning({ id: schema.providerTransfers.id })
+    if (matchingProviderTransfer === undefined) {
+      return yield* Effect.die("Failed to create matching provider transfer")
+    }
+
+    yield* db.insert(schema.providerTransfers).values([
+      {
+        sourceId: TEST_SOURCE_ID,
+        transactionId: ACCOUNTING_TRANSACTIONS[1][0],
+        externalId: "pre-boundary-provider-transfer",
+        timestamp: new Date("2025-01-15T10:00:00.000Z"),
+        direction: "outbound",
+        processingMode: "accounting_only",
+        providerAssetId: BTC_PROVIDER_ASSET_ID,
+        fromAccountRef: "coinbase-account-1",
+        toAccountRef: "external",
+        amount: "2",
+      },
+      {
+        sourceId: TEST_SOURCE_ID,
+        transactionId: ACCOUNTING_TRANSACTIONS[6][0],
+        externalId: "unrelated-asset-provider-transfer",
+        timestamp: new Date("2025-03-01T10:00:00.000Z"),
+        direction: "outbound",
+        processingMode: "accounting_only",
+        providerAssetId: EUR_PROVIDER_ASSET_ID,
+        fromAccountRef: "coinbase-account-1",
+        toAccountRef: "external",
+        amount: "3",
+      },
+    ])
+
+    yield* db.insert(schema.inventoryMovements).values({
+      principalId: TEST_PRINCIPAL_ID,
+      sourceId: TEST_SOURCE_ID,
+      transactionId: ACCOUNTING_TRANSACTIONS[3][0],
+      providerTransferId: matchingProviderTransfer.id,
+      assetId: TEST_BTC_ASSET_ID,
+      timestamp: new Date("2025-03-01T10:00:00.000Z"),
+      direction: "outbound",
+      purpose: "principal",
+      taxTreatment: "pending_review",
+      reconciliationStatus: "unmatched",
+      amount: "6.0",
+    })
+
+    yield* db.insert(schema.inventoryMovements).values({
+      principalId: TEST_PRINCIPAL_ID,
+      sourceId: TEST_SOURCE_ID,
+      transactionId: ACCOUNTING_TRANSACTIONS[5][0],
+      transactionLegId: POST_FEE_LEG_ID,
+      assetId: TEST_BTC_ASSET_ID,
+      timestamp: new Date("2025-04-01T10:00:00.000Z"),
+      direction: "outbound",
+      purpose: "fee",
+      taxTreatment: "pending_review",
+      reconciliationStatus: "unmatched",
+      amount: "1",
+    })
+
+    return matchingProviderTransfer.id
+  })
+
+const seedAccountingState = () =>
+  context.runPg(
+    Effect.gen(function* () {
+      const db = yield* drizzle
+      const fixture = yield* seedSyncEngineRepositoryFixture()
+      yield* seedSyncEngineAssets(fixture)
+      yield* seedAccountingReferences(db)
+      yield* seedAccountingTransactions(db)
+      yield* seedAccountingLegs(db)
+      yield* seedSecondaryAccountingLeg(db)
+      yield* seedAccountingLots(db)
+      return yield* seedAccountingTransfers(db)
+    })
+  )
+
+const seedUnrelatedRawSource = (db: TestDb) =>
+  Effect.gen(function* () {
+    const sourceId = "00000000-0000-0000-0000-000000000611"
+    const addressId = "00000000-0000-0000-0000-000000000612"
+    const transactionId = "00000000-0000-0000-0000-000000000613"
+    const legId = "00000000-0000-0000-0000-000000000614"
+    const rawRecordId = "00000000-0000-0000-0000-000000000615"
+
+    yield* db.insert(schema.addresses).values({
+      id: addressId,
+      principalId: TEST_PRINCIPAL_ID,
+      address: "bc1q-unrelated-accounting-rebuild",
+      type: "bitcoin",
+      name: "Unrelated accounting source",
+    })
+    yield* db.insert(schema.sources).values({
+      id: sourceId,
+      principalId: TEST_PRINCIPAL_ID,
+      name: "Unrelated accounting source",
+      providerKey: "bitcoin-rpc",
+      sourceableType: "onchain",
+      addressId,
+    })
+    yield* db.insert(schema.sourceRecordsRaw).values({
+      id: rawRecordId,
+      sourceId,
+      provider: "bitcoin-rpc",
+      recordType: "transaction",
+      externalAccountId: "unrelated-account",
+      externalRecordId: "unrelated-record",
+      occurredAt: new Date("2025-03-01T10:00:00.000Z"),
+      payload: { id: "unrelated-record" },
+      normalizedAt: new Date("2025-03-01T10:01:00.000Z"),
+    })
+    yield* db.insert(schema.transactions).values({
+      id: transactionId,
+      sourceId,
+      sourceRawRecordId: rawRecordId,
+      externalId: "unrelated-transaction",
+      timestamp: new Date("2025-03-01T10:00:00.000Z"),
+      principalId: TEST_PRINCIPAL_ID,
+    })
+    yield* db.insert(schema.transactionLegs).values({
+      id: legId,
+      sourceId,
+      sourceRawRecordId: rawRecordId,
+      externalId: "unrelated-leg",
+      timestamp: new Date("2025-03-01T10:00:00.000Z"),
+      principalId: TEST_PRINCIPAL_ID,
+      assetId: TEST_EUR_ASSET_ID,
+      amount: "7",
+      kind: "acquisition",
+      provenance: "deterministic",
+      transactionId,
+      fiatAmount: "70",
+      fiatCurrency: "EUR",
+    })
+    yield* db.insert(schema.fifoLots).values({
+      principalId: TEST_PRINCIPAL_ID,
+      sourceId,
+      assetId: TEST_EUR_ASSET_ID,
+      acquiredAt: new Date("2025-03-01T10:00:00.000Z"),
+      originalAmount: "7",
+      remainingAmount: "7",
+      costBasisPerToken: "10",
+      costBasisCurrency: "EUR",
+      costBasisStatus: "known",
+      sourceLegId: legId,
+    })
+
+    return sourceId
+  })
+
+const seedOtherPrincipalAccounting = (db: TestDb) =>
+  Effect.gen(function* () {
+    const otherUserId = "00000000-0000-0000-0000-000000000621"
+    const otherPrincipalId = "00000000-0000-0000-0000-000000000622"
+    const otherSourceId = "00000000-0000-0000-0000-000000000623"
+    const otherTransactionId = "00000000-0000-0000-0000-000000000624"
+    const otherLegId = "00000000-0000-0000-0000-000000000625"
+    const otherFixture = yield* seedSyncEngineRepositoryFixture({
+      userId: otherUserId,
+      principalId: otherPrincipalId,
+      sourceId: otherSourceId,
+    })
+    yield* db.insert(schema.transactions).values({
+      id: otherTransactionId,
+      sourceId: otherFixture.sourceId,
+      externalId: "other-principal-acquisition",
+      timestamp: new Date("2025-03-01T10:00:00.000Z"),
+      principalId: otherFixture.principalId,
+    })
+    yield* db.insert(schema.transactionLegs).values({
+      id: otherLegId,
+      sourceId: otherFixture.sourceId,
+      externalId: "other-principal-acquisition-leg",
+      timestamp: new Date("2025-03-01T10:00:00.000Z"),
+      principalId: otherFixture.principalId,
+      assetId: TEST_BTC_ASSET_ID,
+      amount: "4",
+      kind: "acquisition",
+      provenance: "deterministic",
+      transactionId: otherTransactionId,
+      fiatAmount: "400",
+      fiatCurrency: "EUR",
+    })
+    yield* db.insert(schema.fifoLots).values({
+      principalId: otherFixture.principalId,
+      sourceId: otherFixture.sourceId,
+      assetId: TEST_BTC_ASSET_ID,
+      acquiredAt: new Date("2025-03-01T10:00:00.000Z"),
+      originalAmount: "4",
+      remainingAmount: "4",
+      costBasisPerToken: "100",
+      costBasisCurrency: "EUR",
+      costBasisStatus: "known",
+      sourceLegId: otherLegId,
+    })
+
+    return otherPrincipalId
+  })
+
+const seedIsolationState = () =>
+  context.runPg(
+    Effect.gen(function* () {
+      const db = yield* drizzle
+      const unrelatedSourceId = yield* seedUnrelatedRawSource(db)
+      const otherPrincipalId = yield* seedOtherPrincipalAccounting(db)
+      return { otherPrincipalId, unrelatedSourceId }
+    })
+  )
+
+beforeEach(async () => {
+  await Effect.runPromise(context.recreateTestDatabase())
+})
+
+describe("PrincipalAccountingRebuildService", () => {
+  it("rebuilds affected principal accounting from the earliest event", async () => {
+    const affectedProviderTransferId = await seedAccountingState()
+
+    const result = await runTest(
+      Effect.gen(function* () {
+        const accountingRebuild = yield* PrincipalAccountingRebuildService
+        const portfolio = yield* PortfolioRepository
+        const taxCalculation = yield* TaxCalculationService
+        const reconciliationRepository = yield* TransferReconciliationRepository
+
+        const rebuild = yield* accountingRebuild.rebuildPrincipalAccounting({
+          principalId: TEST_PRINCIPAL_ID,
+          affectedAssetIds: [OLD_BTC_ASSET_ID, TEST_BTC_ASSET_ID],
+          rebuildFrom,
+        })
+        const positions = yield* portfolio.listAssetPositions({
+          principalId: TEST_PRINCIPAL_ID,
+          sourceId: null,
+        })
+        const secondaryPositions = yield* portfolio.listAssetPositions({
+          principalId: TEST_PRINCIPAL_ID,
+          sourceId: SECONDARY_SOURCE_ID,
+        })
+        const tax = yield* taxCalculation.calculateTax({
+          sourceId: TEST_SOURCE_ID,
+          jurisdiction: "germany",
+          year: 2025,
+        })
+        const unresolvedReconciliations =
+          yield* reconciliationRepository.listUnresolvedTransferReconciliations({
+            status: null,
+            cursorId: null,
+            limit: 10,
+          })
+
+        return { rebuild, positions, secondaryPositions, tax, unresolvedReconciliations }
+      })
+    )
+
+    expect(result.rebuild).toEqual({
+      principalId: TEST_PRINCIPAL_ID,
+      affectedAssetIds: [OLD_BTC_ASSET_ID, TEST_BTC_ASSET_ID],
+      rebuildFrom,
+      rebuiltSourceIds: [TEST_SOURCE_ID, SECONDARY_SOURCE_ID].sort(),
+      fifoLotsRebuilt: 2,
+      disposalMatchesRebuilt: 1,
+      inventoryAllocationsRebuilt: 1,
+      transferCandidatesReconciled: 1,
+      transferPairsCanonicalized: 0,
+    })
+    expect(result.positions).toEqual([
+      expect.objectContaining({
+        assetId: TEST_BTC_ASSET_ID,
+        amount: "14",
+        costBasis: "1500",
+        costBasisCurrency: "EUR",
+        costBasisStatus: "known",
+      }),
+      expect.objectContaining({
+        assetId: TEST_EUR_ASSET_ID,
+        amount: "3",
+        costBasis: "30",
+        costBasisCurrency: "EUR",
+        costBasisStatus: "known",
+      }),
+    ])
+    expect(result.secondaryPositions).toEqual([])
+    expect(
+      result.unresolvedReconciliations.map(({ providerTransferId }) => providerTransferId)
+    ).toEqual([affectedProviderTransferId])
+    expect(result.tax).toEqual({
+      year: 2025,
+      currency: "EUR",
+      taxableGains: 700,
+      taxableLosses: 0,
+      taxFreeGains: 0,
+      incomeTotal: 300,
+    })
+  })
+
+  it("leaves unrelated raw sources and another principal unchanged", async () => {
+    await seedAccountingState()
+    const { otherPrincipalId, unrelatedSourceId } = await seedIsolationState()
+
+    const result = await runTest(
+      Effect.gen(function* () {
+        const accountingRebuild = yield* PrincipalAccountingRebuildService
+        const portfolio = yield* PortfolioRepository
+        const rawRecords = yield* SourceRawRecordRepository
+
+        const rebuild = yield* accountingRebuild.rebuildPrincipalAccounting({
+          principalId: TEST_PRINCIPAL_ID,
+          affectedAssetIds: [OLD_BTC_ASSET_ID, TEST_BTC_ASSET_ID],
+          rebuildFrom,
+        })
+        const unrelatedReplayCandidates = yield* rawRecords.listReplayCandidates({
+          sourceId: unrelatedSourceId,
+        })
+        const otherPrincipalPositions = yield* portfolio.listAssetPositions({
+          principalId: otherPrincipalId,
+          sourceId: null,
+        })
+
+        return { rebuild, unrelatedReplayCandidates, otherPrincipalPositions }
+      })
+    )
+
+    expect(result.rebuild.rebuiltSourceIds).toEqual([TEST_SOURCE_ID, SECONDARY_SOURCE_ID].sort())
+    expect(result.unrelatedReplayCandidates).toEqual([])
+    expect(result.otherPrincipalPositions).toEqual([
+      expect.objectContaining({
+        assetId: TEST_BTC_ASSET_ID,
+        amount: "4",
+        costBasis: "400",
+      }),
+    ])
+  })
+})
