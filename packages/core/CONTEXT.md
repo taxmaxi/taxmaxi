@@ -12,6 +12,18 @@ _Avoid_: Fiat asset, canonical asset
 A fiat currency description received from a provider's dedicated fiat catalog. An exact supported currency code resolves without provider asset review; unknown or conflicting evidence fails closed.
 _Avoid_: Provider asset
 
+**Tax report**:
+A tax document for one account, one jurisdiction, and one tax year. It covers all of the account's source connections together; a single source is never a report boundary.
+_Avoid_: Source report, per-source calculation
+
+**Report generation**:
+One run that turns the account's data into a stored, unchangeable tax report file, stamped with when it ran. Regenerating is always allowed and creates a new artifact; an existing artifact never changes.
+_Avoid_: Report update, live report
+
+**Report blocker**:
+A condition that makes the tax calculation unsound, such as a FIFO inventory shortfall. While any blocker exists, report generation is refused with the blocker's reason code. TaxMaxi never generates a report from numbers it knows are broken.
+_Avoid_: Warning, disclosure section
+
 ## Wallet input language
 
 **Wallet name**:
