@@ -14,7 +14,11 @@ import {
 } from "@my/sync-engine/services"
 import { schema } from "../schema/index.ts"
 import {
+  addFifoInventoryReview,
   buildFifoAllocations,
+  compareDecimalQuantities,
+  FIFO_INVENTORY_REVIEW_REASON_PREFIX,
+  removeFifoInventoryReview,
   type FifoAllocation,
   type OpenFifoLot,
   toCostBasisPerToken,
@@ -112,7 +116,389 @@ const appendOwnerSource = ({
 const make = Effect.gen(function* () {
   const db = yield* drizzle
 
-  const loadOpenLots = ({
+  const recordFifoInventoryReview = ({
+    tx,
+    principalId,
+    transactionId,
+    cause,
+  }: {
+    readonly tx: SyncEngineDbTransaction
+    readonly principalId: string
+    readonly transactionId: string
+    readonly cause: unknown
+  }) =>
+    Effect.gen(function* () {
+      const reason =
+        `${FIFO_INVENTORY_REVIEW_REASON_PREFIX} Review required because the transaction moves ` +
+        "more inventory out than the synced source FIFO lots currently cover. " +
+        "This usually means an opening balance, transfer in, or historical acquisition is missing. " +
+        String(cause)
+      const [review] = yield* tx
+        .select({
+          reviewStatus: schema.transactionReviews.reviewStatus,
+          categorizationReason: schema.transactionReviews.categorizationReason,
+          matchedLayer: schema.transactionReviews.matchedLayer,
+        })
+        .from(schema.transactionReviews)
+        .where(eq(schema.transactionReviews.transactionId, transactionId))
+        .limit(1)
+        .pipe(
+          wrapSyncEngineSqlError(
+            "principalAccountingRebuildRepository.recordFifoInventoryReview.loadReview"
+          )
+        )
+      const fifoReview = addFifoInventoryReview({ review, reason })
+
+      if (review === undefined) {
+        yield* tx
+          .insert(schema.transactionReviews)
+          .values({
+            transactionId,
+            principalId,
+            reviewStatus: fifoReview.reviewStatus,
+            categorizationReason: fifoReview.categorizationReason,
+            matchedLayer: fifoReview.matchedLayer,
+            needsReview: fifoReview.needsReview,
+            createdAt: nowDate(),
+            updatedAt: nowDate(),
+          })
+          .pipe(
+            wrapSyncEngineSqlError(
+              "principalAccountingRebuildRepository.recordFifoInventoryReview.insertReview"
+            )
+          )
+        return
+      }
+
+      yield* tx
+        .update(schema.transactionReviews)
+        .set({
+          reviewStatus: fifoReview.reviewStatus,
+          categorizationReason: fifoReview.categorizationReason,
+          matchedLayer: fifoReview.matchedLayer,
+          needsReview: fifoReview.needsReview,
+          updatedAt: nowDate(),
+        })
+        .where(eq(schema.transactionReviews.transactionId, transactionId))
+        .pipe(
+          wrapSyncEngineSqlError(
+            "principalAccountingRebuildRepository.recordFifoInventoryReview.updateReview"
+          )
+        )
+    })
+
+  const buildRebuildFifoAllocations = ({
+    tx,
+    principalId,
+    transactionId,
+    lots,
+    amount,
+    fiatAmount,
+    operation,
+  }: {
+    readonly tx: SyncEngineDbTransaction
+    readonly principalId: string
+    readonly transactionId: string | null
+    readonly lots: ReadonlyArray<OpenFifoLot>
+    readonly amount: string
+    readonly fiatAmount: string | null
+    readonly operation:
+      | "principalAccountingRebuildRepository.matchDisposal"
+      | "principalAccountingRebuildRepository.allocateInventoryMovement"
+  }) =>
+    buildFifoAllocations({
+      lots,
+      amount,
+      fiatAmount,
+      errorFactory: fixedPointErrorFactory,
+      insufficientInventoryError: (remainingAmount) =>
+        new SyncEngineStorageError({
+          operation,
+          cause: `Insufficient FIFO inventory for outbound amount ${remainingAmount}`,
+        }),
+    }).pipe(
+      Effect.catchTag("SyncEngineStorageError", (error) =>
+        error.operation === operation && transactionId !== null
+          ? recordFifoInventoryReview({
+              tx,
+              principalId,
+              transactionId,
+              cause: error.cause,
+            }).pipe(Effect.as(null))
+          : Effect.fail(error)
+      )
+    )
+
+  const loadDisposalFifoCoverage = ({
+    tx,
+    transactionId,
+  }: {
+    readonly tx: SyncEngineDbTransaction
+    readonly transactionId: string
+  }) =>
+    Effect.gen(function* () {
+      const disposalLegs = yield* tx
+        .select({
+          id: schema.transactionLegs.id,
+          assetId: schema.transactionLegs.assetId,
+          amount: schema.transactionLegs.amount,
+        })
+        .from(schema.transactionLegs)
+        .where(
+          and(
+            eq(schema.transactionLegs.transactionId, transactionId),
+            eq(schema.transactionLegs.kind, "disposal")
+          )
+        )
+        .pipe(
+          wrapSyncEngineSqlError(
+            "principalAccountingRebuildRepository.loadDisposalFifoCoverage.loadLegs"
+          )
+        )
+      const matches =
+        disposalLegs.length === 0
+          ? []
+          : yield* tx
+              .select({
+                disposalLegId: schema.disposalMatches.disposalLegId,
+                matchedAmount: sql<string>`sum(${schema.disposalMatches.matchedAmount})`,
+              })
+              .from(schema.disposalMatches)
+              .where(
+                inArray(
+                  schema.disposalMatches.disposalLegId,
+                  disposalLegs.map(({ id }) => id)
+                )
+              )
+              .groupBy(schema.disposalMatches.disposalLegId)
+              .pipe(
+                wrapSyncEngineSqlError(
+                  "principalAccountingRebuildRepository.loadDisposalFifoCoverage.loadMatches"
+                )
+              )
+
+      return {
+        disposalLegs,
+        matchedAmounts: new Map(
+          matches.map(({ disposalLegId, matchedAmount }) => [disposalLegId, matchedAmount] as const)
+        ),
+      }
+    })
+
+  const loadMovementFifoCoverage = ({
+    tx,
+    transactionId,
+  }: {
+    readonly tx: SyncEngineDbTransaction
+    readonly transactionId: string
+  }) =>
+    Effect.gen(function* () {
+      const movements = yield* tx
+        .select({
+          id: schema.inventoryMovements.id,
+          providerTransferId: schema.inventoryMovements.providerTransferId,
+          purpose: schema.inventoryMovements.purpose,
+          reconciliationStatus: schema.inventoryMovements.reconciliationStatus,
+          assetId: schema.inventoryMovements.assetId,
+          amount: schema.inventoryMovements.amount,
+        })
+        .from(schema.inventoryMovements)
+        .where(
+          and(
+            eq(schema.inventoryMovements.transactionId, transactionId),
+            eq(schema.inventoryMovements.direction, "outbound")
+          )
+        )
+        .pipe(
+          wrapSyncEngineSqlError(
+            "principalAccountingRebuildRepository.loadMovementFifoCoverage.loadMovements"
+          )
+        )
+      const allocations =
+        movements.length === 0
+          ? []
+          : yield* tx
+              .select({
+                inventoryMovementId: schema.inventoryMovementAllocations.inventoryMovementId,
+                matchedAmount: sql<string>`sum(${schema.inventoryMovementAllocations.matchedAmount})`,
+              })
+              .from(schema.inventoryMovementAllocations)
+              .where(
+                inArray(
+                  schema.inventoryMovementAllocations.inventoryMovementId,
+                  movements.map(({ id }) => id)
+                )
+              )
+              .groupBy(schema.inventoryMovementAllocations.inventoryMovementId)
+              .pipe(
+                wrapSyncEngineSqlError(
+                  "principalAccountingRebuildRepository.loadMovementFifoCoverage.loadAllocations"
+                )
+              )
+
+      return {
+        movements,
+        matchedAmounts: new Map(
+          allocations.map(({ inventoryMovementId, matchedAmount }) => [
+            inventoryMovementId,
+            matchedAmount,
+          ])
+        ),
+      }
+    })
+
+  const isFullyCovered = ({
+    amount,
+    matchedAmount,
+  }: {
+    readonly amount: string
+    readonly matchedAmount: string | undefined
+  }) =>
+    compareDecimalQuantities({
+      left: amount,
+      right: matchedAmount ?? "0",
+      errorFactory: fixedPointErrorFactory,
+    }).pipe(Effect.map((comparison) => comparison === 0))
+
+  const hasUnmatchedFifoEffects = ({
+    tx,
+    transactionId,
+  }: {
+    readonly tx: SyncEngineDbTransaction
+    readonly transactionId: string
+  }) =>
+    Effect.gen(function* () {
+      const disposalCoverage = yield* loadDisposalFifoCoverage({ tx, transactionId })
+      const matchedDisposalResults = yield* Effect.forEach(disposalCoverage.disposalLegs, (leg) =>
+        isFullyCovered({
+          amount: leg.amount,
+          matchedAmount: disposalCoverage.matchedAmounts.get(leg.id),
+        }).pipe(Effect.map((matched) => ({ leg, matched })))
+      )
+      if (matchedDisposalResults.some(({ matched }) => !matched)) return true
+
+      const movementCoverage = yield* loadMovementFifoCoverage({ tx, transactionId })
+      for (const movement of movementCoverage.movements) {
+        if (movement.reconciliationStatus === "matched") continue
+        if (
+          yield* isFullyCovered({
+            amount: movement.amount,
+            matchedAmount: movementCoverage.matchedAmounts.get(movement.id),
+          })
+        ) {
+          continue
+        }
+
+        if (movement.purpose === "principal" && movement.providerTransferId !== null) {
+          const matchingDisposals = yield* Effect.forEach(
+            matchedDisposalResults.filter(({ leg }) => leg.assetId === movement.assetId),
+            ({ leg }) => isFullyCovered({ amount: leg.amount, matchedAmount: movement.amount })
+          )
+          if (matchingDisposals.some(Boolean)) continue
+        }
+        return true
+      }
+
+      return false
+    })
+
+  const clearResolvedFifoReview = ({
+    tx,
+    transactionId,
+  }: {
+    readonly tx: SyncEngineDbTransaction
+    readonly transactionId: string
+  }) =>
+    Effect.gen(function* () {
+      if (yield* hasUnmatchedFifoEffects({ tx, transactionId })) return
+
+      const [review] = yield* tx
+        .select({
+          reviewStatus: schema.transactionReviews.reviewStatus,
+          categorizationReason: schema.transactionReviews.categorizationReason,
+          matchedLayer: schema.transactionReviews.matchedLayer,
+          userNotes: schema.transactionReviews.userNotes,
+        })
+        .from(schema.transactionReviews)
+        .where(eq(schema.transactionReviews.transactionId, transactionId))
+        .limit(1)
+        .pipe(
+          wrapSyncEngineSqlError(
+            "principalAccountingRebuildRepository.clearResolvedFifoReview.loadReview"
+          )
+        )
+      if (review === undefined) return
+
+      const fifoReview = removeFifoInventoryReview(review)
+
+      if (fifoReview === null) {
+        yield* tx
+          .delete(schema.transactionReviews)
+          .where(eq(schema.transactionReviews.transactionId, transactionId))
+          .pipe(
+            wrapSyncEngineSqlError(
+              "principalAccountingRebuildRepository.clearResolvedFifoReview.deleteReview"
+            )
+          )
+        return
+      }
+
+      yield* tx
+        .update(schema.transactionReviews)
+        .set({
+          categorizationReason: fifoReview.categorizationReason,
+          matchedLayer: fifoReview.matchedLayer,
+          needsReview: fifoReview.needsReview,
+          updatedAt: nowDate(),
+        })
+        .where(eq(schema.transactionReviews.transactionId, transactionId))
+        .pipe(
+          wrapSyncEngineSqlError(
+            "principalAccountingRebuildRepository.clearResolvedFifoReview.updateReview"
+          )
+        )
+    })
+
+  const loadOpenDisposalLots = ({
+    tx,
+    principalId,
+    sourceIds,
+    assetId,
+    timestamp,
+  }: {
+    readonly tx: SyncEngineDbTransaction
+    readonly principalId: string
+    readonly sourceIds: ReadonlyArray<string>
+    readonly assetId: string
+    readonly timestamp: Date
+  }): Effect.Effect<ReadonlyArray<OpenFifoLot>, SyncEngineStorageError> =>
+    tx
+      .select({
+        id: schema.fifoLots.id,
+        remainingAmount: schema.fifoLots.remainingAmount,
+        costBasisPerToken: schema.fifoLots.costBasisPerToken,
+      })
+      .from(schema.fifoLots)
+      .innerJoin(schema.transactionLegs, eq(schema.transactionLegs.id, schema.fifoLots.sourceLegId))
+      .where(
+        and(
+          eq(schema.fifoLots.principalId, principalId),
+          inArray(schema.fifoLots.sourceId, sourceIds),
+          eq(schema.fifoLots.assetId, assetId),
+          sql`${schema.fifoLots.sourceLegId} is not null`,
+          gt(schema.fifoLots.remainingAmount, "0"),
+          lte(schema.fifoLots.acquiredAt, timestamp),
+          lte(schema.transactionLegs.timestamp, timestamp)
+        )
+      )
+      .orderBy(
+        asc(schema.fifoLots.acquiredAt),
+        asc(schema.fifoLots.createdAt),
+        asc(schema.fifoLots.id)
+      )
+      .pipe(wrapSyncEngineSqlError("principalAccountingRebuildRepository.loadOpenDisposalLots"))
+
+  const loadOpenMovementLots = ({
     tx,
     principalId,
     sourceIds,
@@ -146,7 +532,7 @@ const make = Effect.gen(function* () {
         asc(schema.fifoLots.createdAt),
         asc(schema.fifoLots.id)
       )
-      .pipe(wrapSyncEngineSqlError("principalAccountingRebuildRepository.loadOpenLots"))
+      .pipe(wrapSyncEngineSqlError("principalAccountingRebuildRepository.loadOpenMovementLots"))
 
   const updateAllocatedLots = ({
     tx,
@@ -622,24 +1008,30 @@ const make = Effect.gen(function* () {
       const ownerSourceIds = [
         ...(ownerSourceIdsByLegId.get(leg.id) ?? new Set([leg.sourceId])),
       ].sort()
-      const lots = yield* loadOpenLots({
+      const lots = yield* loadOpenDisposalLots({
         tx,
         principalId,
         sourceIds: ownerSourceIds,
         assetId: leg.assetId,
         timestamp: leg.timestamp,
       })
-      const allocations = yield* buildFifoAllocations({
+      const allocations = yield* buildRebuildFifoAllocations({
+        tx,
+        principalId,
+        transactionId: leg.transactionId,
         lots,
         amount: leg.amount,
         fiatAmount: leg.fiatAmount,
-        errorFactory: fixedPointErrorFactory,
-        insufficientInventoryError: (remainingAmount) =>
-          new SyncEngineStorageError({
-            operation: "principalAccountingRebuildRepository.matchDisposal",
-            cause: `Insufficient FIFO inventory for outbound amount ${remainingAmount}`,
-          }),
+        operation: "principalAccountingRebuildRepository.matchDisposal",
       })
+      if (allocations === null) {
+        return {
+          sourceIds: ownerSourceIds,
+          fifoLotsRebuilt: 0,
+          disposalMatchesRebuilt: 0,
+          inventoryAllocationsRebuilt: 0,
+        }
+      }
       yield* Effect.forEach(
         allocations,
         (allocation) =>
@@ -660,6 +1052,9 @@ const make = Effect.gen(function* () {
         { concurrency: 1, discard: true }
       )
       yield* updateAllocatedLots({ tx, allocations })
+      if (leg.transactionId !== null) {
+        yield* clearResolvedFifoReview({ tx, transactionId: leg.transactionId })
+      }
 
       return {
         sourceIds: ownerSourceIds,
@@ -713,24 +1108,30 @@ const make = Effect.gen(function* () {
       const ownerSourceIds = [
         ...(ownerSourceIdsByMovementId.get(movement.id) ?? new Set([movement.sourceId])),
       ].sort()
-      const lots = yield* loadOpenLots({
+      const lots = yield* loadOpenMovementLots({
         tx,
         principalId,
         sourceIds: ownerSourceIds,
         assetId: movement.assetId,
         timestamp: movement.timestamp,
       })
-      const allocations = yield* buildFifoAllocations({
+      const allocations = yield* buildRebuildFifoAllocations({
+        tx,
+        principalId,
+        transactionId: movement.transactionId,
         lots,
         amount: movement.amount,
         fiatAmount: null,
-        errorFactory: fixedPointErrorFactory,
-        insufficientInventoryError: (remainingAmount) =>
-          new SyncEngineStorageError({
-            operation: "principalAccountingRebuildRepository.allocateInventoryMovement",
-            cause: `Insufficient FIFO inventory for outbound amount ${remainingAmount}`,
-          }),
+        operation: "principalAccountingRebuildRepository.allocateInventoryMovement",
       })
+      if (allocations === null) {
+        return {
+          sourceIds: ownerSourceIds,
+          fifoLotsRebuilt: 0,
+          disposalMatchesRebuilt: 0,
+          inventoryAllocationsRebuilt: 0,
+        }
+      }
       yield* Effect.forEach(
         allocations,
         (allocation) =>
@@ -750,6 +1151,7 @@ const make = Effect.gen(function* () {
         { concurrency: 1, discard: true }
       )
       yield* updateAllocatedLots({ tx, allocations })
+      yield* clearResolvedFifoReview({ tx, transactionId: movement.transactionId })
 
       return {
         sourceIds: ownerSourceIds,

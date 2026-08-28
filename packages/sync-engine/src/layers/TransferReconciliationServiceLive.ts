@@ -524,7 +524,9 @@ const make = Effect.gen(function* () {
             (rebuildFrom === undefined || transfer.timestamp >= rebuildFrom) &&
             (affectedAssetIdSet === null ||
               (transfer.canonicalAssetId !== null &&
-                affectedAssetIdSet.has(transfer.canonicalAssetId)))
+                affectedAssetIdSet.has(transfer.canonicalAssetId)) ||
+              (transfer.reconciledAssetId !== null &&
+                affectedAssetIdSet.has(transfer.reconciledAssetId)))
         )
 
         const summary = yield* Effect.reduce(

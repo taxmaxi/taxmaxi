@@ -16,7 +16,9 @@ import * as Schema from "effect/Schema"
 import { canonicalizeAddress } from "@my/core/assets"
 import { makeFixedPointErrorFactory } from "./SourceNormalizationFixedPoint.ts"
 import {
+  addFifoInventoryReview,
   buildFifoAllocations,
+  FIFO_INVENTORY_REVIEW_REASON_PREFIX,
   type FifoAllocation,
   compareDecimalQuantities as compareFifoDecimalQuantities,
   subtractDecimalQuantities as subtractFifoDecimalQuantities,
@@ -158,25 +160,6 @@ const decodeNumericString = ({
 const isInsufficientFifoInventoryError = (error: SyncEngineStorageError): boolean =>
   error.operation === INSUFFICIENT_FIFO_INVENTORY_OPERATION
 
-const FIFO_INVENTORY_REVIEW_LAYER = "fifo_inventory"
-const FIFO_INVENTORY_REVIEW_REASON_PREFIX =
-  "fifo_inventory: Review required because the transaction moves more inventory out than the synced source FIFO lots currently cover."
-
-const appendReviewSegment = ({
-  existing,
-  segment,
-  separator,
-}: {
-  readonly existing: string | null | undefined
-  readonly segment: string
-  readonly separator: string
-}): string =>
-  existing === null || existing === undefined || existing.trim() === ""
-    ? segment
-    : existing.includes(segment)
-      ? existing
-      : `${existing}${separator}${segment}`
-
 const buildInsufficientInventoryReview = ({
   transaction,
   existingReview,
@@ -195,32 +178,27 @@ const buildInsufficientInventoryReview = ({
   const principalId = transaction.principalId
 
   const inventoryReason =
-    `${FIFO_INVENTORY_REVIEW_REASON_PREFIX} ` +
+    `${FIFO_INVENTORY_REVIEW_REASON_PREFIX} Review required because the transaction moves more ` +
+    "inventory out than the synced source FIFO lots currently cover. " +
     "This usually means an opening balance, transfer in, or historical acquisition is missing. " +
     String(error.cause)
-  const preservesReviewedState =
-    existingReview?.reviewStatus === "approved" || existingReview?.reviewStatus === "changed"
+  const fifoReview = addFifoInventoryReview({ review: existingReview, reason: inventoryReason })
 
   return {
     principalId,
-    reviewStatus: preservesReviewedState ? existingReview.reviewStatus : "needs_review",
+    reviewStatus: fifoReview.reviewStatus,
     originalTypeKey: existingReview?.originalTypeKey ?? resolvedTransactionType.transactionType,
     originalConfidence: existingReview?.originalConfidence ?? null,
     currentTypeKey: existingReview?.currentTypeKey ?? resolvedTransactionType.transactionType,
     legalRuleSetVersion: existingReview?.legalRuleSetVersion ?? null,
-    categorizationReason: appendReviewSegment({
-      existing: existingReview?.categorizationReason,
-      segment: inventoryReason,
-      separator: "\n",
-    }),
-    matchedLayer: appendReviewSegment({
-      existing: existingReview?.matchedLayer,
-      segment: FIFO_INVENTORY_REVIEW_LAYER,
-      separator: ",",
-    }),
-    needsReview: true,
+    categorizationReason: fifoReview.categorizationReason,
+    matchedLayer: fifoReview.matchedLayer,
+    needsReview: fifoReview.needsReview,
     userNotes: existingReview?.userNotes ?? null,
-    reviewedAt: preservesReviewedState ? existingReview.reviewedAt : null,
+    reviewedAt:
+      fifoReview.reviewStatus === "approved" || fifoReview.reviewStatus === "changed"
+        ? (existingReview?.reviewedAt ?? null)
+        : null,
   }
 }
 

@@ -36,6 +36,7 @@ import {
   type TransferReconciliationRecordDraft,
   type TransferReconciliationRepositoryShape,
 } from "@my/sync-engine/services"
+import { FIFO_INVENTORY_REVIEW_LAYER, removeFifoInventoryReview } from "./FifoAccounting.ts"
 import { drizzle } from "./PgClientLive.ts"
 import { nowDate, wrapSyncEngineSqlError } from "./SyncEngineRepositorySupport.ts"
 import { schema } from "../schema/index.ts"
@@ -82,8 +83,6 @@ const make = Effect.gen(function* () {
 
   const INTERNAL_TRANSFER_REASON =
     "Deterministic provider transfer reconciled to a principal-owned onchain transfer."
-  const FIFO_INVENTORY_REVIEW_LAYER = "fifo_inventory"
-  const FIFO_INVENTORY_REVIEW_REASON_PREFIX = "fifo_inventory:"
   const RECONCILIATION_TIME_WINDOW_MILLIS = 12 * 60 * 60 * 1000
   const AutomaticRevalidationMetadataSchema = Schema.Struct({
     revalidateMovementFacts: Schema.optional(Schema.Boolean),
@@ -812,6 +811,7 @@ const make = Effect.gen(function* () {
           providerTransactionId: schema.providerTransfers.transactionId,
           providerAssetId: schema.providerTransfers.providerAssetId,
           canonicalAssetId: schema.providerAssetMappings.canonicalAssetId,
+          reconciledAssetId: schema.transfers.assetId,
           assetRepresentationId: schema.providerAssetMappings.assetRepresentationId,
           timestamp: schema.providerTransfers.timestamp,
           direction: schema.providerTransfers.direction,
@@ -834,6 +834,14 @@ const make = Effect.gen(function* () {
             eq(schema.providerAssetMappings.mappingStatus, "approved"),
             eq(schema.providerAssetMappings.mappingKind, "asset")
           )
+        )
+        .leftJoin(
+          schema.transferReconciliations,
+          eq(schema.transferReconciliations.providerTransferId, schema.providerTransfers.id)
+        )
+        .leftJoin(
+          schema.transfers,
+          eq(schema.transfers.id, schema.transferReconciliations.canonicalTransferId)
         )
         .where(
           and(
@@ -3982,26 +3990,9 @@ const make = Effect.gen(function* () {
                   return
                 }
 
-                const remainingLayers = (review.matchedLayer ?? "")
-                  .split(",")
-                  .map((layer) => layer.trim())
-                  .filter((layer) => layer !== "" && layer !== FIFO_INVENTORY_REVIEW_LAYER)
-                const remainingReasons = (review.categorizationReason ?? "")
-                  .split("\n")
-                  .filter(
-                    (reason) =>
-                      reason.trim() !== "" &&
-                      !reason.trimStart().startsWith(FIFO_INVENTORY_REVIEW_REASON_PREFIX)
-                  )
-                const preservesUserReview =
-                  review.reviewStatus === "approved" || review.reviewStatus === "changed"
-                const shouldKeepReview =
-                  remainingLayers.length > 0 ||
-                  remainingReasons.length > 0 ||
-                  review.userNotes !== null ||
-                  preservesUserReview
+                const fifoReview = removeFifoInventoryReview(review)
 
-                if (!shouldKeepReview) {
+                if (fifoReview === null) {
                   yield* tx
                     .delete(schema.transactionReviews)
                     .where(eq(schema.transactionReviews.transactionId, transactionId))
@@ -4016,10 +4007,9 @@ const make = Effect.gen(function* () {
                 yield* tx
                   .update(schema.transactionReviews)
                   .set({
-                    categorizationReason:
-                      remainingReasons.length === 0 ? null : remainingReasons.join("\n"),
-                    matchedLayer: remainingLayers.length === 0 ? null : remainingLayers.join(","),
-                    needsReview: review.reviewStatus === "needs_review",
+                    categorizationReason: fifoReview.categorizationReason,
+                    matchedLayer: fifoReview.matchedLayer,
+                    needsReview: fifoReview.needsReview,
                     updatedAt: nowDate(),
                   })
                   .where(eq(schema.transactionReviews.transactionId, transactionId))

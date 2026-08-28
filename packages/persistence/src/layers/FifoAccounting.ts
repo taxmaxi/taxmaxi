@@ -49,6 +49,74 @@ export interface FifoAllocation {
   readonly gainLoss: string
 }
 
+/** Transaction-review fields used by FIFO shortage lifecycle updates. */
+export interface FifoInventoryReviewState {
+  readonly reviewStatus: "auto_applied" | "needs_review" | "approved" | "changed"
+  readonly categorizationReason: string | null | undefined
+  readonly matchedLayer: string | null | undefined
+  readonly userNotes?: string | null
+}
+
+export const FIFO_INVENTORY_REVIEW_LAYER = "fifo_inventory"
+export const FIFO_INVENTORY_REVIEW_REASON_PREFIX = "fifo_inventory:"
+
+const withoutFifoReviewSegments = (review: FifoInventoryReviewState) => ({
+  reasons: (review.categorizationReason ?? "")
+    .split("\n")
+    .filter(
+      (reason) =>
+        reason.trim() !== "" && !reason.trimStart().startsWith(FIFO_INVENTORY_REVIEW_REASON_PREFIX)
+    ),
+  layers: (review.matchedLayer ?? "")
+    .split(",")
+    .map((layer) => layer.trim())
+    .filter((layer) => layer !== "" && layer !== FIFO_INVENTORY_REVIEW_LAYER),
+})
+
+/** Add or replace the FIFO shortage segment while preserving other review state. */
+export const addFifoInventoryReview = ({
+  review,
+  reason,
+}: {
+  readonly review: FifoInventoryReviewState | null | undefined
+  readonly reason: string
+}) => {
+  const existing = review ?? {
+    reviewStatus: "needs_review" as const,
+    categorizationReason: null,
+    matchedLayer: null,
+  }
+  const remaining = withoutFifoReviewSegments(existing)
+  return {
+    reviewStatus:
+      existing.reviewStatus === "approved" || existing.reviewStatus === "changed"
+        ? existing.reviewStatus
+        : ("needs_review" as const),
+    categorizationReason: [...remaining.reasons, reason].join("\n"),
+    matchedLayer: [...remaining.layers, FIFO_INVENTORY_REVIEW_LAYER].join(","),
+    needsReview: true as const,
+  }
+}
+
+/** Remove the FIFO shortage segment, or return null when no review state remains. */
+export const removeFifoInventoryReview = (review: FifoInventoryReviewState) => {
+  const remaining = withoutFifoReviewSegments(review)
+  const preservesUserReview =
+    review.reviewStatus === "approved" || review.reviewStatus === "changed"
+  const shouldKeepReview =
+    remaining.layers.length > 0 ||
+    remaining.reasons.length > 0 ||
+    (review.userNotes !== null && review.userNotes !== undefined) ||
+    preservesUserReview
+  if (!shouldKeepReview) return null
+
+  return {
+    categorizationReason: remaining.reasons.length === 0 ? null : remaining.reasons.join("\n"),
+    matchedLayer: remaining.layers.length === 0 ? null : remaining.layers.join(","),
+    needsReview: review.reviewStatus === "needs_review",
+  }
+}
+
 /** Compare two exact decimal quantity strings. */
 export const compareDecimalQuantities = <E>({
   left,

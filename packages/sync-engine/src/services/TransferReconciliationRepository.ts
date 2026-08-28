@@ -31,6 +31,7 @@ export interface ProviderTransferReconciliationCandidate {
   readonly providerTransactionId: string
   readonly providerAssetId: string | null
   readonly canonicalAssetId: string | null
+  readonly reconciledAssetId: string | null
   readonly assetRepresentationId: string | null
   readonly timestamp: Date
   readonly direction: "inbound" | "outbound"
