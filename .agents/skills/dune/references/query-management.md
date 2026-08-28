@@ -20,14 +20,14 @@ dune query create --name <NAME> --sql <SQL> [flags]
 
 ### Flags
 
-| Flag            | Type     | Required | Default | Description                                                         |
-| --------------- | -------- | -------- | ------- | ------------------------------------------------------------------- |
-| `--name`        | `string` | Yes      | --      | Human-readable query title                                          |
-| `--sql`         | `string` | Yes      | --      | DuneSQL query text                                                  |
-| `--description` | `string` | No       | `""`    | Short description of the query                                      |
-| `--private`     | `bool`   | No       | `false` | Make the query private (not publicly visible)                       |
-| `--temp`        | `bool`   | No       | `false` | Create a temporary query (auto-deleted, not shown in saved queries) |
-| `-o, --output`  | `string` | No       | `text`  | Output format: `text` or `json`                                     |
+| Flag | Type | Required | Default | Description |
+|------|------|----------|---------|-------------|
+| `--name` | `string` | Yes | -- | Human-readable query title |
+| `--sql` | `string` | Yes | -- | DuneSQL query text |
+| `--description` | `string` | No | `""` | Short description of the query |
+| `--private` | `bool` | No | `false` | Make the query private (not publicly visible) |
+| `--temp` | `bool` | No | `false` | Create a temporary query (auto-deleted, not shown in saved queries) |
+| `-o, --output` | `string` | No | `text` | Output format: `text` or `json` |
 
 ### Output
 
@@ -74,15 +74,15 @@ dune query get <query-id>
 
 ### Arguments
 
-| Argument   | Type      | Description                          |
-| ---------- | --------- | ------------------------------------ |
+| Argument | Type | Description |
+|----------|------|-------------|
 | `query-id` | `integer` | The numeric ID of the query to fetch |
 
 ### Flags
 
-| Flag           | Type     | Required | Default | Description                     |
-| -------------- | -------- | -------- | ------- | ------------------------------- |
-| `-o, --output` | `string` | No       | `text`  | Output format: `text` or `json` |
+| Flag | Type | Required | Default | Description |
+|------|------|----------|---------|-------------|
+| `-o, --output` | `string` | No | `text` | Output format: `text` or `json` |
 
 ### Output
 
@@ -130,20 +130,20 @@ dune query update <query-id> [flags]
 
 ### Arguments
 
-| Argument   | Type      | Description                           |
-| ---------- | --------- | ------------------------------------- |
+| Argument | Type | Description |
+|----------|------|-------------|
 | `query-id` | `integer` | The numeric ID of the query to update |
 
 ### Flags
 
-| Flag            | Type       | Required | Default | Description                        |
-| --------------- | ---------- | -------- | ------- | ---------------------------------- |
-| `--name`        | `string`   | No       | --      | New query name                     |
-| `--sql`         | `string`   | No       | --      | New DuneSQL query text             |
-| `--description` | `string`   | No       | --      | New description                    |
-| `--private`     | `bool`     | No       | --      | Set privacy flag                   |
-| `--tags`        | `[]string` | No       | --      | Replace all tags (comma-separated) |
-| `-o, --output`  | `string`   | No       | `text`  | Output format: `text` or `json`    |
+| Flag | Type | Required | Default | Description |
+|------|------|----------|---------|-------------|
+| `--name` | `string` | No | -- | New query name |
+| `--sql` | `string` | No | -- | New DuneSQL query text |
+| `--description` | `string` | No | -- | New description |
+| `--private` | `bool` | No | -- | Set privacy flag |
+| `--tags` | `[]string` | No | -- | Replace all tags (comma-separated) |
+| `-o, --output` | `string` | No | `text` | Output format: `text` or `json` |
 
 Only the provided flags are updated; omitted fields remain unchanged.
 
@@ -180,15 +180,15 @@ dune query archive <query-id>
 
 ### Arguments
 
-| Argument   | Type      | Description                            |
-| ---------- | --------- | -------------------------------------- |
+| Argument | Type | Description |
+|----------|------|-------------|
 | `query-id` | `integer` | The numeric ID of the query to archive |
 
 ### Flags
 
-| Flag           | Type     | Required | Default | Description                     |
-| -------------- | -------- | -------- | ------- | ------------------------------- |
-| `-o, --output` | `string` | No       | `text`  | Output format: `text` or `json` |
+| Flag | Type | Required | Default | Description |
+|------|------|----------|---------|-------------|
+| `-o, --output` | `string` | No | `text` | Output format: `text` or `json` |
 
 ### Output
 

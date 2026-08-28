@@ -5,7 +5,6 @@
 Search the Dune dataset catalog to discover tables and their schemas before writing SQL.
 
 Two search modes:
-
 - **`dataset search`** -- Keyword and filter-based search across all datasets
 - **`dataset search-by-contract`** -- Find decoded tables for a specific contract address
 
@@ -15,12 +14,12 @@ Two search modes:
 
 ### Categories
 
-| Category    | Description                                                   | Examples                                                                       |
-| ----------- | ------------------------------------------------------------- | ------------------------------------------------------------------------------ |
-| `canonical` | Core blockchain data maintained by Dune                       | `ethereum.blocks`, `ethereum.transactions`, `ethereum.traces`, `ethereum.logs` |
-| `decoded`   | ABI-decoded contract data (events and function calls)         | `uniswap_v3_ethereum.evt_Swap`, `erc20_ethereum.evt_Transfer`                  |
-| `spell`     | Curated Spellbook transformations (higher-level, cross-chain) | `dex.trades`, `tokens.transfers`, `nft.trades`                                 |
-| `community` | Community-contributed datasets                                | Varies                                                                         |
+| Category | Description | Examples |
+|----------|-------------|---------|
+| `canonical` | Core blockchain data maintained by Dune | `ethereum.blocks`, `ethereum.transactions`, `ethereum.traces`, `ethereum.logs` |
+| `decoded` | ABI-decoded contract data (events and function calls) | `uniswap_v3_ethereum.evt_Swap`, `erc20_ethereum.evt_Transfer` |
+| `spell` | Curated Spellbook transformations (higher-level, cross-chain) | `dex.trades`, `tokens.transfers`, `nft.trades` |
+| `community` | Community-contributed datasets | Varies |
 
 ### Decoded Tables
 
@@ -33,14 +32,14 @@ Decoded tables parse raw blockchain data using a contract's ABI into structured 
 
 ### Dataset Types
 
-| Type                   | Description                                             |
-| ---------------------- | ------------------------------------------------------- |
-| `dune_table`           | Core Dune-maintained tables (canonical chain data)      |
-| `decoded_table`        | Contract ABI-decoded event and call tables              |
-| `spell`                | Spellbook transformation tables (curated, higher-level) |
-| `uploaded_table`       | User-uploaded CSV or data tables                        |
-| `transformation_table` | Materialized user-created transformation tables         |
-| `transformation_view`  | Virtual user-created transformation views               |
+| Type | Description |
+|------|-------------|
+| `dune_table` | Core Dune-maintained tables (canonical chain data) |
+| `decoded_table` | Contract ABI-decoded event and call tables |
+| `spell` | Spellbook transformation tables (curated, higher-level) |
+| `uploaded_table` | User-uploaded CSV or data tables |
+| `transformation_table` | Materialized user-created transformation tables |
+| `transformation_view` | Virtual user-created transformation views |
 
 ---
 
@@ -54,20 +53,20 @@ dune dataset search [flags]
 
 ### Flags
 
-| Flag                 | Type       | Required | Default | Description                                                                                                             |
-| -------------------- | ---------- | -------- | ------- | ----------------------------------------------------------------------------------------------------------------------- |
-| `--query`            | `string`   | No       | `""`    | Search query text (natural language or table name keywords)                                                             |
-| `--categories`       | `[]string` | No       | --      | Filter by category: `canonical`, `decoded`, `spell`, `community`                                                        |
-| `--blockchains`      | `[]string` | No       | --      | Filter by blockchain (e.g. `ethereum`, `arbitrum`, `solana`)                                                            |
-| `--dataset-types`    | `[]string` | No       | --      | Filter by type: `dune_table`, `decoded_table`, `spell`, `uploaded_table`, `transformation_table`, `transformation_view` |
-| `--schemas`          | `[]string` | No       | --      | Filter by schema/namespace (e.g. `dex`, `uniswap_v3_ethereum`)                                                          |
-| `--owner-scope`      | `string`   | No       | `""`    | Ownership filter: `all`, `me`, `team`                                                                                   |
-| `--include-private`  | `bool`     | No       | `false` | Include private datasets in results                                                                                     |
-| `--include-schema`   | `bool`     | No       | `false` | Include column-level schema (name, type, nullable) for each table                                                       |
-| `--include-metadata` | `bool`     | No       | `false` | Include metadata (description, page rank, ABI type, project name, etc.)                                                 |
-| `--limit`            | `int32`    | No       | `20`    | Maximum number of results                                                                                               |
-| `--offset`           | `int32`    | No       | `0`     | Pagination offset                                                                                                       |
-| `-o, --output`       | `string`   | No       | `text`  | Output format: `text` or `json`                                                                                         |
+| Flag | Type | Required | Default | Description |
+|------|------|----------|---------|-------------|
+| `--query` | `string` | No | `""` | Search query text (natural language or table name keywords) |
+| `--categories` | `[]string` | No | -- | Filter by category: `canonical`, `decoded`, `spell`, `community` |
+| `--blockchains` | `[]string` | No | -- | Filter by blockchain (e.g. `ethereum`, `arbitrum`, `solana`) |
+| `--dataset-types` | `[]string` | No | -- | Filter by type: `dune_table`, `decoded_table`, `spell`, `uploaded_table`, `transformation_table`, `transformation_view` |
+| `--schemas` | `[]string` | No | -- | Filter by schema/namespace (e.g. `dex`, `uniswap_v3_ethereum`) |
+| `--owner-scope` | `string` | No | `""` | Ownership filter: `all`, `me`, `team` |
+| `--include-private` | `bool` | No | `false` | Include private datasets in results |
+| `--include-schema` | `bool` | No | `false` | Include column-level schema (name, type, nullable) for each table |
+| `--include-metadata` | `bool` | No | `false` | Include metadata (description, page rank, ABI type, project name, etc.) |
+| `--limit` | `int32` | No | `20` | Maximum number of results |
+| `--offset` | `int32` | No | `0` | Pagination offset |
+| `-o, --output` | `string` | No | `text` | Output format: `text` or `json` |
 
 ### Output
 
@@ -122,12 +121,12 @@ When reviewing schema output, look for **partition columns** -- these are the co
 
 Common partition column names by table type:
 
-| Table Type                                       | Partition Column           |
-| ------------------------------------------------ | -------------------------- |
+| Table Type | Partition Column |
+|------------|-----------------|
 | Canonical tables (`ethereum.transactions`, etc.) | `block_time`, `block_date` |
-| Decoded event tables (`evt_*`)                   | `evt_block_time`           |
-| Decoded call tables (`call_*`)                   | `call_block_time`          |
-| Spellbook tables (`dex.trades`, etc.)            | `block_time`, `block_date` |
+| Decoded event tables (`evt_*`) | `evt_block_time` |
+| Decoded call tables (`call_*`) | `call_block_time` |
+| Spellbook tables (`dex.trades`, etc.) | `block_time`, `block_date` |
 
 **Always include `--include-schema`** when the goal is to write a query. After discovering a table, check for its partition columns and instruct the user (or include in generated SQL) a `WHERE` clause on the partition column.
 
@@ -145,14 +144,14 @@ dune dataset search-by-contract --contract-address <ADDRESS> [flags]
 
 ### Flags
 
-| Flag                 | Type       | Required | Default | Description                                                                     |
-| -------------------- | ---------- | -------- | ------- | ------------------------------------------------------------------------------- |
-| `--contract-address` | `string`   | Yes      | --      | Contract address (EVM `0x...` or Tron format)                                   |
-| `--blockchains`      | `[]string` | No       | --      | Filter to specific blockchains. Can be specified multiple times.                |
-| `--include-schema`   | `bool`     | No       | `false` | Include column-level schema (name, type, nullable). Enable when preparing SQL.  |
-| `--limit`            | `int32`    | No       | `20`    | Maximum results. Use 5-10 for quick checks, 50-100 for comprehensive discovery. |
-| `--offset`           | `int32`    | No       | `0`     | Pagination offset                                                               |
-| `-o, --output`       | `string`   | No       | `text`  | Output format: `text` or `json`                                                 |
+| Flag | Type | Required | Default | Description |
+|------|------|----------|---------|-------------|
+| `--contract-address` | `string` | Yes | -- | Contract address (EVM `0x...` or Tron format) |
+| `--blockchains` | `[]string` | No | -- | Filter to specific blockchains. Can be specified multiple times. |
+| `--include-schema` | `bool` | No | `false` | Include column-level schema (name, type, nullable). Enable when preparing SQL. |
+| `--limit` | `int32` | No | `20` | Maximum results. Use 5-10 for quick checks, 50-100 for comprehensive discovery. |
+| `--offset` | `int32` | No | `0` | Pagination offset |
+| `-o, --output` | `string` | No | `text` | Output format: `text` or `json` |
 
 ### Output
 
@@ -179,13 +178,13 @@ dune dataset search-by-contract --contract-address 0x1f9840a85d5aF5bf1D1762F925B
 
 ### When to Use Which
 
-| Scenario                                     | Command                                 |
-| -------------------------------------------- | --------------------------------------- |
-| You have a contract address                  | `search-by-contract`                    |
-| You know a project name (e.g., "uniswap")    | `dataset search --query "uniswap"`      |
-| You need canonical chain data (blocks, txs)  | `dataset search --categories canonical` |
-| You need Spellbook tables (dex.trades, etc.) | `dataset search --categories spell`     |
-| You want to browse all tables for a chain    | `dataset search --blockchains ethereum` |
+| Scenario | Command |
+|----------|---------|
+| You have a contract address | `search-by-contract` |
+| You know a project name (e.g., "uniswap") | `dataset search --query "uniswap"` |
+| You need canonical chain data (blocks, txs) | `dataset search --categories canonical` |
+| You need Spellbook tables (dex.trades, etc.) | `dataset search --categories spell` |
+| You want to browse all tables for a chain | `dataset search --blockchains ethereum` |
 
 ---
 

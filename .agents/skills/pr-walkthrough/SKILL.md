@@ -19,26 +19,36 @@ Read the full diff — every changed file, not the stat summary. Then gather the
 
 Done when every changed file is read and you can say, for each one, why it changed.
 
-## 3. Explain the local terminology
+## 3. Write in plain speech
 
-While reading the issue and diff, identify terms that are necessary to understand the change but have a specific or ambiguous meaning in this subsystem. Define an isolated term in plain language on first use. When several terms are needed, add a short **Terms.** section after **The story.**
+The reviewer may not have touched this subsystem for weeks, and the issue behind the PR is often newer than anything in their head. Write the whole briefing for a reader who knows the product but has none of the subsystem's vocabulary loaded. Defining a term once does not license using it afterwards — a definition read once does not stick.
 
-Explain what each term refers to in this PR and why it matters. Use a concrete example when it makes the meaning clearer. Do not explain common programming terms or add a broad glossary unrelated to the review.
+Rules:
 
-Done when a coworker familiar with the repository, but new to this subsystem, can understand every hotspot without needing a separate terminology explanation.
+- Describe a thing by what it does before you name it: "the table that stores which decision is in force (`asset_resolution_current_state`)". Afterwards keep using the plain description; use the code name only where the reviewer needs it to find the code.
+- Each sentence must survive on its own. Do not build a sentence on a term the reader would have to scroll back to re-learn — neither a code name nor a general term like "projection" or "compare-and-set". Say what happens instead.
+- Unfold compressed noun phrases into cause and effect. Not "compare-and-set bound to both revisions" but "the write fails if anything changed since the admin looked, and they are told to re-check".
+- Pick one concrete example — a real provider, asset, and admin action — and carry it through the whole briefing. Explain each mechanism as what happens to that example, not as an abstract property.
+- Prefer everyday words over the repo's invented ones, including the documented domain terms. Reach for a domain term only when the review needs it to discuss the code, and ground it in plain words at that spot.
+
+**Terms.** section: only when several code names are unavoidable in the hotspots. Each entry says what the thing does in plain words first, then gives the name.
+
+Done when someone who has read only the issue title can follow every sentence without a glossary or a scroll-back.
 
 ## 4. Give the walkthrough
 
 Deliver in this shape:
 
-**The story.** A few sentences: what problem this solves and the approach I took — the "why" the diff can't show. Mention any path I tried and abandoned if it explains the final shape. Define isolated unfamiliar terms inline.
-
 **Terms.** Include this only when several subsystem-specific terms are needed. For each term, state what it means in this PR and why it matters.
+
+**The story.** A few sentences: what problem this solves and the approach I took — the "why" the diff can't show. Mention any path I tried and abandoned if it explains the final shape. Define isolated unfamiliar terms inline.
 
 **Hotspots.** The places the review should spend its time, ranked. Each gets a clickable `file:line` pointer and one or two sentences on what to check there and why it carries risk — core logic, a behavior change, a rule that must hold, a subtle interaction with existing code. Routine changes (renames, lockfiles, generated code, import shuffles) get a single line binning them as skimmable.
 
 **Confessions.** My genuine doubts, as the author, each naming its file: a shortcut I took, an edge case I never exercised, a test I didn't write, a design choice I went back and forth on, a place where the code drifted from what the issue asked. Derive each confession from evidence in the diff — an untested path, an assumption, a TODO — so the reviewer can go look. If honest inspection turns up none, say so and say what gives me that confidence.
 
-Done when every changed file is either covered by a hotspot or binned as routine, every confession points at code, and the terminology needed to follow the hotspots has been explained.
+Before delivering, do a cold-read pass: read the briefing as someone who last thought about this area weeks ago. Any sentence that uses an invented noun before the briefing has described that thing in everyday words fails — rewrite it.
+
+Done when every changed file is either covered by a hotspot or binned as routine, every confession points at code, and the briefing passes the cold-read pass.
 
 The deliverable is the briefing — leave the code untouched and let the reviewer decide what to act on.

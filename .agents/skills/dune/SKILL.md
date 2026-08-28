@@ -1,6 +1,6 @@
 ---
 name: dune
-description: 'Dune CLI for querying blockchain and on-chain data via DuneSQL, searching decoded contract tables, managing saved queries, managing visualizations, managing dashboards, and monitoring credit usage on Dune. Use when user asks about blockchain data, on-chain analytics, token transfers, DEX trades, smart contract events, wallet balances, Ethereum/EVM chain queries, DuneSQL, visualizations, charts, dashboards, or says "query Dune", "search Dune datasets", "run a Dune query", "create a dashboard", or "manage dashboard".'
+description: "Dune CLI for querying blockchain and on-chain data via DuneSQL, searching decoded contract tables, managing saved queries, managing visualizations, managing dashboards, and monitoring credit usage on Dune. Use when user asks about blockchain data, on-chain analytics, token transfers, DEX trades, smart contract events, wallet balances, Ethereum/EVM chain queries, DuneSQL, visualizations, charts, dashboards, or says \"query Dune\", \"search Dune datasets\", \"run a Dune query\", \"create a dashboard\", or \"manage dashboard\"."
 compatibility: Requires network access and the Dune CLI (auto-installed on first use). Works on macOS, Linux, and Windows.
 allowed-tools: Bash(dune:*) Bash(curl:*) Read
 metadata:
@@ -50,8 +50,8 @@ Config file location: `~/.config/dune/config.yaml`
 
 ## Global Flags
 
-| Flag              | Description                                                      |
-| ----------------- | ---------------------------------------------------------------- |
+| Flag | Description |
+|------|-------------|
 | `--api-key <KEY>` | Dune API key (overrides `DUNE_API_KEY` env var and saved config) |
 
 ### Output Format (per-command flag)
@@ -84,33 +84,33 @@ Available tiers: `small`, `medium`, `large`. **Do not pass `--performance` by de
 
 After submitting a query, the execution progresses through these states:
 
-| State                   | Meaning                     | Action                                 |
-| ----------------------- | --------------------------- | -------------------------------------- |
-| `QUERY_STATE_PENDING`   | Queued for execution        | Wait                                   |
-| `QUERY_STATE_EXECUTING` | Currently running           | Wait                                   |
-| `QUERY_STATE_COMPLETED` | Results available           | Fetch results                          |
-| `QUERY_STATE_FAILED`    | Execution failed            | Check error message; fix SQL and retry |
-| `QUERY_STATE_CANCELLED` | Cancelled by user or system | Re-execute if needed                   |
+| State | Meaning | Action |
+|-------|---------|--------|
+| `QUERY_STATE_PENDING` | Queued for execution | Wait |
+| `QUERY_STATE_EXECUTING` | Currently running | Wait |
+| `QUERY_STATE_COMPLETED` | Results available | Fetch results |
+| `QUERY_STATE_FAILED` | Execution failed | Check error message; fix SQL and retry |
+| `QUERY_STATE_CANCELLED` | Cancelled by user or system | Re-execute if needed |
 
 ### Dataset Categories
 
-| Category    | Description                                                                     |
-| ----------- | ------------------------------------------------------------------------------- |
-| `canonical` | Core blockchain data (blocks, transactions, traces, logs)                       |
-| `decoded`   | ABI-decoded contract data (events and function calls)                           |
-| `spell`     | Dune Spellbook transformations (curated, higher-level tables like `dex.trades`) |
-| `community` | Community-contributed datasets                                                  |
+| Category | Description |
+|----------|-------------|
+| `canonical` | Core blockchain data (blocks, transactions, traces, logs) |
+| `decoded` | ABI-decoded contract data (events and function calls) |
+| `spell` | Dune Spellbook transformations (curated, higher-level tables like `dex.trades`) |
+| `community` | Community-contributed datasets |
 
 ### Dataset Types
 
-| Type                   | Description                        |
-| ---------------------- | ---------------------------------- |
-| `dune_table`           | Core Dune-maintained tables        |
-| `decoded_table`        | Contract ABI-decoded tables        |
-| `spell`                | Spellbook transformation tables    |
-| `uploaded_table`       | User-uploaded CSV/data tables      |
+| Type | Description |
+|------|-------------|
+| `dune_table` | Core Dune-maintained tables |
+| `decoded_table` | Contract ABI-decoded tables |
+| `spell` | Spellbook transformation tables |
+| `uploaded_table` | User-uploaded CSV/data tables |
 | `transformation_table` | Materialized transformation tables |
-| `transformation_view`  | Virtual transformation views       |
+| `transformation_view` | Virtual transformation views |
 
 ### Query Parameters
 
@@ -122,29 +122,29 @@ dune query run 12345 --param wallet=0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045 -
 
 ## Command Overview
 
-| Command                           | Description                                          | Auth |
-| --------------------------------- | ---------------------------------------------------- | ---- |
-| `dune auth`                       | Save API key to config file                          | No   |
-| `dune query create`               | Create a new saved query                             | Yes  |
-| `dune query get <id>`             | Fetch a saved query's SQL and metadata               | Yes  |
-| `dune query update <id>`          | Update an existing query                             | Yes  |
-| `dune query archive <id>`         | Archive a saved query                                | Yes  |
-| `dune query run <id>`             | Execute a saved query and wait for results           | Yes  |
-| `dune query run-sql`              | Execute raw DuneSQL directly (no saved query needed) | Yes  |
-| `dune execution results <id>`     | Fetch results of a previous execution                | Yes  |
-| `dune dataset search`             | Search the Dune dataset catalog                      | Yes  |
-| `dune dataset search-by-contract` | Find decoded tables for a contract address           | Yes  |
-| `dune viz create`                 | Create a visualization on a saved query              | Yes  |
-| `dune viz get <id>`               | Fetch visualization details and options              | Yes  |
-| `dune viz list`                   | List all visualizations for a query                  | Yes  |
-| `dune viz update <id>`            | Update an existing visualization                     | Yes  |
-| `dune viz delete <id>`            | Permanently delete a visualization                   | Yes  |
-| `dune docs search`                | Search Dune documentation                            | No   |
-| `dune usage`                      | Show credit and resource usage                       | Yes  |
-| `dune dashboard create`           | Create a new dashboard                               | Yes  |
-| `dune dashboard get <id>`         | Fetch a dashboard's metadata and widgets             | Yes  |
-| `dune dashboard update <id>`      | Update an existing dashboard                         | Yes  |
-| `dune dashboard archive <id>`     | Archive a dashboard                                  | Yes  |
+| Command | Description | Auth |
+|---------|-------------|------|
+| `dune auth` | Save API key to config file | No |
+| `dune query create` | Create a new saved query | Yes |
+| `dune query get <id>` | Fetch a saved query's SQL and metadata | Yes |
+| `dune query update <id>` | Update an existing query | Yes |
+| `dune query archive <id>` | Archive a saved query | Yes |
+| `dune query run <id>` | Execute a saved query and wait for results | Yes |
+| `dune query run-sql` | Execute raw DuneSQL directly (no saved query needed) | Yes |
+| `dune execution results <id>` | Fetch results of a previous execution | Yes |
+| `dune dataset search` | Search the Dune dataset catalog | Yes |
+| `dune dataset search-by-contract` | Find decoded tables for a contract address | Yes |
+| `dune viz create` | Create a visualization on a saved query | Yes |
+| `dune viz get <id>` | Fetch visualization details and options | Yes |
+| `dune viz list` | List all visualizations for a query | Yes |
+| `dune viz update <id>` | Update an existing visualization | Yes |
+| `dune viz delete <id>` | Permanently delete a visualization | Yes |
+| `dune docs search` | Search Dune documentation | No |
+| `dune usage` | Show credit and resource usage | Yes |
+| `dune dashboard create` | Create a new dashboard | Yes |
+| `dune dashboard get <id>` | Fetch a dashboard's metadata and widgets | Yes |
+| `dune dashboard update <id>` | Update an existing dashboard | Yes |
+| `dune dashboard archive <id>` | Archive a dashboard | Yes |
 
 ## Common Workflows
 
@@ -246,13 +246,13 @@ The following capabilities are available via the Dune MCP server or web UI but *
 
 Load the relevant reference when you need detailed command syntax and flags:
 
-| Task                                                                 | Reference                                                             |
-| -------------------------------------------------------------------- | --------------------------------------------------------------------- |
-| Create, get, update, or archive saved queries                        | [query-management.md](references/query-management.md)                 |
-| Execute queries (run, run-sql) or fetch execution results            | [query-execution.md](references/query-execution.md)                   |
-| Search datasets or find tables for a contract address                | [dataset-discovery.md](references/dataset-discovery.md)               |
-| Search documentation or check account usage                          | [docs-and-usage.md](references/docs-and-usage.md)                     |
-| DuneSQL types, functions, common patterns, and pitfalls              | [dunesql-cheatsheet.md](references/dunesql-cheatsheet.md)             |
+| Task | Reference |
+|------|-----------|
+| Create, get, update, or archive saved queries | [query-management.md](references/query-management.md) |
+| Execute queries (run, run-sql) or fetch execution results | [query-execution.md](references/query-execution.md) |
+| Search datasets or find tables for a contract address | [dataset-discovery.md](references/dataset-discovery.md) |
+| Search documentation or check account usage | [docs-and-usage.md](references/docs-and-usage.md) |
+| DuneSQL types, functions, common patterns, and pitfalls | [dunesql-cheatsheet.md](references/dunesql-cheatsheet.md) |
 | Create, get, update, delete, or list visualizations on saved queries | [visualization-management.md](references/visualization-management.md) |
-| Create, get, update, or archive dashboards                           | [dashboard-management.md](references/dashboard-management.md)         |
-| CLI install, authentication, and version recovery                    | [install-and-recovery.md](references/install-and-recovery.md)         |
+| Create, get, update, or archive dashboards | [dashboard-management.md](references/dashboard-management.md) |
+| CLI install, authentication, and version recovery | [install-and-recovery.md](references/install-and-recovery.md) |

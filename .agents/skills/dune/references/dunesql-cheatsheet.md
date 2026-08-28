@@ -10,13 +10,13 @@ Quick reference for DuneSQL -- the Trino-based query engine used by Dune. Use th
 
 DuneSQL extends standard SQL with types specific to on-chain data:
 
-| Type        | Description                                                                         | Example                                      |
-| ----------- | ----------------------------------------------------------------------------------- | -------------------------------------------- |
+| Type | Description | Example |
+|------|-------------|---------|
 | `varbinary` | Raw byte sequences. Used for addresses, transaction hashes, block hashes, calldata. | `0xd8da6bf26964af9d7eed9e03e53415d37aa96045` |
-| `uint256`   | Unsigned 256-bit integer. Used for token amounts, balances, gas values.             | `1000000000000000000` (1 ETH in wei)         |
-| `int256`    | Signed 256-bit integer. Used for values that can be negative (e.g. price deltas).   | `-500000000000000000`                        |
-| `double`    | 64-bit floating point. Used for USD prices, percentages.                            | `1842.50`                                    |
-| `timestamp` | Timestamp with timezone. Used for `block_time`.                                     | `2024-01-15 12:30:00 UTC`                    |
+| `uint256` | Unsigned 256-bit integer. Used for token amounts, balances, gas values. | `1000000000000000000` (1 ETH in wei) |
+| `int256` | Signed 256-bit integer. Used for values that can be negative (e.g. price deltas). | `-500000000000000000` |
+| `double` | 64-bit floating point. Used for USD prices, percentages. | `1842.50` |
+| `timestamp` | Timestamp with timezone. Used for `block_time`. | `2024-01-15 12:30:00 UTC` |
 
 ### Address Handling (Critical)
 
@@ -309,16 +309,16 @@ ORDER BY 2 DESC
 
 ## Common Pitfalls
 
-| Pitfall                                | Wrong                                                                                | Right                                                                                                                                                                                                                                                                      |
-| -------------------------------------- | ------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Comparing addresses as strings         | `WHERE "from" = '0xabc...'`                                                          | `WHERE "from" = 0xabc...`                                                                                                                                                                                                                                                  |
-| Missing partition filter               | `SELECT COUNT(*) FROM ethereum.transactions`                                         | Add `WHERE block_time >= NOW() - INTERVAL '7' DAY`                                                                                                                                                                                                                         |
-| Not quoting reserved words             | `SELECT from, to FROM ...`                                                           | `SELECT "from", "to" FROM ...`                                                                                                                                                                                                                                             |
-| Raw token amounts as readable          | `SELECT value FROM ...`                                                              | `CAST(value AS double) / POWER(10, decimals)`                                                                                                                                                                                                                              |
-| `FROM_HEX` with 0x prefix              | `FROM_HEX('0xabc...')`                                                               | `FROM_HEX('abc...')` (no 0x)                                                                                                                                                                                                                                               |
-| Using `TIMESTAMP` keyword              | `WHERE block_time > TIMESTAMP '2024-01-01'`                                          | `WHERE block_time > CAST('2024-01-01' AS timestamp)` or use `DATE '2024-01-01'`                                                                                                                                                                                            |
-| Forgetting `GROUP BY` with agg         | `SELECT day, COUNT(*) ...`                                                           | Add `GROUP BY 1` or `GROUP BY day`                                                                                                                                                                                                                                         |
-| Bigint overflow in arithmetic          | `SUM(gas_used * gas_price)`                                                          | `SUM(CAST(gas_used AS double) * CAST(gas_price AS double))` — always cast to `double` before multiplying or summing large integer columns (`gas_used`, `gas_price`, `value`, `uint256` fields) to avoid bigint overflow                                                    |
+| Pitfall | Wrong | Right |
+|---------|-------|-------|
+| Comparing addresses as strings | `WHERE "from" = '0xabc...'` | `WHERE "from" = 0xabc...` |
+| Missing partition filter | `SELECT COUNT(*) FROM ethereum.transactions` | Add `WHERE block_time >= NOW() - INTERVAL '7' DAY` |
+| Not quoting reserved words | `SELECT from, to FROM ...` | `SELECT "from", "to" FROM ...` |
+| Raw token amounts as readable | `SELECT value FROM ...` | `CAST(value AS double) / POWER(10, decimals)` |
+| `FROM_HEX` with 0x prefix | `FROM_HEX('0xabc...')` | `FROM_HEX('abc...')` (no 0x) |
+| Using `TIMESTAMP` keyword | `WHERE block_time > TIMESTAMP '2024-01-01'` | `WHERE block_time > CAST('2024-01-01' AS timestamp)` or use `DATE '2024-01-01'` |
+| Forgetting `GROUP BY` with agg | `SELECT day, COUNT(*) ...` | Add `GROUP BY 1` or `GROUP BY day` |
+| Bigint overflow in arithmetic | `SUM(gas_used * gas_price)` | `SUM(CAST(gas_used AS double) * CAST(gas_price AS double))` — always cast to `double` before multiplying or summing large integer columns (`gas_used`, `gas_price`, `value`, `uint256` fields) to avoid bigint overflow |
 | Inferring identifiers from nearby data | Assuming a token ID range belongs to a project because it appeared in the same table | Always explicitly resolve identifiers (project IDs, pool addresses, token ID ranges) from a table/column that directly maps names to IDs. If the first table lacks the ID, search for other decoded tables that expose it. Never guess from co-located or positional data. |
 
 ---

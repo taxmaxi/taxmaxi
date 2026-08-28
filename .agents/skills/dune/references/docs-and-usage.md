@@ -16,12 +16,12 @@ dune docs search --query <TEXT> [flags]
 
 ### Flags
 
-| Flag                   | Type     | Required | Default | Description                                                 |
-| ---------------------- | -------- | -------- | ------- | ----------------------------------------------------------- |
-| `--query`              | `string` | Yes      | --      | Search query text (natural language)                        |
-| `--api-reference-only` | `bool`   | No       | `false` | Prioritize API reference pages over conceptual guides       |
-| `--code-only`          | `bool`   | No       | `false` | Prioritize pages with executable code examples and snippets |
-| `-o, --output`         | `string` | No       | `text`  | Output format: `text` or `json`                             |
+| Flag | Type | Required | Default | Description |
+|------|------|----------|---------|-------------|
+| `--query` | `string` | Yes | -- | Search query text (natural language) |
+| `--api-reference-only` | `bool` | No | `false` | Prioritize API reference pages over conceptual guides |
+| `--code-only` | `bool` | No | `false` | Prioritize pages with executable code examples and snippets |
+| `-o, --output` | `string` | No | `text` | Output format: `text` or `json` |
 
 ### Output
 
@@ -42,7 +42,7 @@ dune docs search --query <TEXT> [flags]
 **json:**
 
 ```json
-{ "query": "<query>", "results": [{ "title": "...", "url": "...", "description": "..." }] }
+{"query": "<query>", "results": [{"title": "...", "url": "...", "description": "..."}]}
 ```
 
 ### Examples
@@ -66,14 +66,14 @@ dune docs search --query "INTERVAL syntax DuneSQL" -o json
 
 ### Useful Search Topics
 
-| Topic                        | Example Query                                              |
-| ---------------------------- | ---------------------------------------------------------- |
+| Topic | Example Query |
+|-------|--------------|
 | DuneSQL syntax and functions | `"DuneSQL functions"`, `"INTERVAL syntax"`, `"CAST types"` |
-| Table naming and structure   | `"decoded tables"`, `"canonical tables"`, `"table naming"` |
-| Query optimization           | `"writing efficient queries"`, `"query performance"`       |
-| API endpoints and limits     | `"API rate limits"`, `"execute query API"`                 |
-| Blockchain-specific data     | `"ethereum transactions schema"`, `"solana data"`          |
-| Spellbook                    | `"Spellbook tables"`, `"dex.trades"`                       |
+| Table naming and structure | `"decoded tables"`, `"canonical tables"`, `"table naming"` |
+| Query optimization | `"writing efficient queries"`, `"query performance"` |
+| API endpoints and limits | `"API rate limits"`, `"execute query API"` |
+| Blockchain-specific data | `"ethereum transactions schema"`, `"solana data"` |
+| Spellbook | `"Spellbook tables"`, `"dex.trades"` |
 
 ---
 
@@ -87,11 +87,11 @@ dune usage [flags]
 
 ### Flags
 
-| Flag           | Type     | Required | Default | Description                             |
-| -------------- | -------- | -------- | ------- | --------------------------------------- |
-| `--start-date` | `string` | No       | --      | Filter start date (`YYYY-MM-DD` format) |
-| `--end-date`   | `string` | No       | --      | Filter end date (`YYYY-MM-DD` format)   |
-| `-o, --output` | `string` | No       | `text`  | Output format: `text` or `json`         |
+| Flag | Type | Required | Default | Description |
+|------|------|----------|---------|-------------|
+| `--start-date` | `string` | No | -- | Filter start date (`YYYY-MM-DD` format) |
+| `--end-date` | `string` | No | -- | Filter end date (`YYYY-MM-DD` format) |
+| `-o, --output` | `string` | No | `text` | Output format: `text` or `json` |
 
 ### Output
 
@@ -121,13 +121,13 @@ dune usage --start-date 2025-01-01 --end-date 2025-06-01 -o json
 
 ### What's Included
 
-| Field                  | Description                                      |
-| ---------------------- | ------------------------------------------------ |
-| Private Queries        | Number of private queries in your account        |
-| Private Dashboards     | Number of private dashboards                     |
-| Storage Used / Allowed | Data storage consumed vs. plan allowance         |
-| Credits Used           | Credits consumed per billing period              |
-| Credits Included       | Credits included in your plan per billing period |
+| Field | Description |
+|-------|-------------|
+| Private Queries | Number of private queries in your account |
+| Private Dashboards | Number of private dashboards |
+| Storage Used / Allowed | Data storage consumed vs. plan allowance |
+| Credits Used | Credits consumed per billing period |
+| Credits Included | Credits included in your plan per billing period |
 
 ---
 

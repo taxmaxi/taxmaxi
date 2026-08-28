@@ -5,7 +5,6 @@
 Execute DuneSQL queries and retrieve results. This is the most commonly used part of the CLI.
 
 Two ways to execute queries:
-
 - **`query run <id>`** -- Execute a saved query by ID
 - **`query run-sql --sql <SQL>`** -- Execute raw DuneSQL directly (no saved query needed)
 
@@ -23,19 +22,19 @@ dune query run <query-id> [flags]
 
 ### Arguments
 
-| Argument   | Type      | Description                                  |
-| ---------- | --------- | -------------------------------------------- |
+| Argument | Type | Description |
+|----------|------|-------------|
 | `query-id` | `integer` | The numeric ID of the saved query to execute |
 
 ### Flags
 
-| Flag            | Type       | Required | Default | Description                                                                                                                             |
-| --------------- | ---------- | -------- | ------- | --------------------------------------------------------------------------------------------------------------------------------------- |
-| `--param`       | `[]string` | No       | --      | Query parameter as `key=value` (repeatable). Values are auto-typed by the API.                                                          |
-| `--performance` | `string`   | No       | (auto)  | Performance tier override: `small`, `medium`, or `large`. Omit unless the user asks, the query is complex, or a previous run timed out. |
-| `--limit`       | `int`      | No       | `0`     | Maximum rows to display (`0` = all rows)                                                                                                |
-| `--no-wait`     | `bool`     | No       | `false` | Submit and exit immediately without waiting for results                                                                                 |
-| `-o, --output`  | `string`   | No       | `text`  | Output format: `text` or `json`                                                                                                         |
+| Flag | Type | Required | Default | Description |
+|------|------|----------|---------|-------------|
+| `--param` | `[]string` | No | -- | Query parameter as `key=value` (repeatable). Values are auto-typed by the API. |
+| `--performance` | `string` | No | (auto) | Performance tier override: `small`, `medium`, or `large`. Omit unless the user asks, the query is complex, or a previous run timed out. |
+| `--limit` | `int` | No | `0` | Maximum rows to display (`0` = all rows) |
+| `--no-wait` | `bool` | No | `false` | Submit and exit immediately without waiting for results |
+| `-o, --output` | `string` | No | `text` | Output format: `text` or `json` |
 
 ### Wait Behavior
 
@@ -94,14 +93,14 @@ dune query run-sql --sql <SQL> [flags]
 
 ### Flags
 
-| Flag            | Type       | Required | Default | Description                                                                                                                             |
-| --------------- | ---------- | -------- | ------- | --------------------------------------------------------------------------------------------------------------------------------------- |
-| `--sql`         | `string`   | Yes      | --      | DuneSQL query to execute                                                                                                                |
-| `--param`       | `[]string` | No       | --      | Query parameter as `key=value` (repeatable). Values are auto-typed by the API.                                                          |
-| `--performance` | `string`   | No       | (auto)  | Performance tier override: `small`, `medium`, or `large`. Omit unless the user asks, the query is complex, or a previous run timed out. |
-| `--limit`       | `int`      | No       | `0`     | Maximum rows to display (`0` = all rows)                                                                                                |
-| `--no-wait`     | `bool`     | No       | `false` | Submit and exit immediately without waiting for results                                                                                 |
-| `-o, --output`  | `string`   | No       | `text`  | Output format: `text` or `json`                                                                                                         |
+| Flag | Type | Required | Default | Description |
+|------|------|----------|---------|-------------|
+| `--sql` | `string` | Yes | -- | DuneSQL query to execute |
+| `--param` | `[]string` | No | -- | Query parameter as `key=value` (repeatable). Values are auto-typed by the API. |
+| `--performance` | `string` | No | (auto) | Performance tier override: `small`, `medium`, or `large`. Omit unless the user asks, the query is complex, or a previous run timed out. |
+| `--limit` | `int` | No | `0` | Maximum rows to display (`0` = all rows) |
+| `--no-wait` | `bool` | No | `false` | Submit and exit immediately without waiting for results |
+| `-o, --output` | `string` | No | `text` | Output format: `text` or `json` |
 
 ### Output
 
@@ -141,12 +140,12 @@ See [dunesql-cheatsheet.md](dunesql-cheatsheet.md#partition-columns--query-perfo
 
 ### When to Use `run-sql` vs `query run`
 
-| Use Case                               | Command                                              |
-| -------------------------------------- | ---------------------------------------------------- |
-| Quick exploration, one-off analysis    | `run-sql`                                            |
-| Reusable query you'll run repeatedly   | Create with `query create`, then `query run`         |
+| Use Case | Command |
+|----------|---------|
+| Quick exploration, one-off analysis | `run-sql` |
+| Reusable query you'll run repeatedly | Create with `query create`, then `query run` |
 | Parameterized query shared with others | Create with `query create`, then `query run --param` |
-| Testing SQL before saving              | `run-sql`                                            |
+| Testing SQL before saving | `run-sql` |
 
 ---
 
@@ -160,28 +159,28 @@ dune execution results <execution-id> [flags]
 
 ### Arguments
 
-| Argument       | Type     | Description                                                                       |
-| -------------- | -------- | --------------------------------------------------------------------------------- |
+| Argument | Type | Description |
+|----------|------|-------------|
 | `execution-id` | `string` | The execution ID (returned by `query run --no-wait` or `query run-sql --no-wait`) |
 
 ### Flags
 
-| Flag           | Type     | Required | Default | Description                             |
-| -------------- | -------- | -------- | ------- | --------------------------------------- |
-| `--limit`      | `int`    | No       | `0`     | Maximum rows to return (`0` = all rows) |
-| `--offset`     | `int`    | No       | `0`     | Number of rows to skip (for pagination) |
-| `-o, --output` | `string` | No       | `text`  | Output format: `text` or `json`         |
+| Flag | Type | Required | Default | Description |
+|------|------|----------|---------|-------------|
+| `--limit` | `int` | No | `0` | Maximum rows to return (`0` = all rows) |
+| `--offset` | `int` | No | `0` | Number of rows to skip (for pagination) |
+| `-o, --output` | `string` | No | `text` | Output format: `text` or `json` |
 
 ### Execution State Handling
 
 The command behaves differently depending on the execution's current state:
 
-| State               | Behavior                                               |
-| ------------------- | ------------------------------------------------------ |
-| Completed           | Displays result table with row count                   |
+| State | Behavior |
+|-------|----------|
+| Completed | Displays result table with row count |
 | Pending / Executing | Prints execution ID and current state (no results yet) |
-| Failed              | Returns error with the failure message                 |
-| Cancelled           | Returns error: `execution was cancelled`               |
+| Failed | Returns error with the failure message |
+| Cancelled | Returns error: `execution was cancelled` |
 
 ### Output
 
@@ -238,17 +237,17 @@ When a query execution fails, the error message typically includes details about
 
 ### Error Recovery Patterns
 
-| Error Pattern                                 | Likely Cause                                                          | Recovery                                                                                                                                                                                                |
-| --------------------------------------------- | --------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `Column 'X' cannot be resolved`               | Misspelled column name or wrong table                                 | Run `dune dataset search --query "<table>" --include-schema -o json` to check actual column names                                                                                                       |
-| `Table 'X' does not exist`                    | Wrong table name or namespace                                         | Run `dune dataset search --query "<keyword>" -o json` to find the correct fully-qualified name                                                                                                          |
-| `Type mismatch` or `Cannot apply operator`    | Comparing incompatible types (e.g. string vs varbinary for addresses) | See [dunesql-cheatsheet.md](dunesql-cheatsheet.md#address-handling-critical) -- addresses must use `0x` prefix, not string quotes                                                                       |
-| `Unexpected parameters` or `mismatched input` | SQL syntax error                                                      | Check for missing commas, unbalanced parentheses, or reserved words that need quoting (`"from"`, `"to"`)                                                                                                |
-| `Query exceeded resource limits` or timeout   | Scanning too much data                                                | Add or tighten a partition filter (`WHERE block_time >= NOW() - INTERVAL '7' DAY`). See [dunesql-cheatsheet.md](dunesql-cheatsheet.md#partition-columns--query-performance). Try `--performance large`. |
-| `Query killed` or `QUERY_STATE_CANCELLED`     | Execution cancelled (timeout, credit limit, or manual)                | Re-run with `--performance large` or reduce the query scope                                                                                                                                             |
-| `Permission denied` or `Access denied`        | Private table or insufficient permissions                             | Verify the user owns the table or has access. Check `--owner-scope`                                                                                                                                     |
-| `Division by zero`                            | Dividing by a zero-value column                                       | Wrap with `NULLIF()`: `amount / NULLIF(divisor, 0)`                                                                                                                                                     |
-| `FROM_HEX` failure                            | Passing `0x`-prefixed string to `FROM_HEX()`                          | `FROM_HEX()` expects hex without `0x`. Use the `0x` literal syntax instead: `WHERE addr = 0xabc...`                                                                                                     |
+| Error Pattern | Likely Cause | Recovery |
+|---------------|-------------|----------|
+| `Column 'X' cannot be resolved` | Misspelled column name or wrong table | Run `dune dataset search --query "<table>" --include-schema -o json` to check actual column names |
+| `Table 'X' does not exist` | Wrong table name or namespace | Run `dune dataset search --query "<keyword>" -o json` to find the correct fully-qualified name |
+| `Type mismatch` or `Cannot apply operator` | Comparing incompatible types (e.g. string vs varbinary for addresses) | See [dunesql-cheatsheet.md](dunesql-cheatsheet.md#address-handling-critical) -- addresses must use `0x` prefix, not string quotes |
+| `Unexpected parameters` or `mismatched input` | SQL syntax error | Check for missing commas, unbalanced parentheses, or reserved words that need quoting (`"from"`, `"to"`) |
+| `Query exceeded resource limits` or timeout | Scanning too much data | Add or tighten a partition filter (`WHERE block_time >= NOW() - INTERVAL '7' DAY`). See [dunesql-cheatsheet.md](dunesql-cheatsheet.md#partition-columns--query-performance). Try `--performance large`. |
+| `Query killed` or `QUERY_STATE_CANCELLED` | Execution cancelled (timeout, credit limit, or manual) | Re-run with `--performance large` or reduce the query scope |
+| `Permission denied` or `Access denied` | Private table or insufficient permissions | Verify the user owns the table or has access. Check `--owner-scope` |
+| `Division by zero` | Dividing by a zero-value column | Wrap with `NULLIF()`: `amount / NULLIF(divisor, 0)` |
+| `FROM_HEX` failure | Passing `0x`-prefixed string to `FROM_HEX()` | `FROM_HEX()` expects hex without `0x`. Use the `0x` literal syntax instead: `WHERE addr = 0xabc...` |
 
 ### Step-by-Step Error Recovery
 

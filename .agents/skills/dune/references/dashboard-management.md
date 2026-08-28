@@ -22,14 +22,14 @@ dune dashboard create --name <NAME> [flags]
 
 ### Flags
 
-| Flag                  | Type      | Required | Default | Description                                        |
-| --------------------- | --------- | -------- | ------- | -------------------------------------------------- |
-| `--name`              | `string`  | Yes      | --      | Dashboard display name                             |
-| `--private`           | `bool`    | No       | `false` | Make the dashboard private                         |
-| `--visualization-ids` | `[]int64` | No       | --      | Comma-separated visualization IDs to add           |
-| `--text-widgets`      | `string`  | No       | --      | JSON array of text widgets: `[{"text":"# Title"}]` |
-| `--columns-per-row`   | `int`     | No       | `2`     | Visualizations per row: 1, 2, or 3                 |
-| `-o, --output`        | `string`  | No       | `text`  | Output format: `text` or `json`                    |
+| Flag | Type | Required | Default | Description |
+|------|------|----------|---------|-------------|
+| `--name` | `string` | Yes | -- | Dashboard display name |
+| `--private` | `bool` | No | `false` | Make the dashboard private |
+| `--visualization-ids` | `[]int64` | No | -- | Comma-separated visualization IDs to add |
+| `--text-widgets` | `string` | No | -- | JSON array of text widgets: `[{"text":"# Title"}]` |
+| `--columns-per-row` | `int` | No | `2` | Visualizations per row: 1, 2, or 3 |
+| `-o, --output` | `string` | No | `text` | Output format: `text` or `json` |
 
 ### Output
 
@@ -76,17 +76,17 @@ dune dashboard get --owner <handle> --slug <slug>
 
 ### Arguments
 
-| Argument       | Type      | Description                                  |
-| -------------- | --------- | -------------------------------------------- |
+| Argument | Type | Description |
+|----------|------|-------------|
 | `dashboard_id` | `integer` | The numeric ID of the dashboard (positional) |
 
 ### Flags
 
-| Flag           | Type     | Required | Default | Description                                     |
-| -------------- | -------- | -------- | ------- | ----------------------------------------------- |
-| `--owner`      | `string` | No       | --      | Owner username or team handle (use with --slug) |
-| `--slug`       | `string` | No       | --      | Dashboard URL slug (use with --owner)           |
-| `-o, --output` | `string` | No       | `text`  | Output format: `text` or `json`                 |
+| Flag | Type | Required | Default | Description |
+|------|------|----------|---------|-------------|
+| `--owner` | `string` | No | -- | Owner username or team handle (use with --slug) |
+| `--slug` | `string` | No | -- | Dashboard URL slug (use with --owner) |
+| `-o, --output` | `string` | No | `text` | Output format: `text` or `json` |
 
 Provide either a positional `dashboard_id` OR both `--owner` and `--slug`.
 
@@ -123,23 +123,23 @@ dune dashboard update <dashboard_id> [flags]
 
 ### Arguments
 
-| Argument       | Type      | Description                               |
-| -------------- | --------- | ----------------------------------------- |
+| Argument | Type | Description |
+|----------|------|-------------|
 | `dashboard_id` | `integer` | The numeric ID of the dashboard to update |
 
 ### Flags
 
-| Flag                      | Type       | Required | Default | Description                                              |
-| ------------------------- | ---------- | -------- | ------- | -------------------------------------------------------- |
-| `--name`                  | `string`   | No       | --      | New dashboard name                                       |
-| `--slug`                  | `string`   | No       | --      | New URL slug (auto-generated from name if omitted)       |
-| `--private`               | `bool`     | No       | --      | Set dashboard privacy                                    |
-| `--tags`                  | `[]string` | No       | --      | Replace all tags (comma-separated)                       |
-| `--visualization-widgets` | `string`   | No       | --      | Visualization widgets JSON (replaces all)                |
-| `--text-widgets`          | `string`   | No       | --      | Text widgets JSON (replaces all)                         |
-| `--param-widgets`         | `string`   | No       | --      | Param widgets JSON (replaces all, pass through from get) |
-| `--columns-per-row`       | `int`      | No       | `2`     | Visualizations per row (for auto-layout)                 |
-| `-o, --output`            | `string`   | No       | `text`  | Output format: `text` or `json`                          |
+| Flag | Type | Required | Default | Description |
+|------|------|----------|---------|-------------|
+| `--name` | `string` | No | -- | New dashboard name |
+| `--slug` | `string` | No | -- | New URL slug (auto-generated from name if omitted) |
+| `--private` | `bool` | No | -- | Set dashboard privacy |
+| `--tags` | `[]string` | No | -- | Replace all tags (comma-separated) |
+| `--visualization-widgets` | `string` | No | -- | Visualization widgets JSON (replaces all) |
+| `--text-widgets` | `string` | No | -- | Text widgets JSON (replaces all) |
+| `--param-widgets` | `string` | No | -- | Param widgets JSON (replaces all, pass through from get) |
+| `--columns-per-row` | `int` | No | `2` | Visualizations per row (for auto-layout) |
+| `-o, --output` | `string` | No | `text` | Output format: `text` or `json` |
 
 Only the provided flags are updated; omitted fields remain unchanged.
 
@@ -208,15 +208,15 @@ dune dashboard archive <dashboard_id>
 
 ### Arguments
 
-| Argument       | Type      | Description                                |
-| -------------- | --------- | ------------------------------------------ |
+| Argument | Type | Description |
+|----------|------|-------------|
 | `dashboard_id` | `integer` | The numeric ID of the dashboard to archive |
 
 ### Flags
 
-| Flag           | Type     | Required | Default | Description                     |
-| -------------- | -------- | -------- | ------- | ------------------------------- |
-| `-o, --output` | `string` | No       | `text`  | Output format: `text` or `json` |
+| Flag | Type | Required | Default | Description |
+|------|------|----------|---------|-------------|
+| `-o, --output` | `string` | No | `text` | Output format: `text` or `json` |
 
 ### Output
 
