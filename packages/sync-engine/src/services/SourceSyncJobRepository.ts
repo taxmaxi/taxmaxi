@@ -17,8 +17,6 @@ import type {
   SourceSyncExecutionJob,
   SourceSyncJobDetails,
   SourceSyncJobMode,
-  SourceSyncPendingDispatchJob,
-  SourceSyncRepairableActiveJob,
   SourceSyncStaleActiveJob,
 } from "./SourceSyncModels.ts"
 
@@ -84,16 +82,6 @@ export interface CreateOrReuseSourceSyncJobParams {
   readonly principalId: string
   readonly mode: SourceSyncJobMode
   readonly maxAttempts: number
-}
-
-/**
- * AttachSourceSyncQueueMetadataParams - Input for recording durable queue metadata.
- */
-export interface AttachSourceSyncQueueMetadataParams {
-  readonly jobId: string
-  readonly queueName: string
-  readonly queueJobId: string
-  readonly queuedAt: Date
 }
 
 /**
@@ -185,23 +173,6 @@ export interface ListStaleActiveSourceSyncJobsParams {
 }
 
 /**
- * ListRepairableActiveSourceSyncJobsParams - Input for startup recovery selection.
- */
-export interface ListRepairableActiveSourceSyncJobsParams {
-  readonly pendingStaleBefore: Date
-  readonly processingStaleBefore: Date
-  readonly limit: number
-}
-
-/**
- * ListPendingSourceSyncJobsNeedingDispatchParams - Input for continuous queue dispatch.
- */
-export interface ListPendingSourceSyncJobsNeedingDispatchParams {
-  readonly staleBefore: Date
-  readonly limit: number
-}
-
-/**
  * ListClaimableSourceSyncJobsParams - Input for the worker poll loop.
  */
 export interface ListClaimableSourceSyncJobsParams {
@@ -228,18 +199,6 @@ export interface SourceSyncJobRepositoryShape {
   readonly createOrReuseJob: (
     params: CreateOrReuseSourceSyncJobParams
   ) => Effect.Effect<CreateOrReuseSourceSyncJobResult, SyncEngineStorageError>
-
-  /**
-   * Attach durable queue metadata after a pending job is enqueued.
-   */
-  readonly attachQueueMetadata: (
-    params: AttachSourceSyncQueueMetadataParams
-  ) => Effect.Effect<
-    void,
-    | SourceSyncJobExecutionRecordNotFoundError
-    | SourceSyncJobExecutionRecordConflictError
-    | SyncEngineStorageError
-  >
 
   /**
    * Atomically claim a pending job for worker execution.
@@ -356,20 +315,6 @@ export interface SourceSyncJobRepositoryShape {
   readonly listStaleActiveJobs: (
     params: ListStaleActiveSourceSyncJobsParams
   ) => Effect.Effect<ReadonlyArray<SourceSyncStaleActiveJob>, SyncEngineStorageError>
-
-  /**
-   * List active jobs that need startup repair or queue reconciliation.
-   */
-  readonly listRepairableActiveJobs: (
-    params: ListRepairableActiveSourceSyncJobsParams
-  ) => Effect.Effect<ReadonlyArray<SourceSyncRepairableActiveJob>, SyncEngineStorageError>
-
-  /**
-   * List pending jobs that are missing queue metadata or need queue reconciliation.
-   */
-  readonly listPendingJobsNeedingDispatch: (
-    params: ListPendingSourceSyncJobsNeedingDispatchParams
-  ) => Effect.Effect<ReadonlyArray<SourceSyncPendingDispatchJob>, SyncEngineStorageError>
 
   /**
    * List pending jobs a worker can claim right now: prerequisites are met and

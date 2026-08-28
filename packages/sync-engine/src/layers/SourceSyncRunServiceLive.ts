@@ -39,8 +39,6 @@ const sourceStartFailureMessage = (
       return "Source was not found while starting the sync run."
     case "SourceSyncJobNotFoundError":
       return "Source sync job was not found while starting the sync run."
-    case "SourceSyncQueueError":
-      return "Failed to enqueue source sync job."
   }
 }
 
@@ -142,14 +140,6 @@ const make = Effect.gen(function* () {
                     message: sourceStartFailureMessage(error),
                   }),
                 SourceSyncJobNotFoundError: (error) =>
-                  recordRunItemDispatchFailure({
-                    runId: run.id,
-                    principalId,
-                    sourceId: source.id,
-                    errorTag: error._tag,
-                    message: sourceStartFailureMessage(error),
-                  }),
-                SourceSyncQueueError: (error) =>
                   recordRunItemDispatchFailure({
                     runId: run.id,
                     principalId,

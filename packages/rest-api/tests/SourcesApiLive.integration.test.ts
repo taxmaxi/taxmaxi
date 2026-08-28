@@ -11,13 +11,9 @@ import {
 import { and, eq } from "@my/persistence/query"
 import * as ConfigProvider from "effect/ConfigProvider"
 import {
-  SOURCE_SYNC_QUEUE_NAME,
   SourceSyncJobRepository,
-  SourceSyncQueue,
-  SourceSyncQueueError,
   SourceSyncRunService,
   TransferReconciliationService,
-  type SourceSyncQueuePayload,
   type SourceSyncRunServiceShape,
   type TransferReconciliationServiceShape,
 } from "@my/sync-engine/services"
@@ -61,9 +57,6 @@ const context = makeIntegrationTestDatabaseContext({
 })
 const TestPgClientLive = context.TestPgClientLive
 
-const queuedAt = new Date("2026-01-01T00:00:00.000Z")
-const queueEvents: Array<SourceSyncQueuePayload> = []
-const settlementEvents: Array<string> = []
 const validX402PaymentHeader = "valid-test-x402-payment"
 const REPORT_TEST_USER_ID = "00000000-0000-4000-8000-000000000181"
 const REPORT_TEST_PRINCIPAL_ID = "00000000-0000-4000-8000-000000000183"
@@ -87,54 +80,26 @@ const X402PaymentValidatorSettlementFailureTestLive = makeX402PaymentValidatorTe
   failSettlement: true,
   validPaymentHeader: validX402PaymentHeader,
 })
-const X402PaymentValidatorTrackingTestLive = makeX402PaymentValidatorTestLive({
-  onSettle: (paymentHeader) => settlementEvents.push(paymentHeader),
-  validPaymentHeader: validX402PaymentHeader,
-})
 const X402PaymentValidatorWithoutPayerIdentityTestLive = makeX402PaymentValidatorTestLive({
   includePayerIdentity: false,
   validPaymentHeader: validX402PaymentHeader,
 })
 
-const SourceSyncQueueTestLive = Layer.effect(
-  SourceSyncQueue,
+/**
+ * The Postgres equivalent of "the job was enqueued": pending jobs the worker
+ * poll loop can claim right now, shaped like the old queue payloads.
+ */
+const listQueuedJobEvents = () =>
   Effect.gen(function* () {
-    const sourceSyncJobRepository = yield* SourceSyncJobRepository
-
-    return SourceSyncQueue.of({
-      enqueueSourceSyncJob: (payload) =>
-        Effect.gen(function* () {
-          queueEvents.push(payload)
-          yield* sourceSyncJobRepository
-            .attachQueueMetadata({
-              jobId: payload.jobId,
-              queueName: SOURCE_SYNC_QUEUE_NAME,
-              queueJobId: payload.jobId,
-              queuedAt,
-            })
-            .pipe(
-              Effect.mapError(
-                (cause) =>
-                  new SourceSyncQueueError({
-                    operation: "test.attachQueueMetadata",
-                    cause,
-                  })
-              )
-            )
-        }),
-    })
+    const repository = yield* SourceSyncJobRepository
+    const jobs = yield* repository.listClaimableJobs({ dueBefore: new Date(), limit: 100 })
+    return jobs.map(({ id, sourceId, principalId, mode }) => ({
+      jobId: id,
+      sourceId,
+      principalId,
+      mode,
+    }))
   })
-)
-
-const SourceSyncQueueFailureTestLive = Layer.succeed(SourceSyncQueue, {
-  enqueueSourceSyncJob: () =>
-    Effect.fail(
-      new SourceSyncQueueError({
-        operation: "test.enqueueSourceSyncJob",
-        cause: "queue unavailable",
-      })
-    ),
-})
 
 const SourceSyncRunServiceTestLive = Layer.succeed(SourceSyncRunService, {
   startSyncRun: () => Effect.die("SourceSyncRunService test stub: startSyncRun not implemented"),
@@ -180,13 +145,11 @@ const TransferReconciliationServiceTestLive = Layer.succeed(TransferReconciliati
     ),
 } satisfies TransferReconciliationServiceShape)
 
-const makeSourceSyncServiceWithDepsTestLive = (
-  sourceSyncQueueLayer: Layer.Layer<SourceSyncQueue, never, SourceSyncJobRepository>
-) =>
-  SourceSyncServiceLive.pipe(Layer.provide(sourceSyncQueueLayer), Layer.provide(RepositoriesLive))
+const SourceSyncServiceWithDepsTestLive = SourceSyncServiceLive.pipe(
+  Layer.provide(RepositoriesLive)
+)
 
 const makePersistenceLayer = <R = never>(
-  sourceSyncQueueLayer: Layer.Layer<SourceSyncQueue, never, SourceSyncJobRepository>,
   taxCalculationServiceLayer: Layer.Layer<
     TaxCalculationService,
     never,
@@ -195,7 +158,7 @@ const makePersistenceLayer = <R = never>(
 ) =>
   Layer.mergeAll(
     RepositoriesLive,
-    makeSourceSyncServiceWithDepsTestLive(sourceSyncQueueLayer),
+    SourceSyncServiceWithDepsTestLive,
     SourceSyncRunServiceTestLive,
     taxCalculationServiceLayer,
     TransferReconciliationServiceTestLive,
@@ -204,7 +167,6 @@ const makePersistenceLayer = <R = never>(
   ).pipe(Layer.provideMerge(TestPgClientLive))
 
 const makeHttpLive = <R = never>(
-  sourceSyncQueueLayer: Layer.Layer<SourceSyncQueue, never, SourceSyncJobRepository>,
   x402PaymentValidatorLayer: Layer.Layer<X402PaymentValidator> = X402PaymentValidatorTestLive,
   taxCalculationServiceLayer: Layer.Layer<
     TaxCalculationService,
@@ -220,30 +182,15 @@ const makeHttpLive = <R = never>(
       Layer.provide(SimpleTokenValidatorLive)
     )
   ).pipe(
-    Layer.provideMerge(makePersistenceLayer(sourceSyncQueueLayer, taxCalculationServiceLayer)),
+    Layer.provideMerge(makePersistenceLayer(taxCalculationServiceLayer)),
     Layer.provideMerge(NodeHttpServer.layerTest),
     Layer.provide(ConfigProvider.layer(ClaimTokenConfigProvider))
   )
 
-const HttpLive = makeHttpLive(SourceSyncQueueTestLive)
-const QueueFailureHttpLive = makeHttpLive(SourceSyncQueueFailureTestLive)
-const SettlementFailureHttpLive = makeHttpLive(
-  SourceSyncQueueTestLive,
-  X402PaymentValidatorSettlementFailureTestLive
-)
-const NoPayerIdentityHttpLive = makeHttpLive(
-  SourceSyncQueueTestLive,
-  X402PaymentValidatorWithoutPayerIdentityTestLive
-)
-const PaidQueueFailureHttpLive = makeHttpLive(
-  SourceSyncQueueFailureTestLive,
-  X402PaymentValidatorTrackingTestLive
-)
-const TaxCalculationHttpLive = makeHttpLive(
-  SourceSyncQueueTestLive,
-  X402PaymentValidatorTestLive,
-  TaxCalculationServiceLive
-)
+const HttpLive = makeHttpLive()
+const SettlementFailureHttpLive = makeHttpLive(X402PaymentValidatorSettlementFailureTestLive)
+const NoPayerIdentityHttpLive = makeHttpLive(X402PaymentValidatorWithoutPayerIdentityTestLive)
+const TaxCalculationHttpLive = makeHttpLive(X402PaymentValidatorTestLive, TaxCalculationServiceLive)
 
 const makeAuthenticatedClient = ({ userId }: { readonly userId: string }) =>
   Effect.gen(function* () {
@@ -766,8 +713,6 @@ await Effect.runPromise(context.recreateTestDatabase())
 
 describe("SourcesApiLive", () => {
   beforeEach(async () => {
-    queueEvents.length = 0
-    settlementEvents.length = 0
     await Effect.runPromise(context.recreateTestDatabase())
   })
 
@@ -1311,8 +1256,8 @@ describe("SourcesApiLive", () => {
       })
       expect(receiptClaim?.claimValueHash).toMatch(/^[a-f0-9]{64}$/u)
       expect(receiptClaim?.claimValueHash).not.toBe(validX402PaymentHeader)
-      expect(queueEvents).toHaveLength(1)
-      expect(queueEvents[0]).toMatchObject({
+      expect(yield* listQueuedJobEvents()).toHaveLength(1)
+      expect((yield* listQueuedJobEvents())[0]).toMatchObject({
         sourceId: response.source.id,
         principalId: response.source.principalId,
         mode: "sync",
@@ -1377,7 +1322,7 @@ describe("SourcesApiLive", () => {
             }),
           ])
         )
-        expect(queueEvents).toHaveLength(1)
+        expect(yield* listQueuedJobEvents()).toHaveLength(1)
       }).pipe(Effect.provide(NoPayerIdentityHttpLive), Effect.scoped)
   )
 
@@ -1776,7 +1721,7 @@ describe("SourcesApiLive", () => {
       expect(reused.created).toBe(false)
       expect(reused.claim).toBeNull()
       expect(reused.syncJob).toBeNull()
-      expect(queueEvents).toHaveLength(1)
+      expect(yield* listQueuedJobEvents()).toHaveLength(1)
     }).pipe(Effect.provide(HttpLive), Effect.scoped)
   )
 
@@ -2417,7 +2362,7 @@ describe("SourcesApiLive", () => {
       expect(sources).toEqual([])
       expect(claims).toEqual([])
       expect(jobs).toEqual([])
-      expect(queueEvents).toHaveLength(0)
+      expect(yield* listQueuedJobEvents()).toHaveLength(0)
     }).pipe(Effect.provide(HttpLive), Effect.scoped)
   )
 
@@ -2450,8 +2395,8 @@ describe("SourcesApiLive", () => {
         name: "Anonymous paid Solana wallet",
         providerKey: "helius-solana",
       })
-      expect(queueEvents).toHaveLength(1)
-      expect(queueEvents[0]).toMatchObject({
+      expect(yield* listQueuedJobEvents()).toHaveLength(1)
+      expect((yield* listQueuedJobEvents())[0]).toMatchObject({
         sourceId: decodedBody.source.id,
         principalId: decodedBody.source.principalId,
         mode: "sync",
@@ -2491,7 +2436,7 @@ describe("SourcesApiLive", () => {
       expect(sources).toEqual([])
       expect(claims).toEqual([])
       expect(jobs).toEqual([])
-      expect(queueEvents).toHaveLength(0)
+      expect(yield* listQueuedJobEvents()).toHaveLength(0)
     }).pipe(Effect.provide(HttpLive), Effect.scoped)
   )
 
@@ -2526,40 +2471,8 @@ describe("SourcesApiLive", () => {
 
       expect(claims).toEqual([])
       expect(jobs).toHaveLength(1)
-      expect(queueEvents).toHaveLength(1)
+      expect(yield* listQueuedJobEvents()).toHaveLength(1)
     }).pipe(Effect.provide(SettlementFailureHttpLive), Effect.scoped)
-  )
-
-  it.effect("does not settle x402 payment when paid anonymous sync enqueue fails", () =>
-    Effect.gen(function* () {
-      const client = yield* makeUnauthenticatedClientWithPayment()
-      const result = yield* client.sources
-        .createSource({
-          payload: {
-            type: "onchain",
-            walletAddress: "So11111111111111111111111111111111111111112",
-            name: "Queue failure anonymous Solana wallet",
-            year: 2025,
-            jurisdiction: "germany",
-          },
-        })
-        .pipe(Effect.result)
-
-      expect(result._tag).toBe("Failure")
-      if (result._tag === "Failure") {
-        expect(result.failure._tag).toBe("InternalServerError")
-        expect(result.failure.message).toBe("Failed to enqueue source sync job.")
-      }
-
-      const db = yield* drizzle
-      const claims = yield* db
-        .select({ id: schema.principalClaims.id })
-        .from(schema.principalClaims)
-
-      expect(claims).toEqual([])
-      expect(queueEvents).toHaveLength(0)
-      expect(settlementEvents).toEqual([])
-    }).pipe(Effect.provide(PaidQueueFailureHttpLive), Effect.scoped)
   )
 
   it.effect("rejects source creation when invalid auth credentials are present", () =>
@@ -2582,7 +2495,7 @@ describe("SourcesApiLive", () => {
       const db = yield* drizzle
       const principals = yield* db.select({ id: schema.principals.id }).from(schema.principals)
       expect(principals).toEqual([])
-      expect(queueEvents).toHaveLength(0)
+      expect(yield* listQueuedJobEvents()).toHaveLength(0)
     }).pipe(Effect.provide(HttpLive), Effect.scoped)
   )
 
@@ -2638,7 +2551,7 @@ describe("SourcesApiLive", () => {
       expect(second.source.id).toBe(first.source.id)
       expect(first.source.providerKey).toBe("helius-solana")
       expect(second.source.providerKey).toBe("helius-solana")
-      expect(queueEvents).toHaveLength(0)
+      expect(yield* listQueuedJobEvents()).toHaveLength(0)
     }).pipe(Effect.provide(HttpLive), Effect.scoped)
   )
 
@@ -2717,8 +2630,8 @@ describe("SourcesApiLive", () => {
         status: "queued",
         message: null,
       })
-      expect(queueEvents).toHaveLength(1)
-      expect(queueEvents[0]).toMatchObject({
+      expect(yield* listQueuedJobEvents()).toHaveLength(1)
+      expect((yield* listQueuedJobEvents())[0]).toMatchObject({
         jobId: job.jobId,
         sourceId,
         principalId,
@@ -2857,10 +2770,11 @@ describe("SourcesApiLive", () => {
 
         // The credit-required job does not block the continue; a fresh job is
         // queued and asking again reuses it instead of stacking more jobs.
+        // Only the fresh job is claimable - the paused one is credit_required.
         expect(continuedJob.jobId).not.toBe(pausedJob.jobId)
         expect(continuedJob.status).toBe("queued")
         expect(repeatedJob.jobId).toBe(continuedJob.jobId)
-        expect(queueEvents).toHaveLength(2)
+        expect(yield* listQueuedJobEvents()).toMatchObject([{ jobId: continuedJob.jobId }])
       }).pipe(Effect.provide(HttpLive), Effect.scoped)
   )
 
@@ -2882,7 +2796,7 @@ describe("SourcesApiLive", () => {
 
       expect(secondJob.jobId).toBe(firstJob.jobId)
       expect(secondJob.status).toBe("queued")
-      expect(queueEvents).toHaveLength(1)
+      expect(yield* listQueuedJobEvents()).toHaveLength(1)
     }).pipe(Effect.provide(HttpLive), Effect.scoped)
   )
 
@@ -2900,35 +2814,12 @@ describe("SourcesApiLive", () => {
       })
 
       expect(replay.status).toBe("queued")
-      expect(queueEvents).toHaveLength(1)
-      expect(queueEvents[0]).toMatchObject({
+      expect(yield* listQueuedJobEvents()).toHaveLength(1)
+      expect((yield* listQueuedJobEvents())[0]).toMatchObject({
         jobId: replay.jobId,
         mode: "replay",
       })
     }).pipe(Effect.provide(HttpLive), Effect.scoped)
-  )
-
-  it.effect("returns an internal server error when queue enqueue fails", () =>
-    Effect.gen(function* () {
-      const userId = crypto.randomUUID()
-      const principalId = crypto.randomUUID()
-      const sourceId = crypto.randomUUID()
-      yield* seedCoinbaseSource({ userId, principalId, sourceId })
-      yield* seedUsableCredit({ userId })
-
-      const client = yield* makeAuthenticatedClient({ userId })
-      const result = yield* client.sources
-        .startSourceSyncJob({
-          params: { sourceId },
-        })
-        .pipe(Effect.result)
-
-      expect(result._tag).toBe("Failure")
-      if (result._tag === "Failure") {
-        expect(result.failure._tag).toBe("InternalServerError")
-        expect(result.failure.message).toBe("Failed to enqueue source sync job.")
-      }
-    }).pipe(Effect.provide(QueueFailureHttpLive), Effect.scoped)
   )
 
   it.effect("refuses to start a sync for a registered user with no usable credits", () =>
@@ -2953,7 +2844,7 @@ describe("SourcesApiLive", () => {
         return yield* Effect.die("Expected SourceCreditRequiredError")
       }
 
-      expect(queueEvents).toHaveLength(0)
+      expect(yield* listQueuedJobEvents()).toHaveLength(0)
 
       const db = yield* drizzle
       const jobs = yield* db
@@ -2976,7 +2867,7 @@ describe("SourcesApiLive", () => {
       const started = yield* client.sources.startSourceSyncJob({ params: { sourceId } })
 
       expect(started.status).toBe("queued")
-      expect(queueEvents).toHaveLength(1)
+      expect(yield* listQueuedJobEvents()).toHaveLength(1)
     }).pipe(Effect.provide(HttpLive), Effect.scoped)
   )
 
@@ -3000,7 +2891,7 @@ describe("SourcesApiLive", () => {
         return yield* Effect.die("Expected SourceCreditRequiredError")
       }
 
-      expect(queueEvents).toHaveLength(0)
+      expect(yield* listQueuedJobEvents()).toHaveLength(0)
     }).pipe(Effect.provide(HttpLive), Effect.scoped)
   )
 
@@ -3033,7 +2924,7 @@ describe("SourcesApiLive", () => {
           return yield* Effect.die("Expected SourceCreditRequiredError")
         }
 
-        expect(queueEvents).toHaveLength(0)
+        expect(yield* listQueuedJobEvents()).toHaveLength(0)
       }).pipe(Effect.provide(HttpLive), Effect.scoped)
   )
 
@@ -3058,7 +2949,7 @@ describe("SourcesApiLive", () => {
         })
 
         expect(response.syncJob).not.toBeNull()
-        expect(queueEvents).toHaveLength(1)
+        expect(yield* listQueuedJobEvents()).toHaveLength(1)
       }).pipe(Effect.provide(HttpLive), Effect.scoped)
   )
 

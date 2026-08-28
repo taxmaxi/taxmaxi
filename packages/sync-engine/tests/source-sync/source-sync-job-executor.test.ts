@@ -85,14 +85,10 @@ const makeReplayRawRecord = (index: number): SourceRawRecord => ({
 })
 
 const unusedJobLifecycleMethods = {
-  attachQueueMetadata: () => Effect.die("attachQueueMetadata should not be called"),
   claimJob: () => Effect.die("claimJob should not be called"),
   heartbeatJob: () => Effect.die("heartbeatJob should not be called"),
   recordRetryableFailure: () => Effect.die("recordRetryableFailure should not be called"),
   listStaleActiveJobs: () => Effect.die("listStaleActiveJobs should not be called"),
-  listRepairableActiveJobs: () => Effect.die("listRepairableActiveJobs should not be called"),
-  listPendingJobsNeedingDispatch: () =>
-    Effect.die("listPendingJobsNeedingDispatch should not be called"),
   listClaimableJobs: () => Effect.die("listClaimableJobs should not be called"),
 }
 
@@ -181,7 +177,6 @@ const makeExecutorLayer = ({
   const SourceSyncJobRepositoryTestLive = Layer.succeed(SourceSyncJobRepository, {
     findActiveJob: () => Effect.die("findActiveJob should not be called"),
     createOrReuseJob: () => Effect.die("createOrReuseJob should not be called"),
-    attachQueueMetadata: unusedJobLifecycleMethods.attachQueueMetadata,
     recoverStaleActiveJob: () => Effect.die("recoverStaleActiveJob should not be called"),
     getJob: () => Effect.die("getJob should not be called"),
     getExecutionJob: ({ jobId }) => {
@@ -247,8 +242,6 @@ const makeExecutorLayer = ({
         events.push(`retry:${message}:${attemptCount}:${nextRetryAt.toISOString()}`)
       }),
     listStaleActiveJobs: unusedJobLifecycleMethods.listStaleActiveJobs,
-    listRepairableActiveJobs: unusedJobLifecycleMethods.listRepairableActiveJobs,
-    listPendingJobsNeedingDispatch: unusedJobLifecycleMethods.listPendingJobsNeedingDispatch,
     listClaimableJobs: unusedJobLifecycleMethods.listClaimableJobs,
     completeJob: ({ state }) =>
       Effect.sync(() => {

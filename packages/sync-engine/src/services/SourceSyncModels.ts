@@ -165,8 +165,6 @@ export interface SourceSyncActiveJob {
   readonly mode: SourceSyncJobMode
   readonly status: ActiveSourceSyncJobStatus
   readonly updatedAt: Date
-  readonly queueName: string | null
-  readonly queueJobId: string | null
 }
 
 /**
@@ -208,30 +206,6 @@ export interface SourceSyncStaleActiveJob {
   readonly heartbeatAt: Date | null
   readonly updatedAt: Date
   readonly workerId: string | null
-}
-
-/**
- * SourceSyncRepairableActiveJob - Active job projection used by startup recovery.
- */
-export interface SourceSyncRepairableActiveJob {
-  readonly id: string
-  readonly sourceId: string
-  readonly principalId: string
-  readonly mode: SourceSyncJobMode
-  readonly status: ActiveSourceSyncJobStatus
-  readonly startedAt: Date | null
-  readonly heartbeatAt: Date | null
-  readonly updatedAt: Date
-  readonly workerId: string | null
-  readonly queueName: string | null
-  readonly queueJobId: string | null
-}
-
-/**
- * SourceSyncPendingDispatchJob - Pending DB job that must be present in the source-sync queue.
- */
-export interface SourceSyncPendingDispatchJob extends SourceSyncRepairableActiveJob {
-  readonly status: "pending"
 }
 
 /**
@@ -294,8 +268,6 @@ export interface ReusedSourceSyncJob {
   readonly principalId: string
   readonly mode: SourceSyncJobMode
   readonly status: ActiveSourceSyncJobStatus
-  readonly queueName: string | null
-  readonly queueJobId: string | null
 }
 
 /**

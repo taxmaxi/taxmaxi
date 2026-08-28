@@ -9,12 +9,8 @@ import {
   type AuthServiceShape,
 } from "@my/core/authentication"
 import {
-  SOURCE_SYNC_QUEUE_NAME,
   SourceSyncJobRepository,
-  SourceSyncQueue,
-  SourceSyncQueueError,
   TransferReconciliationService,
-  type SourceSyncQueuePayload,
   type TransferReconciliationServiceShape,
 } from "@my/sync-engine/services"
 import { SourceSyncRunServiceLive, SourceSyncServiceLive } from "@my/sync-engine/layers"
@@ -39,8 +35,6 @@ const context = makeIntegrationTestDatabaseContext({
 })
 const TestPgClientLive = context.TestPgClientLive
 
-const queuedAt = new Date("2026-01-01T00:00:00.000Z")
-const queueEvents: Array<SourceSyncQueuePayload> = []
 const X402PaymentValidatorTestLive = makeX402PaymentValidatorTestLive({
   validPaymentHeader: "valid-test-x402-payment",
 })
@@ -51,35 +45,15 @@ const AnonSessionServiceTestLive = AnonSessionServiceLive.pipe(
   Layer.provide(ConfigProvider.layer(TestConfigProvider))
 )
 
-const SourceSyncQueueTestLive = Layer.effect(
-  SourceSyncQueue,
+/**
+ * The Postgres equivalent of "the job was enqueued": pending jobs the worker
+ * poll loop can claim right now.
+ */
+const listQueuedJobEvents = () =>
   Effect.gen(function* () {
-    const sourceSyncJobRepository = yield* SourceSyncJobRepository
-
-    return SourceSyncQueue.of({
-      enqueueSourceSyncJob: (payload) =>
-        Effect.gen(function* () {
-          queueEvents.push(payload)
-          yield* sourceSyncJobRepository
-            .attachQueueMetadata({
-              jobId: payload.jobId,
-              queueName: SOURCE_SYNC_QUEUE_NAME,
-              queueJobId: payload.jobId,
-              queuedAt,
-            })
-            .pipe(
-              Effect.mapError(
-                (cause) =>
-                  new SourceSyncQueueError({
-                    operation: "test.attachQueueMetadata",
-                    cause,
-                  })
-              )
-            )
-        }),
-    })
+    const repository = yield* SourceSyncJobRepository
+    return yield* repository.listClaimableJobs({ dueBefore: new Date(), limit: 100 })
   })
-)
 
 const AuthServiceTestLive = Layer.succeed(AuthService, {
   login: () => Effect.die("AuthService test stub: login not implemented"),
@@ -121,7 +95,6 @@ const TransferReconciliationServiceTestLive = Layer.succeed(TransferReconciliati
 } satisfies TransferReconciliationServiceShape)
 
 const SourceSyncServiceWithDepsTestLive = SourceSyncServiceLive.pipe(
-  Layer.provide(SourceSyncQueueTestLive),
   Layer.provide(RepositoriesLive)
 )
 
@@ -279,7 +252,6 @@ await Effect.runPromise(context.recreateTestDatabase())
 
 describe("SyncRunsApiLive", () => {
   beforeEach(async () => {
-    queueEvents.length = 0
     await Effect.runPromise(context.recreateTestDatabase())
   })
 
@@ -300,7 +272,7 @@ describe("SyncRunsApiLive", () => {
       expect(run.items.map((item) => item.sourceId).sort()).toEqual(sourceIds.sort())
       expect(run.items.every((item) => item.provider === "coinbase")).toBe(true)
       expect(run.items.every((item) => item.status === "queued")).toBe(true)
-      expect(queueEvents).toHaveLength(2)
+      expect(yield* listQueuedJobEvents()).toHaveLength(2)
     }).pipe(Effect.provide(HttpLive), Effect.scoped)
   )
 

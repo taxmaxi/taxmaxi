@@ -9,7 +9,6 @@ import type * as Effect from "effect/Effect"
 import * as Schema from "effect/Schema"
 import { SyncEngineStorageError } from "./SyncEngineStorageError.ts"
 import type { SourceSyncJobDetails, SourceSyncJobSummary } from "./SourceSyncModels.ts"
-import type { SourceSyncQueueError } from "./SourceSyncQueue.ts"
 
 /**
  * UnsupportedProviderError - Provider is not supported by the sync engine.
@@ -74,7 +73,6 @@ export type SourceSyncServiceError =
   | UnsupportedProviderError
   | SourceNotFoundError
   | SourceSyncJobNotFoundError
-  | SourceSyncQueueError
   | SyncEngineStorageError
 
 /**

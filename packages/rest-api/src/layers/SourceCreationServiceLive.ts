@@ -370,8 +370,6 @@ export const SourceCreationServiceLive = Layer.effect(
                 return toBadRequestError(`Unsupported provider: ${error.provider}`)
               case "SourceNotFoundError":
                 return toBadRequestError("No source found. Connect a source first.")
-              case "SourceSyncQueueError":
-                return toInternalError("Failed to enqueue source sync job.")
               default:
                 return toInternalError("Failed to start source sync.")
             }

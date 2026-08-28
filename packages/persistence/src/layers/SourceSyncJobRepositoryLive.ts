@@ -29,8 +29,6 @@ import {
   toPublicSourceSyncJobStatus,
   type SourceSyncClaimableJob,
   type SourceSyncJobRepositoryShape,
-  type SourceSyncPendingDispatchJob,
-  type SourceSyncRepairableActiveJob,
   type SourceSyncStaleActiveJob,
 } from "@my/sync-engine/services"
 import {
@@ -167,6 +165,9 @@ const make = Effect.gen(function* () {
           status: "pending",
           attemptCount: 0,
           maxAttempts: 3,
+          // A pending row is already visible to the worker poll loop, so
+          // creation is the moment the job counts as queued.
+          queuedAt: createdAt,
           createdAt,
           updatedAt: createdAt,
         })
@@ -355,8 +356,6 @@ const make = Effect.gen(function* () {
     mode: schema.processingJobs.mode,
     status: schema.processingJobs.status,
     updatedAt: schema.processingJobs.updatedAt,
-    queueName: schema.processingJobs.queueName,
-    queueJobId: schema.processingJobs.queueJobId,
   } as const
 
   const selectExecutionJobFields = {
@@ -470,8 +469,6 @@ const make = Effect.gen(function* () {
                   mode: job.mode,
                   status: job.status,
                   updatedAt: job.updatedAt,
-                  queueName: job.queueName,
-                  queueJobId: job.queueJobId,
                 },
               ]
             }
@@ -502,6 +499,9 @@ const make = Effect.gen(function* () {
           status: "pending",
           attemptCount: 0,
           maxAttempts,
+          // A pending row is already visible to the worker poll loop, so
+          // creation is the moment the job counts as queued.
+          queuedAt: nowDate(),
           progressDetails: { mode },
         })
         .returning({ id: schema.processingJobs.id })
@@ -583,8 +583,6 @@ const make = Effect.gen(function* () {
                   principalId: concurrentJob.principalId,
                   mode: concurrentJob.mode,
                   status: concurrentJob.status,
-                  queueName: concurrentJob.queueName,
-                  queueJobId: concurrentJob.queueJobId,
                 } satisfies CreateOrReuseSourceSyncJobResult
               })
             )
@@ -594,39 +592,6 @@ const make = Effect.gen(function* () {
 
     return attemptCreateOrReuse(MAX_CREATE_OR_REUSE_RACE_ATTEMPTS)
   }
-
-  const attachQueueMetadata: SourceSyncJobRepositoryShape["attachQueueMetadata"] = ({
-    jobId,
-    queueName,
-    queueJobId,
-    queuedAt,
-  }) =>
-    Effect.gen(function* () {
-      const [job] = yield* db
-        .update(schema.processingJobs)
-        .set({
-          queueName,
-          queueJobId,
-          queuedAt,
-          updatedAt: queuedAt,
-        })
-        .where(
-          and(
-            eq(schema.processingJobs.id, jobId),
-            inArray(schema.processingJobs.status, ACTIVE_JOB_STATUSES)
-          )
-        )
-        .returning({ id: schema.processingJobs.id })
-        .pipe(wrapSyncEngineSqlError("sourceSyncJobRepository.attachQueueMetadata.update"))
-
-      if (job === undefined) {
-        return yield* failExpectedState({
-          jobId,
-          operation: "sourceSyncJobRepository.attachQueueMetadata.select",
-          reason: "Only active jobs can receive queue metadata.",
-        })
-      }
-    })
 
   const claimJob: SourceSyncJobRepositoryShape["claimJob"] = ({ jobId, workerId, startedAt }) =>
     db
@@ -1237,124 +1202,6 @@ const make = Effect.gen(function* () {
         )
       )
 
-  const listRepairableActiveJobs: SourceSyncJobRepositoryShape["listRepairableActiveJobs"] = ({
-    pendingStaleBefore,
-    processingStaleBefore,
-    limit,
-  }) =>
-    db
-      .select({
-        id: schema.processingJobs.id,
-        sourceId: schema.processingJobs.sourceId,
-        principalId: schema.processingJobs.principalId,
-        mode: schema.processingJobs.mode,
-        status: schema.processingJobs.status,
-        startedAt: schema.processingJobs.startedAt,
-        heartbeatAt: schema.processingJobs.heartbeatAt,
-        updatedAt: schema.processingJobs.updatedAt,
-        workerId: schema.processingJobs.workerId,
-        queueName: schema.processingJobs.queueName,
-        queueJobId: schema.processingJobs.queueJobId,
-      })
-      .from(schema.processingJobs)
-      .where(
-        and(
-          isNotNull(schema.processingJobs.principalId),
-          processingJobPrerequisitesSucceeded,
-          or(
-            and(
-              eq(schema.processingJobs.status, "pending"),
-              or(
-                isNull(schema.processingJobs.queueName),
-                isNull(schema.processingJobs.queueJobId),
-                lt(schema.processingJobs.updatedAt, pendingStaleBefore)
-              )
-            ),
-            and(
-              eq(schema.processingJobs.status, "processing"),
-              or(
-                lt(schema.processingJobs.heartbeatAt, processingStaleBefore),
-                and(
-                  isNull(schema.processingJobs.heartbeatAt),
-                  lt(schema.processingJobs.updatedAt, processingStaleBefore)
-                )
-              )
-            )
-          )
-        )
-      )
-      .orderBy(asc(schema.processingJobs.updatedAt))
-      .limit(limit)
-      .pipe(
-        wrapSyncEngineSqlError("sourceSyncJobRepository.listRepairableActiveJobs"),
-        Effect.map((jobs) =>
-          jobs.flatMap((job) => {
-            if (job.status !== "pending" && job.status !== "processing") {
-              return []
-            }
-
-            return [
-              {
-                id: job.id,
-                sourceId: job.sourceId,
-                principalId: job.principalId,
-                mode: job.mode,
-                status: job.status,
-                startedAt: job.startedAt,
-                heartbeatAt: job.heartbeatAt,
-                updatedAt: job.updatedAt,
-                workerId: job.workerId,
-                queueName: job.queueName,
-                queueJobId: job.queueJobId,
-              } satisfies SourceSyncRepairableActiveJob,
-            ]
-          })
-        )
-      )
-
-  const listPendingJobsNeedingDispatch: SourceSyncJobRepositoryShape["listPendingJobsNeedingDispatch"] =
-    ({ staleBefore, limit }) =>
-      db
-        .select({
-          id: schema.processingJobs.id,
-          sourceId: schema.processingJobs.sourceId,
-          principalId: schema.processingJobs.principalId,
-          mode: schema.processingJobs.mode,
-          startedAt: schema.processingJobs.startedAt,
-          heartbeatAt: schema.processingJobs.heartbeatAt,
-          updatedAt: schema.processingJobs.updatedAt,
-          workerId: schema.processingJobs.workerId,
-          queueName: schema.processingJobs.queueName,
-          queueJobId: schema.processingJobs.queueJobId,
-        })
-        .from(schema.processingJobs)
-        .where(
-          and(
-            isNotNull(schema.processingJobs.principalId),
-            eq(schema.processingJobs.status, "pending"),
-            processingJobPrerequisitesSucceeded,
-            or(
-              isNull(schema.processingJobs.queueName),
-              isNull(schema.processingJobs.queueJobId),
-              lt(schema.processingJobs.updatedAt, staleBefore)
-            )
-          )
-        )
-        .orderBy(asc(schema.processingJobs.updatedAt))
-        .limit(limit)
-        .pipe(
-          wrapSyncEngineSqlError("sourceSyncJobRepository.listPendingJobsNeedingDispatch"),
-          Effect.map((jobs) =>
-            jobs.map(
-              (job) =>
-                ({
-                  ...job,
-                  status: "pending",
-                }) satisfies SourceSyncPendingDispatchJob
-            )
-          )
-        )
-
   const listClaimableJobs: SourceSyncJobRepositoryShape["listClaimableJobs"] = ({
     dueBefore,
     limit,
@@ -1385,7 +1232,6 @@ const make = Effect.gen(function* () {
   return SourceSyncJobRepository.of({
     findActiveJob,
     createOrReuseJob,
-    attachQueueMetadata,
     claimJob,
     heartbeatJob,
     recordRetryableFailure,
@@ -1396,8 +1242,6 @@ const make = Effect.gen(function* () {
     getJob,
     getExecutionJob,
     listStaleActiveJobs,
-    listRepairableActiveJobs,
-    listPendingJobsNeedingDispatch,
     listClaimableJobs,
   } satisfies SourceSyncJobRepositoryShape)
 })

@@ -17,7 +17,6 @@ import { CoinbaseReferenceMappingServiceLive } from "../../src/providers/coinbas
 import { CoinbaseSourceSyncProviderLive } from "../../src/providers/coinbase/layers/CoinbaseSourceSyncProviderLive.ts"
 import { CoinbaseReferenceMappingService } from "../../src/providers/coinbase/services/CoinbaseReferenceMappingService.ts"
 import { CoinbaseSyncClient } from "../../src/providers/coinbase/services/CoinbaseSyncClient.ts"
-import { SourceSyncService } from "@my/sync-engine/services"
 import { AssetRepositoryLive } from "../../../persistence/src/layers/AssetRepositoryLive.ts"
 import { AssetResolutionJobRepositoryLive } from "../../../persistence/src/layers/AssetResolutionJobRepositoryLive.ts"
 import { ProviderAssetRepositoryLive } from "../../../persistence/src/layers/ProviderAssetRepositoryLive.ts"
@@ -31,7 +30,7 @@ import {
   seedSyncEngineRepositoryFixture,
 } from "../../../persistence/tests/support/integration-test-kit.ts"
 import { ProviderRawRecord } from "../../src/shared/SourceProviderRawBatch.ts"
-import { SourceSyncQueueInlineExecutorTestLive } from "../support/SourceSyncQueueInlineExecutorTestLive.ts"
+import { startSourceSyncJobInline } from "../support/SourceSyncInlineExecution.ts"
 
 const context = makeIntegrationTestDatabaseContext({
   databaseNamePrefix: "taxmaxi_sync_engine_coinbase_mapping_pr04",
@@ -312,8 +311,7 @@ const SourceSyncJobExecutorTestLive = SourceSyncJobExecutorLive.pipe(
 )
 
 const SourceSyncLayer = SourceSyncServiceLive.pipe(
-  Layer.provide(SourceSyncQueueInlineExecutorTestLive),
-  Layer.provide(SourceSyncJobExecutorTestLive)
+  Layer.provideMerge(SourceSyncJobExecutorTestLive)
 )
 
 const TestLayer = SourceSyncLayer.pipe(
@@ -342,13 +340,7 @@ const seedCoinbaseSource = () =>
   }).pipe(Effect.provide(TestPgClientLive))
 
 const runSync = () =>
-  Effect.gen(function* () {
-    const sourceSync = yield* SourceSyncService
-    return yield* sourceSync.startSourceSyncJob({
-      principalId,
-      sourceId,
-    })
-  }).pipe(Effect.provide(TestLayer))
+  startSourceSyncJobInline({ principalId, sourceId }).pipe(Effect.provide(TestLayer))
 
 const runReferenceMapping = <A, E>(effect: Effect.Effect<A, E, CoinbaseReferenceMappingService>) =>
   Effect.runPromise(

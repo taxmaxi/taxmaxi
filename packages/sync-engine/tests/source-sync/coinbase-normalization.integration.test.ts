@@ -37,7 +37,10 @@ import {
 } from "../../../persistence/tests/support/integration-test-kit.ts"
 import { ProviderRawRecord } from "../../src/shared/SourceProviderRawBatch.ts"
 import type { SourceRawRecord, SourceSyncSource } from "../../src/services/SourceSyncModels.ts"
-import { SourceSyncQueueInlineExecutorTestLive } from "../support/SourceSyncQueueInlineExecutorTestLive.ts"
+import {
+  replaySourceSyncJobInline,
+  startSourceSyncJobInline,
+} from "../support/SourceSyncInlineExecution.ts"
 
 const context = makeIntegrationTestDatabaseContext({
   databaseNamePrefix: "taxmaxi_sync_engine_coinbase_pr04",
@@ -397,8 +400,7 @@ const SourceSyncJobExecutorTestLive = SourceSyncJobExecutorLive.pipe(
 )
 
 const SourceSyncLayer = SourceSyncServiceLive.pipe(
-  Layer.provide(SourceSyncQueueInlineExecutorTestLive),
-  Layer.provide(SourceSyncJobExecutorTestLive)
+  Layer.provideMerge(SourceSyncJobExecutorTestLive)
 )
 
 const TestLayer = SourceSyncLayer.pipe(
@@ -459,13 +461,7 @@ const seedCoinbaseSource = () =>
   }).pipe(Effect.provide(TestPgClientLive))
 
 const runSync = () =>
-  Effect.gen(function* () {
-    const sourceSync = yield* SourceSyncService
-    return yield* sourceSync.startSourceSyncJob({
-      principalId,
-      sourceId,
-    })
-  }).pipe(Effect.provide(TestLayer))
+  startSourceSyncJobInline({ principalId, sourceId }).pipe(Effect.provide(TestLayer))
 
 const fetchJobDetails = ({ jobId }: { readonly jobId: string }) =>
   Effect.gen(function* () {
@@ -480,7 +476,7 @@ const fetchJobDetails = ({ jobId }: { readonly jobId: string }) =>
 const replaySource = () =>
   Effect.gen(function* () {
     const sourceSync = yield* SourceSyncService
-    const summary = yield* sourceSync.replaySourceSyncJob({
+    const summary = yield* replaySourceSyncJobInline({
       principalId,
       sourceId,
     })

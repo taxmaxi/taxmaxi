@@ -22,9 +22,7 @@
     "@opentelemetry/sdk-trace-base": "2.8.0",
     "@opentelemetry/sdk-trace-node": "2.9.0",
     "@opentelemetry/semantic-conventions": "1.41.1",
-    "bullmq": "5.76.4",
-    "effect": "4.0.0-rc.109",
-    "ioredis": "5.10.1"
+    "effect": "4.0.0-rc.109"
   },
   "devDependencies": {
     "@my/typescript-config": "workspace:*",
