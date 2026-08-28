@@ -526,7 +526,10 @@ const make = Effect.gen(function* () {
         const affectedAssetIdSet = affectedAssetIds === undefined ? null : new Set(affectedAssetIds)
         const providerTransfers = listedProviderTransfers.filter(
           (transfer) =>
-            (rebuildFrom === undefined || transfer.timestamp >= rebuildFrom) &&
+            (rebuildFrom === undefined ||
+              transfer.timestamp >= rebuildFrom ||
+              (transfer.canonicalTransactionTimestamp !== null &&
+                transfer.canonicalTransactionTimestamp >= rebuildFrom)) &&
             (affectedAssetIdSet === null ||
               (transfer.canonicalAssetId !== null &&
                 affectedAssetIdSet.has(transfer.canonicalAssetId)) ||

@@ -4,7 +4,7 @@
  * @module PrincipalAccountingRebuildRepositoryLive
  */
 
-import { and, asc, eq, gt, gte, inArray, lte, sql } from "drizzle-orm"
+import { and, asc, eq, gt, gte, inArray, lte, or, sql } from "drizzle-orm"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import {
@@ -90,6 +90,7 @@ interface RebuildEventResult {
   readonly fifoLotsRebuilt: number
   readonly disposalMatchesRebuilt: number
   readonly inventoryAllocationsRebuilt: number
+  readonly fifoShortage?: true
 }
 
 const fixedPointErrorFactory = makeFixedPointErrorFactory(({ kind, message }) =>
@@ -138,6 +139,7 @@ const make = Effect.gen(function* () {
           reviewStatus: schema.transactionReviews.reviewStatus,
           categorizationReason: schema.transactionReviews.categorizationReason,
           matchedLayer: schema.transactionReviews.matchedLayer,
+          reviewedAt: schema.transactionReviews.reviewedAt,
         })
         .from(schema.transactionReviews)
         .where(eq(schema.transactionReviews.transactionId, transactionId))
@@ -177,6 +179,10 @@ const make = Effect.gen(function* () {
           categorizationReason: fifoReview.categorizationReason,
           matchedLayer: fifoReview.matchedLayer,
           needsReview: fifoReview.needsReview,
+          reviewedAt:
+            fifoReview.reviewStatus === "approved" || fifoReview.reviewStatus === "changed"
+              ? review.reviewedAt
+              : null,
           updatedAt: nowDate(),
         })
         .where(eq(schema.transactionReviews.transactionId, transactionId))
@@ -377,6 +383,24 @@ const make = Effect.gen(function* () {
       )
       if (matchedDisposalResults.some(({ matched }) => !matched)) return true
 
+      const feeLegs = yield* tx
+        .select({
+          assetId: schema.transactionLegs.assetId,
+          amount: schema.transactionLegs.amount,
+        })
+        .from(schema.transactionLegs)
+        .where(
+          and(
+            eq(schema.transactionLegs.transactionId, transactionId),
+            eq(schema.transactionLegs.kind, "fee")
+          )
+        )
+        .pipe(
+          wrapSyncEngineSqlError(
+            "principalAccountingRebuildRepository.hasUnmatchedFifoEffects.loadFeeLegs"
+          )
+        )
+
       const movementCoverage = yield* loadMovementFifoCoverage({ tx, transactionId })
       for (const movement of movementCoverage.movements) {
         if (movement.reconciliationStatus === "matched") continue
@@ -395,6 +419,13 @@ const make = Effect.gen(function* () {
             ({ leg }) => isFullyCovered({ amount: leg.amount, matchedAmount: movement.amount })
           )
           if (matchingDisposals.some(Boolean)) continue
+        }
+        if (movement.purpose === "fee" && movement.providerTransferId !== null) {
+          const matchingFees = yield* Effect.forEach(
+            feeLegs.filter((leg) => leg.assetId === movement.assetId),
+            (leg) => isFullyCovered({ amount: leg.amount, matchedAmount: movement.amount })
+          )
+          if (matchingFees.some(Boolean)) continue
         }
         return true
       }
@@ -518,13 +549,18 @@ const make = Effect.gen(function* () {
         costBasisPerToken: schema.fifoLots.costBasisPerToken,
       })
       .from(schema.fifoLots)
+      .leftJoin(schema.transactionLegs, eq(schema.transactionLegs.id, schema.fifoLots.sourceLegId))
       .where(
         and(
           eq(schema.fifoLots.principalId, principalId),
           inArray(schema.fifoLots.sourceId, sourceIds),
           eq(schema.fifoLots.assetId, assetId),
           gt(schema.fifoLots.remainingAmount, "0"),
-          lte(schema.fifoLots.acquiredAt, timestamp)
+          lte(schema.fifoLots.acquiredAt, timestamp),
+          or(
+            sql`${schema.fifoLots.sourceLegId} is null`,
+            lte(schema.transactionLegs.timestamp, timestamp)
+          )
         )
       )
       .orderBy(
@@ -551,6 +587,209 @@ const make = Effect.gen(function* () {
           .pipe(wrapSyncEngineSqlError("principalAccountingRebuildRepository.updateAllocatedLots")),
       { concurrency: 1, discard: true }
     )
+
+  const loadInternalTransferDestinationLeg = ({
+    tx,
+    principalId,
+    originLegId,
+  }: {
+    readonly tx: SyncEngineDbTransaction
+    readonly principalId: string
+    readonly originLegId: string
+  }) =>
+    Effect.gen(function* () {
+      const [reconciliationKey] = yield* tx
+        .select({
+          providerTransferId: sql<
+            string | null
+          >`${schema.transactionLegs.metadata}->'reconciliation'->>'providerTransferId'`,
+          canonicalTransferId: sql<
+            string | null
+          >`${schema.transactionLegs.metadata}->'reconciliation'->>'canonicalTransferId'`,
+        })
+        .from(schema.transactionLegs)
+        .where(
+          and(
+            eq(schema.transactionLegs.id, originLegId),
+            eq(schema.transactionLegs.principalId, principalId)
+          )
+        )
+        .limit(1)
+        .pipe(
+          wrapSyncEngineSqlError(
+            "principalAccountingRebuildRepository.refreshInternalTransferCarriedLots.loadReconciliationKey"
+          )
+        )
+      if (
+        reconciliationKey?.providerTransferId === null ||
+        reconciliationKey?.providerTransferId === undefined ||
+        reconciliationKey.canonicalTransferId === null
+      ) {
+        return null
+      }
+
+      const destinationLegs = yield* tx
+        .select({
+          id: schema.transactionLegs.id,
+          principalId: schema.transactionLegs.principalId,
+          sourceId: schema.transactionLegs.sourceId,
+          assetId: schema.transactionLegs.assetId,
+          assetRepresentationId: schema.transactionLegs.assetRepresentationId,
+        })
+        .from(schema.transactionLegs)
+        .where(
+          and(
+            eq(schema.transactionLegs.principalId, principalId),
+            eq(schema.transactionLegs.derivationRule, "internal_transfer_in"),
+            sql`${schema.transactionLegs.metadata}->'reconciliation'->>'providerTransferId' = ${reconciliationKey.providerTransferId}`,
+            sql`${schema.transactionLegs.metadata}->'reconciliation'->>'canonicalTransferId' = ${reconciliationKey.canonicalTransferId}`
+          )
+        )
+        .limit(2)
+        .pipe(
+          wrapSyncEngineSqlError(
+            "principalAccountingRebuildRepository.refreshInternalTransferCarriedLots.loadDestinationLeg"
+          )
+        )
+      const [destinationLeg] = destinationLegs
+      if (destinationLeg === undefined || destinationLegs.length !== 1) {
+        return yield* new SyncEngineStorageError({
+          operation:
+            "principalAccountingRebuildRepository.refreshInternalTransferCarriedLots.destinationLeg",
+          cause: `Expected exactly one destination leg for reconciliation ${reconciliationKey.providerTransferId}, found ${destinationLegs.length}`,
+        })
+      }
+
+      return destinationLeg
+    })
+
+  const refreshInternalTransferCarriedLots = ({
+    tx,
+    principalId,
+    originLegId,
+    allocations,
+  }: {
+    readonly tx: SyncEngineDbTransaction
+    readonly principalId: string
+    readonly originLegId: string
+    readonly allocations: ReadonlyArray<FifoAllocation>
+  }) =>
+    Effect.gen(function* () {
+      const destinationLeg = yield* loadInternalTransferDestinationLeg({
+        tx,
+        principalId,
+        originLegId,
+      })
+      if (destinationLeg === null) return []
+
+      const existingLots = yield* tx
+        .select({
+          id: schema.fifoLots.id,
+          sourceLegSequence: schema.fifoLots.sourceLegSequence,
+        })
+        .from(schema.fifoLots)
+        .where(eq(schema.fifoLots.sourceLegId, destinationLeg.id))
+        .orderBy(asc(schema.fifoLots.sourceLegSequence))
+        .pipe(
+          wrapSyncEngineSqlError(
+            "principalAccountingRebuildRepository.refreshInternalTransferCarriedLots.loadExistingLots"
+          )
+        )
+      const sourceLots =
+        allocations.length === 0
+          ? []
+          : yield* tx
+              .select({
+                id: schema.fifoLots.id,
+                acquiredAt: schema.fifoLots.acquiredAt,
+                costBasisPerToken: schema.fifoLots.costBasisPerToken,
+                costBasisCurrency: schema.fifoLots.costBasisCurrency,
+                costBasisStatus: schema.fifoLots.costBasisStatus,
+              })
+              .from(schema.fifoLots)
+              .where(
+                inArray(
+                  schema.fifoLots.id,
+                  allocations.map(({ fifoLotId }) => fifoLotId)
+                )
+              )
+              .pipe(
+                wrapSyncEngineSqlError(
+                  "principalAccountingRebuildRepository.refreshInternalTransferCarriedLots.loadSourceLots"
+                )
+              )
+      const sourceLotsById = new Map(sourceLots.map((lot) => [lot.id, lot] as const))
+      const existingLotsBySequence = new Map(
+        existingLots.map((lot) => [lot.sourceLegSequence, lot] as const)
+      )
+
+      for (const [sequence, allocation] of allocations.entries()) {
+        const sourceLot = sourceLotsById.get(allocation.fifoLotId)
+        if (sourceLot === undefined) {
+          return yield* new SyncEngineStorageError({
+            operation:
+              "principalAccountingRebuildRepository.refreshInternalTransferCarriedLots.sourceLot",
+            cause: `Missing source FIFO lot ${allocation.fifoLotId}`,
+          })
+        }
+        const values = {
+          principalId: destinationLeg.principalId,
+          sourceId: destinationLeg.sourceId,
+          assetId: destinationLeg.assetId,
+          assetRepresentationId: destinationLeg.assetRepresentationId,
+          acquiredAt: sourceLot.acquiredAt,
+          originalAmount: allocation.matchedAmount,
+          remainingAmount: allocation.matchedAmount,
+          costBasisPerToken: sourceLot.costBasisPerToken,
+          costBasisCurrency: sourceLot.costBasisCurrency,
+          costBasisStatus: sourceLot.costBasisStatus,
+          sourceLegId: destinationLeg.id,
+          sourceLegSequence: sequence,
+          updatedAt: nowDate(),
+        }
+        const existingLot = existingLotsBySequence.get(sequence)
+        if (existingLot === undefined) {
+          yield* tx
+            .insert(schema.fifoLots)
+            .values({
+              ...values,
+              createdAt: nowDate(),
+            })
+            .pipe(
+              wrapSyncEngineSqlError(
+                "principalAccountingRebuildRepository.refreshInternalTransferCarriedLots.insertLot"
+              )
+            )
+        } else {
+          yield* tx
+            .update(schema.fifoLots)
+            .set(values)
+            .where(eq(schema.fifoLots.id, existingLot.id))
+            .pipe(
+              wrapSyncEngineSqlError(
+                "principalAccountingRebuildRepository.refreshInternalTransferCarriedLots.updateLot"
+              )
+            )
+        }
+      }
+
+      const retainedSequences = new Set(allocations.map((_, sequence) => sequence))
+      const obsoleteLotIds = existingLots
+        .filter(({ sourceLegSequence }) => !retainedSequences.has(sourceLegSequence))
+        .map(({ id }) => id)
+      if (obsoleteLotIds.length > 0) {
+        yield* tx
+          .delete(schema.fifoLots)
+          .where(inArray(schema.fifoLots.id, obsoleteLotIds))
+          .pipe(
+            wrapSyncEngineSqlError(
+              "principalAccountingRebuildRepository.refreshInternalTransferCarriedLots.deleteObsoleteLots"
+            )
+          )
+      }
+
+      return [destinationLeg.sourceId]
+    })
 
   const createLegLot = ({
     tx,
@@ -1025,15 +1264,33 @@ const make = Effect.gen(function* () {
         operation: "principalAccountingRebuildRepository.matchDisposal",
       })
       if (allocations === null) {
+        const carriedSourceIds =
+          leg.derivationRule === "internal_transfer_out"
+            ? yield* refreshInternalTransferCarriedLots({
+                tx,
+                principalId,
+                originLegId: leg.id,
+                allocations: [],
+              })
+            : []
         return {
-          sourceIds: ownerSourceIds,
+          sourceIds: [...new Set([...ownerSourceIds, ...carriedSourceIds])].sort(),
           fifoLotsRebuilt: 0,
           disposalMatchesRebuilt: 0,
           inventoryAllocationsRebuilt: 0,
+          fifoShortage: true,
         }
       }
+      const storedAllocations =
+        leg.derivationRule === "internal_transfer_out"
+          ? allocations.map((allocation) => ({
+              ...allocation,
+              proceeds: allocation.costBasis,
+              gainLoss: "0",
+            }))
+          : allocations
       yield* Effect.forEach(
-        allocations,
+        storedAllocations,
         (allocation) =>
           tx
             .insert(schema.disposalMatches)
@@ -1052,14 +1309,23 @@ const make = Effect.gen(function* () {
         { concurrency: 1, discard: true }
       )
       yield* updateAllocatedLots({ tx, allocations })
+      const carriedSourceIds =
+        leg.derivationRule === "internal_transfer_out"
+          ? yield* refreshInternalTransferCarriedLots({
+              tx,
+              principalId,
+              originLegId: leg.id,
+              allocations,
+            })
+          : []
       if (leg.transactionId !== null) {
         yield* clearResolvedFifoReview({ tx, transactionId: leg.transactionId })
       }
 
       return {
-        sourceIds: ownerSourceIds,
+        sourceIds: [...new Set([...ownerSourceIds, ...carriedSourceIds])].sort(),
         fifoLotsRebuilt: 0,
-        disposalMatchesRebuilt: allocations.length,
+        disposalMatchesRebuilt: storedAllocations.length,
         inventoryAllocationsRebuilt: 0,
       }
     })
@@ -1130,6 +1396,7 @@ const make = Effect.gen(function* () {
           fifoLotsRebuilt: 0,
           disposalMatchesRebuilt: 0,
           inventoryAllocationsRebuilt: 0,
+          fifoShortage: true,
         }
       }
       yield* Effect.forEach(
@@ -1179,8 +1446,49 @@ const make = Effect.gen(function* () {
       let fifoLotsRebuilt = 0
       let disposalMatchesRebuilt = 0
       let inventoryAllocationsRebuilt = 0
+      const blockedFifoKeys = new Set<string>()
 
       for (const event of eventSet.events) {
+        const assetId = event.type === "leg" ? event.leg.assetId : event.movement.assetId
+        const transactionId =
+          event.type === "leg" ? event.leg.transactionId : event.movement.transactionId
+        const sourceIds = [
+          ...((event.type === "leg"
+            ? disposalOwnerSourceIds.get(event.id)
+            : movementOwnerSourceIds.get(event.id)) ??
+            new Set([event.type === "leg" ? event.leg.sourceId : event.movement.sourceId])),
+        ].sort()
+        const isOutboundFifoEffect =
+          (event.type === "leg" && event.leg.kind === "disposal") ||
+          (event.type === "movement" && event.movement.direction === "outbound")
+        const isBlocked =
+          isOutboundFifoEffect &&
+          sourceIds.some((sourceId) => blockedFifoKeys.has(`${sourceId}:${assetId}`))
+        if (isBlocked) {
+          const carriedSourceIds =
+            event.type === "leg" && event.leg.derivationRule === "internal_transfer_out"
+              ? yield* refreshInternalTransferCarriedLots({
+                  tx,
+                  principalId,
+                  originLegId: event.leg.id,
+                  allocations: [],
+                })
+              : []
+          if (transactionId !== null) {
+            yield* recordFifoInventoryReview({
+              tx,
+              principalId,
+              transactionId,
+              cause: "An earlier FIFO effect for this source and asset has insufficient inventory",
+            })
+          }
+          for (const sourceId of [...sourceIds, ...carriedSourceIds]) {
+            rebuiltSourceIds.add(sourceId)
+            blockedFifoKeys.add(`${sourceId}:${assetId}`)
+          }
+          continue
+        }
+
         const result =
           event.type === "leg"
             ? yield* rebuildLeg({
@@ -1196,6 +1504,11 @@ const make = Effect.gen(function* () {
                 transactionLegs: eventSet.transactionLegs,
                 ownerSourceIdsByMovementId: movementOwnerSourceIds,
               })
+        if (result.fifoShortage === true) {
+          for (const sourceId of result.sourceIds) {
+            blockedFifoKeys.add(`${sourceId}:${assetId}`)
+          }
+        }
         for (const sourceId of result.sourceIds) rebuiltSourceIds.add(sourceId)
         fifoLotsRebuilt += result.fifoLotsRebuilt
         disposalMatchesRebuilt += result.disposalMatchesRebuilt

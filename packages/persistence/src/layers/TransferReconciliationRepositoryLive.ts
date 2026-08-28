@@ -813,6 +813,7 @@ const make = Effect.gen(function* () {
           providerAssetId: schema.providerTransfers.providerAssetId,
           canonicalAssetId: schema.providerAssetMappings.canonicalAssetId,
           reconciledAssetId: schema.transfers.assetId,
+          canonicalTransactionTimestamp: canonicalTransactionTable.timestamp,
           assetRepresentationId: schema.providerAssetMappings.assetRepresentationId,
           timestamp: schema.providerTransfers.timestamp,
           direction: schema.providerTransfers.direction,
@@ -843,6 +844,10 @@ const make = Effect.gen(function* () {
         .leftJoin(
           schema.transfers,
           eq(schema.transfers.id, schema.transferReconciliations.canonicalTransferId)
+        )
+        .leftJoin(
+          canonicalTransactionTable,
+          eq(canonicalTransactionTable.id, schema.transferReconciliations.canonicalTransactionId)
         )
         .where(
           and(
@@ -2380,7 +2385,10 @@ const make = Effect.gen(function* () {
                       : inArray(schema.transfers.assetId, affectedAssetIds),
                     rebuildFrom === undefined
                       ? sql`true`
-                      : gte(schema.providerTransfers.timestamp, rebuildFrom)
+                      : or(
+                          gte(schema.providerTransfers.timestamp, rebuildFrom),
+                          gte(canonicalTransactionTable.timestamp, rebuildFrom)
+                        )
                   )
                 )
                 .orderBy(asc(schema.providerTransfers.timestamp))
@@ -2472,7 +2480,7 @@ const make = Effect.gen(function* () {
             ) =>
               rows.filter(
                 (row) =>
-                  row.providerTransferSourceId === sourceId &&
+                  (sourceId === null || row.providerTransferSourceId === sourceId) &&
                   (reconciliationId === undefined || row.reconciliationId === reconciliationId)
               )
 
@@ -2581,7 +2589,7 @@ const make = Effect.gen(function* () {
             })
             const inventorySourceIds = [
               ...new Set([
-                sourceId,
+                ...(sourceId === null ? [] : [sourceId]),
                 ...connectedReconciliationsBeforeLock.flatMap((reconciliation) => [
                   reconciliation.providerTransactionSourceId,
                   reconciliation.canonicalTransactionSourceId,

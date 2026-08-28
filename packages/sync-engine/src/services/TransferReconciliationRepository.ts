@@ -32,6 +32,7 @@ export interface ProviderTransferReconciliationCandidate {
   readonly providerAssetId: string | null
   readonly canonicalAssetId: string | null
   readonly reconciledAssetId: string | null
+  readonly canonicalTransactionTimestamp: Date | null
   readonly assetRepresentationId: string | null
   readonly timestamp: Date
   readonly direction: "inbound" | "outbound"
@@ -210,11 +211,12 @@ export interface TransferReconciliationRepositoryShape {
 
   /**
    * Replace false provider/onchain tax-visible state with canonical internal-transfer
-   * legs and review rows for deterministic reconciliations belonging to one source.
+   * legs and review rows for deterministic reconciliations belonging to one source,
+   * or for all sources in one principal-wide ordered rebuild pass when sourceId is null.
    */
   readonly applyDeterministicInternalTransferCanonicalization: (params: {
     readonly principalId: string
-    readonly sourceId: string
+    readonly sourceId: string | null
     readonly reconciliationId?: string
     readonly affectedAssetIds?: ReadonlyArray<string>
     readonly rebuildFrom?: Date

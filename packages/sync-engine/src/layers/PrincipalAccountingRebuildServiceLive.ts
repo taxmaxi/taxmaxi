@@ -49,16 +49,14 @@ const make = Effect.gen(function* () {
           transferCandidatesReconciled += summary.evaluatedProviderTransfers
         }
 
-        for (const source of principalSources) {
-          const summary =
-            yield* transferReconciliation.applyDeterministicInternalTransferCanonicalization({
-              principalId: params.principalId,
-              sourceId: source.id,
-              affectedAssetIds: params.affectedAssetIds,
-              rebuildFrom: params.rebuildFrom,
-            })
-          transferPairsCanonicalized += summary.canonicalizedPairs
-        }
+        const canonicalization =
+          yield* transferReconciliation.applyDeterministicInternalTransferCanonicalization({
+            principalId: params.principalId,
+            sourceId: null,
+            affectedAssetIds: params.affectedAssetIds,
+            rebuildFrom: params.rebuildFrom,
+          })
+        transferPairsCanonicalized += canonicalization.canonicalizedPairs
 
         const accounting = yield* accountingRepository.rebuildPrincipalAccounting(params)
 

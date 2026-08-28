@@ -22,9 +22,14 @@ export interface ReconcileTransferCandidatesParams {
 
 /**
  * ApplyDeterministicInternalTransferCanonicalizationParams - Scope canonicalization
- * to a source, optionally narrowed to one reviewed reconciliation.
+ * to one source or one principal-wide ordered rebuild, optionally narrowed to one review.
  */
-export interface ApplyDeterministicInternalTransferCanonicalizationParams extends ReconcileTransferCandidatesParams {
+export interface ApplyDeterministicInternalTransferCanonicalizationParams {
+  readonly principalId: string
+  /** One CEX source for normal sync, or null for a principal-wide ordered rebuild pass. */
+  readonly sourceId: string | null
+  readonly affectedAssetIds?: ReadonlyArray<string>
+  readonly rebuildFrom?: Date
   readonly reconciliationId?: string
 }
 
