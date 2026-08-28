@@ -38,6 +38,7 @@ interface RebuildLeg {
   readonly assetRepresentationId: string | null
   readonly amount: string
   readonly kind: "acquisition" | "disposal" | "income" | "fee"
+  readonly derivationRule: string | null
   readonly fiatAmount: string | null
   readonly fiatCurrency: string | null
 }
@@ -437,11 +438,16 @@ const make = Effect.gen(function* () {
       const lots = yield* tx
         .select({ id: schema.fifoLots.id })
         .from(schema.fifoLots)
+        .leftJoin(
+          schema.transactionLegs,
+          eq(schema.transactionLegs.id, schema.fifoLots.sourceLegId)
+        )
         .where(
           and(
             eq(schema.fifoLots.principalId, principalId),
             inArray(schema.fifoLots.assetId, assetIds),
-            gte(schema.fifoLots.acquiredAt, rebuildFrom)
+            gte(schema.fifoLots.acquiredAt, rebuildFrom),
+            sql`${schema.transactionLegs.derivationRule} is distinct from 'internal_transfer_in'`
           )
         )
         .orderBy(asc(schema.fifoLots.id))
@@ -502,6 +508,7 @@ const make = Effect.gen(function* () {
           assetRepresentationId: schema.transactionLegs.assetRepresentationId,
           amount: schema.transactionLegs.amount,
           kind: schema.transactionLegs.kind,
+          derivationRule: schema.transactionLegs.derivationRule,
           fiatAmount: schema.transactionLegs.fiatAmount,
           fiatCurrency: schema.transactionLegs.fiatCurrency,
         })
@@ -560,7 +567,7 @@ const make = Effect.gen(function* () {
           type: "movement" as const,
           id: movement.id,
           timestamp: movement.timestamp,
-          priority: 2,
+          priority: movement.direction === "inbound" ? 2 : 3,
           movement,
         })),
       ]
@@ -586,6 +593,14 @@ const make = Effect.gen(function* () {
     readonly ownerSourceIdsByLegId: OwnerSourceIdsByRecordId
   }): Effect.Effect<RebuildEventResult, SyncEngineStorageError> =>
     Effect.gen(function* () {
+      if (leg.derivationRule === "internal_transfer_in") {
+        return {
+          sourceIds: [leg.sourceId],
+          fifoLotsRebuilt: 0,
+          disposalMatchesRebuilt: 0,
+          inventoryAllocationsRebuilt: 0,
+        }
+      }
       if (leg.kind === "acquisition" || leg.kind === "income") {
         yield* createLegLot({ tx, leg })
         return {

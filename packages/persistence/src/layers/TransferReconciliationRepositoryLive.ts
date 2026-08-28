@@ -224,6 +224,15 @@ const make = Effect.gen(function* () {
     readonly timestamp: Date
     readonly createdAt: Date
   }
+  type FifoEffectAllocation = {
+    readonly id: string
+    readonly effectId: string
+    readonly fifoLotId: string
+    readonly matchedAmount: unknown
+  }
+
+  const fifoEffectKey = ({ kind, id }: Pick<RebuildableFifoEffect, "kind" | "id">) =>
+    `${kind}:${id}`
 
   const makeReconciliationEffectMutations = (tx: ReconciliationMutationExecutor) => {
     const clearLegs = ({ legs }: { readonly legs: ReadonlyArray<ReconciliationLegEffect> }) =>
@@ -376,6 +385,95 @@ const make = Effect.gen(function* () {
     const inventoryKeyForEffect = (effect: RebuildableFifoEffect) =>
       `${effect.sourceId}:${effect.principalId}:${effect.assetId}`
 
+    const loadFifoEffectAllocations = ({
+      disposalIds,
+      movementIds,
+      operationPrefix,
+    }: {
+      readonly disposalIds: ReadonlyArray<string>
+      readonly movementIds: ReadonlyArray<string>
+      readonly operationPrefix: string
+    }) =>
+      Effect.gen(function* () {
+        const disposalMatches: ReadonlyArray<FifoEffectAllocation> =
+          disposalIds.length === 0
+            ? []
+            : yield* tx
+                .select({
+                  id: schema.disposalMatches.id,
+                  effectId: schema.disposalMatches.disposalLegId,
+                  fifoLotId: schema.disposalMatches.fifoLotId,
+                  matchedAmount: schema.disposalMatches.matchedAmount,
+                })
+                .from(schema.disposalMatches)
+                .where(inArray(schema.disposalMatches.disposalLegId, disposalIds))
+                .pipe(wrapSyncEngineSqlError(`${operationPrefix}.loadDisposalMatches`))
+        const movementAllocations: ReadonlyArray<FifoEffectAllocation> =
+          movementIds.length === 0
+            ? []
+            : yield* tx
+                .select({
+                  id: schema.inventoryMovementAllocations.id,
+                  effectId: schema.inventoryMovementAllocations.inventoryMovementId,
+                  fifoLotId: schema.inventoryMovementAllocations.fifoLotId,
+                  matchedAmount: schema.inventoryMovementAllocations.matchedAmount,
+                })
+                .from(schema.inventoryMovementAllocations)
+                .where(
+                  inArray(schema.inventoryMovementAllocations.inventoryMovementId, movementIds)
+                )
+                .pipe(wrapSyncEngineSqlError(`${operationPrefix}.loadMovementAllocations`))
+
+        return { disposalMatches, movementAllocations }
+      })
+
+    const clearFifoEffectAllocations = ({
+      disposalMatches,
+      movementAllocations,
+      operationPrefix,
+    }: {
+      readonly disposalMatches: ReadonlyArray<FifoEffectAllocation>
+      readonly movementAllocations: ReadonlyArray<FifoEffectAllocation>
+      readonly operationPrefix: string
+    }) =>
+      Effect.gen(function* () {
+        yield* Effect.forEach(
+          [...disposalMatches, ...movementAllocations],
+          (allocation) =>
+            tx
+              .update(schema.fifoLots)
+              .set({
+                remainingAmount: sql`${schema.fifoLots.remainingAmount} + ${allocation.matchedAmount}`,
+                updatedAt: nowDate(),
+              })
+              .where(eq(schema.fifoLots.id, allocation.fifoLotId))
+              .pipe(wrapSyncEngineSqlError(`${operationPrefix}.restoreLot`)),
+          { concurrency: 1, discard: true }
+        )
+        if (disposalMatches.length > 0) {
+          yield* tx
+            .delete(schema.disposalMatches)
+            .where(
+              inArray(
+                schema.disposalMatches.id,
+                disposalMatches.map(({ id }) => id)
+              )
+            )
+            .pipe(wrapSyncEngineSqlError(`${operationPrefix}.deleteDisposalMatches`))
+        }
+        if (movementAllocations.length > 0) {
+          yield* tx
+            .delete(schema.inventoryMovementAllocations)
+            .where(
+              inArray(
+                schema.inventoryMovementAllocations.id,
+                movementAllocations.map(({ id }) => id)
+              )
+            )
+            .pipe(wrapSyncEngineSqlError(`${operationPrefix}.deleteMovementAllocations`))
+        }
+      })
+
     const rebuildFifoEffects = ({
       effects: unsortedEffects,
       shortageMode,
@@ -395,43 +493,15 @@ const make = Effect.gen(function* () {
         const movements = effects.filter((effect) => effect.kind === "movement")
         const disposalIds = disposals.map(({ id }) => id)
         const movementIds = movements.map(({ id }) => id)
-        const disposalMatches =
-          disposalIds.length === 0
-            ? []
-            : yield* tx
-                .select({
-                  id: schema.disposalMatches.id,
-                  effectId: schema.disposalMatches.disposalLegId,
-                  fifoLotId: schema.disposalMatches.fifoLotId,
-                  matchedAmount: schema.disposalMatches.matchedAmount,
-                })
-                .from(schema.disposalMatches)
-                .where(inArray(schema.disposalMatches.disposalLegId, disposalIds))
-                .pipe(
-                  wrapSyncEngineSqlError(
-                    "transferReconciliationRepository.reconciliationEffectMutations.rebuildFifoEffects.loadDisposalMatches"
-                  )
-                )
-        const movementAllocations =
-          movementIds.length === 0
-            ? []
-            : yield* tx
-                .select({
-                  id: schema.inventoryMovementAllocations.id,
-                  effectId: schema.inventoryMovementAllocations.inventoryMovementId,
-                  fifoLotId: schema.inventoryMovementAllocations.fifoLotId,
-                  matchedAmount: schema.inventoryMovementAllocations.matchedAmount,
-                })
-                .from(schema.inventoryMovementAllocations)
-                .where(
-                  inArray(schema.inventoryMovementAllocations.inventoryMovementId, movementIds)
-                )
-                .pipe(
-                  wrapSyncEngineSqlError(
-                    "transferReconciliationRepository.reconciliationEffectMutations.rebuildFifoEffects.loadMovementAllocations"
-                  )
-                )
-        const effectById = new Map(effects.map((effect) => [effect.id, effect] as const))
+        const { disposalMatches, movementAllocations } = yield* loadFifoEffectAllocations({
+          disposalIds,
+          movementIds,
+          operationPrefix:
+            "transferReconciliationRepository.reconciliationEffectMutations.rebuildFifoEffects",
+        })
+        const effectByKey = new Map(
+          effects.map((effect) => [fifoEffectKey(effect), effect] as const)
+        )
         const allocations = [...disposalMatches, ...movementAllocations]
         const restoredAmountByLotId = new Map<string, BigDecimal.BigDecimal>()
         for (const allocation of allocations) {
@@ -523,11 +593,11 @@ const make = Effect.gen(function* () {
         }
 
         const blockedInventoryKeys = new Set<string>()
-        const blockedEffectIds = new Set<string>()
+        const blockedEffectKeys = new Set<string>()
         for (const effect of effects) {
           const inventoryKey = inventoryKeyForEffect(effect)
           if (blockedInventoryKeys.has(inventoryKey)) {
-            blockedEffectIds.add(effect.id)
+            blockedEffectKeys.add(fifoEffectKey(effect))
             continue
           }
           let remainingAmount = yield* decodeBigDecimal({
@@ -564,78 +634,39 @@ const make = Effect.gen(function* () {
           }
           if (BigDecimal.isGreaterThan(remainingAmount, BigDecimal.fromBigInt(0n))) {
             blockedInventoryKeys.add(inventoryKey)
-            blockedEffectIds.add(effect.id)
+            blockedEffectKeys.add(fifoEffectKey(effect))
           }
         }
         if (shortageMode === "preserve") {
           for (const effect of effects) {
             if (blockedInventoryKeys.has(inventoryKeyForEffect(effect))) {
-              blockedEffectIds.add(effect.id)
+              blockedEffectKeys.add(fifoEffectKey(effect))
             }
           }
         }
 
-        const shouldRemoveAllocation = (effectId: string) => {
-          const effect = effectById.get(effectId)
+        const shouldRemoveAllocation = (kind: RebuildableFifoEffect["kind"], effectId: string) => {
+          const effect = effectByKey.get(fifoEffectKey({ kind, id: effectId }))
           return (
-            effect !== undefined && (shortageMode === "clear" || !blockedEffectIds.has(effect.id))
+            effect !== undefined &&
+            (shortageMode === "clear" || !blockedEffectKeys.has(fifoEffectKey(effect)))
           )
         }
         const disposalMatchesToRebuild = disposalMatches.filter(({ effectId }) =>
-          shouldRemoveAllocation(effectId)
+          shouldRemoveAllocation("disposal", effectId)
         )
         const movementAllocationsToRebuild = movementAllocations.filter(({ effectId }) =>
-          shouldRemoveAllocation(effectId)
+          shouldRemoveAllocation("movement", effectId)
         )
-        yield* Effect.forEach(
-          [...disposalMatchesToRebuild, ...movementAllocationsToRebuild],
-          (allocation) =>
-            tx
-              .update(schema.fifoLots)
-              .set({
-                remainingAmount: sql`${schema.fifoLots.remainingAmount} + ${allocation.matchedAmount}`,
-                updatedAt: nowDate(),
-              })
-              .where(eq(schema.fifoLots.id, allocation.fifoLotId))
-              .pipe(
-                wrapSyncEngineSqlError(
-                  "transferReconciliationRepository.reconciliationEffectMutations.rebuildFifoEffects.restoreLot"
-                )
-              )
-        )
-        if (disposalMatchesToRebuild.length > 0) {
-          yield* tx
-            .delete(schema.disposalMatches)
-            .where(
-              inArray(
-                schema.disposalMatches.id,
-                disposalMatchesToRebuild.map(({ id }) => id)
-              )
-            )
-            .pipe(
-              wrapSyncEngineSqlError(
-                "transferReconciliationRepository.reconciliationEffectMutations.rebuildFifoEffects.deleteDisposalMatches"
-              )
-            )
-        }
-        if (movementAllocationsToRebuild.length > 0) {
-          yield* tx
-            .delete(schema.inventoryMovementAllocations)
-            .where(
-              inArray(
-                schema.inventoryMovementAllocations.id,
-                movementAllocationsToRebuild.map(({ id }) => id)
-              )
-            )
-            .pipe(
-              wrapSyncEngineSqlError(
-                "transferReconciliationRepository.reconciliationEffectMutations.rebuildFifoEffects.deleteMovementAllocations"
-              )
-            )
-        }
+        yield* clearFifoEffectAllocations({
+          disposalMatches: disposalMatchesToRebuild,
+          movementAllocations: movementAllocationsToRebuild,
+          operationPrefix:
+            "transferReconciliationRepository.reconciliationEffectMutations.rebuildFifoEffects",
+        })
 
         for (const effect of effects) {
-          if (blockedEffectIds.has(effect.id)) {
+          if (blockedEffectKeys.has(fifoEffectKey(effect))) {
             continue
           }
           const effectAmount = yield* decodeBigDecimal({
@@ -760,10 +791,15 @@ const make = Effect.gen(function* () {
           }
         }
 
-        return { blockedEffectIds, blockedInventoryKeys }
+        return { blockedEffectKeys, blockedInventoryKeys }
       })
 
-    return { clearLegs, rebuildFifoEffects }
+    return {
+      clearFifoEffectAllocations,
+      clearLegs,
+      loadFifoEffectAllocations,
+      rebuildFifoEffects,
+    }
   }
 
   const listProviderTransfersForReconciliation: TransferReconciliationRepositoryShape["listProviderTransfersForReconciliation"] =
@@ -2011,12 +2047,12 @@ const make = Effect.gen(function* () {
                 })),
               ]
               const { rebuildFifoEffects } = makeReconciliationEffectMutations(tx)
-              const { blockedEffectIds } = yield* rebuildFifoEffects({
+              const { blockedEffectKeys } = yield* rebuildFifoEffects({
                 effects: dependentEffects,
                 shortageMode: "clear",
               })
               for (const effect of dependentEffects) {
-                if (blockedEffectIds.has(effect.id)) {
+                if (blockedEffectKeys.has(fifoEffectKey(effect))) {
                   yield* markRollbackFifoReview(effect.transactionId)
                 }
               }
@@ -2749,7 +2785,8 @@ const make = Effect.gen(function* () {
                   )
                 )
 
-            const { clearLegs: clearPrincipalLegs } = makeReconciliationEffectMutations(tx)
+            const reconciliationEffectMutations = makeReconciliationEffectMutations(tx)
+            const { clearLegs: clearPrincipalLegs } = reconciliationEffectMutations
 
             const canClearPrincipalLegs = ({
               legs,
@@ -2776,6 +2813,149 @@ const make = Effect.gen(function* () {
                 }
 
                 return true
+              })
+
+            const loadFifoEffectsDependingOnLots = ({
+              lotOrigin,
+            }: {
+              readonly lotOrigin: ReturnType<typeof inArray>
+            }) =>
+              Effect.gen(function* () {
+                const dependentDisposals = yield* tx
+                  .select({
+                    id: schema.transactionLegs.id,
+                    transactionId: schema.transactionLegs.transactionId,
+                    sourceId: schema.transactionLegs.sourceId,
+                    principalId: schema.transactionLegs.principalId,
+                    assetId: schema.transactionLegs.assetId,
+                    amount: schema.transactionLegs.amount,
+                    fiatAmount: schema.transactionLegs.fiatAmount,
+                    timestamp: schema.transactionLegs.timestamp,
+                    createdAt: schema.transactionLegs.createdAt,
+                  })
+                  .from(schema.disposalMatches)
+                  .innerJoin(
+                    schema.fifoLots,
+                    eq(schema.fifoLots.id, schema.disposalMatches.fifoLotId)
+                  )
+                  .innerJoin(
+                    schema.transactionLegs,
+                    eq(schema.transactionLegs.id, schema.disposalMatches.disposalLegId)
+                  )
+                  .where(lotOrigin)
+                  .pipe(
+                    wrapSyncEngineSqlError(
+                      "transferReconciliationRepository.applyDeterministicInternalTransferCanonicalization.stageAffectedFifoEffects.loadDisposals"
+                    )
+                  )
+                const dependentMovements = yield* tx
+                  .select({
+                    id: schema.inventoryMovements.id,
+                    transactionId: schema.inventoryMovements.transactionId,
+                    sourceId: schema.inventoryMovements.sourceId,
+                    principalId: schema.inventoryMovements.principalId,
+                    assetId: schema.inventoryMovements.assetId,
+                    amount: schema.inventoryMovements.amount,
+                    timestamp: schema.inventoryMovements.timestamp,
+                    createdAt: schema.inventoryMovements.createdAt,
+                  })
+                  .from(schema.inventoryMovementAllocations)
+                  .innerJoin(
+                    schema.fifoLots,
+                    eq(schema.fifoLots.id, schema.inventoryMovementAllocations.fifoLotId)
+                  )
+                  .innerJoin(
+                    schema.inventoryMovements,
+                    eq(
+                      schema.inventoryMovements.id,
+                      schema.inventoryMovementAllocations.inventoryMovementId
+                    )
+                  )
+                  .where(lotOrigin)
+                  .pipe(
+                    wrapSyncEngineSqlError(
+                      "transferReconciliationRepository.applyDeterministicInternalTransferCanonicalization.stageAffectedFifoEffects.loadMovements"
+                    )
+                  )
+                const effects = [
+                  ...dependentDisposals.map(
+                    (effect) =>
+                      ({ ...effect, kind: "disposal", fiatAmount: effect.fiatAmount }) as const
+                  ),
+                  ...dependentMovements.map(
+                    (effect) => ({ ...effect, kind: "movement", fiatAmount: null }) as const
+                  ),
+                ] satisfies ReadonlyArray<RebuildableFifoEffect>
+
+                return effects
+              })
+
+            const stageAffectedFifoEffectsForReplacement = ({
+              legs,
+              providerTransferIds,
+            }: {
+              readonly legs: ReadonlyArray<ReconciliationLegEffect>
+              readonly providerTransferIds: ReadonlyArray<string>
+            }) =>
+              Effect.gen(function* () {
+                if (affectedAssetIds === undefined || rebuildFrom === undefined) return []
+
+                const sourceLegIds = legs
+                  .filter((leg) => leg.kind === "acquisition" || leg.kind === "income")
+                  .map(({ id }) => id)
+                const lotOrigins = [
+                  ...(sourceLegIds.length === 0
+                    ? []
+                    : [inArray(schema.fifoLots.sourceLegId, sourceLegIds)]),
+                  ...(providerTransferIds.length === 0
+                    ? []
+                    : [inArray(schema.fifoLots.sourceProviderTransferId, providerTransferIds)]),
+                ]
+                const [firstLotOrigin, ...remainingLotOrigins] = lotOrigins
+                if (firstLotOrigin === undefined) return []
+                const lotOrigin =
+                  remainingLotOrigins.length === 0
+                    ? firstLotOrigin
+                    : or(firstLotOrigin, ...remainingLotOrigins)
+                if (lotOrigin === undefined) return []
+
+                const effects = yield* loadFifoEffectsDependingOnLots({
+                  lotOrigin,
+                })
+                const uniqueEffects = [
+                  ...new Map(
+                    effects.map((effect) => [fifoEffectKey(effect), effect] as const)
+                  ).values(),
+                ]
+                const affectedAssetIdSet = new Set(affectedAssetIds)
+                if (
+                  uniqueEffects.some(
+                    (effect) =>
+                      !affectedAssetIdSet.has(effect.assetId) || effect.timestamp < rebuildFrom
+                  )
+                ) {
+                  return []
+                }
+
+                const disposalIds = uniqueEffects
+                  .filter((effect) => effect.kind === "disposal")
+                  .map(({ id }) => id)
+                const movementIds = uniqueEffects
+                  .filter((effect) => effect.kind === "movement")
+                  .map(({ id }) => id)
+                const allocations = yield* reconciliationEffectMutations.loadFifoEffectAllocations({
+                  disposalIds,
+                  movementIds,
+                  operationPrefix:
+                    "transferReconciliationRepository.applyDeterministicInternalTransferCanonicalization.stageAffectedFifoEffects",
+                })
+                yield* reconciliationEffectMutations.clearFifoEffectAllocations({
+                  ...allocations,
+                  operationPrefix:
+                    "transferReconciliationRepository.applyDeterministicInternalTransferCanonicalization.stageAffectedFifoEffects",
+                })
+
+                return uniqueEffects
               })
 
             const isExpectedPrincipalLeg = ({
@@ -4589,6 +4769,12 @@ const make = Effect.gen(function* () {
                     sourceTransferId: destinationSourceTransferId,
                   }))
 
+                const stagedFifoEffects = yield* stageAffectedFifoEffectsForReplacement({
+                  legs: [...originPrincipalLegs, ...destinationPrincipalLegs],
+                  providerTransferIds:
+                    row.providerDirection === "inbound" ? [row.providerTransferId] : [],
+                })
+
                 const originCanBeCleared = originAlreadyCanonical
                   ? true
                   : yield* canClearPrincipalLegs({
@@ -4779,18 +4965,26 @@ const make = Effect.gen(function* () {
                   destinationLegId,
                   disposition,
                 })
-                const invalidatedReconciliations = yield* rebuildDestinationFifoEffects({
-                  affectedAssetId: row.assetId,
-                  affectedPrincipalId: destinationTransaction.principalId,
-                  destinationSourceId: destinationTransaction.sourceId,
-                  fromTimestamp: destinationTransaction.timestamp,
-                })
 
                 if (row.providerDirection === "inbound") {
                   yield* removeUnusedInboundProviderLot({
                     providerTransferId: row.providerTransferId,
                   })
                 }
+
+                if (stagedFifoEffects.length > 0) {
+                  const { rebuildFifoEffects } = makeReconciliationEffectMutations(tx)
+                  yield* rebuildFifoEffects({
+                    effects: stagedFifoEffects,
+                    shortageMode: "clear",
+                  })
+                }
+                const invalidatedReconciliations = yield* rebuildDestinationFifoEffects({
+                  affectedAssetId: row.assetId,
+                  affectedPrincipalId: destinationTransaction.principalId,
+                  destinationSourceId: destinationTransaction.sourceId,
+                  fromTimestamp: destinationTransaction.timestamp,
+                })
 
                 const matchedProviderTransferIds =
                   custodyProviderTransferId === null ||

@@ -8,11 +8,13 @@ import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import {
   PrincipalAccountingRebuildRepository,
-  PrincipalAccountingRebuildService,
-  type PrincipalAccountingRebuildServiceShape,
   SourceRepository,
   TransferReconciliationService,
 } from "../services/index.ts"
+import {
+  PrincipalAccountingRebuildService,
+  type PrincipalAccountingRebuildServiceShape,
+} from "../services/PrincipalAccountingRebuildService.ts"
 
 const make = Effect.gen(function* () {
   const accountingRepository = yield* PrincipalAccountingRebuildRepository

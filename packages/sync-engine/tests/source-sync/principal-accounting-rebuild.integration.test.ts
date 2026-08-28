@@ -1,8 +1,10 @@
+import { eq } from "drizzle-orm"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import { beforeEach, describe, expect, it } from "vitest"
 import { PrincipalAccountingRebuildServiceLive } from "../../src/layers/PrincipalAccountingRebuildServiceLive.ts"
 import { TransferReconciliationServiceLive } from "../../src/layers/TransferReconciliationServiceLive.ts"
+import { PrincipalAccountingRebuildService } from "../../src/services/PrincipalAccountingRebuildService.ts"
 import { PortfolioRepositoryLive } from "../../../persistence/src/layers/PortfolioRepositoryLive.ts"
 import { PrincipalAccountingRebuildRepositoryLive } from "../../../persistence/src/layers/PrincipalAccountingRebuildRepositoryLive.ts"
 import { SourceRawRecordRepositoryLive } from "../../../persistence/src/layers/SourceRawRecordRepositoryLive.ts"
@@ -25,7 +27,6 @@ import {
   seedSyncEngineRepositoryFixture,
 } from "../../../persistence/tests/support/integration-test-kit.ts"
 import {
-  PrincipalAccountingRebuildService,
   SourceRawRecordRepository,
   TransferReconciliationRepository,
 } from "@my/sync-engine/services"
@@ -591,6 +592,424 @@ const seedIsolationState = () =>
     })
   )
 
+const seedSameTimeInventoryMovementState = () => {
+  const movementTimestamp = new Date("2025-03-01T10:00:00.000Z")
+  const inboundTransactionId = "00000000-0000-0000-0000-000000000910"
+  const outboundTransactionId = "00000000-0000-0000-0000-000000000911"
+  const inboundProviderTransferId = "00000000-0000-0000-0000-000000000912"
+  const outboundProviderTransferId = "00000000-0000-0000-0000-000000000913"
+
+  return context.runPg(
+    Effect.gen(function* () {
+      const db = yield* drizzle
+      const fixture = yield* seedSyncEngineRepositoryFixture()
+      yield* seedSyncEngineAssets(fixture)
+      yield* db.insert(schema.transactions).values([
+        {
+          id: inboundTransactionId,
+          sourceId: TEST_SOURCE_ID,
+          externalId: "same-time-inbound",
+          timestamp: movementTimestamp,
+          principalId: TEST_PRINCIPAL_ID,
+          providerStatus: "completed",
+        },
+        {
+          id: outboundTransactionId,
+          sourceId: TEST_SOURCE_ID,
+          externalId: "same-time-outbound",
+          timestamp: movementTimestamp,
+          principalId: TEST_PRINCIPAL_ID,
+          providerStatus: "completed",
+        },
+      ])
+      yield* db.insert(schema.providerTransfers).values([
+        {
+          id: inboundProviderTransferId,
+          sourceId: TEST_SOURCE_ID,
+          transactionId: inboundTransactionId,
+          externalId: "same-time-inbound-transfer",
+          timestamp: movementTimestamp,
+          direction: "inbound",
+          processingMode: "evidence_only",
+          fromAccountRef: "external",
+          toAccountRef: "principal",
+          amount: "2",
+        },
+        {
+          id: outboundProviderTransferId,
+          sourceId: TEST_SOURCE_ID,
+          transactionId: outboundTransactionId,
+          externalId: "same-time-outbound-transfer",
+          timestamp: movementTimestamp,
+          direction: "outbound",
+          processingMode: "evidence_only",
+          fromAccountRef: "principal",
+          toAccountRef: "external",
+          amount: "2",
+        },
+      ])
+      yield* db.insert(schema.inventoryMovements).values([
+        {
+          id: "00000000-0000-0000-0000-000000000920",
+          principalId: TEST_PRINCIPAL_ID,
+          sourceId: TEST_SOURCE_ID,
+          transactionId: outboundTransactionId,
+          providerTransferId: outboundProviderTransferId,
+          assetId: TEST_BTC_ASSET_ID,
+          timestamp: movementTimestamp,
+          direction: "outbound",
+          purpose: "principal",
+          taxTreatment: "pending_review",
+          reconciliationStatus: "unmatched",
+          amount: "2",
+        },
+        {
+          id: "00000000-0000-0000-0000-000000000921",
+          principalId: TEST_PRINCIPAL_ID,
+          sourceId: TEST_SOURCE_ID,
+          transactionId: inboundTransactionId,
+          providerTransferId: inboundProviderTransferId,
+          assetId: TEST_BTC_ASSET_ID,
+          timestamp: movementTimestamp,
+          direction: "inbound",
+          purpose: "principal",
+          taxTreatment: "pending_review",
+          reconciliationStatus: "unmatched",
+          amount: "2",
+        },
+      ])
+    })
+  )
+}
+
+const seedCarriedInternalTransferState = () => {
+  const destinationTransactionId = "00000000-0000-0000-0000-000000000930"
+  const destinationLegId = "00000000-0000-0000-0000-000000000931"
+  const disposalTransactionId = "00000000-0000-0000-0000-000000000932"
+  const disposalLegId = "00000000-0000-0000-0000-000000000933"
+  const carriedLotId = "00000000-0000-0000-0000-000000000934"
+  const postBoundaryCarriedLotId = "00000000-0000-0000-0000-000000000935"
+
+  return context.runPg(
+    Effect.gen(function* () {
+      const db = yield* drizzle
+      const fixture = yield* seedSyncEngineRepositoryFixture()
+      yield* seedSyncEngineAssets(fixture)
+      yield* db.insert(schema.transactions).values([
+        {
+          id: destinationTransactionId,
+          sourceId: TEST_SOURCE_ID,
+          externalId: "internal-transfer-destination",
+          timestamp: new Date("2025-02-15T10:00:00.000Z"),
+          principalId: TEST_PRINCIPAL_ID,
+        },
+        {
+          id: disposalTransactionId,
+          sourceId: TEST_SOURCE_ID,
+          externalId: "post-transfer-disposal",
+          timestamp: new Date("2025-03-01T10:00:00.000Z"),
+          principalId: TEST_PRINCIPAL_ID,
+        },
+      ])
+      yield* db.insert(schema.transactionLegs).values([
+        {
+          id: destinationLegId,
+          sourceId: TEST_SOURCE_ID,
+          externalId: "internal-transfer-destination:leg",
+          timestamp: new Date("2025-02-15T10:00:00.000Z"),
+          principalId: TEST_PRINCIPAL_ID,
+          assetId: TEST_BTC_ASSET_ID,
+          amount: "3",
+          kind: "acquisition",
+          provenance: "deterministic",
+          derivationRule: "internal_transfer_in",
+          transactionId: destinationTransactionId,
+          fiatAmount: "200",
+          fiatCurrency: "EUR",
+        },
+        {
+          id: disposalLegId,
+          sourceId: TEST_SOURCE_ID,
+          externalId: "post-transfer-disposal:leg",
+          timestamp: new Date("2025-03-01T10:00:00.000Z"),
+          principalId: TEST_PRINCIPAL_ID,
+          assetId: TEST_BTC_ASSET_ID,
+          amount: "1",
+          kind: "disposal",
+          provenance: "deterministic",
+          transactionId: disposalTransactionId,
+          fiatAmount: "150",
+          fiatCurrency: "EUR",
+        },
+      ])
+      yield* db.insert(schema.fifoLots).values([
+        {
+          id: carriedLotId,
+          principalId: TEST_PRINCIPAL_ID,
+          sourceId: TEST_SOURCE_ID,
+          assetId: TEST_BTC_ASSET_ID,
+          acquiredAt: new Date("2025-01-01T10:00:00.000Z"),
+          originalAmount: "2",
+          remainingAmount: "1",
+          costBasisPerToken: "100",
+          costBasisCurrency: "EUR",
+          costBasisStatus: "known",
+          sourceLegId: destinationLegId,
+          sourceLegSequence: 0,
+        },
+        {
+          id: postBoundaryCarriedLotId,
+          principalId: TEST_PRINCIPAL_ID,
+          sourceId: TEST_SOURCE_ID,
+          assetId: TEST_BTC_ASSET_ID,
+          acquiredAt: new Date("2025-02-10T10:00:00.000Z"),
+          originalAmount: "1",
+          remainingAmount: "1",
+          costBasisPerToken: "250",
+          costBasisCurrency: "EUR",
+          costBasisStatus: "known",
+          sourceLegId: destinationLegId,
+          sourceLegSequence: 1,
+        },
+      ])
+      yield* db.insert(schema.disposalMatches).values({
+        disposalLegId,
+        fifoLotId: carriedLotId,
+        matchedAmount: "1",
+        costBasis: "100",
+        proceeds: "150",
+        gainLoss: "50",
+      })
+    })
+  )
+}
+
+const CANONICALIZATION_IDS = {
+  openingTransaction: "00000000-0000-0000-0000-000000000940",
+  openingLeg: "00000000-0000-0000-0000-000000000941",
+  openingLot: "00000000-0000-0000-0000-000000000942",
+  providerTransaction: "00000000-0000-0000-0000-000000000943",
+  providerTransfer: "00000000-0000-0000-0000-000000000944",
+  destinationTransaction: "00000000-0000-0000-0000-000000000945",
+  canonicalTransfer: "00000000-0000-0000-0000-000000000946",
+  staleDestinationLeg: "00000000-0000-0000-0000-000000000947",
+  staleDestinationLot: "00000000-0000-0000-0000-000000000948",
+  laterTransaction: "00000000-0000-0000-0000-000000000949",
+  collidingDisposalAndMovement: "00000000-0000-0000-0000-000000000950",
+  laterFeeLeg: "00000000-0000-0000-0000-000000000951",
+} as const
+const canonicalizationTransferTimestamp = new Date("2025-02-15T10:00:00.000Z")
+const canonicalizationLaterTimestamp = new Date("2025-03-01T10:00:00.000Z")
+
+const seedCanonicalizationTransactionsAndLegs = (db: TestDb) =>
+  Effect.gen(function* () {
+    yield* db.insert(schema.transactions).values([
+      {
+        id: CANONICALIZATION_IDS.openingTransaction,
+        sourceId: TEST_SOURCE_ID,
+        externalId: "canonicalization-opening-inventory",
+        timestamp: new Date("2025-01-01T10:00:00.000Z"),
+        principalId: TEST_PRINCIPAL_ID,
+      },
+      {
+        id: CANONICALIZATION_IDS.providerTransaction,
+        sourceId: TEST_SOURCE_ID,
+        externalId: "canonicalization-provider-send",
+        timestamp: canonicalizationTransferTimestamp,
+        principalId: TEST_PRINCIPAL_ID,
+        providerStatus: "completed",
+      },
+      {
+        id: CANONICALIZATION_IDS.destinationTransaction,
+        sourceId: SECONDARY_SOURCE_ID,
+        externalId: "canonicalization-wallet-receipt",
+        timestamp: canonicalizationTransferTimestamp,
+        principalId: TEST_PRINCIPAL_ID,
+      },
+      {
+        id: CANONICALIZATION_IDS.laterTransaction,
+        sourceId: SECONDARY_SOURCE_ID,
+        externalId: "canonicalization-later-effects",
+        timestamp: canonicalizationLaterTimestamp,
+        principalId: TEST_PRINCIPAL_ID,
+      },
+    ])
+    yield* db.insert(schema.transactionLegs).values([
+      {
+        id: CANONICALIZATION_IDS.openingLeg,
+        sourceId: TEST_SOURCE_ID,
+        externalId: "canonicalization-opening-inventory:leg",
+        timestamp: new Date("2025-01-01T10:00:00.000Z"),
+        principalId: TEST_PRINCIPAL_ID,
+        assetId: TEST_BTC_ASSET_ID,
+        amount: "2",
+        kind: "acquisition",
+        provenance: "deterministic",
+        transactionId: CANONICALIZATION_IDS.openingTransaction,
+        fiatAmount: "200",
+        fiatCurrency: "EUR",
+      },
+      {
+        id: CANONICALIZATION_IDS.staleDestinationLeg,
+        sourceId: SECONDARY_SOURCE_ID,
+        externalId: "canonicalization-wallet-receipt:stale-leg",
+        timestamp: canonicalizationTransferTimestamp,
+        principalId: TEST_PRINCIPAL_ID,
+        assetId: TEST_BTC_ASSET_ID,
+        amount: "2",
+        kind: "acquisition",
+        provenance: "deterministic",
+        transactionId: CANONICALIZATION_IDS.destinationTransaction,
+        fiatAmount: "220",
+        fiatCurrency: "EUR",
+      },
+      {
+        id: CANONICALIZATION_IDS.collidingDisposalAndMovement,
+        sourceId: SECONDARY_SOURCE_ID,
+        externalId: "canonicalization-later-disposal:leg",
+        timestamp: canonicalizationLaterTimestamp,
+        principalId: TEST_PRINCIPAL_ID,
+        assetId: TEST_BTC_ASSET_ID,
+        amount: "1",
+        kind: "disposal",
+        provenance: "deterministic",
+        transactionId: CANONICALIZATION_IDS.laterTransaction,
+        fiatAmount: "150",
+        fiatCurrency: "EUR",
+      },
+      {
+        id: CANONICALIZATION_IDS.laterFeeLeg,
+        sourceId: SECONDARY_SOURCE_ID,
+        externalId: "canonicalization-later-fee:leg",
+        timestamp: canonicalizationLaterTimestamp,
+        principalId: TEST_PRINCIPAL_ID,
+        assetId: TEST_BTC_ASSET_ID,
+        amount: "0.5",
+        kind: "fee",
+        provenance: "deterministic",
+        transactionId: CANONICALIZATION_IDS.laterTransaction,
+        fiatAmount: "75",
+        fiatCurrency: "EUR",
+      },
+    ])
+  })
+
+const seedCanonicalizationFifoEffects = (db: TestDb) =>
+  Effect.gen(function* () {
+    yield* db.insert(schema.fifoLots).values([
+      {
+        id: CANONICALIZATION_IDS.openingLot,
+        principalId: TEST_PRINCIPAL_ID,
+        sourceId: TEST_SOURCE_ID,
+        assetId: TEST_BTC_ASSET_ID,
+        acquiredAt: new Date("2025-01-01T10:00:00.000Z"),
+        originalAmount: "2",
+        remainingAmount: "2",
+        costBasisPerToken: "100",
+        costBasisCurrency: "EUR",
+        costBasisStatus: "known",
+        sourceLegId: CANONICALIZATION_IDS.openingLeg,
+      },
+      {
+        id: CANONICALIZATION_IDS.staleDestinationLot,
+        principalId: TEST_PRINCIPAL_ID,
+        sourceId: SECONDARY_SOURCE_ID,
+        assetId: TEST_BTC_ASSET_ID,
+        acquiredAt: canonicalizationTransferTimestamp,
+        originalAmount: "2",
+        remainingAmount: "0.5",
+        costBasisPerToken: "110",
+        costBasisCurrency: "EUR",
+        costBasisStatus: "known",
+        sourceLegId: CANONICALIZATION_IDS.staleDestinationLeg,
+      },
+    ])
+    yield* db.insert(schema.disposalMatches).values({
+      disposalLegId: CANONICALIZATION_IDS.collidingDisposalAndMovement,
+      fifoLotId: CANONICALIZATION_IDS.staleDestinationLot,
+      matchedAmount: "1",
+      costBasis: "110",
+      proceeds: "150",
+      gainLoss: "40",
+    })
+    yield* db.insert(schema.inventoryMovements).values({
+      id: CANONICALIZATION_IDS.collidingDisposalAndMovement,
+      principalId: TEST_PRINCIPAL_ID,
+      sourceId: SECONDARY_SOURCE_ID,
+      transactionId: CANONICALIZATION_IDS.laterTransaction,
+      transactionLegId: CANONICALIZATION_IDS.laterFeeLeg,
+      assetId: TEST_BTC_ASSET_ID,
+      timestamp: canonicalizationLaterTimestamp,
+      direction: "outbound",
+      purpose: "fee",
+      taxTreatment: "pending_review",
+      reconciliationStatus: "unmatched",
+      amount: "0.5",
+    })
+    yield* db.insert(schema.inventoryMovementAllocations).values({
+      inventoryMovementId: CANONICALIZATION_IDS.collidingDisposalAndMovement,
+      fifoLotId: CANONICALIZATION_IDS.staleDestinationLot,
+      matchedAmount: "0.5",
+    })
+  })
+
+const seedCanonicalizationReconciliation = (db: TestDb) =>
+  Effect.gen(function* () {
+    yield* db.insert(schema.providerTransfers).values({
+      id: CANONICALIZATION_IDS.providerTransfer,
+      sourceId: TEST_SOURCE_ID,
+      transactionId: CANONICALIZATION_IDS.providerTransaction,
+      externalId: "canonicalization-provider-transfer",
+      providerAssetId: BTC_PROVIDER_ASSET_ID,
+      timestamp: canonicalizationTransferTimestamp,
+      direction: "outbound",
+      processingMode: "accounting_only",
+      fromAccountRef: "principal",
+      toAddress: "bc1q-secondary-accounting-rebuild",
+      amount: "2",
+    })
+    yield* db.insert(schema.transfers).values({
+      id: CANONICALIZATION_IDS.canonicalTransfer,
+      sourceId: SECONDARY_SOURCE_ID,
+      principalId: TEST_PRINCIPAL_ID,
+      externalId: "canonicalization-wallet-transfer",
+      addressId: SECONDARY_ADDRESS_ID,
+      timestamp: canonicalizationTransferTimestamp,
+      type: "native",
+      fromAddress: "external",
+      toAddress: "bc1q-secondary-accounting-rebuild",
+      assetId: TEST_BTC_ASSET_ID,
+      amount: "2",
+    })
+    yield* db
+      .update(schema.transactionLegs)
+      .set({ sourceTransferId: CANONICALIZATION_IDS.canonicalTransfer })
+      .where(eq(schema.transactionLegs.id, CANONICALIZATION_IDS.staleDestinationLeg))
+    yield* db.insert(schema.transferReconciliations).values({
+      principalId: TEST_PRINCIPAL_ID,
+      providerTransferId: CANONICALIZATION_IDS.providerTransfer,
+      canonicalTransferId: CANONICALIZATION_IDS.canonicalTransfer,
+      canonicalTransactionId: CANONICALIZATION_IDS.destinationTransaction,
+      status: "auto_applied",
+      matchReason: "deterministic_wallet_receipt_match",
+      confidence: "1",
+      deterministic: true,
+    })
+  })
+
+const seedCanonicalizationWithDependentFifoState = () =>
+  context.runPg(
+    Effect.gen(function* () {
+      const db = yield* drizzle
+      const fixture = yield* seedSyncEngineRepositoryFixture()
+      yield* seedSyncEngineAssets(fixture)
+      yield* seedAccountingReferences(db)
+      yield* seedCanonicalizationTransactionsAndLegs(db)
+      yield* seedCanonicalizationFifoEffects(db)
+      yield* seedCanonicalizationReconciliation(db)
+    })
+  )
+
 beforeEach(async () => {
   await Effect.runPromise(context.recreateTestDatabase())
 })
@@ -710,6 +1129,85 @@ describe("PrincipalAccountingRebuildService", () => {
         assetId: TEST_BTC_ASSET_ID,
         amount: "4",
         costBasis: "400",
+      }),
+    ])
+  })
+
+  it("rebuilds same-time inbound inventory before outbound inventory", async () => {
+    await seedSameTimeInventoryMovementState()
+
+    const result = await runTest(
+      Effect.flatMap(PrincipalAccountingRebuildService, (service) =>
+        service.rebuildPrincipalAccounting({
+          principalId: TEST_PRINCIPAL_ID,
+          affectedAssetIds: [TEST_BTC_ASSET_ID],
+          rebuildFrom,
+        })
+      )
+    )
+
+    expect(result.fifoLotsRebuilt).toBe(1)
+    expect(result.inventoryAllocationsRebuilt).toBe(1)
+  })
+
+  it("preserves carried FIFO slices for internal-transfer acquisition legs", async () => {
+    await seedCarriedInternalTransferState()
+
+    const result = await runTest(
+      Effect.gen(function* () {
+        const service = yield* PrincipalAccountingRebuildService
+        const portfolio = yield* PortfolioRepository
+        const rebuild = yield* service.rebuildPrincipalAccounting({
+          principalId: TEST_PRINCIPAL_ID,
+          affectedAssetIds: [TEST_BTC_ASSET_ID],
+          rebuildFrom,
+        })
+        const positions = yield* portfolio.listAssetPositions({
+          principalId: TEST_PRINCIPAL_ID,
+          sourceId: null,
+        })
+        return { rebuild, positions }
+      })
+    )
+
+    expect(result.rebuild.fifoLotsRebuilt).toBe(0)
+    expect(result.rebuild.disposalMatchesRebuilt).toBe(1)
+    expect(result.positions).toEqual([
+      expect.objectContaining({
+        assetId: TEST_BTC_ASSET_ID,
+        amount: "2",
+        costBasis: "350",
+      }),
+    ])
+  })
+
+  it("clears affected FIFO usage before canonicalizing a newly internal transfer", async () => {
+    await seedCanonicalizationWithDependentFifoState()
+
+    const result = await runTest(
+      Effect.gen(function* () {
+        const reconciliation = yield* TransferReconciliationRepository
+        const portfolio = yield* PortfolioRepository
+        const rebuild = yield* reconciliation.applyDeterministicInternalTransferCanonicalization({
+          principalId: TEST_PRINCIPAL_ID,
+          sourceId: TEST_SOURCE_ID,
+          affectedAssetIds: [TEST_BTC_ASSET_ID],
+          rebuildFrom,
+        })
+        const positions = yield* portfolio.listAssetPositions({
+          principalId: TEST_PRINCIPAL_ID,
+          sourceId: null,
+        })
+        return { rebuild, positions }
+      })
+    )
+
+    expect(result.rebuild.canonicalizedPairs).toBe(1)
+    expect(result.positions).toEqual([
+      expect.objectContaining({
+        assetId: TEST_BTC_ASSET_ID,
+        amount: "0.5",
+        costBasis: "50",
       }),
     ])
   })
