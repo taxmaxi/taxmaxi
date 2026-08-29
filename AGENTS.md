@@ -189,6 +189,25 @@ Select only needed columns. Do not use `SELECT *`.
 9. Keep `.env` files local. They are intentionally present for this working copy but must not be committed.
 10. In `apps/www`, every user-visible string must come from paraglide messages (`m["..."]()` with keys in `apps/www/messages/en.json` and `de.json`). Do not hardcode English copy in components. Backend responses carry machine-readable codes, not display text; the frontend maps codes to localized copy.
 
+## Delivery PRs and Reviews
+
+Delivery work is one PR per checklist task on a spec issue.
+
+Sometimes new code must give a different result than the old code for the same input, because the old result was wrong. We allow this only when the change is written down first, as a task note on the spec issue or in an ADR.
+
+Implementers:
+
+- State in the PR description whether the PR changes any results. One PR must not mix result-changing work with result-preserving work.
+- For each result the PR changes on purpose, paste the written-down decision into the PR description and name its source, for example "#212, T04 note". A link alone is not enough, because reviewers cannot always open GitHub issues.
+- If you discover during the work that a result must change, write the decision on the spec issue first, then paste it.
+
+Reviewers:
+
+- When a PR description pastes a decision, check that the pasted text really exists at the named source. If it exists, accept that result change. Do not report it as a finding. Do not report further examples of the same change. If you think the decision itself is wrong, comment on the spec issue.
+- Do not treat the old code as correct by default. Before launch, we replace known defects of the old code on purpose.
+- Use P0 and P1 only when code writes wrong data, leaves half-updated state, has a security problem, or loses data. "This belongs in a later task" is P3.
+- Some inputs are junk, for example a leg whose fiat currency field says "USDC". The old code often accepted junk and wrote wrong numbers. New code may reject junk; the rejection is correct. Check only what happens after the rejection. Correct: the affected transaction becomes a review item and the rest of the sync continues. Wrong: the error stops the whole sync job. Report the second case only. Do not ask to accept the junk again.
+
 ## Agent skills
 
 ### Issue tracker
