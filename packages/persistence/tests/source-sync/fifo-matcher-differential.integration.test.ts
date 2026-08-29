@@ -400,7 +400,9 @@ const matchPureFixture = (fixture: DifferentialFixture) =>
       remainingQuantity: quantity(acquisition.quantity),
       costBasisPerUnit: MonetaryAmount.unsafeFromString(
         acquisition.costBasisPerUnit,
-        acquisition.fiatCurrency ?? "EUR"
+        acquisition.fiatAmount === null
+          ? (fixture.disposal.fiatCurrency ?? acquisition.fiatCurrency ?? "EUR")
+          : (acquisition.fiatCurrency ?? "EUR")
       ),
     })),
     disposal: {
@@ -582,7 +584,7 @@ describe("source FIFO and pure matcher differential", () => {
           timestamp: DateTime.toDateUtc(DateTime.makeUnsafe("2025-02-01T10:00:00.000Z")),
           quantity: "0.50000000",
           fiatAmount: "1.00000000",
-          fiatCurrency: "EUR",
+          fiatCurrency: "USD",
         },
       })
 
@@ -754,6 +756,89 @@ describe("source FIFO and pure matcher differential", () => {
         matchedLayer: "fifo_inventory",
         needsReview: true,
         categorizationReason: expect.stringContaining("Currency mismatch: expected EUR, got USD"),
+      })
+    })
+  )
+
+  it.effect("rolls back earlier FIFO matches when a later leg needs currency review", () =>
+    Effect.gen(function* () {
+      const acquisition: AcquisitionFact = {
+        externalId: "atomic-review-lot",
+        rawRecordId: "00000000-0000-0000-0000-000000000851",
+        timestamp: DateTime.toDateUtc(DateTime.makeUnsafe("2025-01-01T10:00:00.000Z")),
+        quantity: "1.00000000",
+        fiatAmount: "2.00000000",
+        fiatCurrency: "EUR",
+        costBasisPerUnit: "2",
+      }
+      const firstDisposal: DisposalFact = {
+        externalId: "atomic-review-first-disposal",
+        rawRecordId: "00000000-0000-0000-0000-000000000852",
+        timestamp: DateTime.toDateUtc(DateTime.makeUnsafe("2025-02-01T10:00:00.000Z")),
+        quantity: "0.25000000",
+        fiatAmount: "1.00000000",
+        fiatCurrency: "EUR",
+      }
+      const secondDisposal: DisposalFact = {
+        externalId: "atomic-review-second-disposal",
+        rawRecordId: "00000000-0000-0000-0000-000000000853",
+        timestamp: firstDisposal.timestamp,
+        quantity: "0.25000000",
+        fiatAmount: "1.00000000",
+        fiatCurrency: "USD",
+      }
+
+      yield* persistFact({ ...acquisition, kind: "acquisition" })
+      yield* Effect.promise(() =>
+        runPg(
+          seedRawRecord({
+            externalId: secondDisposal.externalId,
+            rawRecordId: secondDisposal.rawRecordId,
+            timestamp: secondDisposal.timestamp,
+          })
+        )
+      )
+      yield* Effect.promise(() =>
+        runPg(
+          seedRawRecord({
+            externalId: firstDisposal.externalId,
+            rawRecordId: firstDisposal.rawRecordId,
+            timestamp: firstDisposal.timestamp,
+          })
+        )
+      )
+
+      const persistenceInput = makePersistenceInput({
+        cexAccountId: repositoryFixture.cexAccountId,
+        fact: { ...firstDisposal, kind: "disposal" },
+      })
+      yield* Effect.promise(() =>
+        runRepository(
+          Effect.flatMap(SourceNormalizationRepository, (repository) =>
+            repository.persistNormalizedArtifacts({
+              ...persistenceInput,
+              legs: [
+                makeLeg({ ...firstDisposal, kind: "disposal" }),
+                makeLeg({ ...secondDisposal, kind: "disposal" }),
+              ],
+            })
+          )
+        )
+      )
+
+      const persistedRows = yield* loadPersistedRows([acquisition.externalId])
+      const persistedResult = yield* renderPersistedResult({ rows: persistedRows })
+      const review = yield* loadShortageReview(firstDisposal.externalId)
+
+      expect(persistedResult).toEqual({
+        lots: [{ lotId: acquisition.externalId, remainingQuantity: "1" }],
+        allocations: [],
+      })
+      expect(review).toMatchObject({
+        reviewStatus: "needs_review",
+        matchedLayer: "fifo_inventory",
+        needsReview: true,
+        categorizationReason: expect.stringContaining("Currency mismatch"),
       })
     })
   )

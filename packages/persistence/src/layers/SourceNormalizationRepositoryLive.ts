@@ -73,6 +73,7 @@ interface OpenFifoLotRecord {
   readonly remainingAmount: string
   readonly costBasisPerToken: string
   readonly costBasisCurrency: string
+  readonly costBasisStatus: "known" | "pending_review"
 }
 
 interface FifoLotAllocation {
@@ -1376,6 +1377,7 @@ const make = Effect.gen(function* () {
           remainingAmount: schema.fifoLots.remainingAmount,
           costBasisPerToken: schema.fifoLots.costBasisPerToken,
           costBasisCurrency: schema.fifoLots.costBasisCurrency,
+          costBasisStatus: schema.fifoLots.costBasisStatus,
         })
         .from(schema.fifoLots)
         .innerJoin(
@@ -1504,9 +1506,14 @@ const make = Effect.gen(function* () {
             value: lot.remainingAmount,
             operation: "sourceNormalizationRepository.buildFifoLotAllocations.remainingAmount",
           })
+          // A pending lot carries a zero-basis placeholder, so its stored currency is not a fact.
+          // Use the disposal currency only to keep the temporary zero arithmetic currency-safe.
           const costBasisPerUnit = yield* decodeMonetaryAmount({
             amount: lot.costBasisPerToken,
-            currency: lot.costBasisCurrency,
+            currency:
+              lot.costBasisStatus === "pending_review"
+                ? (disposalFiatCurrency ?? lot.costBasisCurrency)
+                : lot.costBasisCurrency,
             operation: "sourceNormalizationRepository.buildFifoLotAllocations.costBasisPerToken",
           })
 
@@ -2709,48 +2716,57 @@ const make = Effect.gen(function* () {
             currentProviderTransferIds,
           })
 
-          const transactionReview = yield* feedFifoLegs({
-            executor: tx,
-            legs: persistedLegs,
-          }).pipe(
-            Effect.andThen(
-              materializesProviderMovements
-                ? allocateProviderInventoryMovements({
-                    executor: tx,
-                    transaction: persistedTransaction,
-                    providerTransfers: persistedProviderTransfers,
-                    legs: persistedLegs,
-                    feesOnly: hasFailedStatus,
-                  })
-                : Effect.void
-            ),
-            Effect.andThen(
-              materializesProviderMovements
-                ? allocateFeeInventoryMovements({
-                    executor: tx,
-                    legs: persistedLegs,
-                  })
-                : Effect.void
-            ),
-            Effect.as(params.transactionReview),
-            Effect.catchTag("SyncEngineStorageError", (error) =>
-              isFifoInventoryReviewError(error)
-                ? resetInventoryMovementAllocationsForTransaction({
-                    executor: tx,
-                    transactionId: persistedTransaction.id,
-                  }).pipe(
-                    Effect.as(
-                      buildFifoInventoryReview({
-                        transaction: persistedTransaction,
-                        existingReview: params.transactionReview,
-                        resolvedTransactionType: params.resolvedTransactionType,
-                        error,
-                      })
-                    )
-                  )
-                : Effect.fail(error)
+          // Catch reviewable matcher errors outside this savepoint so every disposal-lot write
+          // rolls back while the outer transaction can still persist the factual legs and review.
+          const transactionReview = yield* tx
+            .transaction((fifoTx) =>
+              feedFifoLegs({
+                executor: fifoTx,
+                legs: persistedLegs,
+              })
             )
-          )
+            .pipe(
+              wrapSyncEngineStorageError(
+                "sourceNormalizationRepository.persistNormalizedArtifacts.applyFifo"
+              ),
+              Effect.andThen(
+                materializesProviderMovements
+                  ? allocateProviderInventoryMovements({
+                      executor: tx,
+                      transaction: persistedTransaction,
+                      providerTransfers: persistedProviderTransfers,
+                      legs: persistedLegs,
+                      feesOnly: hasFailedStatus,
+                    })
+                  : Effect.void
+              ),
+              Effect.andThen(
+                materializesProviderMovements
+                  ? allocateFeeInventoryMovements({
+                      executor: tx,
+                      legs: persistedLegs,
+                    })
+                  : Effect.void
+              ),
+              Effect.as(params.transactionReview),
+              Effect.catchTag("SyncEngineStorageError", (error) =>
+                isFifoInventoryReviewError(error)
+                  ? resetInventoryMovementAllocationsForTransaction({
+                      executor: tx,
+                      transactionId: persistedTransaction.id,
+                    }).pipe(
+                      Effect.as(
+                        buildFifoInventoryReview({
+                          transaction: persistedTransaction,
+                          existingReview: params.transactionReview,
+                          resolvedTransactionType: params.resolvedTransactionType,
+                          error,
+                        })
+                      )
+                    )
+                  : Effect.fail(error)
+              )
+            )
 
           yield* upsertTransactionReview({
             executor: tx,
