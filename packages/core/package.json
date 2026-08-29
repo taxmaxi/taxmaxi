@@ -32,6 +32,10 @@
       "types": "./dist/currency/index.d.ts",
       "default": "./dist/currency/index.js"
     },
+    "./accounting": {
+      "types": "./dist/accounting/index.d.ts",
+      "default": "./dist/accounting/index.js"
+    },
     "./shared/values/Address": {
       "types": "./dist/shared/values/Address.d.ts",
       "default": "./dist/shared/values/Address.js"

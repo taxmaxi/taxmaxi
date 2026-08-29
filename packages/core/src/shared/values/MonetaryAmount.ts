@@ -12,12 +12,42 @@ import * as BigDecimal from "effect/BigDecimal"
 import * as Effect from "effect/Effect"
 import * as Option from "effect/Option"
 import * as Schema from "effect/Schema"
+import type { AccountingQuantity } from "../../accounting/AccountingQuantity.ts"
 import { CurrencyCode } from "../../currency/CurrencyCode.ts"
 
 /**
  * Minimum decimal precision for monetary amounts
  */
 const MIN_PRECISION = 4
+
+/** Divide exactly and round half away from zero at the requested fractional scale. */
+const divideToScale = ({
+  dividend,
+  divisor,
+  scale,
+}: {
+  readonly dividend: BigDecimal.BigDecimal
+  readonly divisor: BigDecimal.BigDecimal
+  readonly scale: number
+}): Option.Option<BigDecimal.BigDecimal> => {
+  if (BigDecimal.isZero(divisor)) {
+    return Option.none()
+  }
+
+  const scaleAdjustment = scale + divisor.scale - dividend.scale
+  const scaledDividend =
+    scaleAdjustment >= 0 ? dividend.value * 10n ** BigInt(scaleAdjustment) : dividend.value
+  const scaledDivisor =
+    scaleAdjustment >= 0 ? divisor.value : divisor.value * 10n ** BigInt(-scaleAdjustment)
+  const negative = scaledDividend < 0n !== scaledDivisor < 0n
+  const dividendMagnitude = scaledDividend < 0n ? -scaledDividend : scaledDividend
+  const divisorMagnitude = scaledDivisor < 0n ? -scaledDivisor : scaledDivisor
+  const quotient = dividendMagnitude / divisorMagnitude
+  const remainder = dividendMagnitude % divisorMagnitude
+  const roundedMagnitude = remainder * 2n >= divisorMagnitude ? quotient + 1n : quotient
+
+  return Option.some(BigDecimal.make(negative ? -roundedMagnitude : roundedMagnitude, scale))
+}
 
 /**
  * Error for currency mismatch in arithmetic operations
@@ -220,6 +250,12 @@ export const multiply = (
   )
 }
 
+/** Multiply a monetary amount per asset unit by an exact asset quantity. */
+export const multiplyByQuantity = (
+  unitAmount: MonetaryAmount,
+  quantity: AccountingQuantity
+): MonetaryAmount => multiply(unitAmount, quantity)
+
 /**
  * Multiply a monetary amount by a number.
  * The result maintains the original currency.
@@ -391,6 +427,30 @@ export const round = (amount: MonetaryAmount, scale: number = 2): MonetaryAmount
     amount.currency
   )
 }
+
+/** Allocate a monetary total in proportion to two exact asset quantities. */
+export const prorate = ({
+  total,
+  part,
+  whole,
+  scale,
+}: {
+  readonly total: MonetaryAmount
+  readonly part: AccountingQuantity
+  readonly whole: AccountingQuantity
+  readonly scale: number
+}): Effect.Effect<MonetaryAmount, DivisionByZeroError> =>
+  Option.match(
+    divideToScale({
+      dividend: BigDecimal.multiply(total.amount, part),
+      divisor: whole,
+      scale,
+    }),
+    {
+      onNone: () => Effect.fail(new DivisionByZeroError()),
+      onSome: (amount) => Effect.succeed(MonetaryAmount.fromBigDecimal(amount, total.currency)),
+    }
+  )
 
 /**
  * Get the maximum of two monetary amounts.
