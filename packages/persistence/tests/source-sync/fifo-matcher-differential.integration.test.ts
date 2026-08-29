@@ -460,6 +460,12 @@ describe("source FIFO and pure matcher differential", () => {
       const persistedResult = yield* renderPersistedResult({ rows: persistedRows })
 
       const pureResult = yield* matchPureFixture(fixture)
+
+      expect(pureResult._tag).toBe("FullyMatched")
+      if (pureResult._tag !== "FullyMatched") {
+        return yield* Effect.die("Expected fully covered FIFO fixture to be fully matched")
+      }
+
       const renderedPureResult = renderPureResult({ fixture, result: pureResult })
 
       expect(renderedPureResult).toEqual(persistedResult)
@@ -469,7 +475,7 @@ describe("source FIFO and pure matcher differential", () => {
 
   it.effect("matches exact quantities and eight-decimal monetary allocations", () =>
     Effect.gen(function* () {
-      yield* assertParity({
+      const multiLotResult = yield* assertParity({
         acquisitions: [
           {
             externalId: "differential-lot-oldest",
@@ -492,10 +498,15 @@ describe("source FIFO and pure matcher differential", () => {
           externalId: "differential-disposal",
           rawRecordId: "00000000-0000-0000-0000-000000000803",
           timestamp: DateTime.toDateUtc(DateTime.makeUnsafe("2025-02-01T10:00:00.000Z")),
-          quantity: "3.00000000",
-          fiatAmount: "10.00000000",
+          quantity: "2.25000000",
+          fiatAmount: "9.00000000",
         },
       })
+
+      expect(multiLotResult.lots).toEqual([
+        { lotId: "differential-lot-oldest", remainingQuantity: "0" },
+        { lotId: "differential-lot-newer", remainingQuantity: "0.75" },
+      ])
 
       yield* assertParity({
         acquisitions: [
