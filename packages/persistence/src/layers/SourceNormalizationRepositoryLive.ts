@@ -89,6 +89,10 @@ const INSUFFICIENT_FIFO_INVENTORY_OPERATION =
   "sourceNormalizationRepository.buildFifoLotAllocations"
 const FIFO_CURRENCY_MISMATCH_OPERATION =
   "sourceNormalizationRepository.buildFifoLotAllocations.currencyMismatch"
+const FIFO_INPUT_REJECTED_OPERATION =
+  "sourceNormalizationRepository.buildFifoLotAllocations.inputRejected"
+const FIFO_MATCHER_REJECTED_OPERATION =
+  "sourceNormalizationRepository.buildFifoLotAllocations.matcherRejected"
 
 /**
  * Wrap residual errors in `SyncEngineStorageError`, but let a typed credit-exhaustion
@@ -172,7 +176,9 @@ const decodeNumericString = ({
 
 const isFifoInventoryReviewError = (error: SyncEngineStorageError): boolean =>
   error.operation === INSUFFICIENT_FIFO_INVENTORY_OPERATION ||
-  error.operation === FIFO_CURRENCY_MISMATCH_OPERATION
+  error.operation === FIFO_CURRENCY_MISMATCH_OPERATION ||
+  error.operation === FIFO_INPUT_REJECTED_OPERATION ||
+  error.operation === FIFO_MATCHER_REJECTED_OPERATION
 
 const FIFO_INVENTORY_REVIEW_LAYER = "fifo_inventory"
 const FIFO_INVENTORY_REVIEW_REASON_PREFIX =
@@ -213,9 +219,11 @@ const buildFifoInventoryReview = ({
   const inventoryReason =
     error.operation === FIFO_CURRENCY_MISMATCH_OPERATION
       ? `${FIFO_INVENTORY_REVIEW_LAYER}: Review required because the lot cost-basis currency does not match the disposal proceeds currency. ${String(error.cause)}`
-      : `${FIFO_INVENTORY_REVIEW_REASON_PREFIX} ` +
-        "This usually means an opening balance, transfer in, or historical acquisition is missing. " +
-        String(error.cause)
+      : error.operation === INSUFFICIENT_FIFO_INVENTORY_OPERATION
+        ? `${FIFO_INVENTORY_REVIEW_REASON_PREFIX} ` +
+          "This usually means an opening balance, transfer in, or historical acquisition is missing. " +
+          String(error.cause)
+        : `${FIFO_INVENTORY_REVIEW_LAYER}: Review required because a FIFO value could not be processed safely. ${String(error.cause)}`
   const preservesReviewedState =
     existingReview?.reviewStatus === "approved" || existingReview?.reviewStatus === "changed"
 
@@ -262,7 +270,7 @@ const decodeMonetaryAmount = ({
   readonly currency: string
   readonly operation: string
 }) =>
-  Schema.decodeEffect(MonetaryAmount)({ amount, currency }).pipe(
+  Schema.decodeEffect(MonetaryAmount)({ amount, currency: currency.toUpperCase() }).pipe(
     Effect.mapError((error) => toSyncEngineStorageError({ error, operation }))
   )
 
@@ -321,7 +329,7 @@ const toFifoMatchStorageError = (error: FifoMatchError): SyncEngineStorageError 
     operation:
       error._tag === "CurrencyMismatchError"
         ? FIFO_CURRENCY_MISMATCH_OPERATION
-        : "sourceNormalizationRepository.buildFifoLotAllocations.match",
+        : FIFO_MATCHER_REJECTED_OPERATION,
   })
 
 const toCostBasisPerToken = ({
@@ -341,14 +349,15 @@ const toCostBasisPerToken = ({
     const totalCostBasis = yield* decodeMonetaryAmount({
       amount: fiatAmount,
       currency: fiatCurrency,
-      operation: "sourceNormalizationRepository.toCostBasisPerToken.fiatAmount",
+      operation: FIFO_INPUT_REJECTED_OPERATION,
     })
     const quantity = yield* decodeAccountingQuantity({
       value: quantityAmount,
-      operation: "sourceNormalizationRepository.toCostBasisPerToken.quantityAmount",
+      operation: FIFO_INPUT_REJECTED_OPERATION,
     })
     const costBasisPerToken = yield* prorate({
-      total: totalCostBasis,
+      // The legacy fixed-point adapter discarded the sign of acquisition fiat values.
+      total: totalCostBasis.abs(),
       part: unitQuantity,
       whole: quantity,
       scale: 18,
@@ -356,7 +365,7 @@ const toCostBasisPerToken = ({
       Effect.mapError((error) =>
         toSyncEngineStorageError({
           error,
-          operation: "sourceNormalizationRepository.toCostBasisPerToken",
+          operation: FIFO_MATCHER_REJECTED_OPERATION,
         })
       )
     )
@@ -1504,7 +1513,7 @@ const make = Effect.gen(function* () {
         Effect.gen(function* () {
           const remainingQuantity = yield* decodeAccountingQuantity({
             value: lot.remainingAmount,
-            operation: "sourceNormalizationRepository.buildFifoLotAllocations.remainingAmount",
+            operation: FIFO_INPUT_REJECTED_OPERATION,
           })
           // A pending lot carries a zero-basis placeholder, so its stored currency is not a fact.
           // Use the disposal currency only to keep the temporary zero arithmetic currency-safe.
@@ -1514,7 +1523,7 @@ const make = Effect.gen(function* () {
               lot.costBasisStatus === "pending_review"
                 ? (disposalFiatCurrency ?? lot.costBasisCurrency)
                 : lot.costBasisCurrency,
-            operation: "sourceNormalizationRepository.buildFifoLotAllocations.costBasisPerToken",
+            operation: FIFO_INPUT_REJECTED_OPERATION,
           })
 
           return { id: lot.id, remainingQuantity, costBasisPerUnit }
@@ -1522,7 +1531,7 @@ const make = Effect.gen(function* () {
       )
       const quantity = yield* decodeAccountingQuantity({
         value: disposalAmount,
-        operation: "sourceNormalizationRepository.buildFifoLotAllocations.disposalAmount",
+        operation: FIFO_INPUT_REJECTED_OPERATION,
       })
       const proceeds =
         disposalFiatAmount === null
@@ -1530,7 +1539,7 @@ const make = Effect.gen(function* () {
           : yield* decodeMonetaryAmount({
               amount: disposalFiatAmount,
               currency: disposalFiatCurrency ?? "EUR",
-              operation: "sourceNormalizationRepository.buildFifoLotAllocations.proceeds",
+              operation: FIFO_INPUT_REJECTED_OPERATION,
             })
       const result = yield* matchFifoLots({
         lots: decodedLots,
@@ -1569,9 +1578,10 @@ const make = Effect.gen(function* () {
       }
 
       const now = nowDate()
+      const costBasisCurrency = (leg.fiatCurrency ?? "EUR").toUpperCase()
       const costBasisPerToken = yield* toCostBasisPerToken({
         fiatAmount: leg.fiatAmount,
-        fiatCurrency: leg.fiatCurrency ?? "EUR",
+        fiatCurrency: costBasisCurrency,
         quantityAmount: leg.amount,
       })
 
@@ -1586,7 +1596,7 @@ const make = Effect.gen(function* () {
           originalAmount: leg.amount,
           remainingAmount: leg.amount,
           costBasisPerToken,
-          costBasisCurrency: leg.fiatCurrency ?? "EUR",
+          costBasisCurrency,
           costBasisStatus:
             leg.fiatAmount === null || leg.fiatCurrency === null ? "pending_review" : "known",
           sourceLegId: leg.id,

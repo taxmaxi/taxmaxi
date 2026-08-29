@@ -393,6 +393,29 @@ const loadPersistedFiatCurrencies = (externalIds: ReadonlyArray<string>) =>
     )
   )
 
+const loadPersistedLotAccounting = (externalId: string) =>
+  Effect.promise(() =>
+    runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const [lot] = yield* db
+          .select({
+            costBasisPerToken: schema.fifoLots.costBasisPerToken,
+            costBasisCurrency: schema.fifoLots.costBasisCurrency,
+          })
+          .from(schema.fifoLots)
+          .innerJoin(
+            schema.transactionLegs,
+            eq(schema.transactionLegs.id, schema.fifoLots.sourceLegId)
+          )
+          .where(eq(schema.transactionLegs.externalId, externalId))
+          .limit(1)
+
+        return lot
+      })
+    )
+  )
+
 const matchPureFixture = (fixture: DifferentialFixture) =>
   matchFifoLots({
     lots: fixture.acquisitions.map((acquisition) => ({
@@ -400,9 +423,10 @@ const matchPureFixture = (fixture: DifferentialFixture) =>
       remainingQuantity: quantity(acquisition.quantity),
       costBasisPerUnit: MonetaryAmount.unsafeFromString(
         acquisition.costBasisPerUnit,
-        acquisition.fiatAmount === null
+        (acquisition.fiatAmount === null
           ? (fixture.disposal.fiatCurrency ?? acquisition.fiatCurrency ?? "EUR")
           : (acquisition.fiatCurrency ?? "EUR")
+        ).toUpperCase()
       ),
     })),
     disposal: {
@@ -412,7 +436,7 @@ const matchPureFixture = (fixture: DifferentialFixture) =>
           ? null
           : MonetaryAmount.unsafeFromString(
               fixture.disposal.fiatAmount,
-              fixture.disposal.fiatCurrency ?? "EUR"
+              (fixture.disposal.fiatCurrency ?? "EUR").toUpperCase()
             ),
     },
   })
@@ -756,6 +780,82 @@ describe("source FIFO and pure matcher differential", () => {
         matchedLayer: "fifo_inventory",
         needsReview: true,
         categorizationReason: expect.stringContaining("Currency mismatch: expected EUR, got USD"),
+      })
+    })
+  )
+
+  it.effect("normalizes FIFO currency casing and preserves legacy negative cost basis", () =>
+    Effect.gen(function* () {
+      const fixture: DifferentialFixture = {
+        acquisitions: [
+          {
+            externalId: "legacy-tolerant-lot",
+            rawRecordId: "00000000-0000-0000-0000-000000000843",
+            timestamp: DateTime.toDateUtc(DateTime.makeUnsafe("2025-01-01T10:00:00.000Z")),
+            quantity: "1.00000000",
+            fiatAmount: "-2.00000000",
+            fiatCurrency: "eur",
+            costBasisPerUnit: "2",
+          },
+        ],
+        disposal: {
+          externalId: "legacy-tolerant-disposal",
+          rawRecordId: "00000000-0000-0000-0000-000000000844",
+          timestamp: DateTime.toDateUtc(DateTime.makeUnsafe("2025-02-01T10:00:00.000Z")),
+          quantity: "0.50000000",
+          fiatAmount: "3.00000000",
+          fiatCurrency: "EUR",
+        },
+      }
+
+      const persistedResult = yield* assertParity(fixture)
+      const persistedLot = yield* loadPersistedLotAccounting("legacy-tolerant-lot")
+
+      expect(persistedLot).toEqual({
+        costBasisPerToken: "2.000000000000000000",
+        costBasisCurrency: "EUR",
+      })
+      expect(persistedResult.allocations).toEqual([
+        {
+          lotId: "legacy-tolerant-lot",
+          matchedQuantity: "0.5",
+          costBasis: "1.00000000",
+          proceeds: "3.00000000",
+          gainLoss: "2.00000000",
+        },
+      ])
+    })
+  )
+
+  it.effect("routes invalid fiat currency input to FIFO review without failing persistence", () =>
+    Effect.gen(function* () {
+      const acquisition: AcquisitionFact = {
+        externalId: "invalid-currency-lot",
+        rawRecordId: "00000000-0000-0000-0000-000000000845",
+        timestamp: DateTime.toDateUtc(DateTime.makeUnsafe("2025-01-01T10:00:00.000Z")),
+        quantity: "1.00000000",
+        fiatAmount: "2.00000000",
+        fiatCurrency: "USDC",
+        costBasisPerUnit: "2",
+      }
+
+      yield* persistFact({ ...acquisition, kind: "acquisition" })
+
+      const persistedRows = yield* loadPersistedRows([acquisition.externalId])
+      const persistedCurrencies = yield* loadPersistedFiatCurrencies([acquisition.externalId])
+      const review = yield* loadShortageReview(acquisition.externalId)
+
+      expect(persistedRows).toEqual({ lots: [], allocations: [] })
+      expect(persistedCurrencies).toEqual([
+        { externalId: acquisition.externalId, fiatCurrency: "USDC" },
+      ])
+      expect(review).toMatchObject({
+        reviewStatus: "needs_review",
+        matchedLayer: "fifo_inventory",
+        needsReview: true,
+        categorizationReason: expect.stringContaining(
+          "Review required because a FIFO value could not be processed safely"
+        ),
       })
     })
   )
