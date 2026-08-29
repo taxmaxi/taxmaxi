@@ -1196,14 +1196,27 @@ describe("source FIFO and pure matcher differential", () => {
       const persistedRows = yield* loadPersistedRows([acquisition.externalId])
       const persistedResult = yield* renderPersistedResult({ rows: persistedRows })
       const review = yield* loadShortageReview(disposal.externalId)
-      const inventoryMovements = yield* Effect.promise(() =>
+      const movementState = yield* Effect.promise(() =>
         runPg(
           Effect.gen(function* () {
             const db = yield* drizzle
-            return yield* db
+            const movements = yield* db
               .select({ id: schema.inventoryMovements.id })
               .from(schema.inventoryMovements)
               .where(eq(schema.inventoryMovements.transactionId, initialResult.transaction.id))
+            const allocations = yield* db
+              .select({ id: schema.inventoryMovementAllocations.id })
+              .from(schema.inventoryMovementAllocations)
+              .innerJoin(
+                schema.inventoryMovements,
+                eq(
+                  schema.inventoryMovements.id,
+                  schema.inventoryMovementAllocations.inventoryMovementId
+                )
+              )
+              .where(eq(schema.inventoryMovements.transactionId, initialResult.transaction.id))
+
+            return { movements, allocations }
           })
         )
       )
@@ -1212,7 +1225,8 @@ describe("source FIFO and pure matcher differential", () => {
         lots: [{ lotId: acquisition.externalId, remainingQuantity: "1" }],
         allocations: [],
       })
-      expect(inventoryMovements).toEqual([])
+      expect(movementState.movements).toHaveLength(1)
+      expect(movementState.allocations).toEqual([])
       expect(review).toMatchObject({
         reviewStatus: "needs_review",
         matchedLayer: "fifo_inventory",

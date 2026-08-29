@@ -2125,12 +2125,14 @@ const make = Effect.gen(function* () {
     providerTransfers,
     legs,
     feesOnly,
+    fifoMode,
   }: {
     readonly executor: SourceNormalizationExecutor
     readonly transaction: PersistedSourceTransaction
     readonly providerTransfers: ReadonlyArray<PersistedSourceProviderTransfer>
     readonly legs: ReadonlyArray<PersistedSourceLegRecord>
     readonly feesOnly: boolean
+    readonly fifoMode: "facts_only" | "allocate"
   }) => {
     const orderedProviderTransfers = [
       ...providerTransfers.filter((providerTransfer) => providerTransfer.direction === "inbound"),
@@ -2143,6 +2145,9 @@ const make = Effect.gen(function* () {
           providerTransfer.processingMode === "evidence_only" ||
           providerTransfer.processingMode === "stale"
         ) {
+          if (fifoMode === "facts_only") {
+            return
+          }
           return yield* removeInventoryMovementForProviderTransfer({
             executor,
             providerTransferId: providerTransfer.id,
@@ -2153,6 +2158,9 @@ const make = Effect.gen(function* () {
         const purpose = metadata.purpose
 
         if (feesOnly && purpose !== "fee") {
+          if (fifoMode === "facts_only") {
+            return
+          }
           return yield* removeInventoryMovementForProviderTransfer({
             executor,
             providerTransferId: providerTransfer.id,
@@ -2160,6 +2168,9 @@ const make = Effect.gen(function* () {
         }
 
         if (providerTransfer.providerAssetId === null) {
+          if (fifoMode === "facts_only") {
+            return
+          }
           return yield* removeInventoryMovementForProviderTransfer({
             executor,
             providerTransferId: providerTransfer.id,
@@ -2187,6 +2198,9 @@ const make = Effect.gen(function* () {
           )
 
         if (assetMapping?.assetId === null || assetMapping?.assetId === undefined) {
+          if (fifoMode === "facts_only") {
+            return
+          }
           return yield* removeInventoryMovementForProviderTransfer({
             executor,
             providerTransferId: providerTransfer.id,
@@ -2266,6 +2280,10 @@ const make = Effect.gen(function* () {
               "sourceNormalizationRepository.allocateProviderInventoryMovements.upsertMovement",
             error: "failed to persist inventory movement",
           })
+        }
+
+        if (fifoMode === "facts_only") {
+          return
         }
 
         yield* resetInventoryMovementAllocations({
@@ -2424,9 +2442,11 @@ const make = Effect.gen(function* () {
   const allocateFeeInventoryMovements = ({
     executor,
     legs,
+    fifoMode,
   }: {
     readonly executor: SourceNormalizationExecutor
     readonly legs: ReadonlyArray<PersistedSourceLegRecord>
+    readonly fifoMode: "facts_only" | "allocate"
   }) =>
     Effect.forEach(
       legs.filter((leg) => leg.kind === "fee"),
@@ -2438,6 +2458,10 @@ const make = Effect.gen(function* () {
           })
 
           if (amountComparison === 0) {
+            if (fifoMode === "facts_only") {
+              return
+            }
+
             const [existingMovement] = yield* executor
               .select({ id: schema.inventoryMovements.id })
               .from(schema.inventoryMovements)
@@ -2544,6 +2568,10 @@ const make = Effect.gen(function* () {
                 "sourceNormalizationRepository.allocateFeeInventoryMovements.upsertMovement",
               error: "failed to persist fee inventory movement",
             })
+          }
+
+          if (fifoMode === "facts_only") {
+            return
           }
 
           yield* resetInventoryMovementAllocations({
@@ -2741,6 +2769,22 @@ const make = Effect.gen(function* () {
             currentProviderTransferIds,
           })
 
+          if (materializesProviderMovements) {
+            yield* allocateProviderInventoryMovements({
+              executor: tx,
+              transaction: persistedTransaction,
+              providerTransfers: persistedProviderTransfers,
+              legs: persistedLegs,
+              feesOnly: hasFailedStatus,
+              fifoMode: "facts_only",
+            })
+            yield* allocateFeeInventoryMovements({
+              executor: tx,
+              legs: persistedLegs,
+              fifoMode: "facts_only",
+            })
+          }
+
           // Catch reviewable matcher errors outside this savepoint so every derived FIFO write
           // rolls back together while the outer transaction still persists facts and review.
           const transactionReview = yield* tx
@@ -2774,10 +2818,12 @@ const make = Effect.gen(function* () {
                     providerTransfers: persistedProviderTransfers,
                     legs: persistedLegs,
                     feesOnly: hasFailedStatus,
+                    fifoMode: "allocate",
                   })
                   yield* allocateFeeInventoryMovements({
                     executor: fifoTx,
                     legs: persistedLegs,
+                    fifoMode: "allocate",
                   })
                 }
               })
