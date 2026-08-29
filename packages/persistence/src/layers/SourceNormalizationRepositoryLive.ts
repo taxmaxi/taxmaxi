@@ -277,18 +277,20 @@ const decodeMonetaryAmount = ({
 const compareDecimalQuantities = ({
   left,
   right,
+  operation,
 }: {
   readonly left: string
   readonly right: string
+  readonly operation?: string
 }) =>
   Effect.gen(function* () {
     const leftQuantity = yield* decodeAccountingQuantity({
       value: left,
-      operation: "sourceNormalizationRepository.compareDecimalQuantities.left",
+      operation: operation ?? "sourceNormalizationRepository.compareDecimalQuantities.left",
     })
     const rightQuantity = yield* decodeAccountingQuantity({
       value: right,
-      operation: "sourceNormalizationRepository.compareDecimalQuantities.right",
+      operation: operation ?? "sourceNormalizationRepository.compareDecimalQuantities.right",
     })
 
     return BigDecimal.Order(leftQuantity, rightQuantity)
@@ -2455,6 +2457,7 @@ const make = Effect.gen(function* () {
           const amountComparison = yield* compareDecimalQuantities({
             left: leg.amount,
             right: "0",
+            operation: FIFO_INPUT_REJECTED_OPERATION,
           })
 
           if (amountComparison === 0) {
@@ -2769,26 +2772,26 @@ const make = Effect.gen(function* () {
             currentProviderTransferIds,
           })
 
-          if (materializesProviderMovements) {
-            yield* allocateProviderInventoryMovements({
-              executor: tx,
-              transaction: persistedTransaction,
-              providerTransfers: persistedProviderTransfers,
-              legs: persistedLegs,
-              feesOnly: hasFailedStatus,
-              fifoMode: "facts_only",
-            })
-            yield* allocateFeeInventoryMovements({
-              executor: tx,
-              legs: persistedLegs,
-              fifoMode: "facts_only",
-            })
-          }
+          // Catch reviewable FIFO input and matcher errors outside this savepoint so every
+          // derived FIFO write rolls back together while the outer transaction persists facts.
+          const transactionReview = yield* Effect.gen(function* () {
+            if (materializesProviderMovements) {
+              yield* allocateProviderInventoryMovements({
+                executor: tx,
+                transaction: persistedTransaction,
+                providerTransfers: persistedProviderTransfers,
+                legs: persistedLegs,
+                feesOnly: hasFailedStatus,
+                fifoMode: "facts_only",
+              })
+              yield* allocateFeeInventoryMovements({
+                executor: tx,
+                legs: persistedLegs,
+                fifoMode: "facts_only",
+              })
+            }
 
-          // Catch reviewable matcher errors outside this savepoint so every derived FIFO write
-          // rolls back together while the outer transaction still persists facts and review.
-          const transactionReview = yield* tx
-            .transaction((fifoTx) =>
+            yield* tx.transaction((fifoTx) =>
               Effect.gen(function* () {
                 if (materializesProviderMovements) {
                   yield* resetInventoryMovementAllocationsForTransaction({
@@ -2828,24 +2831,25 @@ const make = Effect.gen(function* () {
                 }
               })
             )
-            .pipe(
-              wrapSyncEngineStorageError(
-                "sourceNormalizationRepository.persistNormalizedArtifacts.applyFifo"
-              ),
-              Effect.as(params.transactionReview),
-              Effect.catchTag("SyncEngineStorageError", (error) =>
-                isFifoInventoryReviewError(error)
-                  ? Effect.succeed(
-                      buildFifoInventoryReview({
-                        transaction: persistedTransaction,
-                        existingReview: params.transactionReview,
-                        resolvedTransactionType: params.resolvedTransactionType,
-                        error,
-                      })
-                    )
-                  : Effect.fail(error)
-              )
+
+            return params.transactionReview
+          }).pipe(
+            wrapSyncEngineStorageError(
+              "sourceNormalizationRepository.persistNormalizedArtifacts.applyFifo"
+            ),
+            Effect.catchTag("SyncEngineStorageError", (error) =>
+              isFifoInventoryReviewError(error)
+                ? Effect.succeed(
+                    buildFifoInventoryReview({
+                      transaction: persistedTransaction,
+                      existingReview: params.transactionReview,
+                      resolvedTransactionType: params.resolvedTransactionType,
+                      error,
+                    })
+                  )
+                : Effect.fail(error)
             )
+          )
 
           yield* upsertTransactionReview({
             executor: tx,

@@ -1235,4 +1235,67 @@ describe("source FIFO and pure matcher differential", () => {
       })
     })
   )
+
+  it.effect("routes a rejected fee quantity to FIFO review without failing persistence", () =>
+    Effect.gen(function* () {
+      const transactionFact: DisposalFact = {
+        externalId: "rejected-fee-quantity-transaction",
+        rawRecordId: "00000000-0000-0000-0000-000000000859",
+        timestamp: DateTime.toDateUtc(DateTime.makeUnsafe("2025-02-01T10:00:00.000Z")),
+        quantity: "0.10000000",
+        fiatAmount: "1.00000000",
+        fiatCurrency: "EUR",
+      }
+
+      yield* Effect.promise(() =>
+        runPg(
+          seedRawRecord({
+            externalId: transactionFact.externalId,
+            rawRecordId: transactionFact.rawRecordId,
+            timestamp: transactionFact.timestamp,
+          })
+        )
+      )
+
+      const persistenceInput = makePersistenceInput({
+        cexAccountId: repositoryFixture.cexAccountId,
+        fact: { ...transactionFact, kind: "disposal" },
+      })
+      const feeLeg = {
+        ...makeLeg({ ...transactionFact, kind: "disposal" }),
+        externalId: "rejected-fee-quantity-leg",
+        amount: "-0.10000000",
+        kind: "fee" as const,
+        fiatAmount: null,
+        fiatCurrency: null,
+      }
+      const result = yield* Effect.promise(() =>
+        runRepository(
+          Effect.flatMap(SourceNormalizationRepository, (repository) =>
+            repository.persistNormalizedArtifacts({
+              ...persistenceInput,
+              legs: [feeLeg],
+            })
+          )
+        )
+      )
+      const review = yield* loadShortageReview(transactionFact.externalId)
+
+      expect(result.legs).toEqual([
+        expect.objectContaining({
+          sourceRawRecordId: transactionFact.rawRecordId,
+          kind: "fee",
+          amount: expect.stringMatching(/^-0\.1(?:0+)?$/),
+        }),
+      ])
+      expect(review).toMatchObject({
+        reviewStatus: "needs_review",
+        matchedLayer: "fifo_inventory",
+        needsReview: true,
+        categorizationReason: expect.stringContaining(
+          "Review required because a FIFO value could not be processed safely"
+        ),
+      })
+    })
+  )
 })
