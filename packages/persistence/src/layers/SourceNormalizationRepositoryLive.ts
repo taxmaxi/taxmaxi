@@ -9,18 +9,21 @@
  */
 
 import { createHash } from "node:crypto"
+import { matchFifoLots, type FifoMatchError } from "@my/accounting"
+import {
+  AccountingQuantity,
+  format as formatAccountingQuantity,
+  MonetaryAmount,
+  prorate,
+  subtract as subtractAccountingQuantity,
+} from "@my/core/accounting"
 import { and, asc, eq, gt, inArray, isNotNull, isNull, lte, notInArray, or, sql } from "drizzle-orm"
+import * as BigDecimal from "effect/BigDecimal"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
+import * as Option from "effect/Option"
 import * as Schema from "effect/Schema"
 import { canonicalizeAddress } from "@my/core/assets"
-import {
-  divideToScale,
-  formatScaled,
-  makeFixedPointErrorFactory,
-  parseDecimal,
-  powerOfTen,
-} from "./SourceNormalizationFixedPoint.ts"
 import { drizzle } from "./PgClientLive.ts"
 import { schema } from "../schema/index.ts"
 import {
@@ -69,6 +72,7 @@ interface OpenFifoLotRecord {
   readonly originalAmount: string
   readonly remainingAmount: string
   readonly costBasisPerToken: string
+  readonly costBasisCurrency: string
 }
 
 interface FifoLotAllocation {
@@ -82,6 +86,8 @@ interface FifoLotAllocation {
 
 const INSUFFICIENT_FIFO_INVENTORY_OPERATION =
   "sourceNormalizationRepository.buildFifoLotAllocations"
+const FIFO_CURRENCY_MISMATCH_OPERATION =
+  "sourceNormalizationRepository.buildFifoLotAllocations.currencyMismatch"
 
 /**
  * Wrap residual errors in `SyncEngineStorageError`, but let a typed credit-exhaustion
@@ -163,8 +169,9 @@ const decodeNumericString = ({
     )
   )
 
-const isInsufficientFifoInventoryError = (error: SyncEngineStorageError): boolean =>
-  error.operation === INSUFFICIENT_FIFO_INVENTORY_OPERATION
+const isFifoInventoryReviewError = (error: SyncEngineStorageError): boolean =>
+  error.operation === INSUFFICIENT_FIFO_INVENTORY_OPERATION ||
+  error.operation === FIFO_CURRENCY_MISMATCH_OPERATION
 
 const FIFO_INVENTORY_REVIEW_LAYER = "fifo_inventory"
 const FIFO_INVENTORY_REVIEW_REASON_PREFIX =
@@ -185,7 +192,7 @@ const appendReviewSegment = ({
       ? existing
       : `${existing}${separator}${segment}`
 
-const buildInsufficientInventoryReview = ({
+const buildFifoInventoryReview = ({
   transaction,
   existingReview,
   resolvedTransactionType,
@@ -203,9 +210,11 @@ const buildInsufficientInventoryReview = ({
   const principalId = transaction.principalId
 
   const inventoryReason =
-    `${FIFO_INVENTORY_REVIEW_REASON_PREFIX} ` +
-    "This usually means an opening balance, transfer in, or historical acquisition is missing. " +
-    String(error.cause)
+    error.operation === FIFO_CURRENCY_MISMATCH_OPERATION
+      ? `${FIFO_INVENTORY_REVIEW_LAYER}: Review required because the lot cost-basis currency does not match the disposal proceeds currency. ${String(error.cause)}`
+      : `${FIFO_INVENTORY_REVIEW_REASON_PREFIX} ` +
+        "This usually means an opening balance, transfer in, or historical acquisition is missing. " +
+        String(error.cause)
   const preservesReviewedState =
     existingReview?.reviewStatus === "approved" || existingReview?.reviewStatus === "changed"
 
@@ -232,33 +241,29 @@ const buildInsufficientInventoryReview = ({
   }
 }
 
-const fixedPointErrorFactory = makeFixedPointErrorFactory(({ kind, message }) =>
-  toSyncEngineStorageError({
-    operation: `sourceNormalizationRepository.fixedPoint.${kind}`,
-    error: message,
-  })
-)
-
-const signedDigits = (params: { readonly sign: 1 | -1; readonly digits: bigint }): bigint =>
-  params.sign === -1 ? -params.digits : params.digits
-
-const subtractScaledDecimals = ({
-  left,
-  right,
-  scale,
+const decodeAccountingQuantity = ({
+  value,
+  operation,
 }: {
-  readonly left: string
-  readonly right: string
-  readonly scale: number
+  readonly value: string
+  readonly operation: string
 }) =>
-  Effect.gen(function* () {
-    const parsedLeft = yield* parseDecimal(left, fixedPointErrorFactory)
-    const parsedRight = yield* parseDecimal(right, fixedPointErrorFactory)
-    const leftDigits = parsedLeft.digits * powerOfTen(scale - parsedLeft.scale)
-    const rightDigits = parsedRight.digits * powerOfTen(scale - parsedRight.scale)
+  Schema.decodeEffect(AccountingQuantity)(value).pipe(
+    Effect.mapError((error) => toSyncEngineStorageError({ error, operation }))
+  )
 
-    return formatScaled({ digits: leftDigits - rightDigits, scale })
-  })
+const decodeMonetaryAmount = ({
+  amount,
+  currency,
+  operation,
+}: {
+  readonly amount: string
+  readonly currency: string
+  readonly operation: string
+}) =>
+  Schema.decodeEffect(MonetaryAmount)({ amount, currency }).pipe(
+    Effect.mapError((error) => toSyncEngineStorageError({ error, operation }))
+  )
 
 const compareDecimalQuantities = ({
   left,
@@ -268,21 +273,16 @@ const compareDecimalQuantities = ({
   readonly right: string
 }) =>
   Effect.gen(function* () {
-    const parsedLeft = yield* parseDecimal(left, fixedPointErrorFactory)
-    const parsedRight = yield* parseDecimal(right, fixedPointErrorFactory)
-    const scale = Math.max(parsedLeft.scale, parsedRight.scale)
-    const leftDigits = signedDigits(parsedLeft) * powerOfTen(scale - parsedLeft.scale)
-    const rightDigits = signedDigits(parsedRight) * powerOfTen(scale - parsedRight.scale)
+    const leftQuantity = yield* decodeAccountingQuantity({
+      value: left,
+      operation: "sourceNormalizationRepository.compareDecimalQuantities.left",
+    })
+    const rightQuantity = yield* decodeAccountingQuantity({
+      value: right,
+      operation: "sourceNormalizationRepository.compareDecimalQuantities.right",
+    })
 
-    if (leftDigits < rightDigits) {
-      return -1
-    }
-
-    if (leftDigits > rightDigits) {
-      return 1
-    }
-
-    return 0
+    return BigDecimal.Order(leftQuantity, rightQuantity)
   })
 
 const subtractDecimalQuantities = ({
@@ -293,20 +293,43 @@ const subtractDecimalQuantities = ({
   readonly right: string
 }) =>
   Effect.gen(function* () {
-    const parsedLeft = yield* parseDecimal(left, fixedPointErrorFactory)
-    const parsedRight = yield* parseDecimal(right, fixedPointErrorFactory)
-    const scale = Math.max(parsedLeft.scale, parsedRight.scale)
-    const leftDigits = signedDigits(parsedLeft) * powerOfTen(scale - parsedLeft.scale)
-    const rightDigits = signedDigits(parsedRight) * powerOfTen(scale - parsedRight.scale)
+    const leftQuantity = yield* decodeAccountingQuantity({
+      value: left,
+      operation: "sourceNormalizationRepository.subtractDecimalQuantities.left",
+    })
+    const rightQuantity = yield* decodeAccountingQuantity({
+      value: right,
+      operation: "sourceNormalizationRepository.subtractDecimalQuantities.right",
+    })
 
-    return formatScaled({ digits: leftDigits - rightDigits, scale })
+    return yield* Option.match(subtractAccountingQuantity(leftQuantity, rightQuantity), {
+      onNone: () =>
+        toSyncEngineStorageError({
+          error: `Cannot subtract ${right} from ${left}`,
+          operation: "sourceNormalizationRepository.subtractDecimalQuantities",
+        }),
+      onSome: (result) => Effect.succeed(formatAccountingQuantity(result)),
+    })
+  })
+
+const unitQuantity = AccountingQuantity.make(BigDecimal.fromBigInt(1n))
+
+const toFifoMatchStorageError = (error: FifoMatchError): SyncEngineStorageError =>
+  toSyncEngineStorageError({
+    error,
+    operation:
+      error._tag === "CurrencyMismatchError"
+        ? FIFO_CURRENCY_MISMATCH_OPERATION
+        : "sourceNormalizationRepository.buildFifoLotAllocations.match",
   })
 
 const toCostBasisPerToken = ({
   fiatAmount,
+  fiatCurrency,
   quantityAmount,
 }: {
   readonly fiatAmount: string | null
+  readonly fiatCurrency: string
   readonly quantityAmount: string
 }) =>
   Effect.gen(function* () {
@@ -314,54 +337,30 @@ const toCostBasisPerToken = ({
       return "0.000000000000000000"
     }
 
-    const parsedFiat = yield* parseDecimal(fiatAmount, fixedPointErrorFactory)
-    const parsedQuantity = yield* parseDecimal(quantityAmount, fixedPointErrorFactory)
-    return divideToScale({
-      numerator: parsedFiat.digits * powerOfTen(parsedQuantity.scale),
-      denominator: parsedQuantity.digits * powerOfTen(parsedFiat.scale),
+    const totalCostBasis = yield* decodeMonetaryAmount({
+      amount: fiatAmount,
+      currency: fiatCurrency,
+      operation: "sourceNormalizationRepository.toCostBasisPerToken.fiatAmount",
+    })
+    const quantity = yield* decodeAccountingQuantity({
+      value: quantityAmount,
+      operation: "sourceNormalizationRepository.toCostBasisPerToken.quantityAmount",
+    })
+    const costBasisPerToken = yield* prorate({
+      total: totalCostBasis,
+      part: unitQuantity,
+      whole: quantity,
       scale: 18,
-    })
-  })
+    }).pipe(
+      Effect.mapError((error) =>
+        toSyncEngineStorageError({
+          error,
+          operation: "sourceNormalizationRepository.toCostBasisPerToken",
+        })
+      )
+    )
 
-const allocateProceeds = ({
-  totalFiat,
-  matchedAmount,
-  totalAmount,
-}: {
-  readonly totalFiat: string | null
-  readonly matchedAmount: string
-  readonly totalAmount: string
-}) =>
-  Effect.gen(function* () {
-    if (totalFiat === null) {
-      return "0.00000000"
-    }
-
-    const parsedFiat = yield* parseDecimal(totalFiat, fixedPointErrorFactory)
-    const parsedMatched = yield* parseDecimal(matchedAmount, fixedPointErrorFactory)
-    const parsedTotal = yield* parseDecimal(totalAmount, fixedPointErrorFactory)
-    return divideToScale({
-      numerator: parsedFiat.digits * parsedMatched.digits * powerOfTen(parsedTotal.scale),
-      denominator: parsedTotal.digits * powerOfTen(parsedFiat.scale + parsedMatched.scale),
-      scale: 8,
-    })
-  })
-
-const calculateMatchedCostBasis = ({
-  costBasisPerToken,
-  matchedAmount,
-}: {
-  readonly costBasisPerToken: string
-  readonly matchedAmount: string
-}) =>
-  Effect.gen(function* () {
-    const parsedCostBasisPerToken = yield* parseDecimal(costBasisPerToken, fixedPointErrorFactory)
-    const parsedMatched = yield* parseDecimal(matchedAmount, fixedPointErrorFactory)
-    return divideToScale({
-      numerator: parsedCostBasisPerToken.digits * parsedMatched.digits,
-      denominator: powerOfTen(parsedCostBasisPerToken.scale + parsedMatched.scale),
-      scale: 8,
-    })
+    return costBasisPerToken.format()
   })
 
 const make = Effect.gen(function* () {
@@ -1376,6 +1375,7 @@ const make = Effect.gen(function* () {
           originalAmount: schema.fifoLots.originalAmount,
           remainingAmount: schema.fifoLots.remainingAmount,
           costBasisPerToken: schema.fifoLots.costBasisPerToken,
+          costBasisCurrency: schema.fifoLots.costBasisCurrency,
         })
         .from(schema.fifoLots)
         .innerJoin(
@@ -1490,94 +1490,63 @@ const make = Effect.gen(function* () {
     lots,
     disposalAmount,
     disposalFiatAmount,
+    disposalFiatCurrency,
   }: {
     readonly lots: ReadonlyArray<OpenFifoLotRecord>
     readonly disposalAmount: string
     readonly disposalFiatAmount: string | null
+    readonly disposalFiatCurrency: string | null
   }) =>
     Effect.gen(function* () {
-      const allocations = yield* Effect.reduce(
-        lots,
-        () => ({
-          remainingAmount: disposalAmount,
-          items: [] as ReadonlyArray<FifoLotAllocation>,
-        }),
-        (state, lot) =>
-          Effect.gen(function* () {
-            const remainingComparison = yield* compareDecimalQuantities({
-              left: state.remainingAmount,
-              right: "0",
-            })
-            if (remainingComparison === 0) {
-              return state
-            }
-
-            const lotComparison = yield* compareDecimalQuantities({
-              left: lot.remainingAmount,
-              right: "0",
-            })
-            if (lotComparison === 0) {
-              return state
-            }
-
-            const matchedAmountComparison = yield* compareDecimalQuantities({
-              left: lot.remainingAmount,
-              right: state.remainingAmount,
-            })
-            const matchedAmount =
-              matchedAmountComparison <= 0 ? lot.remainingAmount : state.remainingAmount
-            const costBasis = yield* calculateMatchedCostBasis({
-              costBasisPerToken: lot.costBasisPerToken,
-              matchedAmount,
-            })
-            const proceeds = yield* allocateProceeds({
-              totalFiat: disposalFiatAmount,
-              matchedAmount,
-              totalAmount: disposalAmount,
-            })
-            const gainLoss = yield* subtractScaledDecimals({
-              left: proceeds,
-              right: costBasis,
-              scale: 8,
-            })
-            const nextRemainingAmount = yield* subtractDecimalQuantities({
-              left: state.remainingAmount,
-              right: matchedAmount,
-            })
-            const nextLotRemainingAmount = yield* subtractDecimalQuantities({
-              left: lot.remainingAmount,
-              right: matchedAmount,
-            })
-
-            return {
-              remainingAmount: nextRemainingAmount,
-              items: [
-                ...state.items,
-                {
-                  fifoLotId: lot.id,
-                  matchedAmount,
-                  costBasis,
-                  proceeds,
-                  gainLoss,
-                  remainingAmount: nextLotRemainingAmount,
-                },
-              ],
-            }
+      const decodedLots = yield* Effect.forEach(lots, (lot) =>
+        Effect.gen(function* () {
+          const remainingQuantity = yield* decodeAccountingQuantity({
+            value: lot.remainingAmount,
+            operation: "sourceNormalizationRepository.buildFifoLotAllocations.remainingAmount",
           })
-      )
+          const costBasisPerUnit = yield* decodeMonetaryAmount({
+            amount: lot.costBasisPerToken,
+            currency: lot.costBasisCurrency,
+            operation: "sourceNormalizationRepository.buildFifoLotAllocations.costBasisPerToken",
+          })
 
-      const remainingComparison = yield* compareDecimalQuantities({
-        left: allocations.remainingAmount,
-        right: "0",
+          return { id: lot.id, remainingQuantity, costBasisPerUnit }
+        })
+      )
+      const quantity = yield* decodeAccountingQuantity({
+        value: disposalAmount,
+        operation: "sourceNormalizationRepository.buildFifoLotAllocations.disposalAmount",
       })
-      if (remainingComparison > 0) {
+      const proceeds =
+        disposalFiatAmount === null
+          ? null
+          : yield* decodeMonetaryAmount({
+              amount: disposalFiatAmount,
+              currency: disposalFiatCurrency ?? "EUR",
+              operation: "sourceNormalizationRepository.buildFifoLotAllocations.proceeds",
+            })
+      const result = yield* matchFifoLots({
+        lots: decodedLots,
+        disposal: { quantity, proceeds },
+      }).pipe(Effect.mapError(toFifoMatchStorageError))
+
+      if (result._tag === "InventoryShortage") {
         return yield* toSyncEngineStorageError({
-          operation: "sourceNormalizationRepository.buildFifoLotAllocations",
-          error: `Insufficient FIFO inventory for outbound amount ${allocations.remainingAmount}`,
+          operation: INSUFFICIENT_FIFO_INVENTORY_OPERATION,
+          error: `Insufficient FIFO inventory for outbound amount ${formatAccountingQuantity(result.shortage)}`,
         })
       }
 
-      return allocations.items
+      return result.allocations.map(
+        (allocation): FifoLotAllocation => ({
+          fifoLotId: allocation.lotId,
+          matchedAmount: formatAccountingQuantity(allocation.matchedQuantity),
+          costBasis: allocation.costBasis.format(),
+          proceeds: allocation.proceeds.format(),
+          gainLoss: allocation.gainLoss.format(),
+          remainingAmount: formatAccountingQuantity(allocation.remainingQuantity),
+        })
+      )
     })
 
   const ensureFifoLotForLeg = ({
@@ -1595,6 +1564,7 @@ const make = Effect.gen(function* () {
       const now = nowDate()
       const costBasisPerToken = yield* toCostBasisPerToken({
         fiatAmount: leg.fiatAmount,
+        fiatCurrency: leg.fiatCurrency ?? "EUR",
         quantityAmount: leg.amount,
       })
 
@@ -1666,6 +1636,7 @@ const make = Effect.gen(function* () {
         lots: openLots,
         disposalAmount: leg.amount,
         disposalFiatAmount: leg.fiatAmount,
+        disposalFiatCurrency: leg.fiatCurrency,
       })
 
       yield* Effect.forEach(allocations, (allocation) =>
@@ -2358,6 +2329,7 @@ const make = Effect.gen(function* () {
           lots: openLots,
           disposalAmount: providerTransfer.amount,
           disposalFiatAmount: null,
+          disposalFiatCurrency: null,
         })
 
         yield* Effect.forEach(allocations, (allocation) =>
@@ -2541,6 +2513,7 @@ const make = Effect.gen(function* () {
             lots: openLots,
             disposalAmount: leg.amount,
             disposalFiatAmount: null,
+            disposalFiatCurrency: null,
           })
 
           yield* Effect.forEach(allocations, (allocation) =>
@@ -2761,13 +2734,13 @@ const make = Effect.gen(function* () {
             ),
             Effect.as(params.transactionReview),
             Effect.catchTag("SyncEngineStorageError", (error) =>
-              isInsufficientFifoInventoryError(error)
+              isFifoInventoryReviewError(error)
                 ? resetInventoryMovementAllocationsForTransaction({
                     executor: tx,
                     transactionId: persistedTransaction.id,
                   }).pipe(
                     Effect.as(
-                      buildInsufficientInventoryReview({
+                      buildFifoInventoryReview({
                         transaction: persistedTransaction,
                         existingReview: params.transactionReview,
                         resolvedTransactionType: params.resolvedTransactionType,

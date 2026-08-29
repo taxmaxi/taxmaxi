@@ -472,7 +472,7 @@ describe("source FIFO and pure matcher differential", () => {
       )
     })
 
-  const persistLegacyFixture = (fixture: DifferentialFixture) =>
+  const persistRepositoryFixture = (fixture: DifferentialFixture) =>
     Effect.gen(function* () {
       yield* resetFixture()
       yield* Effect.forEach(fixture.acquisitions, (acquisition) =>
@@ -488,7 +488,7 @@ describe("source FIFO and pure matcher differential", () => {
 
   const assertParity = (fixture: DifferentialFixture) =>
     Effect.gen(function* () {
-      const persistedResult = yield* persistLegacyFixture(fixture)
+      const persistedResult = yield* persistRepositoryFixture(fixture)
 
       const pureResult = yield* matchPureFixture(fixture)
 
@@ -704,7 +704,7 @@ describe("source FIFO and pure matcher differential", () => {
     })
   )
 
-  it.effect("surfaces mixed fiat currencies as a typed pure-matcher mismatch", () =>
+  it.effect("routes mixed fiat currencies to FIFO review without consuming inventory", () =>
     Effect.gen(function* () {
       const fixture: DifferentialFixture = {
         acquisitions: [
@@ -728,33 +728,32 @@ describe("source FIFO and pure matcher differential", () => {
         },
       }
 
-      const persistedResult = yield* persistLegacyFixture(fixture)
+      const persistedResult = yield* persistRepositoryFixture(fixture)
       const persistedCurrencies = yield* loadPersistedFiatCurrencies([
         "mixed-currency-lot",
         "mixed-currency-disposal",
       ])
       const pureError = yield* Effect.flip(matchPureFixture(fixture))
+      const review = yield* loadShortageReview(fixture.disposal.externalId)
 
       expect(persistedCurrencies).toEqual([
         { externalId: "mixed-currency-lot", fiatCurrency: "USD" },
         { externalId: "mixed-currency-disposal", fiatCurrency: "EUR" },
       ])
       expect(persistedResult).toEqual({
-        lots: [{ lotId: "mixed-currency-lot", remainingQuantity: "0.5" }],
-        allocations: [
-          {
-            lotId: "mixed-currency-lot",
-            matchedQuantity: "0.5",
-            costBasis: "1.00000000",
-            proceeds: "3.00000000",
-            gainLoss: "2.00000000",
-          },
-        ],
+        lots: [{ lotId: "mixed-currency-lot", remainingQuantity: "1" }],
+        allocations: [],
       })
       expect(pureError).toMatchObject({
         _tag: "CurrencyMismatchError",
         expected: "EUR",
         actual: "USD",
+      })
+      expect(review).toMatchObject({
+        reviewStatus: "needs_review",
+        matchedLayer: "fifo_inventory",
+        needsReview: true,
+        categorizationReason: expect.stringContaining("Currency mismatch: expected EUR, got USD"),
       })
     })
   )
