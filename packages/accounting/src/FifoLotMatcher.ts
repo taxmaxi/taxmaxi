@@ -14,12 +14,13 @@ import {
 import {
   type CurrencyMismatchError,
   type DivisionByZeroError,
-  type MonetaryAmount,
+  MonetaryAmount,
   round,
   subtract,
 } from "@my/core/shared/values/MonetaryAmount"
 import * as BigDecimal from "effect/BigDecimal"
 import * as Effect from "effect/Effect"
+import * as Schema from "effect/Schema"
 
 const ALLOCATION_SCALE = 8
 
@@ -33,7 +34,7 @@ export interface FifoLot {
 /** One disposal to match against ordered acquisition lots. */
 export interface FifoDisposal {
   readonly quantity: AccountingQuantity
-  readonly proceeds: MonetaryAmount
+  readonly proceeds: MonetaryAmount | null
 }
 
 /** The factual values allocated from one acquisition lot to the disposal. */
@@ -62,8 +63,24 @@ export interface InventoryShortage {
 /** The complete FIFO match, including a possible inventory shortage value. */
 export type FifoMatchResult = FullyMatched | InventoryShortage
 
+/** A monetary matcher input that is outside the factual FIFO domain. */
+export class FifoMonetaryValueOutOfRangeError extends Schema.TaggedError<FifoMonetaryValueOutOfRangeError>()(
+  "FifoMonetaryValueOutOfRangeError",
+  {
+    field: Schema.Literals(["costBasisPerUnit", "proceeds"]),
+    value: Schema.String,
+  }
+) {
+  override get message(): string {
+    return `${this.field} must be non-negative, got ${this.value}`
+  }
+}
+
 /** Typed failures possible while calculating monetary allocations. */
-export type FifoMatchError = CurrencyMismatchError | DivisionByZeroError
+export type FifoMatchError =
+  | CurrencyMismatchError
+  | DivisionByZeroError
+  | FifoMonetaryValueOutOfRangeError
 
 const subtractQuantity = (
   left: AccountingQuantity,
@@ -84,6 +101,26 @@ export const matchFifoLots = ({
   readonly disposal: FifoDisposal
 }): Effect.Effect<FifoMatchResult, FifoMatchError, never> =>
   Effect.gen(function* () {
+    if (disposal.proceeds?.isNegative === true) {
+      return yield* Effect.fail(
+        new FifoMonetaryValueOutOfRangeError({
+          field: "proceeds",
+          value: disposal.proceeds.format(),
+        })
+      )
+    }
+
+    for (const lot of lots) {
+      if (lot.costBasisPerUnit.isNegative) {
+        return yield* Effect.fail(
+          new FifoMonetaryValueOutOfRangeError({
+            field: "costBasisPerUnit",
+            value: lot.costBasisPerUnit.format(),
+          })
+        )
+      }
+    }
+
     let remainingQuantity = disposal.quantity
     const allocations: Array<FifoAllocation> = []
 
@@ -103,7 +140,7 @@ export const matchFifoLots = ({
         ALLOCATION_SCALE
       )
       const proceeds = yield* prorate({
-        total: disposal.proceeds,
+        total: disposal.proceeds ?? MonetaryAmount.zero(lot.costBasisPerUnit.currency),
         part: matchedQuantity,
         whole: disposal.quantity,
         scale: ALLOCATION_SCALE,

@@ -560,6 +560,9 @@ importers:
       '@effect/vitest':
         specifier: 4.0.0-rc.109
         version: 4.0.0-rc.109(effect@4.0.0-rc.109)(vitest@4.1.9)
+      '@my/accounting':
+        specifier: workspace:*
+        version: link:../accounting
       '@my/typescript-config':
         specifier: workspace:*
         version: link:../typescript-config
