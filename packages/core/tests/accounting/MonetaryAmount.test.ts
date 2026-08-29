@@ -52,6 +52,22 @@ describe("MonetaryAmount accounting arithmetic", () => {
     })
   )
 
+  it.effect("preserves the requested fractional scale beyond integer digits", () =>
+    Effect.gen(function* () {
+      const allocated = yield* prorate({
+        total: MonetaryAmount.unsafeFromString("10", "EUR"),
+        part: decodeQuantity("1"),
+        whole: decodeQuantity("3"),
+        scale: 100,
+      })
+      const expected = BigDecimal.fromStringUnsafe(
+        "3.3333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333"
+      )
+
+      expect(BigDecimal.equals(allocated.amount, expected)).toBe(true)
+    })
+  )
+
   it.effect("reports zero-total proration as a typed error", () =>
     Effect.gen(function* () {
       const error = yield* prorate({
