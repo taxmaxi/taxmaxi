@@ -45,13 +45,16 @@ const runRepository = <A, E>(effect: Effect.Effect<A, E, SourceNormalizationRepo
 
 const quantity = Schema.decodeUnknownSync(AccountingQuantity)
 
-const formatAtAccountingScale = (value: string): string => {
+const formatMonetaryAtAccountingScale = (value: string): string => {
   const scaled = BigDecimal.scale(BigDecimal.fromStringUnsafe(value), 8)
   const negative = scaled.value < 0n
   const digits = (negative ? -scaled.value : scaled.value).toString().padStart(9, "0")
 
   return `${negative ? "-" : ""}${digits.slice(0, -8)}.${digits.slice(-8)}`
 }
+
+const formatExactQuantity = (value: string): string =>
+  BigDecimal.format(BigDecimal.fromStringUnsafe(value))
 
 interface FifoFact {
   readonly externalId: string
@@ -62,7 +65,6 @@ interface FifoFact {
 }
 
 interface AcquisitionFact extends FifoFact {
-  readonly fiatAmount: string
   readonly costBasisPerUnit: string
 }
 
@@ -270,16 +272,16 @@ const renderPureResult = ({
       lotId: acquisition.externalId,
       remainingQuantity:
         allocation === undefined
-          ? formatAtAccountingScale(acquisition.quantity)
-          : formatAtAccountingScale(formatAccountingQuantity(allocation.remainingQuantity)),
+          ? formatExactQuantity(acquisition.quantity)
+          : formatExactQuantity(formatAccountingQuantity(allocation.remainingQuantity)),
     }
   }),
   allocations: result.allocations.map((allocation) => ({
     lotId: allocation.lotId,
-    matchedQuantity: formatAtAccountingScale(formatAccountingQuantity(allocation.matchedQuantity)),
-    costBasis: formatAtAccountingScale(allocation.costBasis.format()),
-    proceeds: formatAtAccountingScale(allocation.proceeds.format()),
-    gainLoss: formatAtAccountingScale(allocation.gainLoss.format()),
+    matchedQuantity: formatExactQuantity(formatAccountingQuantity(allocation.matchedQuantity)),
+    costBasis: formatMonetaryAtAccountingScale(allocation.costBasis.format()),
+    proceeds: formatMonetaryAtAccountingScale(allocation.proceeds.format()),
+    gainLoss: formatMonetaryAtAccountingScale(allocation.gainLoss.format()),
   })),
 })
 
@@ -329,7 +331,7 @@ const renderPersistedResult = ({ rows }: { readonly rows: PersistedFifoRows }) =
         ? Effect.die("Differential fixture lot is missing an external ID")
         : Effect.succeed({
             lotId: lot.lotId,
-            remainingQuantity: formatAtAccountingScale(lot.remainingQuantity),
+            remainingQuantity: formatExactQuantity(lot.remainingQuantity),
           })
     )
     const allocations = yield* Effect.forEach(rows.allocations, (allocation) =>
@@ -337,14 +339,55 @@ const renderPersistedResult = ({ rows }: { readonly rows: PersistedFifoRows }) =
         ? Effect.die("Differential fixture allocation is missing a lot external ID")
         : Effect.succeed({
             lotId: allocation.lotId,
-            matchedQuantity: formatAtAccountingScale(allocation.matchedQuantity),
-            costBasis: formatAtAccountingScale(allocation.costBasis),
-            proceeds: formatAtAccountingScale(allocation.proceeds),
-            gainLoss: formatAtAccountingScale(allocation.gainLoss),
+            matchedQuantity: formatExactQuantity(allocation.matchedQuantity),
+            costBasis: formatMonetaryAtAccountingScale(allocation.costBasis),
+            proceeds: formatMonetaryAtAccountingScale(allocation.proceeds),
+            gainLoss: formatMonetaryAtAccountingScale(allocation.gainLoss),
           })
     )
 
     return { lots, allocations } satisfies ComparableFifoResult
+  })
+
+const loadShortageReview = (disposalExternalId: string) =>
+  Effect.promise(() =>
+    runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const [review] = yield* db
+          .select({
+            reviewStatus: schema.transactionReviews.reviewStatus,
+            matchedLayer: schema.transactionReviews.matchedLayer,
+            needsReview: schema.transactionReviews.needsReview,
+            categorizationReason: schema.transactionReviews.categorizationReason,
+          })
+          .from(schema.transactionReviews)
+          .innerJoin(
+            schema.transactions,
+            eq(schema.transactions.id, schema.transactionReviews.transactionId)
+          )
+          .where(eq(schema.transactions.externalId, `transaction-${disposalExternalId}`))
+          .limit(1)
+
+        return review
+      })
+    )
+  )
+
+const matchPureFixture = (fixture: DifferentialFixture) =>
+  matchFifoLots({
+    lots: fixture.acquisitions.map((acquisition) => ({
+      id: acquisition.externalId,
+      remainingQuantity: quantity(acquisition.quantity),
+      costBasisPerUnit: MonetaryAmount.unsafeFromString(acquisition.costBasisPerUnit, "EUR"),
+    })),
+    disposal: {
+      quantity: quantity(fixture.disposal.quantity),
+      proceeds:
+        fixture.disposal.fiatAmount === null
+          ? null
+          : MonetaryAmount.unsafeFromString(fixture.disposal.fiatAmount, "EUR"),
+    },
   })
 
 describe("source FIFO and pure matcher differential", () => {
@@ -406,6 +449,7 @@ describe("source FIFO and pure matcher differential", () => {
 
   const assertParity = (fixture: DifferentialFixture) =>
     Effect.gen(function* () {
+      yield* resetFixture()
       yield* Effect.forEach(fixture.acquisitions, (acquisition) =>
         persistFact({ ...acquisition, kind: "acquisition" })
       )
@@ -415,25 +459,15 @@ describe("source FIFO and pure matcher differential", () => {
       const persistedRows = yield* loadPersistedRows(fixtureLotIds)
       const persistedResult = yield* renderPersistedResult({ rows: persistedRows })
 
-      const pureResult = yield* matchFifoLots({
-        lots: fixture.acquisitions.map((acquisition) => ({
-          id: acquisition.externalId,
-          remainingQuantity: quantity(acquisition.quantity),
-          costBasisPerUnit: MonetaryAmount.unsafeFromString(acquisition.costBasisPerUnit, "EUR"),
-        })),
-        disposal: {
-          quantity: quantity(fixture.disposal.quantity),
-          proceeds:
-            fixture.disposal.fiatAmount === null
-              ? null
-              : MonetaryAmount.unsafeFromString(fixture.disposal.fiatAmount, "EUR"),
-        },
-      })
+      const pureResult = yield* matchPureFixture(fixture)
+      const renderedPureResult = renderPureResult({ fixture, result: pureResult })
 
-      expect(renderPureResult({ fixture, result: pureResult })).toEqual(persistedResult)
+      expect(renderedPureResult).toEqual(persistedResult)
+
+      return persistedResult
     })
 
-  it.effect("matches disposal allocations and remaining lots at the eight-decimal scale", () =>
+  it.effect("matches exact quantities and eight-decimal monetary allocations", () =>
     Effect.gen(function* () {
       yield* assertParity({
         acquisitions: [
@@ -481,6 +515,138 @@ describe("source FIFO and pure matcher differential", () => {
           quantity: "0.50000000",
           fiatAmount: null,
         },
+      })
+
+      const missingAcquisitionPriceResult = yield* assertParity({
+        acquisitions: [
+          {
+            externalId: "missing-acquisition-price-lot",
+            rawRecordId: "00000000-0000-0000-0000-000000000821",
+            timestamp: DateTime.toDateUtc(DateTime.makeUnsafe("2025-01-01T10:00:00.000Z")),
+            quantity: "1.00000000",
+            fiatAmount: null,
+            costBasisPerUnit: "0",
+          },
+        ],
+        disposal: {
+          externalId: "missing-acquisition-price-disposal",
+          rawRecordId: "00000000-0000-0000-0000-000000000822",
+          timestamp: DateTime.toDateUtc(DateTime.makeUnsafe("2025-02-01T10:00:00.000Z")),
+          quantity: "0.50000000",
+          fiatAmount: "1.00000000",
+        },
+      })
+
+      expect(missingAcquisitionPriceResult).toEqual({
+        lots: [
+          {
+            lotId: "missing-acquisition-price-lot",
+            remainingQuantity: "0.5",
+          },
+        ],
+        allocations: [
+          {
+            lotId: "missing-acquisition-price-lot",
+            matchedQuantity: "0.5",
+            costBasis: "0.00000000",
+            proceeds: "1.00000000",
+            gainLoss: "1.00000000",
+          },
+        ],
+      })
+
+      const atomicQuantityResult = yield* assertParity({
+        acquisitions: [
+          {
+            externalId: "atomic-quantity-lot",
+            rawRecordId: "00000000-0000-0000-0000-000000000823",
+            timestamp: DateTime.toDateUtc(DateTime.makeUnsafe("2025-01-01T10:00:00.000Z")),
+            quantity: "1.000000001",
+            fiatAmount: "1.00000000",
+            costBasisPerUnit: "0.999999999000000001",
+          },
+        ],
+        disposal: {
+          externalId: "atomic-quantity-disposal",
+          rawRecordId: "00000000-0000-0000-0000-000000000824",
+          timestamp: DateTime.toDateUtc(DateTime.makeUnsafe("2025-02-01T10:00:00.000Z")),
+          quantity: "1.000000000",
+          fiatAmount: "1.00000000",
+        },
+      })
+
+      expect(atomicQuantityResult.lots).toEqual([
+        { lotId: "atomic-quantity-lot", remainingQuantity: "0.000000001" },
+      ])
+      expect(atomicQuantityResult.allocations[0]?.matchedQuantity).toBe("1")
+    })
+  )
+
+  it.effect("compares pure shortages with the legacy review and restored FIFO state", () =>
+    Effect.gen(function* () {
+      const fixture: DifferentialFixture = {
+        acquisitions: [
+          {
+            externalId: "shortage-lot",
+            rawRecordId: "00000000-0000-0000-0000-000000000831",
+            timestamp: DateTime.toDateUtc(DateTime.makeUnsafe("2025-01-01T10:00:00.000Z")),
+            quantity: "1.000000001",
+            fiatAmount: "2.00000000",
+            costBasisPerUnit: "1.999999998",
+          },
+        ],
+        disposal: {
+          externalId: "shortage-disposal",
+          rawRecordId: "00000000-0000-0000-0000-000000000832",
+          timestamp: DateTime.toDateUtc(DateTime.makeUnsafe("2025-02-01T10:00:00.000Z")),
+          quantity: "1.500000003",
+          fiatAmount: "3.00000000",
+        },
+      }
+
+      yield* Effect.forEach(fixture.acquisitions, (acquisition) =>
+        persistFact({ ...acquisition, kind: "acquisition" })
+      )
+      yield* persistFact({ ...fixture.disposal, kind: "disposal" })
+
+      const pureResult = yield* matchPureFixture(fixture)
+      const persistedRows = yield* loadPersistedRows(
+        fixture.acquisitions.map(({ externalId }) => externalId)
+      )
+      const persistedResult = yield* renderPersistedResult({ rows: persistedRows })
+      const review = yield* loadShortageReview(fixture.disposal.externalId)
+
+      expect(pureResult._tag).toBe("InventoryShortage")
+      if (pureResult._tag !== "InventoryShortage") {
+        return yield* Effect.die("Expected pure FIFO fixture to report an inventory shortage")
+      }
+
+      const pureShortage = formatExactQuantity(formatAccountingQuantity(pureResult.shortage))
+
+      expect(pureShortage).toBe("0.500000002")
+      expect(renderPureResult({ fixture, result: pureResult })).toEqual({
+        lots: [{ lotId: "shortage-lot", remainingQuantity: "0" }],
+        allocations: [
+          {
+            lotId: "shortage-lot",
+            matchedQuantity: "1.000000001",
+            costBasis: "2.00000000",
+            proceeds: "2.00000000",
+            gainLoss: "0.00000000",
+          },
+        ],
+      })
+      expect(persistedResult).toEqual({
+        lots: [{ lotId: "shortage-lot", remainingQuantity: "1.000000001" }],
+        allocations: [],
+      })
+      expect(review).toMatchObject({
+        reviewStatus: "needs_review",
+        matchedLayer: "fifo_inventory",
+        needsReview: true,
+        categorizationReason: expect.stringContaining(
+          `Insufficient FIFO inventory for outbound amount ${pureShortage}`
+        ),
       })
     })
   )
