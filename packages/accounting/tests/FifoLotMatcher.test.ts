@@ -2,7 +2,11 @@ import { describe, expect, it } from "@effect/vitest"
 import { AccountingQuantity, MonetaryAmount } from "@my/core/accounting"
 import * as Effect from "effect/Effect"
 import * as Schema from "effect/Schema"
-import { matchFifoLots, type FifoMatchResult } from "../src/index.ts"
+import {
+  FifoMonetaryValueOutOfRangeError,
+  matchFifoLots,
+  type FifoMatchResult,
+} from "../src/index.ts"
 
 const quantity = Schema.decodeUnknownSync(AccountingQuantity)
 
@@ -135,6 +139,63 @@ describe("matchFifoLots", () => {
         ],
         shortage: "1",
       })
+    })
+  )
+
+  it.effect("matches legacy placeholders when disposal proceeds are missing", () =>
+    Effect.gen(function* () {
+      const result = yield* matchFifoLots({
+        lots: [
+          {
+            id: "missing-price-lot",
+            remainingQuantity: quantity("1"),
+            costBasisPerUnit: MonetaryAmount.unsafeFromString("4", "EUR"),
+          },
+        ],
+        disposal: {
+          quantity: quantity("0.5"),
+          proceeds: null,
+        },
+      })
+
+      expect(renderResult(result)).toEqual({
+        _tag: "FullyMatched",
+        allocations: [
+          {
+            lotId: "missing-price-lot",
+            matchedQuantity: "0.5",
+            remainingQuantity: "0.5",
+            costBasis: "2",
+            proceeds: "0",
+            gainLoss: "-2",
+          },
+        ],
+      })
+    })
+  )
+
+  it.effect("rejects negative monetary inputs at the matcher boundary", () =>
+    Effect.gen(function* () {
+      const error = yield* matchFifoLots({
+        lots: [
+          {
+            id: "positive-lot",
+            remainingQuantity: quantity("1"),
+            costBasisPerUnit: MonetaryAmount.unsafeFromString("4", "EUR"),
+          },
+        ],
+        disposal: {
+          quantity: quantity("1"),
+          proceeds: MonetaryAmount.unsafeFromString("-0.000000005", "EUR"),
+        },
+      }).pipe(Effect.flip)
+
+      expect(error).toEqual(
+        new FifoMonetaryValueOutOfRangeError({
+          field: "proceeds",
+          value: "-0.000000005",
+        })
+      )
     })
   )
 })
