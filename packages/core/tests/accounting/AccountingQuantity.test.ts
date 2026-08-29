@@ -2,7 +2,15 @@ import { describe, expect, it } from "@effect/vitest"
 import * as BigDecimal from "effect/BigDecimal"
 import * as Option from "effect/Option"
 import * as Schema from "effect/Schema"
-import { AccountingQuantity, add, format, min, subtract } from "../../src/accounting/index.ts"
+import {
+  AccountingQuantity,
+  add,
+  format,
+  fromAtomicUnits,
+  min,
+  subtract,
+  toAtomicUnits,
+} from "../../src/accounting/index.ts"
 
 const decodeQuantity = Schema.decodeUnknownSync(AccountingQuantity)
 
@@ -44,5 +52,27 @@ describe("AccountingQuantity", () => {
     expect(BigDecimal.equals(selected, BigDecimal.fromStringUnsafe("1.999999999999999999"))).toBe(
       true
     )
+  })
+
+  it("converts between decimal quantities and atomic units", () => {
+    const decoded = fromAtomicUnits({ atomicUnits: 123_456_789n, decimals: 8 })
+
+    expect(Option.map(decoded, format)).toEqual(Option.some("1.23456789"))
+    expect(Option.flatMap(decoded, (quantity) => toAtomicUnits({ quantity, decimals: 8 }))).toEqual(
+      Option.some(123_456_789n)
+    )
+  })
+
+  it("accepts removable decimal zeroes but rejects precision loss", () => {
+    expect(toAtomicUnits({ quantity: decodeQuantity("1.230"), decimals: 2 })).toEqual(
+      Option.some(123n)
+    )
+    expect(toAtomicUnits({ quantity: decodeQuantity("1.234"), decimals: 2 })).toEqual(Option.none())
+  })
+
+  it("rejects invalid atomic quantities and decimal counts", () => {
+    expect(fromAtomicUnits({ atomicUnits: -1n, decimals: 8 })).toEqual(Option.none())
+    expect(fromAtomicUnits({ atomicUnits: 1n, decimals: -1 })).toEqual(Option.none())
+    expect(toAtomicUnits({ quantity: decodeQuantity("1"), decimals: 1.5 })).toEqual(Option.none())
   })
 })

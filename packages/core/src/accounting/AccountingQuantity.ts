@@ -12,6 +12,8 @@ import * as SchemaTransformation from "effect/SchemaTransformation"
 const ZERO = BigDecimal.fromBigInt(0n)
 const PLAIN_DECIMAL_PATTERN = /^[+-]?\d+(?:\.\d+)?$/
 
+const isValidDecimals = (decimals: number): boolean => Number.isInteger(decimals) && decimals >= 0
+
 const formatPlainDecimal = (value: BigDecimal.BigDecimal): string => {
   if (value.scale <= 0) {
     return (value.value * 10n ** BigInt(-value.scale)).toString()
@@ -78,3 +80,42 @@ export const min = (left: AccountingQuantity, right: AccountingQuantity): Accoun
 
 /** Format a quantity as a plain decimal string without exponent notation. */
 export const format = (quantity: AccountingQuantity): string => formatPlainDecimal(quantity)
+
+/** Convert non-negative atomic units to a decimal accounting quantity. */
+export const fromAtomicUnits = ({
+  atomicUnits,
+  decimals,
+}: {
+  readonly atomicUnits: bigint
+  readonly decimals: number
+}): Option.Option<AccountingQuantity> =>
+  atomicUnits < 0n || !isValidDecimals(decimals)
+    ? Option.none()
+    : Option.some(make(BigDecimal.make(atomicUnits, decimals)))
+
+/**
+ * Convert a decimal accounting quantity to atomic units without losing precision.
+ *
+ * Returns `Option.none` when the decimal count is invalid or the quantity has
+ * non-zero digits beyond the asset's atomic precision.
+ */
+export const toAtomicUnits = ({
+  quantity,
+  decimals,
+}: {
+  readonly quantity: AccountingQuantity
+  readonly decimals: number
+}): Option.Option<bigint> => {
+  if (!isValidDecimals(decimals)) {
+    return Option.none()
+  }
+
+  if (quantity.scale <= decimals) {
+    return Option.some(quantity.value * 10n ** BigInt(decimals - quantity.scale))
+  }
+
+  const scaleDifference = quantity.scale - decimals
+  const divisor = 10n ** BigInt(scaleDifference)
+
+  return quantity.value % divisor === 0n ? Option.some(quantity.value / divisor) : Option.none()
+}
