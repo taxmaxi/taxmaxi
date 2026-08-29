@@ -19,12 +19,14 @@ Implement exactly one task from the delivery checklist of issue #212 (accounting
 - Target 5–8 changed files including tests, migrations, and snapshots. Going somewhat over is fine when the task genuinely requires it; heading past ~15 files means the task was cut wrong — stop and say so instead of trimming the PR.
 - Check the checklist state before starting: your task's predecessors must be merged. If they are not, stop and say so.
 
-## Behavior class
+## Results: preserved or changed
 
 Every task is one of two kinds; state which in the PR description:
 
-- **Behavior-preserving** (T01–T05): output must be proven identical. The differential tests are the acceptance gate — if outputs differ, the bug is in the new code until proven otherwise. Never mix in behavior changes.
-- **Behavior-changing** (T07 onward): new behavior, tested at the seams below.
+- **Result-preserving** (T01–T05): the new code must give the same output as the old code for the same input. The differential tests prove this — if outputs differ, the bug is in the new code until proven otherwise. Do not change any result in these tasks, except results with a recorded decision (see below).
+- **Result-changing** (T07 onward): new behavior, tested at the seams below.
+
+For each result the PR changes on purpose, follow the "Delivery PRs and Reviews" section of `AGENTS.md`: record the decision as a task note on #212 first, then paste the decision text into the PR description with its source.
 
 ## Seams for TDD
 
@@ -54,4 +56,4 @@ Use /tdd at these pre-agreed seams and no others:
 1. `mise x -- pnpm run type-check`, lint, and the full test suite pass.
 2. /code-review the work.
 3. Branch from latest `main`. Commit with a conventional message scoped to the surface you touched, with `Refs: #212` in the footer.
-4. Open a PR referencing #212 and the task ID, stating the behavior class.
+4. Open a PR referencing #212 and the task ID. State whether the PR preserves or changes results, and paste the decision text for every changed result (see "Results: preserved or changed" above).
