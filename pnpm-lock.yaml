@@ -409,9 +409,6 @@ importers:
         specifier: 4.4.3
         version: 4.4.3
     devDependencies:
-      '@effect/vitest':
-        specifier: 4.0.0-rc.109
-        version: 4.0.0-rc.109(effect@4.0.0-rc.109)(vitest@4.1.9)
       '@inlang/cli':
         specifier: 3.0.0
         version: 3.0.0
