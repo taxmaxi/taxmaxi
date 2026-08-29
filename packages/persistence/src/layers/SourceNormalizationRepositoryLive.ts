@@ -453,31 +453,6 @@ const make = Effect.gen(function* () {
     derivationRule: schema.transactionLegs.derivationRule,
   } as const
 
-  type FifoDerivedLegSnapshot = Pick<
-    typeof schema.transactionLegs.$inferSelect,
-    | "id"
-    | "timestamp"
-    | "principalId"
-    | "assetId"
-    | "assetRepresentationId"
-    | "amount"
-    | "kind"
-    | "fiatAmount"
-    | "fiatCurrency"
-  >
-
-  const selectFifoDerivedLegSnapshotFields = {
-    id: schema.transactionLegs.id,
-    timestamp: schema.transactionLegs.timestamp,
-    principalId: schema.transactionLegs.principalId,
-    assetId: schema.transactionLegs.assetId,
-    assetRepresentationId: schema.transactionLegs.assetRepresentationId,
-    amount: schema.transactionLegs.amount,
-    kind: schema.transactionLegs.kind,
-    fiatAmount: schema.transactionLegs.fiatAmount,
-    fiatCurrency: schema.transactionLegs.fiatCurrency,
-  } as const
-
   const upsertTransaction = ({
     executor,
     transaction,
@@ -1260,80 +1235,6 @@ const make = Effect.gen(function* () {
       })
     )
 
-  const loadFifoDerivedLegSnapshots = ({
-    executor,
-    legs,
-  }: {
-    readonly executor: SourceNormalizationExecutor
-    readonly legs: ReadonlyArray<SourceTransactionLegDraft>
-  }): Effect.Effect<ReadonlyArray<FifoDerivedLegSnapshot>, SyncEngineStorageError> => {
-    const stableIdentities = legs.flatMap((leg) =>
-      leg.externalId === null
-        ? []
-        : [
-            and(
-              eq(schema.transactionLegs.sourceId, leg.sourceId),
-              eq(schema.transactionLegs.externalId, leg.externalId)
-            ),
-          ]
-    )
-    const stableIdentity = or(...stableIdentities)
-
-    if (stableIdentity === undefined) {
-      return Effect.succeed([])
-    }
-
-    return executor
-      .select(selectFifoDerivedLegSnapshotFields)
-      .from(schema.transactionLegs)
-      .where(
-        and(
-          stableIdentity,
-          or(
-            sql`exists (
-              select 1 from ${schema.fifoLots}
-              where ${schema.fifoLots.sourceLegId} = ${schema.transactionLegs.id}
-            )`,
-            sql`exists (
-              select 1 from ${schema.disposalMatches}
-              where ${schema.disposalMatches.disposalLegId} = ${schema.transactionLegs.id}
-            )`
-          )
-        )
-      )
-      .pipe(wrapSyncEngineSqlError("sourceNormalizationRepository.loadFifoDerivedLegSnapshots"))
-  }
-
-  const restoreFifoDerivedLegSnapshots = ({
-    executor,
-    snapshots,
-  }: {
-    readonly executor: SourceNormalizationExecutor
-    readonly snapshots: ReadonlyArray<FifoDerivedLegSnapshot>
-  }) =>
-    Effect.forEach(
-      snapshots,
-      (snapshot) =>
-        executor
-          .update(schema.transactionLegs)
-          .set({
-            timestamp: snapshot.timestamp,
-            principalId: snapshot.principalId,
-            assetId: snapshot.assetId,
-            assetRepresentationId: snapshot.assetRepresentationId,
-            amount: snapshot.amount,
-            kind: snapshot.kind,
-            fiatAmount: snapshot.fiatAmount,
-            fiatCurrency: snapshot.fiatCurrency,
-            updatedAt: nowDate(),
-          })
-          .where(eq(schema.transactionLegs.id, snapshot.id))
-          .pipe(
-            wrapSyncEngineSqlError("sourceNormalizationRepository.restoreFifoDerivedLegSnapshots")
-          ),
-      { discard: true }
-    )
-
   const upsertTransactionLegs = ({
     executor,
     legs,
@@ -1608,37 +1509,62 @@ const make = Effect.gen(function* () {
     readonly disposalFiatCurrency: string | null
   }) =>
     Effect.gen(function* () {
-      const decodedLots = yield* Effect.forEach(lots, (lot) =>
-        Effect.gen(function* () {
-          const remainingQuantity = yield* decodeAccountingQuantity({
-            value: lot.remainingAmount,
-            operation: FIFO_INPUT_REJECTED_OPERATION,
-          })
-          const storedCostBasisPerUnit = yield* decodeMonetaryAmount({
-            amount: lot.costBasisPerToken,
-            currency: lot.costBasisCurrency,
-            operation: FIFO_INPUT_REJECTED_OPERATION,
-          })
-          // Only a zero pending basis is a currency-free placeholder. A nonzero pending basis
-          // still lacks a factual currency and must not be relabeled to make matching succeed.
-          const costBasisPerUnit =
-            lot.costBasisStatus === "pending_review" &&
-            storedCostBasisPerUnit.isZero &&
-            disposalFiatCurrency !== null
-              ? yield* decodeMonetaryAmount({
-                  amount: lot.costBasisPerToken,
-                  currency: disposalFiatCurrency,
-                  operation: FIFO_INPUT_REJECTED_OPERATION,
-                })
-              : storedCostBasisPerUnit
-
-          return { id: lot.id, remainingQuantity, costBasisPerUnit }
-        })
-      )
       const quantity = yield* decodeAccountingQuantity({
         value: disposalAmount,
         operation: FIFO_INPUT_REJECTED_OPERATION,
       })
+      const decodedLots = [] as Array<{
+        readonly id: string
+        readonly remainingQuantity: AccountingQuantity
+        readonly costBasisPerUnit: MonetaryAmount
+      }>
+      let remainingDisposalQuantity = quantity
+
+      for (const lot of lots) {
+        if (BigDecimal.isZero(remainingDisposalQuantity)) {
+          break
+        }
+
+        const remainingQuantity = yield* decodeAccountingQuantity({
+          value: lot.remainingAmount,
+          operation: FIFO_INPUT_REJECTED_OPERATION,
+        })
+        const storedCostBasisPerUnit = yield* decodeMonetaryAmount({
+          amount: lot.costBasisPerToken,
+          currency: lot.costBasisCurrency,
+          operation: FIFO_INPUT_REJECTED_OPERATION,
+        })
+        // Only a zero pending basis is a currency-free placeholder. A nonzero pending basis
+        // still lacks a factual currency and must not be relabeled to make matching succeed.
+        const costBasisPerUnit =
+          lot.costBasisStatus === "pending_review" &&
+          storedCostBasisPerUnit.isZero &&
+          disposalFiatCurrency !== null
+            ? yield* decodeMonetaryAmount({
+                amount: lot.costBasisPerToken,
+                currency: disposalFiatCurrency,
+                operation: FIFO_INPUT_REJECTED_OPERATION,
+              })
+            : storedCostBasisPerUnit
+
+        decodedLots.push({ id: lot.id, remainingQuantity, costBasisPerUnit })
+
+        if (BigDecimal.Order(remainingQuantity, remainingDisposalQuantity) >= 0) {
+          break
+        }
+
+        const nextRemainingDisposalQuantity = subtractAccountingQuantity(
+          remainingDisposalQuantity,
+          remainingQuantity
+        )
+        if (Option.isNone(nextRemainingDisposalQuantity)) {
+          return yield* toSyncEngineStorageError({
+            error: `Cannot subtract ${lot.remainingAmount} from ${formatAccountingQuantity(remainingDisposalQuantity)}`,
+            operation: FIFO_INPUT_REJECTED_OPERATION,
+          })
+        }
+        remainingDisposalQuantity = nextRemainingDisposalQuantity.value
+      }
       const proceeds =
         disposalFiatAmount === null
           ? null
@@ -2797,10 +2723,6 @@ const make = Effect.gen(function* () {
                   canonicalTransfers: persistedCanonicalTransfers,
                 })
               : params.legs
-          const fifoDerivedLegSnapshots = yield* loadFifoDerivedLegSnapshots({
-            executor: tx,
-            legs: derivedLegs,
-          })
           const persistedLegs = yield* upsertTransactionLegs({
             executor: tx,
             legs: derivedLegs,
@@ -2813,91 +2735,71 @@ const make = Effect.gen(function* () {
             persistedProviderTransfers.map((providerTransfer) => providerTransfer.id)
           )
 
-          if (materializesProviderMovements) {
-            yield* resetInventoryMovementAllocationsForTransaction({
-              executor: tx,
-              transactionId: persistedTransaction.id,
-            })
-            yield* removeStaleProviderInventoryMovements({
-              executor: tx,
-              transactionId: persistedTransaction.id,
-              currentProviderTransferIds,
-            })
-          } else {
-            yield* removeInventoryMovementsForTransaction({
-              executor: tx,
-              transactionId: persistedTransaction.id,
-            })
-          }
-
           yield* clearStaleObservedProviderTransferRepresentations({
             executor: tx,
             transactionId: persistedTransaction.id,
             currentProviderTransferIds,
           })
 
-          // Catch reviewable matcher errors outside this savepoint so every disposal-lot write
-          // rolls back while the outer transaction can still persist the factual legs and review.
-          const fifoOutcome = yield* tx
+          // Catch reviewable matcher errors outside this savepoint so every derived FIFO write
+          // rolls back together while the outer transaction still persists facts and review.
+          const transactionReview = yield* tx
             .transaction((fifoTx) =>
-              feedFifoLegs({
-                executor: fifoTx,
-                legs: persistedLegs,
+              Effect.gen(function* () {
+                if (materializesProviderMovements) {
+                  yield* resetInventoryMovementAllocationsForTransaction({
+                    executor: fifoTx,
+                    transactionId: persistedTransaction.id,
+                  })
+                  yield* removeStaleProviderInventoryMovements({
+                    executor: fifoTx,
+                    transactionId: persistedTransaction.id,
+                    currentProviderTransferIds,
+                  })
+                } else {
+                  yield* removeInventoryMovementsForTransaction({
+                    executor: fifoTx,
+                    transactionId: persistedTransaction.id,
+                  })
+                }
+
+                yield* feedFifoLegs({
+                  executor: fifoTx,
+                  legs: persistedLegs,
+                })
+                if (materializesProviderMovements) {
+                  yield* allocateProviderInventoryMovements({
+                    executor: fifoTx,
+                    transaction: persistedTransaction,
+                    providerTransfers: persistedProviderTransfers,
+                    legs: persistedLegs,
+                    feesOnly: hasFailedStatus,
+                  })
+                  yield* allocateFeeInventoryMovements({
+                    executor: fifoTx,
+                    legs: persistedLegs,
+                  })
+                }
               })
             )
             .pipe(
               wrapSyncEngineStorageError(
                 "sourceNormalizationRepository.persistNormalizedArtifacts.applyFifo"
               ),
-              Effect.andThen(
-                materializesProviderMovements
-                  ? allocateProviderInventoryMovements({
-                      executor: tx,
-                      transaction: persistedTransaction,
-                      providerTransfers: persistedProviderTransfers,
-                      legs: persistedLegs,
-                      feesOnly: hasFailedStatus,
-                    })
-                  : Effect.void
-              ),
-              Effect.andThen(
-                materializesProviderMovements
-                  ? allocateFeeInventoryMovements({
-                      executor: tx,
-                      legs: persistedLegs,
-                    })
-                  : Effect.void
-              ),
-              Effect.as({
-                transactionReview: params.transactionReview,
-                restoredFifoLegs: false as const,
-              }),
+              Effect.as(params.transactionReview),
               Effect.catchTag("SyncEngineStorageError", (error) =>
                 isFifoInventoryReviewError(error)
-                  ? restoreFifoDerivedLegSnapshots({
-                      executor: tx,
-                      snapshots: fifoDerivedLegSnapshots,
-                    }).pipe(
-                      Effect.andThen(
-                        resetInventoryMovementAllocationsForTransaction({
-                          executor: tx,
-                          transactionId: persistedTransaction.id,
-                        })
-                      ),
-                      Effect.as({
-                        transactionReview: buildFifoInventoryReview({
-                          transaction: persistedTransaction,
-                          existingReview: params.transactionReview,
-                          resolvedTransactionType: params.resolvedTransactionType,
-                          error,
-                        }),
-                        restoredFifoLegs: true as const,
+                  ? Effect.succeed(
+                      buildFifoInventoryReview({
+                        transaction: persistedTransaction,
+                        existingReview: params.transactionReview,
+                        resolvedTransactionType: params.resolvedTransactionType,
+                        error,
                       })
                     )
                   : Effect.fail(error)
               )
             )
-          const transactionReview = fifoOutcome.transactionReview
 
           yield* upsertTransactionReview({
             executor: tx,
@@ -2920,34 +2822,12 @@ const make = Effect.gen(function* () {
               )
           }
 
-          const snapshotsById = new Map(
-            fifoDerivedLegSnapshots.map((snapshot) => [snapshot.id, snapshot] as const)
-          )
-          const resultLegs = fifoOutcome.restoredFifoLegs
-            ? persistedLegs.map((leg) => {
-                const snapshot = snapshotsById.get(leg.id)
-                return snapshot === undefined
-                  ? leg
-                  : {
-                      ...leg,
-                      timestamp: snapshot.timestamp,
-                      principalId: snapshot.principalId,
-                      assetId: snapshot.assetId,
-                      assetRepresentationId: snapshot.assetRepresentationId,
-                      amount: snapshot.amount,
-                      kind: snapshot.kind,
-                      fiatAmount: snapshot.fiatAmount,
-                      fiatCurrency: snapshot.fiatCurrency,
-                    }
-              })
-            : persistedLegs
-
           return {
             transaction: persistedTransaction,
             venueContext: persistedVenueContext,
             providerTransfers: persistedProviderTransfers,
             canonicalTransfers: persistedCanonicalTransfers,
-            legs: resultLegs,
+            legs: persistedLegs,
           }
         })
       )
