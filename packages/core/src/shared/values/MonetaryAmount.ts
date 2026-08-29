@@ -411,10 +411,7 @@ export const prorate = ({
   readonly whole: AccountingQuantity
   readonly scale: number
 }): Effect.Effect<MonetaryAmount, DivisionByZeroError> =>
-  Option.match(BigDecimal.divide(part, whole), {
-    onNone: () => Effect.fail(new DivisionByZeroError()),
-    onSome: (ratio) => Effect.succeed(round(multiply(total, ratio), scale)),
-  })
+  divide(multiply(total, part), whole).pipe(Effect.map((amount) => round(amount, scale)))
 
 /**
  * Get the maximum of two monetary amounts.

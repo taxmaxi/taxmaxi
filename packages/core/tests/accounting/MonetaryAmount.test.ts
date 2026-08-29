@@ -1,4 +1,5 @@
 import { describe, expect, it } from "@effect/vitest"
+import * as BigDecimal from "effect/BigDecimal"
 import * as Effect from "effect/Effect"
 import * as Schema from "effect/Schema"
 import {
@@ -32,6 +33,22 @@ describe("MonetaryAmount accounting arithmetic", () => {
 
       expect(allocated.format()).toBe("3.33333333")
       expect(allocated.currency).toBe("EUR")
+    })
+  )
+
+  it.effect("multiplies before division to avoid double rounding", () =>
+    Effect.gen(function* () {
+      const allocated = yield* prorate({
+        total: MonetaryAmount.unsafeFromString("2", "EUR"),
+        part: decodeQuantity("1"),
+        whole: decodeQuantity("3"),
+        scale: 100,
+      })
+      const expected = BigDecimal.fromStringUnsafe(
+        "0.6666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666667"
+      )
+
+      expect(BigDecimal.equals(allocated.amount, expected)).toBe(true)
     })
   )
 

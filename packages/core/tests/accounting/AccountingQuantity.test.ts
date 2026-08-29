@@ -16,8 +16,18 @@ describe("AccountingQuantity", () => {
     expect(format(quantity)).toBe("1.000000000000000010")
   })
 
+  it("encodes high-precision quantities as plain decimals", () => {
+    const quantity = decodeQuantity("0.000000000000000001")
+
+    expect(Schema.encodeSync(AccountingQuantity)(quantity)).toBe("0.000000000000000001")
+  })
+
   it("rejects negative quantities", () => {
     expect(() => decodeQuantity("-0.00000001")).toThrow()
+  })
+
+  it.each(["", "1e3"])("rejects malformed plain-decimal quantity %j", (value) => {
+    expect(() => decodeQuantity(value)).toThrow()
   })
 
   it("subtracts without allowing a negative quantity", () => {

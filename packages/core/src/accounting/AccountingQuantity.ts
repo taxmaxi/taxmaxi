@@ -7,11 +7,39 @@
 import * as BigDecimal from "effect/BigDecimal"
 import * as Option from "effect/Option"
 import * as Schema from "effect/Schema"
+import * as SchemaTransformation from "effect/SchemaTransformation"
 
 const ZERO = BigDecimal.fromBigInt(0n)
+const PLAIN_DECIMAL_PATTERN = /^[+-]?\d+(?:\.\d+)?$/
+
+const formatPlainDecimal = (value: BigDecimal.BigDecimal): string => {
+  if (value.scale <= 0) {
+    return (value.value * 10n ** BigInt(-value.scale)).toString()
+  }
+
+  const negative = value.value < 0n
+  const absoluteDigits = (negative ? -value.value : value.value)
+    .toString()
+    .padStart(value.scale + 1, "0")
+  const whole = absoluteDigits.slice(0, -value.scale)
+  const fraction = absoluteDigits.slice(-value.scale)
+
+  return `${negative ? "-" : ""}${whole}.${fraction}`
+}
+
+const PlainBigDecimalFromString = Schema.Trim.pipe(
+  Schema.check(Schema.isPattern(PLAIN_DECIMAL_PATTERN)),
+  Schema.decodeTo(
+    Schema.BigDecimal,
+    SchemaTransformation.transform({
+      decode: BigDecimal.fromStringUnsafe,
+      encode: formatPlainDecimal,
+    })
+  )
+)
 
 /** A non-negative asset quantity encoded as a decimal string. */
-export const AccountingQuantity = Schema.BigDecimalFromString.pipe(
+export const AccountingQuantity = PlainBigDecimalFromString.pipe(
   Schema.check(Schema.isGreaterThanOrEqualToBigDecimal(ZERO)),
   Schema.brand("AccountingQuantity"),
   Schema.annotate({
@@ -49,17 +77,4 @@ export const min = (left: AccountingQuantity, right: AccountingQuantity): Accoun
   make(BigDecimal.min(left, right))
 
 /** Format a quantity as a plain decimal string without exponent notation. */
-export const format = (quantity: AccountingQuantity): string => {
-  if (quantity.scale <= 0) {
-    return (quantity.value * 10n ** BigInt(-quantity.scale)).toString()
-  }
-
-  const negative = quantity.value < 0n
-  const absoluteDigits = (negative ? -quantity.value : quantity.value)
-    .toString()
-    .padStart(quantity.scale + 1, "0")
-  const whole = absoluteDigits.slice(0, -quantity.scale)
-  const fraction = absoluteDigits.slice(-quantity.scale)
-
-  return `${negative ? "-" : ""}${whole}.${fraction}`
-}
+export const format = (quantity: AccountingQuantity): string => formatPlainDecimal(quantity)
