@@ -11,8 +11,10 @@ import * as SchemaTransformation from "effect/SchemaTransformation"
 
 const ZERO = BigDecimal.fromBigInt(0n)
 const PLAIN_DECIMAL_PATTERN = /^[+-]?\d+(?:\.\d+)?$/
+const MAX_ATOMIC_DECIMALS = 255
 
-const isValidDecimals = (decimals: number): boolean => Number.isInteger(decimals) && decimals >= 0
+const isValidDecimals = (decimals: number): boolean =>
+  Number.isSafeInteger(decimals) && decimals >= 0 && decimals <= MAX_ATOMIC_DECIMALS
 
 const formatPlainDecimal = (value: BigDecimal.BigDecimal): string => {
   if (value.scale <= 0) {

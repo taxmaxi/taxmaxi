@@ -75,4 +75,16 @@ describe("AccountingQuantity", () => {
     expect(fromAtomicUnits({ atomicUnits: 1n, decimals: -1 })).toEqual(Option.none())
     expect(toAtomicUnits({ quantity: decodeQuantity("1"), decimals: 1.5 })).toEqual(Option.none())
   })
+
+  it("accepts the supported decimal limit and rejects larger counts", () => {
+    expect(Option.isSome(fromAtomicUnits({ atomicUnits: 1n, decimals: 255 }))).toBe(true)
+    expect(fromAtomicUnits({ atomicUnits: 1n, decimals: 256 })).toEqual(Option.none())
+    expect(fromAtomicUnits({ atomicUnits: 1n, decimals: Number.MAX_SAFE_INTEGER + 1 })).toEqual(
+      Option.none()
+    )
+    expect(toAtomicUnits({ quantity: decodeQuantity("1"), decimals: 256 })).toEqual(Option.none())
+    expect(
+      toAtomicUnits({ quantity: decodeQuantity("1"), decimals: Number.MAX_SAFE_INTEGER + 1 })
+    ).toEqual(Option.none())
+  })
 })
