@@ -62,6 +62,7 @@ interface FifoFact {
   readonly timestamp: Date
   readonly quantity: string
   readonly fiatAmount: string | null
+  readonly fiatCurrency: string | null
 }
 
 interface AcquisitionFact extends FifoFact {
@@ -175,7 +176,7 @@ const makeTransaction = ({
   providerUpdatedAt: fact.timestamp,
   metadata: { fixture: "fifo-differential" },
   providerFiatAmount: fact.fiatAmount,
-  providerFiatCurrency: fact.fiatAmount === null ? null : "EUR",
+  providerFiatCurrency: fact.fiatCurrency,
   principalId: TEST_PRINCIPAL_ID,
 })
 
@@ -217,7 +218,7 @@ const makeLeg = (fact: PersistedFifoFact): SourceTransactionLegDraft => ({
   transactionId: null,
   sourceTransferId: null,
   fiatAmount: fact.fiatAmount,
-  fiatCurrency: fact.fiatAmount === null ? null : "EUR",
+  fiatCurrency: fact.fiatCurrency,
   feeForTransactionId: null,
 })
 
@@ -374,19 +375,43 @@ const loadShortageReview = (disposalExternalId: string) =>
     )
   )
 
+const loadPersistedFiatCurrencies = (externalIds: ReadonlyArray<string>) =>
+  Effect.promise(() =>
+    runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+
+        return yield* db
+          .select({
+            externalId: schema.transactionLegs.externalId,
+            fiatCurrency: schema.transactionLegs.fiatCurrency,
+          })
+          .from(schema.transactionLegs)
+          .where(inArray(schema.transactionLegs.externalId, externalIds))
+          .orderBy(asc(schema.transactionLegs.timestamp))
+      })
+    )
+  )
+
 const matchPureFixture = (fixture: DifferentialFixture) =>
   matchFifoLots({
     lots: fixture.acquisitions.map((acquisition) => ({
       id: acquisition.externalId,
       remainingQuantity: quantity(acquisition.quantity),
-      costBasisPerUnit: MonetaryAmount.unsafeFromString(acquisition.costBasisPerUnit, "EUR"),
+      costBasisPerUnit: MonetaryAmount.unsafeFromString(
+        acquisition.costBasisPerUnit,
+        acquisition.fiatCurrency ?? "EUR"
+      ),
     })),
     disposal: {
       quantity: quantity(fixture.disposal.quantity),
       proceeds:
         fixture.disposal.fiatAmount === null
           ? null
-          : MonetaryAmount.unsafeFromString(fixture.disposal.fiatAmount, "EUR"),
+          : MonetaryAmount.unsafeFromString(
+              fixture.disposal.fiatAmount,
+              fixture.disposal.fiatCurrency ?? "EUR"
+            ),
     },
   })
 
@@ -447,7 +472,7 @@ describe("source FIFO and pure matcher differential", () => {
       )
     })
 
-  const assertParity = (fixture: DifferentialFixture) =>
+  const persistLegacyFixture = (fixture: DifferentialFixture) =>
     Effect.gen(function* () {
       yield* resetFixture()
       yield* Effect.forEach(fixture.acquisitions, (acquisition) =>
@@ -457,7 +482,13 @@ describe("source FIFO and pure matcher differential", () => {
 
       const fixtureLotIds = fixture.acquisitions.map(({ externalId }) => externalId)
       const persistedRows = yield* loadPersistedRows(fixtureLotIds)
-      const persistedResult = yield* renderPersistedResult({ rows: persistedRows })
+
+      return yield* renderPersistedResult({ rows: persistedRows })
+    })
+
+  const assertParity = (fixture: DifferentialFixture) =>
+    Effect.gen(function* () {
+      const persistedResult = yield* persistLegacyFixture(fixture)
 
       const pureResult = yield* matchPureFixture(fixture)
 
@@ -483,6 +514,7 @@ describe("source FIFO and pure matcher differential", () => {
             timestamp: DateTime.toDateUtc(DateTime.makeUnsafe("2025-01-01T10:00:00.000Z")),
             quantity: "1.00000000",
             fiatAmount: "2.00000000",
+            fiatCurrency: "EUR",
             costBasisPerUnit: "2",
           },
           {
@@ -491,6 +523,7 @@ describe("source FIFO and pure matcher differential", () => {
             timestamp: DateTime.toDateUtc(DateTime.makeUnsafe("2025-01-02T10:00:00.000Z")),
             quantity: "2.00000000",
             fiatAmount: "6.00000000",
+            fiatCurrency: "EUR",
             costBasisPerUnit: "3",
           },
         ],
@@ -500,6 +533,7 @@ describe("source FIFO and pure matcher differential", () => {
           timestamp: DateTime.toDateUtc(DateTime.makeUnsafe("2025-02-01T10:00:00.000Z")),
           quantity: "2.25000000",
           fiatAmount: "9.00000000",
+          fiatCurrency: "EUR",
         },
       })
 
@@ -516,6 +550,7 @@ describe("source FIFO and pure matcher differential", () => {
             timestamp: DateTime.toDateUtc(DateTime.makeUnsafe("2025-01-01T10:00:00.000Z")),
             quantity: "1.00000000",
             fiatAmount: "4.00000000",
+            fiatCurrency: "EUR",
             costBasisPerUnit: "4",
           },
         ],
@@ -525,6 +560,7 @@ describe("source FIFO and pure matcher differential", () => {
           timestamp: DateTime.toDateUtc(DateTime.makeUnsafe("2025-02-01T10:00:00.000Z")),
           quantity: "0.50000000",
           fiatAmount: null,
+          fiatCurrency: null,
         },
       })
 
@@ -536,6 +572,7 @@ describe("source FIFO and pure matcher differential", () => {
             timestamp: DateTime.toDateUtc(DateTime.makeUnsafe("2025-01-01T10:00:00.000Z")),
             quantity: "1.00000000",
             fiatAmount: null,
+            fiatCurrency: null,
             costBasisPerUnit: "0",
           },
         ],
@@ -545,6 +582,7 @@ describe("source FIFO and pure matcher differential", () => {
           timestamp: DateTime.toDateUtc(DateTime.makeUnsafe("2025-02-01T10:00:00.000Z")),
           quantity: "0.50000000",
           fiatAmount: "1.00000000",
+          fiatCurrency: "EUR",
         },
       })
 
@@ -574,6 +612,7 @@ describe("source FIFO and pure matcher differential", () => {
             timestamp: DateTime.toDateUtc(DateTime.makeUnsafe("2025-01-01T10:00:00.000Z")),
             quantity: "1.000000001",
             fiatAmount: "1.00000000",
+            fiatCurrency: "EUR",
             costBasisPerUnit: "0.999999999000000001",
           },
         ],
@@ -583,6 +622,7 @@ describe("source FIFO and pure matcher differential", () => {
           timestamp: DateTime.toDateUtc(DateTime.makeUnsafe("2025-02-01T10:00:00.000Z")),
           quantity: "1.000000000",
           fiatAmount: "1.00000000",
+          fiatCurrency: "EUR",
         },
       })
 
@@ -603,6 +643,7 @@ describe("source FIFO and pure matcher differential", () => {
             timestamp: DateTime.toDateUtc(DateTime.makeUnsafe("2025-01-01T10:00:00.000Z")),
             quantity: "1.000000001",
             fiatAmount: "2.00000000",
+            fiatCurrency: "EUR",
             costBasisPerUnit: "1.999999998",
           },
         ],
@@ -612,6 +653,7 @@ describe("source FIFO and pure matcher differential", () => {
           timestamp: DateTime.toDateUtc(DateTime.makeUnsafe("2025-02-01T10:00:00.000Z")),
           quantity: "1.500000003",
           fiatAmount: "3.00000000",
+          fiatCurrency: "EUR",
         },
       }
 
@@ -658,6 +700,61 @@ describe("source FIFO and pure matcher differential", () => {
         categorizationReason: expect.stringContaining(
           `Insufficient FIFO inventory for outbound amount ${pureShortage}`
         ),
+      })
+    })
+  )
+
+  it.effect("surfaces mixed fiat currencies as a typed pure-matcher mismatch", () =>
+    Effect.gen(function* () {
+      const fixture: DifferentialFixture = {
+        acquisitions: [
+          {
+            externalId: "mixed-currency-lot",
+            rawRecordId: "00000000-0000-0000-0000-000000000841",
+            timestamp: DateTime.toDateUtc(DateTime.makeUnsafe("2025-01-01T10:00:00.000Z")),
+            quantity: "1.00000000",
+            fiatAmount: "2.00000000",
+            fiatCurrency: "USD",
+            costBasisPerUnit: "2",
+          },
+        ],
+        disposal: {
+          externalId: "mixed-currency-disposal",
+          rawRecordId: "00000000-0000-0000-0000-000000000842",
+          timestamp: DateTime.toDateUtc(DateTime.makeUnsafe("2025-02-01T10:00:00.000Z")),
+          quantity: "0.50000000",
+          fiatAmount: "3.00000000",
+          fiatCurrency: "EUR",
+        },
+      }
+
+      const persistedResult = yield* persistLegacyFixture(fixture)
+      const persistedCurrencies = yield* loadPersistedFiatCurrencies([
+        "mixed-currency-lot",
+        "mixed-currency-disposal",
+      ])
+      const pureError = yield* Effect.flip(matchPureFixture(fixture))
+
+      expect(persistedCurrencies).toEqual([
+        { externalId: "mixed-currency-lot", fiatCurrency: "USD" },
+        { externalId: "mixed-currency-disposal", fiatCurrency: "EUR" },
+      ])
+      expect(persistedResult).toEqual({
+        lots: [{ lotId: "mixed-currency-lot", remainingQuantity: "0.5" }],
+        allocations: [
+          {
+            lotId: "mixed-currency-lot",
+            matchedQuantity: "0.5",
+            costBasis: "1.00000000",
+            proceeds: "3.00000000",
+            gainLoss: "2.00000000",
+          },
+        ],
+      })
+      expect(pureError).toMatchObject({
+        _tag: "CurrencyMismatchError",
+        expected: "EUR",
+        actual: "USD",
       })
     })
   )
