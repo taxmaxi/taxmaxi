@@ -8000,10 +8000,11 @@ describe("TransferReconciliationServiceLive", () => {
   )
 
   it.effect.each([
-    ["negative cost basis", "-50000.000000000000000000", "0.00000000"],
-    ["negative remaining quantity", "50000.000000000000000000", "-0.10000000"],
+    ["negative cost basis", "-50000.000000000000000000", "0.00000000", "0.10000000"],
+    ["negative remaining quantity", "50000.000000000000000000", "-0.10000000", "0.10000000"],
+    ["negative saved match amount", "50000.000000000000000000", "0.00000000", "-0.10000000"],
   ] as const)("keeps a rebuilt disposal in review for %s", (testCase) => {
-    const [, sourceCostBasis, junkRemainingAmount] = testCase
+    const [, sourceCostBasis, junkRemainingAmount, savedMatchAmount] = testCase
 
     return Effect.gen(function* () {
       const walletAddress = "bc1qownedwalletrejectedrebuild000000000000000"
@@ -8234,7 +8235,7 @@ describe("TransferReconciliationServiceLive", () => {
             yield* db.insert(schema.disposalMatches).values({
               disposalLegId: disposalLeg.id,
               fifoLotId: receiptLot.id,
-              matchedAmount: "0.10000000",
+              matchedAmount: savedMatchAmount,
               costBasis: "5000.00000000",
               proceeds: "6000.00000000",
               gainLoss: "1000.00000000",
