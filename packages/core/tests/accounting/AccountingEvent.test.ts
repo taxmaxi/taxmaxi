@@ -97,4 +97,21 @@ describe("AccountingEvent", () => {
 
     expect(event).toMatchObject({ _tag: "disposition", cause: "unknown" })
   })
+
+  it("distinguishes a proven passive staking reward from an ambiguous staking reward", () => {
+    const event = decodeEvent({
+      _tag: "acquisition",
+      id: "11111111-1111-4111-8111-111111111111",
+      occurredAt: { epochMillis: 1_700_000_000_000 },
+      assetId: "22222222-2222-4222-8222-222222222222",
+      quantity: "1",
+      custodySourceId: "33333333-3333-4333-8333-333333333333",
+      cause: "passive_staking_reward",
+    })
+
+    expect(event).toMatchObject({
+      _tag: "acquisition",
+      cause: "passive_staking_reward",
+    })
+  })
 })

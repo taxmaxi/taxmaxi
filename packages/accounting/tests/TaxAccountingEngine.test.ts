@@ -29,7 +29,7 @@ const choices = [
   decodeChoice({
     _tag: "accounting_method",
     id: "66666666-6666-4666-8666-666666666666",
-    jurisdiction: "TEST",
+    jurisdiction: "DE",
     method: "fifo",
     recordedAt: { epochMillis: 1 },
     actor: "test",
@@ -38,7 +38,7 @@ const choices = [
   decodeChoice({
     _tag: "inventory_scope",
     id: "77777777-7777-4777-8777-777777777777",
-    jurisdiction: "TEST",
+    jurisdiction: "DE",
     scope: "per_custody_unit",
     recordedAt: { epochMillis: 1 },
     actor: "test",
@@ -55,8 +55,8 @@ const runCalculation = ({
 }) =>
   calculate({
     ledger,
-    jurisdiction: JurisdictionCode.make("TEST"),
-    taxYear: TaxYear.make(2025),
+    jurisdiction: JurisdictionCode.make("DE"),
+    taxYear: TaxYear.make(1970),
     accountingChoices: choices,
     valuationFacts,
   })
@@ -139,13 +139,13 @@ describe("calculate", () => {
           acquisitionEventId: ACQUISITION_ONE,
           proceeds: "40",
           gainLoss: "10",
-          treatmentCodes: [],
+          treatmentCodes: ["de.taxable_private_disposal"],
         },
         {
           acquisitionEventId: ACQUISITION_TWO,
           proceeds: "40",
           gainLoss: "30",
-          treatmentCodes: [],
+          treatmentCodes: ["de.taxable_private_disposal"],
         },
       ])
       expect(result.derivedLots).toHaveLength(1)
@@ -162,8 +162,8 @@ describe("calculate", () => {
       expect(encodeQuantity(remainingLot.remainingQuantity)).toBe("1")
       expect(result).toMatchObject({
         status: "complete",
-        jurisdiction: "TEST",
-        taxYear: 2025,
+        jurisdiction: "DE",
+        taxYear: 1970,
         inventoryScope: "per_custody_unit",
         blockers: [],
         incomeResults: [],
@@ -651,14 +651,14 @@ describe("calculate", () => {
 
       const broken = yield* calculate({
         ledger: [],
-        jurisdiction: JurisdictionCode.make("TEST"),
-        taxYear: TaxYear.make(2025),
+        jurisdiction: JurisdictionCode.make("DE"),
+        taxYear: TaxYear.make(1970),
         accountingChoices: [
           methodChoice,
           decodeChoice({
             _tag: "inventory_scope",
             id: "88888888-8888-4888-8888-888888888888",
-            jurisdiction: "TEST",
+            jurisdiction: "DE",
             scope: "per_custody_unit",
             recordedAt: { epochMillis: 2 },
             actor: "test",
@@ -670,14 +670,14 @@ describe("calculate", () => {
       }).pipe(Effect.flip)
       const cyclic = yield* calculate({
         ledger: [],
-        jurisdiction: JurisdictionCode.make("TEST"),
-        taxYear: TaxYear.make(2025),
+        jurisdiction: JurisdictionCode.make("DE"),
+        taxYear: TaxYear.make(1970),
         accountingChoices: [
           methodChoice,
           decodeChoice({
             _tag: "inventory_scope",
             id: "88888888-8888-4888-8888-888888888888",
-            jurisdiction: "TEST",
+            jurisdiction: "DE",
             scope: "per_custody_unit",
             recordedAt: { epochMillis: 2 },
             actor: "test",
@@ -687,7 +687,7 @@ describe("calculate", () => {
           decodeChoice({
             _tag: "inventory_scope",
             id: "99999999-9999-4999-8999-999999999999",
-            jurisdiction: "TEST",
+            jurisdiction: "DE",
             scope: "whole_taxpayer",
             recordedAt: { epochMillis: 1 },
             actor: "test",
@@ -779,7 +779,7 @@ describe("calculate", () => {
     })
   )
 
-  it.effect("uses one pooled FIFO and ignores custody movements under whole-taxpayer scope", () =>
+  it.effect("rejects whole-taxpayer scope before processing the ledger", () =>
     Effect.gen(function* () {
       const movementId = "88888888-8888-4888-8888-888888888888"
       const acquisition = decodeEvent({
@@ -809,15 +809,15 @@ describe("calculate", () => {
         custodySourceId: SOURCE_TWO,
         cause: "sale",
       })
-      const result = yield* calculate({
+      const error = yield* calculate({
         ledger: [disposition, movement, acquisition],
-        jurisdiction: JurisdictionCode.make("TEST"),
-        taxYear: TaxYear.make(2025),
+        jurisdiction: JurisdictionCode.make("DE"),
+        taxYear: TaxYear.make(1970),
         accountingChoices: [
           decodeChoice({
             _tag: "accounting_method",
             id: "66666666-6666-4666-8666-666666666666",
-            jurisdiction: "TEST",
+            jurisdiction: "DE",
             method: "fifo",
             recordedAt: { epochMillis: 1 },
             actor: "test",
@@ -826,7 +826,7 @@ describe("calculate", () => {
           decodeChoice({
             _tag: "inventory_scope",
             id: "77777777-7777-4777-8777-777777777777",
-            jurisdiction: "TEST",
+            jurisdiction: "DE",
             scope: "whole_taxpayer",
             recordedAt: { epochMillis: 1 },
             actor: "test",
@@ -847,18 +847,14 @@ describe("calculate", () => {
             evidenceReference: "sale",
           }),
         ],
-      })
+      }).pipe(Effect.flip)
 
-      expect(result.inventoryScope).toBe("whole_taxpayer")
-      expect(result.blockers).toEqual([])
-      expect(result.realizedResults[0]).toMatchObject({
-        acquisitionEventId: ACQUISITION_ONE,
-        dispositionEventId: DISPOSITION,
+      expect(error).toMatchObject({
+        _tag: "IllegalAccountingChoiceError",
+        jurisdiction: "DE",
+        choiceKind: "inventory_scope",
+        value: "whole_taxpayer",
       })
-      expect(result.derivedLots).toEqual([])
-      expect(result.explanationTrace.map((entry) => entry.code)).toContain(
-        "pooled_custody_movement"
-      )
     })
   )
 
@@ -987,15 +983,15 @@ describe("calculate", () => {
     })
   )
 
-  it.effect("rejects missing, multiple-active, and unsupported structural choices", () =>
+  it.effect("defaults missing choices and rejects multiple-active or illegal choices", () =>
     Effect.gen(function* () {
       const baseInput = {
         ledger: [],
-        jurisdiction: JurisdictionCode.make("TEST"),
-        taxYear: TaxYear.make(2025),
+        jurisdiction: JurisdictionCode.make("DE"),
+        taxYear: TaxYear.make(1970),
         valuationFacts: [],
       }
-      const missing = yield* calculate({ ...baseInput, accountingChoices: [] }).pipe(Effect.flip)
+      const defaults = yield* calculate({ ...baseInput, accountingChoices: [] })
       const multiple = yield* calculate({
         ...baseInput,
         accountingChoices: [
@@ -1003,7 +999,7 @@ describe("calculate", () => {
           decodeChoice({
             _tag: "accounting_method",
             id: "88888888-8888-4888-8888-888888888888",
-            jurisdiction: "TEST",
+            jurisdiction: "DE",
             method: "fifo",
             recordedAt: { epochMillis: 2 },
             actor: "test",
@@ -1017,7 +1013,7 @@ describe("calculate", () => {
           decodeChoice({
             _tag: "accounting_method",
             id: "88888888-8888-4888-8888-888888888888",
-            jurisdiction: "TEST",
+            jurisdiction: "DE",
             method: "average_cost",
             recordedAt: { epochMillis: 2 },
             actor: "test",
@@ -1028,10 +1024,10 @@ describe("calculate", () => {
         ],
       }).pipe(Effect.flip)
 
-      expect(missing).toMatchObject({
-        _tag: "AccountingChoiceResolutionError",
-        choiceKind: "accounting_method",
-        reason: "missing",
+      expect(defaults).toMatchObject({
+        accountingMethod: "fifo",
+        inventoryScope: "per_custody_unit",
+        appliedChoiceIds: [],
       })
       expect(multiple).toMatchObject({
         _tag: "AccountingChoiceResolutionError",
@@ -1039,8 +1035,10 @@ describe("calculate", () => {
         reason: "multiple_active",
       })
       expect(unsupported).toMatchObject({
-        _tag: "UnsupportedAccountingMethodError",
-        method: "average_cost",
+        _tag: "IllegalAccountingChoiceError",
+        jurisdiction: "DE",
+        choiceKind: "accounting_method",
+        value: "average_cost",
       })
     })
   )

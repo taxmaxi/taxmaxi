@@ -46,6 +46,7 @@ export const AcquisitionCause = Schema.Literals([
   "airdrop",
   "mining_reward",
   "staking_reward",
+  "passive_staking_reward",
   "reward",
   "payment",
   "unknown",
@@ -53,7 +54,7 @@ export const AcquisitionCause = Schema.Literals([
   identifier: "AcquisitionCause",
   title: "Acquisition Cause",
   description:
-    "Factual reason ownership increased; purchase includes any exchange and unknown must produce an engine blocker",
+    "Factual reason ownership increased; passive staking requires proven upstream evidence, purchase includes any exchange, and unknown must produce an engine blocker",
 })
 
 /** The AcquisitionCause type. */
