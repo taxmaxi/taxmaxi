@@ -37,6 +37,24 @@ export interface FifoDisposal {
   readonly proceeds: MonetaryAmount | null
 }
 
+/** Minimum lot shape needed to allocate a quantity in FIFO order. */
+export interface FifoQuantityLot {
+  readonly remainingQuantity: AccountingQuantity
+}
+
+/** Quantity taken from one FIFO lot without assigning monetary meaning. */
+export interface FifoQuantityAllocation<Lot extends FifoQuantityLot> {
+  readonly lot: Lot
+  readonly matchedQuantity: AccountingQuantity
+  readonly remainingQuantity: AccountingQuantity
+}
+
+/** Quantity allocation across ordered lots, including any uncovered suffix. */
+export interface FifoQuantityAllocationResult<Lot extends FifoQuantityLot> {
+  readonly allocations: ReadonlyArray<FifoQuantityAllocation<Lot>>
+  readonly shortage: AccountingQuantity | null
+}
+
 /** The factual values allocated from one acquisition lot to the disposal. */
 export interface FifoAllocation {
   readonly lotId: string
@@ -97,6 +115,41 @@ const subtractQuantity = (
   right: AccountingQuantity
 ): AccountingQuantity => AccountingQuantitySchema.make(BigDecimal.subtract(left, right))
 
+/** Allocate a positive quantity across immutable lots in the supplied FIFO order. */
+export const allocateFifoQuantity = <Lot extends FifoQuantityLot>({
+  lots,
+  quantity,
+}: {
+  readonly lots: ReadonlyArray<Lot>
+  readonly quantity: AccountingQuantity
+}): FifoQuantityAllocationResult<Lot> => {
+  let remainingQuantity = quantity
+  const allocations: Array<FifoQuantityAllocation<Lot>> = []
+
+  for (const lot of lots) {
+    if (BigDecimal.isZero(remainingQuantity)) {
+      break
+    }
+
+    if (BigDecimal.isZero(lot.remainingQuantity)) {
+      continue
+    }
+
+    const matchedQuantity = min(lot.remainingQuantity, remainingQuantity)
+    allocations.push({
+      lot,
+      matchedQuantity,
+      remainingQuantity: subtractQuantity(lot.remainingQuantity, matchedQuantity),
+    })
+    remainingQuantity = subtractQuantity(remainingQuantity, matchedQuantity)
+  }
+
+  return {
+    allocations,
+    shortage: BigDecimal.isZero(remainingQuantity) ? null : remainingQuantity,
+  }
+}
+
 /**
  * Match a disposal against lots in the order supplied by the caller.
  *
@@ -120,18 +173,11 @@ export const matchFifoLots = ({
       })
     }
 
-    let remainingQuantity = disposal.quantity
+    const quantityResult = allocateFifoQuantity({ lots, quantity: disposal.quantity })
     const allocations: Array<FifoAllocation> = []
 
-    for (const lot of lots) {
-      if (BigDecimal.isZero(remainingQuantity)) {
-        break
-      }
-
-      if (BigDecimal.isZero(lot.remainingQuantity)) {
-        continue
-      }
-
+    for (const quantityAllocation of quantityResult.allocations) {
+      const lot = quantityAllocation.lot
       if (lot.costBasisPerUnit.isNegative) {
         return yield* new FifoInputRejectedError({
           cause: new FifoMonetaryValueOutOfRangeError({
@@ -141,8 +187,7 @@ export const matchFifoLots = ({
         })
       }
 
-      const matchedQuantity = min(lot.remainingQuantity, remainingQuantity)
-      const remainingLotQuantity = subtractQuantity(lot.remainingQuantity, matchedQuantity)
+      const matchedQuantity = quantityAllocation.matchedQuantity
       const costBasis = round(
         multiplyByQuantity(lot.costBasisPerUnit, matchedQuantity),
         ALLOCATION_SCALE
@@ -158,15 +203,14 @@ export const matchFifoLots = ({
       allocations.push({
         lotId: lot.id,
         matchedQuantity,
-        remainingQuantity: remainingLotQuantity,
+        remainingQuantity: quantityAllocation.remainingQuantity,
         costBasis,
         proceeds,
         gainLoss,
       })
-      remainingQuantity = subtractQuantity(remainingQuantity, matchedQuantity)
     }
 
-    return BigDecimal.isZero(remainingQuantity)
+    return quantityResult.shortage === null
       ? { _tag: "FullyMatched", allocations }
-      : { _tag: "InventoryShortage", allocations, shortage: remainingQuantity }
+      : { _tag: "InventoryShortage", allocations, shortage: quantityResult.shortage }
   })

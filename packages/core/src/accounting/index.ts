@@ -1,3 +1,4 @@
+export * from "./AccountingChoice.ts"
 export * from "./AccountingEvent.ts"
 export * from "./AccountingQuantity.ts"
 export * from "./ValuationFact.ts"
