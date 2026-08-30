@@ -1011,39 +1011,43 @@ describe("source FIFO and pure matcher differential", () => {
     })
   )
 
-  it.effect("preserves legacy absolute-value handling for negative disposal proceeds", () =>
+  it.effect("routes negative disposal proceeds to review without consuming inventory", () =>
     Effect.gen(function* () {
-      const persistedResult = yield* assertParity({
-        acquisitions: [
-          {
-            externalId: "negative-proceeds-lot",
-            rawRecordId: "00000000-0000-0000-0000-000000000848",
-            timestamp: DateTime.toDateUtc(DateTime.makeUnsafe("2025-01-01T10:00:00.000Z")),
-            quantity: "1.00000000",
-            fiatAmount: "2.00000000",
-            fiatCurrency: "EUR",
-            costBasisPerUnit: "2",
-          },
-        ],
-        disposal: {
-          externalId: "negative-proceeds-disposal",
-          rawRecordId: "00000000-0000-0000-0000-000000000849",
-          timestamp: DateTime.toDateUtc(DateTime.makeUnsafe("2025-02-01T10:00:00.000Z")),
-          quantity: "0.50000000",
-          fiatAmount: "-3.00000000",
-          fiatCurrency: "EUR",
-        },
-      })
+      const acquisition: AcquisitionFact = {
+        externalId: "negative-proceeds-lot",
+        rawRecordId: "00000000-0000-0000-0000-000000000848",
+        timestamp: DateTime.toDateUtc(DateTime.makeUnsafe("2025-01-01T10:00:00.000Z")),
+        quantity: "1.00000000",
+        fiatAmount: "2.00000000",
+        fiatCurrency: "EUR",
+        costBasisPerUnit: "2",
+      }
+      const disposal: DisposalFact = {
+        externalId: "negative-proceeds-disposal",
+        rawRecordId: "00000000-0000-0000-0000-000000000849",
+        timestamp: DateTime.toDateUtc(DateTime.makeUnsafe("2025-02-01T10:00:00.000Z")),
+        quantity: "0.50000000",
+        fiatAmount: "-3.00000000",
+        fiatCurrency: "EUR",
+      }
 
-      expect(persistedResult.allocations).toEqual([
-        {
-          lotId: "negative-proceeds-lot",
-          matchedQuantity: "0.5",
-          costBasis: "1.00000000",
-          proceeds: "3.00000000",
-          gainLoss: "2.00000000",
-        },
-      ])
+      yield* persistFact({ ...acquisition, kind: "acquisition" })
+      yield* persistFact({ ...disposal, kind: "disposal" })
+
+      const persistedRows = yield* loadPersistedRows([acquisition.externalId])
+      const persistedResult = yield* renderPersistedResult({ rows: persistedRows })
+      const review = yield* loadShortageReview(disposal.externalId)
+
+      expect(persistedResult).toEqual({
+        lots: [{ lotId: acquisition.externalId, remainingQuantity: "1" }],
+        allocations: [],
+      })
+      expect(review).toMatchObject({
+        reviewStatus: "needs_review",
+        matchedLayer: "fifo_inventory",
+        needsReview: true,
+        categorizationReason: expect.stringContaining("proceeds must be non-negative"),
+      })
     })
   )
 

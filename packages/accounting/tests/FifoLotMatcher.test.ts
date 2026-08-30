@@ -3,6 +3,7 @@ import { AccountingQuantity, MonetaryAmount } from "@my/core/accounting"
 import * as Effect from "effect/Effect"
 import * as Schema from "effect/Schema"
 import {
+  FifoInputRejectedError,
   FifoMonetaryValueOutOfRangeError,
   matchFifoLots,
   type FifoMatchResult,
@@ -142,6 +143,43 @@ describe("matchFifoLots", () => {
     })
   )
 
+  it.effect("does not validate unused lots after the disposal is fully matched", () =>
+    Effect.gen(function* () {
+      const result = yield* matchFifoLots({
+        lots: [
+          {
+            id: "sufficient-lot",
+            remainingQuantity: quantity("1"),
+            costBasisPerUnit: MonetaryAmount.unsafeFromString("4", "EUR"),
+          },
+          {
+            id: "unused-junk-lot",
+            remainingQuantity: quantity("1"),
+            costBasisPerUnit: MonetaryAmount.unsafeFromString("-5", "EUR"),
+          },
+        ],
+        disposal: {
+          quantity: quantity("0.5"),
+          proceeds: MonetaryAmount.unsafeFromString("10", "EUR"),
+        },
+      })
+
+      expect(renderResult(result)).toEqual({
+        _tag: "FullyMatched",
+        allocations: [
+          {
+            lotId: "sufficient-lot",
+            matchedQuantity: "0.5",
+            remainingQuantity: "0.5",
+            costBasis: "2",
+            proceeds: "10",
+            gainLoss: "8",
+          },
+        ],
+      })
+    })
+  )
+
   it.effect("matches legacy placeholders when disposal proceeds are missing", () =>
     Effect.gen(function* () {
       const result = yield* matchFifoLots({
@@ -191,9 +229,11 @@ describe("matchFifoLots", () => {
       }).pipe(Effect.flip)
 
       expect(error).toEqual(
-        new FifoMonetaryValueOutOfRangeError({
-          field: "proceeds",
-          value: "-0.000000005",
+        new FifoInputRejectedError({
+          cause: new FifoMonetaryValueOutOfRangeError({
+            field: "proceeds",
+            value: "-0.000000005",
+          }),
         })
       )
     })

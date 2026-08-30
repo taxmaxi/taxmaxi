@@ -9,7 +9,12 @@
  */
 
 import { createHash } from "node:crypto"
-import { matchFifoLots, type FifoMatchError } from "@my/accounting"
+import {
+  FifoInputRejectedError,
+  isFifoInputRejectedError,
+  matchFifoLots,
+  type FifoMatchError,
+} from "@my/accounting"
 import {
   AccountingQuantity,
   format as formatAccountingQuantity,
@@ -91,17 +96,6 @@ const FIFO_CURRENCY_MISMATCH_OPERATION =
   "sourceNormalizationRepository.buildFifoLotAllocations.currencyMismatch"
 const FIFO_MATCHER_REJECTED_OPERATION =
   "sourceNormalizationRepository.buildFifoLotAllocations.matcherRejected"
-
-class FifoInputRejectedError extends Schema.TaggedError<FifoInputRejectedError>()(
-  "FifoInputRejectedError",
-  { cause: Schema.Unknown }
-) {
-  override get message(): string {
-    return `FIFO input rejected: ${String(this.cause)}`
-  }
-}
-
-const isFifoInputRejectedError = Schema.is(FifoInputRejectedError)
 
 /**
  * Wrap residual errors in `SyncEngineStorageError`, but let a typed credit-exhaustion
@@ -274,6 +268,64 @@ const decodeFifoMonetaryAmount = ({
   Schema.decodeEffect(MonetaryAmount)({ amount, currency: currency.toUpperCase() }).pipe(
     Effect.mapError((cause) => new FifoInputRejectedError({ cause }))
   )
+
+const decodeSourceFifoMatchRow = <Row extends { readonly matchedAmount: string }>(row: Row) =>
+  decodeFifoQuantity(row.matchedAmount).pipe(
+    Effect.map((matchedAmount) => ({
+      ...row,
+      matchedAmount: formatAccountingQuantity(matchedAmount),
+    }))
+  )
+
+const decodeSourceFifoLotRow = ({
+  lot,
+  disposalFiatCurrency,
+}: {
+  readonly lot: OpenFifoLotRecord
+  readonly disposalFiatCurrency: string | null
+}) =>
+  Effect.gen(function* () {
+    const remainingQuantity = yield* decodeFifoQuantity(lot.remainingAmount)
+    const storedCostBasisPerUnit = yield* decodeFifoMonetaryAmount({
+      amount: lot.costBasisPerToken,
+      currency: lot.costBasisCurrency,
+    })
+    // Only a zero pending basis is a currency-free placeholder. A nonzero pending basis
+    // still lacks a factual currency and must not be relabeled to make matching succeed.
+    const costBasisPerUnit =
+      lot.costBasisStatus === "pending_review" &&
+      storedCostBasisPerUnit.isZero &&
+      disposalFiatCurrency !== null
+        ? yield* decodeFifoMonetaryAmount({
+            amount: lot.costBasisPerToken,
+            currency: disposalFiatCurrency,
+          })
+        : storedCostBasisPerUnit
+
+    return { id: lot.id, remainingQuantity, costBasisPerUnit }
+  })
+
+const decodeSourceFifoEffectRow = ({
+  amount,
+  fiatAmount,
+  fiatCurrency,
+}: {
+  readonly amount: string
+  readonly fiatAmount: string | null
+  readonly fiatCurrency: string | null
+}) =>
+  Effect.gen(function* () {
+    const quantity = yield* decodeFifoQuantity(amount)
+    const proceeds =
+      fiatAmount === null
+        ? null
+        : yield* decodeFifoMonetaryAmount({
+            amount: fiatAmount,
+            currency: fiatCurrency ?? "EUR",
+          })
+
+    return { quantity, proceeds }
+  })
 
 const compareFifoQuantities = ({
   left,
@@ -1495,7 +1547,11 @@ const make = Effect.gen(function* () {
     readonly disposalFiatCurrency: string | null
   }) =>
     Effect.gen(function* () {
-      const quantity = yield* decodeFifoQuantity(disposalAmount)
+      const { proceeds, quantity } = yield* decodeSourceFifoEffectRow({
+        amount: disposalAmount,
+        fiatAmount: disposalFiatAmount,
+        fiatCurrency: disposalFiatCurrency,
+      })
       const decodedLots = [] as Array<{
         readonly id: string
         readonly remainingQuantity: AccountingQuantity
@@ -1508,32 +1564,17 @@ const make = Effect.gen(function* () {
           break
         }
 
-        const remainingQuantity = yield* decodeFifoQuantity(lot.remainingAmount)
-        const storedCostBasisPerUnit = yield* decodeFifoMonetaryAmount({
-          amount: lot.costBasisPerToken,
-          currency: lot.costBasisCurrency,
-        })
-        // Only a zero pending basis is a currency-free placeholder. A nonzero pending basis
-        // still lacks a factual currency and must not be relabeled to make matching succeed.
-        const costBasisPerUnit =
-          lot.costBasisStatus === "pending_review" &&
-          storedCostBasisPerUnit.isZero &&
-          disposalFiatCurrency !== null
-            ? yield* decodeFifoMonetaryAmount({
-                amount: lot.costBasisPerToken,
-                currency: disposalFiatCurrency,
-              })
-            : storedCostBasisPerUnit
+        const decodedLot = yield* decodeSourceFifoLotRow({ lot, disposalFiatCurrency })
 
-        decodedLots.push({ id: lot.id, remainingQuantity, costBasisPerUnit })
+        decodedLots.push(decodedLot)
 
-        if (BigDecimal.Order(remainingQuantity, remainingDisposalQuantity) >= 0) {
+        if (BigDecimal.Order(decodedLot.remainingQuantity, remainingDisposalQuantity) >= 0) {
           break
         }
 
         const nextRemainingDisposalQuantity = subtractAccountingQuantity(
           remainingDisposalQuantity,
-          remainingQuantity
+          decodedLot.remainingQuantity
         )
         if (Option.isNone(nextRemainingDisposalQuantity)) {
           return yield* new FifoInputRejectedError({
@@ -1542,13 +1583,6 @@ const make = Effect.gen(function* () {
         }
         remainingDisposalQuantity = nextRemainingDisposalQuantity.value
       }
-      const proceeds =
-        disposalFiatAmount === null
-          ? null
-          : yield* decodeFifoMonetaryAmount({
-              amount: disposalFiatAmount,
-              currency: disposalFiatCurrency ?? "EUR",
-            }).pipe(Effect.map((amount) => amount.abs()))
       const result = yield* matchFifoLots({
         lots: decodedLots,
         disposal: { quantity, proceeds },
@@ -1736,18 +1770,22 @@ const make = Effect.gen(function* () {
         )
 
       yield* Effect.forEach(allocations, (allocation) =>
-        executor
-          .update(schema.fifoLots)
-          .set({
-            remainingAmount: sql`${schema.fifoLots.remainingAmount} + ${allocation.matchedAmount}`,
-            updatedAt: nowDate(),
-          })
-          .where(eq(schema.fifoLots.id, allocation.fifoLotId))
-          .pipe(
-            wrapSyncEngineSqlError(
-              "sourceNormalizationRepository.resetInventoryMovementAllocations.restoreLot"
+        Effect.gen(function* () {
+          const decodedAllocation = yield* decodeSourceFifoMatchRow(allocation)
+
+          yield* executor
+            .update(schema.fifoLots)
+            .set({
+              remainingAmount: sql`${schema.fifoLots.remainingAmount} + ${decodedAllocation.matchedAmount}`,
+              updatedAt: nowDate(),
+            })
+            .where(eq(schema.fifoLots.id, decodedAllocation.fifoLotId))
+            .pipe(
+              wrapSyncEngineSqlError(
+                "sourceNormalizationRepository.resetInventoryMovementAllocations.restoreLot"
+              )
             )
-          )
+        })
       )
 
       yield* executor

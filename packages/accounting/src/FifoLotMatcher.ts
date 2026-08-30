@@ -76,11 +76,21 @@ export class FifoMonetaryValueOutOfRangeError extends Schema.TaggedError<FifoMon
   }
 }
 
+/** A FIFO input that cannot be processed without inventing accounting facts. */
+export class FifoInputRejectedError extends Schema.TaggedError<FifoInputRejectedError>()(
+  "FifoInputRejectedError",
+  { cause: Schema.Unknown }
+) {
+  override get message(): string {
+    return `FIFO input rejected: ${String(this.cause)}`
+  }
+}
+
+/** Check whether an error is a tagged FIFO input rejection. */
+export const isFifoInputRejectedError = Schema.is(FifoInputRejectedError)
+
 /** Typed failures possible while calculating monetary allocations. */
-export type FifoMatchError =
-  | CurrencyMismatchError
-  | DivisionByZeroError
-  | FifoMonetaryValueOutOfRangeError
+export type FifoMatchError = CurrencyMismatchError | DivisionByZeroError | FifoInputRejectedError
 
 const subtractQuantity = (
   left: AccountingQuantity,
@@ -102,23 +112,12 @@ export const matchFifoLots = ({
 }): Effect.Effect<FifoMatchResult, FifoMatchError, never> =>
   Effect.gen(function* () {
     if (disposal.proceeds?.isNegative === true) {
-      return yield* Effect.fail(
-        new FifoMonetaryValueOutOfRangeError({
+      return yield* new FifoInputRejectedError({
+        cause: new FifoMonetaryValueOutOfRangeError({
           field: "proceeds",
           value: disposal.proceeds.format(),
-        })
-      )
-    }
-
-    for (const lot of lots) {
-      if (lot.costBasisPerUnit.isNegative) {
-        return yield* Effect.fail(
-          new FifoMonetaryValueOutOfRangeError({
-            field: "costBasisPerUnit",
-            value: lot.costBasisPerUnit.format(),
-          })
-        )
-      }
+        }),
+      })
     }
 
     let remainingQuantity = disposal.quantity
@@ -131,6 +130,15 @@ export const matchFifoLots = ({
 
       if (BigDecimal.isZero(lot.remainingQuantity)) {
         continue
+      }
+
+      if (lot.costBasisPerUnit.isNegative) {
+        return yield* new FifoInputRejectedError({
+          cause: new FifoMonetaryValueOutOfRangeError({
+            field: "costBasisPerUnit",
+            value: lot.costBasisPerUnit.format(),
+          }),
+        })
       }
 
       const matchedQuantity = min(lot.remainingQuantity, remainingQuantity)

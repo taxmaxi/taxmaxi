@@ -6,6 +6,20 @@
  */
 
 import {
+  FifoInputRejectedError,
+  isFifoInputRejectedError,
+  matchFifoLots,
+  type FifoMatchError,
+  type FifoMatchResult,
+} from "@my/accounting"
+import {
+  AccountingQuantity,
+  add as addAccountingQuantities,
+  format as formatAccountingQuantity,
+  MonetaryAmount,
+} from "@my/core/accounting"
+import { CurrencyCode } from "@my/core/currency"
+import {
   aliasedTable,
   and,
   asc,
@@ -205,6 +219,79 @@ const make = Effect.gen(function* () {
       )
     )
 
+  const RECONCILIATION_FIFO_CURRENCY = CurrencyCode.make("EUR")
+
+  const decodeFifoQuantity = ({
+    value,
+    operation,
+  }: {
+    readonly value: unknown
+    readonly operation: string
+  }) =>
+    Effect.gen(function* () {
+      const amount = yield* formatDecimal({ value, operation }).pipe(
+        Effect.mapError(
+          (error) =>
+            new SyncEngineStorageError({
+              operation,
+              cause: new FifoInputRejectedError({ cause: error.cause }),
+            })
+        )
+      )
+
+      return yield* Schema.decodeEffect(AccountingQuantity)(amount).pipe(
+        Effect.mapError(
+          (cause) =>
+            new SyncEngineStorageError({
+              operation,
+              cause: new FifoInputRejectedError({ cause }),
+            })
+        )
+      )
+    })
+
+  // T05 preserves the rebuild's currency-blind numeric output. Result rows do not
+  // carry a currency here, so the adapter gives every matcher input one currency.
+  const decodeReconciliationFifoMoney = ({
+    value,
+    operation,
+  }: {
+    readonly value: unknown
+    readonly operation: string
+  }) =>
+    Effect.gen(function* () {
+      const amount = yield* formatDecimal({ value, operation }).pipe(
+        Effect.mapError(
+          (error) =>
+            new SyncEngineStorageError({
+              operation,
+              cause: new FifoInputRejectedError({ cause: error.cause }),
+            })
+        )
+      )
+
+      return yield* Schema.decodeEffect(MonetaryAmount)({
+        amount,
+        currency: RECONCILIATION_FIFO_CURRENCY,
+      }).pipe(
+        Effect.mapError(
+          (cause) =>
+            new SyncEngineStorageError({
+              operation,
+              cause: new FifoInputRejectedError({ cause }),
+            })
+        )
+      )
+    })
+
+  const wrapFifoMatchError = ({
+    error,
+    operation,
+  }: {
+    readonly error: FifoMatchError
+    readonly operation: string
+  }) => new SyncEngineStorageError({ operation, cause: error })
+
   type ReconciliationLegEffect = {
     readonly id: string
     readonly kind: string
@@ -225,6 +312,128 @@ const make = Effect.gen(function* () {
     readonly timestamp: Date
     readonly createdAt: Date
   }
+  type RebuildFifoMatchRow = {
+    readonly id: string
+    readonly effectId: string
+    readonly fifoLotId: string
+    readonly matchedAmount: unknown
+  }
+  type RebuildFifoLotRow = {
+    readonly id: string
+    readonly sourceId: string
+    readonly principalId: string
+    readonly assetId: string
+    readonly acquiredAt: Date
+    readonly availableAt: Date
+    readonly remainingAmount: unknown
+    readonly costBasisPerToken: unknown
+    readonly createdAt: Date
+  }
+  type DecodedRebuildFifoLotRow = Omit<
+    RebuildFifoLotRow,
+    "remainingAmount" | "costBasisPerToken"
+  > & {
+    readonly remainingQuantity: AccountingQuantity
+    readonly costBasisPerUnit: MonetaryAmount
+  }
+  type DecodedRebuildableFifoEffect = RebuildableFifoEffect & {
+    readonly quantity: AccountingQuantity
+    readonly proceeds: MonetaryAmount | null
+  }
+
+  const optionalRejectedFifoInput = <A>(
+    input: Effect.Effect<A, SyncEngineStorageError>
+  ): Effect.Effect<Option.Option<A>, SyncEngineStorageError> =>
+    input.pipe(
+      Effect.map(Option.some),
+      Effect.catchTag("SyncEngineStorageError", (error) =>
+        isFifoInputRejectedError(error.cause) ? Effect.succeed(Option.none()) : Effect.fail(error)
+      )
+    )
+
+  const decodeRebuildFifoMatchRow = (row: RebuildFifoMatchRow) =>
+    optionalRejectedFifoInput(
+      decodeFifoQuantity({
+        value: row.matchedAmount,
+        operation:
+          "transferReconciliationRepository.reconciliationEffectMutations.rebuildFifoEffects.matchRow.matchedAmount",
+      }).pipe(Effect.map((matchedAmount) => ({ ...row, matchedAmount })))
+    )
+
+  const decodeRebuildFifoLotRow = (row: RebuildFifoLotRow) =>
+    optionalRejectedFifoInput(
+      Effect.gen(function* () {
+        const remainingQuantity = yield* decodeFifoQuantity({
+          value: row.remainingAmount,
+          operation:
+            "transferReconciliationRepository.reconciliationEffectMutations.rebuildFifoEffects.lotRow.remainingAmount",
+        })
+        const costBasisPerUnit = yield* decodeReconciliationFifoMoney({
+          value: row.costBasisPerToken,
+          operation:
+            "transferReconciliationRepository.reconciliationEffectMutations.rebuildFifoEffects.lotRow.costBasisPerToken",
+        })
+
+        return {
+          id: row.id,
+          sourceId: row.sourceId,
+          principalId: row.principalId,
+          assetId: row.assetId,
+          acquiredAt: row.acquiredAt,
+          availableAt: row.availableAt,
+          createdAt: row.createdAt,
+          remainingQuantity,
+          costBasisPerUnit,
+        } satisfies DecodedRebuildFifoLotRow
+      })
+    )
+
+  const decodeRebuildFifoEffectRow = (row: RebuildableFifoEffect) =>
+    optionalRejectedFifoInput(
+      Effect.gen(function* () {
+        const quantity = yield* decodeFifoQuantity({
+          value: row.amount,
+          operation:
+            "transferReconciliationRepository.reconciliationEffectMutations.rebuildFifoEffects.effectRow.amount",
+        })
+        const proceeds =
+          row.fiatAmount === null
+            ? null
+            : yield* decodeReconciliationFifoMoney({
+                value: row.fiatAmount,
+                operation:
+                  "transferReconciliationRepository.reconciliationEffectMutations.rebuildFifoEffects.effectRow.fiatAmount",
+              })
+
+        return { ...row, quantity, proceeds } satisfies DecodedRebuildableFifoEffect
+      })
+    )
+
+  const matchRebuildFifoEffect = ({
+    lots,
+    effect,
+  }: {
+    readonly lots: ReadonlyArray<{
+      readonly id: string
+      readonly remainingQuantity: AccountingQuantity
+      readonly costBasisPerUnit: MonetaryAmount
+    }>
+    readonly effect: DecodedRebuildableFifoEffect
+  }) =>
+    optionalRejectedFifoInput(
+      matchFifoLots({
+        lots,
+        disposal: { quantity: effect.quantity, proceeds: effect.proceeds },
+      }).pipe(
+        Effect.mapError((error) =>
+          wrapFifoMatchError({
+            error,
+            operation:
+              "transferReconciliationRepository.reconciliationEffectMutations.rebuildFifoEffects.match",
+          })
+        )
+      )
+    )
 
   const makeReconciliationEffectMutations = (tx: ReconciliationMutationExecutor) => {
     const clearLegs = ({ legs }: { readonly legs: ReadonlyArray<ReconciliationLegEffect> }) =>
@@ -433,24 +642,44 @@ const make = Effect.gen(function* () {
                   )
                 )
         const effectById = new Map(effects.map((effect) => [effect.id, effect] as const))
+        const blockedInventoryKeys = new Set<string>()
+        const blockedEffectIds = new Set<string>()
+        const rejectedInventoryKeys = new Set<string>()
+        const blockRejectedEffect = (effect: RebuildableFifoEffect) => {
+          const inventoryKey = inventoryKeyForEffect(effect)
+          rejectedInventoryKeys.add(inventoryKey)
+          blockedInventoryKeys.add(inventoryKey)
+          blockedEffectIds.add(effect.id)
+        }
         const allocations = [...disposalMatches, ...movementAllocations]
-        const restoredAmountByLotId = new Map<string, BigDecimal.BigDecimal>()
+        const allocationKey = (allocation: RebuildFifoMatchRow) =>
+          `${allocation.effectId}:${allocation.fifoLotId}:${allocation.id}`
+        const decodedMatchedAmountByAllocationKey = new Map<string, AccountingQuantity>()
+        const restoredAmountByLotId = new Map<string, AccountingQuantity>()
         for (const allocation of allocations) {
-          const matchedAmount = yield* decodeBigDecimal({
-            value: yield* formatDecimal({
-              value: allocation.matchedAmount,
-              operation:
-                "transferReconciliationRepository.reconciliationEffectMutations.rebuildFifoEffects.preflightMatchedAmount",
-            }),
-            operation:
-              "transferReconciliationRepository.reconciliationEffectMutations.rebuildFifoEffects.preflightMatchedAmount",
-          })
-          const restoredAmount = restoredAmountByLotId.get(allocation.fifoLotId)
+          const decodedAllocation = yield* decodeRebuildFifoMatchRow(allocation)
+          if (Option.isNone(decodedAllocation)) {
+            const effect = effectById.get(allocation.effectId)
+            if (effect === undefined) {
+              return yield* new SyncEngineStorageError({
+                operation:
+                  "transferReconciliationRepository.reconciliationEffectMutations.rebuildFifoEffects.matchRow.effect",
+                cause: `Missing FIFO effect ${allocation.effectId}`,
+              })
+            }
+            blockRejectedEffect(effect)
+            continue
+          }
+          decodedMatchedAmountByAllocationKey.set(
+            allocationKey(allocation),
+            decodedAllocation.value.matchedAmount
+          )
+          const restoredAmount = restoredAmountByLotId.get(decodedAllocation.value.fifoLotId)
           restoredAmountByLotId.set(
-            allocation.fifoLotId,
+            decodedAllocation.value.fifoLotId,
             restoredAmount === undefined
-              ? matchedAmount
-              : BigDecimal.sum(restoredAmount, matchedAmount)
+              ? decodedAllocation.value.matchedAmount
+              : addAccountingQuantities(restoredAmount, decodedAllocation.value.matchedAmount)
           )
         }
 
@@ -503,70 +732,90 @@ const make = Effect.gen(function* () {
                     "transferReconciliationRepository.reconciliationEffectMutations.rebuildFifoEffects.loadCandidateLots"
                   )
                 )
-        const virtualRemainingByLotId = new Map<string, BigDecimal.BigDecimal>()
+        const decodedCandidateLots: Array<DecodedRebuildFifoLotRow> = []
+        const virtualRemainingByLotId = new Map<string, AccountingQuantity>()
         for (const lot of candidateLots) {
-          const remainingAmount = yield* decodeBigDecimal({
-            value: yield* formatDecimal({
-              value: lot.remainingAmount,
-              operation:
-                "transferReconciliationRepository.reconciliationEffectMutations.rebuildFifoEffects.preflightLotRemaining",
-            }),
-            operation:
-              "transferReconciliationRepository.reconciliationEffectMutations.rebuildFifoEffects.preflightLotRemaining",
-          })
+          const decodedLot = yield* decodeRebuildFifoLotRow(lot)
+          if (Option.isNone(decodedLot)) {
+            const inventoryKey = `${lot.sourceId}:${lot.principalId}:${lot.assetId}`
+            rejectedInventoryKeys.add(inventoryKey)
+            blockedInventoryKeys.add(inventoryKey)
+            continue
+          }
+          decodedCandidateLots.push(decodedLot.value)
+          const restoredAmount = restoredAmountByLotId.get(lot.id)
           virtualRemainingByLotId.set(
             lot.id,
-            BigDecimal.sum(
-              remainingAmount,
-              restoredAmountByLotId.get(lot.id) ?? BigDecimal.fromBigInt(0n)
-            )
+            restoredAmount === undefined
+              ? decodedLot.value.remainingQuantity
+              : addAccountingQuantities(decodedLot.value.remainingQuantity, restoredAmount)
           )
         }
 
-        const blockedInventoryKeys = new Set<string>()
-        const blockedEffectIds = new Set<string>()
+        const decodedEffectById = new Map<string, DecodedRebuildableFifoEffect>()
+        for (const effect of effects) {
+          const decodedEffect = yield* decodeRebuildFifoEffectRow(effect)
+          if (Option.isNone(decodedEffect)) {
+            blockRejectedEffect(effect)
+            continue
+          }
+          decodedEffectById.set(effect.id, decodedEffect.value)
+        }
+
+        const matchResultByEffectId = new Map<string, FifoMatchResult>()
         for (const effect of effects) {
           const inventoryKey = inventoryKeyForEffect(effect)
           if (blockedInventoryKeys.has(inventoryKey)) {
             blockedEffectIds.add(effect.id)
             continue
           }
-          let remainingAmount = yield* decodeBigDecimal({
-            value: yield* formatDecimal({
-              value: effect.amount,
-              operation:
-                "transferReconciliationRepository.reconciliationEffectMutations.rebuildFifoEffects.preflightEffectAmount",
-            }),
-            operation:
-              "transferReconciliationRepository.reconciliationEffectMutations.rebuildFifoEffects.preflightEffectAmount",
-          })
-          for (const lot of candidateLots) {
-            if (
-              lot.sourceId !== effect.sourceId ||
-              lot.principalId !== effect.principalId ||
-              lot.assetId !== effect.assetId ||
-              lot.acquiredAt > effect.timestamp ||
-              lot.availableAt > effect.timestamp
-            ) {
-              continue
-            }
-            const lotRemaining = virtualRemainingByLotId.get(lot.id) ?? BigDecimal.fromBigInt(0n)
-            if (!BigDecimal.isGreaterThan(lotRemaining, BigDecimal.fromBigInt(0n))) {
-              continue
-            }
-            const matchedAmount = BigDecimal.isLessThanOrEqualTo(remainingAmount, lotRemaining)
-              ? remainingAmount
-              : lotRemaining
-            virtualRemainingByLotId.set(lot.id, BigDecimal.subtract(lotRemaining, matchedAmount))
-            remainingAmount = BigDecimal.subtract(remainingAmount, matchedAmount)
-            if (!BigDecimal.isGreaterThan(remainingAmount, BigDecimal.fromBigInt(0n))) {
-              break
-            }
+          const decodedEffect = decodedEffectById.get(effect.id)
+          if (decodedEffect === undefined) {
+            blockRejectedEffect(effect)
+            continue
           }
-          if (BigDecimal.isGreaterThan(remainingAmount, BigDecimal.fromBigInt(0n))) {
+          const preflightResult = yield* matchRebuildFifoEffect({
+            lots: decodedCandidateLots.flatMap((lot) => {
+              const remainingQuantity = virtualRemainingByLotId.get(lot.id)
+              return remainingQuantity === undefined ||
+                BigDecimal.isZero(remainingQuantity) ||
+                lot.sourceId !== effect.sourceId ||
+                lot.principalId !== effect.principalId ||
+                lot.assetId !== effect.assetId ||
+                lot.acquiredAt > effect.timestamp ||
+                lot.availableAt > effect.timestamp
+                ? []
+                : [
+                    {
+                      id: lot.id,
+                      remainingQuantity,
+                      costBasisPerUnit: lot.costBasisPerUnit,
+                    },
+                  ]
+            }),
+            effect: decodedEffect,
+          })
+          if (Option.isNone(preflightResult)) {
+            blockRejectedEffect(effect)
+            continue
+          }
+          const result = preflightResult.value
+          if (result._tag === "InventoryShortage") {
             blockedInventoryKeys.add(inventoryKey)
             blockedEffectIds.add(effect.id)
+            continue
           }
+          matchResultByEffectId.set(effect.id, result)
+          for (const allocation of result.allocations) {
+            virtualRemainingByLotId.set(allocation.lotId, allocation.remainingQuantity)
+          }
+        }
+        for (const effect of effects) {
+          if (!rejectedInventoryKeys.has(inventoryKeyForEffect(effect))) {
+            continue
+          }
+          blockedEffectIds.add(effect.id)
+          matchResultByEffectId.delete(effect.id)
         }
         if (shortageMode === "preserve") {
           for (const effect of effects) {
@@ -578,16 +827,24 @@ const make = Effect.gen(function* () {
 
         const shouldRemoveAllocation = (effectId: string) => {
           const effect = effectById.get(effectId)
-          return (
-            effect !== undefined && (shortageMode === "clear" || !blockedEffectIds.has(effect.id))
-          )
+          if (effect === undefined || rejectedInventoryKeys.has(inventoryKeyForEffect(effect))) {
+            return false
+          }
+
+          return shortageMode === "clear" || !blockedEffectIds.has(effect.id)
         }
-        const disposalMatchesToRebuild = disposalMatches.filter(({ effectId }) =>
-          shouldRemoveAllocation(effectId)
-        )
-        const movementAllocationsToRebuild = movementAllocations.filter(({ effectId }) =>
-          shouldRemoveAllocation(effectId)
-        )
+        const selectValidatedAllocationsToRebuild = <Row extends RebuildFifoMatchRow>(
+          rows: ReadonlyArray<Row>
+        ) =>
+          rows.flatMap((row) => {
+            const matchedAmount = decodedMatchedAmountByAllocationKey.get(allocationKey(row))
+            return shouldRemoveAllocation(row.effectId) && matchedAmount !== undefined
+              ? [{ ...row, matchedAmount: formatAccountingQuantity(matchedAmount) }]
+              : []
+          })
+        const disposalMatchesToRebuild = selectValidatedAllocationsToRebuild(disposalMatches)
+        const movementAllocationsToRebuild =
+          selectValidatedAllocationsToRebuild(movementAllocations)
         yield* Effect.forEach(
           [...disposalMatchesToRebuild, ...movementAllocationsToRebuild],
           (allocation) =>
@@ -639,125 +896,36 @@ const make = Effect.gen(function* () {
           if (blockedEffectIds.has(effect.id)) {
             continue
           }
-          const effectAmount = yield* decodeBigDecimal({
-            value: yield* formatDecimal({
-              value: effect.amount,
-              operation:
-                "transferReconciliationRepository.reconciliationEffectMutations.rebuildFifoEffects.effectAmount",
-            }),
-            operation:
-              "transferReconciliationRepository.reconciliationEffectMutations.rebuildFifoEffects.effectAmount",
-          })
-          const availableLots = yield* tx
-            .select({
-              id: schema.fifoLots.id,
-              remainingAmount: schema.fifoLots.remainingAmount,
-              costBasisPerToken: schema.fifoLots.costBasisPerToken,
-            })
-            .from(schema.fifoLots)
-            .innerJoin(
-              schema.transactionLegs,
-              eq(schema.transactionLegs.id, schema.fifoLots.sourceLegId)
-            )
-            .where(
-              and(
-                eq(schema.fifoLots.sourceId, effect.sourceId),
-                eq(schema.fifoLots.principalId, effect.principalId),
-                eq(schema.fifoLots.assetId, effect.assetId),
-                lte(schema.fifoLots.acquiredAt, effect.timestamp),
-                lte(schema.transactionLegs.timestamp, effect.timestamp),
-                gt(schema.fifoLots.remainingAmount, "0")
-              )
-            )
-            .orderBy(asc(schema.fifoLots.acquiredAt), asc(schema.fifoLots.createdAt))
-            .pipe(
-              wrapSyncEngineSqlError(
-                "transferReconciliationRepository.reconciliationEffectMutations.rebuildFifoEffects.loadOpenLots"
-              )
-            )
-          let remainingAmount = effectAmount
-          const nextAllocations = []
-          for (const lot of availableLots) {
-            if (!BigDecimal.isGreaterThan(remainingAmount, BigDecimal.fromBigInt(0n))) {
-              break
-            }
-            const lotRemaining = yield* decodeBigDecimal({
-              value: yield* formatDecimal({
-                value: lot.remainingAmount,
-                operation:
-                  "transferReconciliationRepository.reconciliationEffectMutations.rebuildFifoEffects.lotRemaining",
-              }),
-              operation:
-                "transferReconciliationRepository.reconciliationEffectMutations.rebuildFifoEffects.lotRemaining",
-            })
-            const matchedAmount = BigDecimal.isLessThanOrEqualTo(remainingAmount, lotRemaining)
-              ? remainingAmount
-              : lotRemaining
-            nextAllocations.push({
-              fifoLotId: lot.id,
-              matchedAmount,
-              nextRemaining: BigDecimal.subtract(lotRemaining, matchedAmount),
-              costBasisPerToken: yield* decodeBigDecimal({
-                value: yield* formatDecimal({
-                  value: lot.costBasisPerToken,
-                  operation:
-                    "transferReconciliationRepository.reconciliationEffectMutations.rebuildFifoEffects.costBasisPerToken",
-                }),
-                operation:
-                  "transferReconciliationRepository.reconciliationEffectMutations.rebuildFifoEffects.costBasisPerToken",
-              }),
-            })
-            remainingAmount = BigDecimal.subtract(remainingAmount, matchedAmount)
+          const result = matchResultByEffectId.get(effect.id)
+          if (result === undefined) {
+            continue
           }
-          const totalProceeds =
-            effect.fiatAmount === null
-              ? BigDecimal.fromBigInt(0n)
-              : yield* decodeBigDecimal({
-                  value: yield* formatDecimal({
-                    value: effect.fiatAmount,
-                    operation:
-                      "transferReconciliationRepository.reconciliationEffectMutations.rebuildFifoEffects.fiatAmount",
-                  }),
-                  operation:
-                    "transferReconciliationRepository.reconciliationEffectMutations.rebuildFifoEffects.fiatAmount",
-                })
-          for (const allocation of nextAllocations) {
+          for (const allocation of result.allocations) {
             if (effect.kind === "disposal") {
-              const costBasis = BigDecimal.round(
-                BigDecimal.multiply(allocation.matchedAmount, allocation.costBasisPerToken),
-                { scale: 8 }
-              )
-              const proceedsRatio = Option.getOrElse(
-                BigDecimal.divide(allocation.matchedAmount, effectAmount),
-                () => BigDecimal.fromBigInt(0n)
-              )
-              const proceeds = BigDecimal.round(BigDecimal.multiply(totalProceeds, proceedsRatio), {
-                scale: 8,
-              })
               yield* tx.insert(schema.disposalMatches).values({
                 disposalLegId: effect.id,
-                fifoLotId: allocation.fifoLotId,
-                matchedAmount: BigDecimal.format(allocation.matchedAmount),
-                costBasis: BigDecimal.format(costBasis),
-                proceeds: BigDecimal.format(proceeds),
-                gainLoss: BigDecimal.format(BigDecimal.subtract(proceeds, costBasis)),
+                fifoLotId: allocation.lotId,
+                matchedAmount: formatAccountingQuantity(allocation.matchedQuantity),
+                costBasis: allocation.costBasis.format(),
+                proceeds: allocation.proceeds.format(),
+                gainLoss: allocation.gainLoss.format(),
                 createdAt: nowDate(),
               })
             } else {
               yield* tx.insert(schema.inventoryMovementAllocations).values({
                 inventoryMovementId: effect.id,
-                fifoLotId: allocation.fifoLotId,
-                matchedAmount: BigDecimal.format(allocation.matchedAmount),
+                fifoLotId: allocation.lotId,
+                matchedAmount: formatAccountingQuantity(allocation.matchedQuantity),
                 createdAt: nowDate(),
               })
             }
             yield* tx
               .update(schema.fifoLots)
               .set({
-                remainingAmount: BigDecimal.format(allocation.nextRemaining),
+                remainingAmount: formatAccountingQuantity(allocation.remainingQuantity),
                 updatedAt: nowDate(),
               })
-              .where(eq(schema.fifoLots.id, allocation.fifoLotId))
+              .where(eq(schema.fifoLots.id, allocation.lotId))
           }
         }
 
