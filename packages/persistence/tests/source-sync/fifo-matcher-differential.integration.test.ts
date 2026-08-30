@@ -1236,66 +1236,177 @@ describe("source FIFO and pure matcher differential", () => {
     })
   )
 
-  it.effect("routes a rejected fee quantity to FIFO review without failing persistence", () =>
+  it.effect("routes rejected FIFO quantities from every persistence entry path to review", () =>
     Effect.gen(function* () {
-      const transactionFact: DisposalFact = {
-        externalId: "rejected-fee-quantity-transaction",
-        rawRecordId: "00000000-0000-0000-0000-000000000859",
-        timestamp: DateTime.toDateUtc(DateTime.makeUnsafe("2025-02-01T10:00:00.000Z")),
-        quantity: "0.10000000",
-        fiatAmount: "1.00000000",
-        fiatCurrency: "EUR",
-      }
-
-      yield* Effect.promise(() =>
+      const timestamp = DateTime.toDateUtc(DateTime.makeUnsafe("2025-02-01T10:00:00.000Z"))
+      const providerAssetId = yield* Effect.promise(() =>
         runPg(
-          seedRawRecord({
-            externalId: transactionFact.externalId,
-            rawRecordId: transactionFact.rawRecordId,
-            timestamp: transactionFact.timestamp,
+          Effect.gen(function* () {
+            const db = yield* drizzle
+            const [providerAsset] = yield* db
+              .insert(schema.providerAssets)
+              .values({
+                provider: "coinbase",
+                providerAssetId: "rejected-provider-leg-asset",
+                currencyCode: "BTC",
+                retrievedAt: timestamp,
+              })
+              .returning({ id: schema.providerAssets.id })
+
+            if (providerAsset === undefined) {
+              return yield* Effect.die("Failed to create rejected provider-leg asset")
+            }
+
+            yield* db.insert(schema.providerAssetMappings).values({
+              providerAssetRowId: providerAsset.id,
+              mappingKind: "asset",
+              canonicalAssetId: TEST_BTC_ASSET_ID,
+              assetRepresentationId: TEST_BTC_REPRESENTATION_ID,
+              canonicalFiatCurrency: null,
+              mappingStatus: "approved",
+              reviewerNotes: null,
+              sourceNotes: null,
+              createdAt: timestamp,
+              updatedAt: timestamp,
+            })
+
+            return providerAsset.id
           })
         )
       )
 
-      const persistenceInput = makePersistenceInput({
-        cexAccountId: repositoryFixture.cexAccountId,
-        fact: { ...transactionFact, kind: "disposal" },
-      })
-      const feeLeg = {
-        ...makeLeg({ ...transactionFact, kind: "disposal" }),
-        externalId: "rejected-fee-quantity-leg",
-        amount: "-0.10000000",
-        kind: "fee" as const,
-        fiatAmount: null,
-        fiatCurrency: null,
-      }
-      const result = yield* Effect.promise(() =>
-        runRepository(
-          Effect.flatMap(SourceNormalizationRepository, (repository) =>
-            repository.persistNormalizedArtifacts({
-              ...persistenceInput,
-              legs: [feeLeg],
-            })
-          )
-        )
-      )
-      const review = yield* loadShortageReview(transactionFact.externalId)
+      const scenarios = [
+        {
+          entryPath: "fee leg",
+          fact: {
+            externalId: "rejected-fee-quantity-transaction",
+            rawRecordId: "00000000-0000-0000-0000-000000000859",
+            timestamp,
+            quantity: "-0.10000000",
+            fiatAmount: null,
+            fiatCurrency: null,
+            kind: "disposal" as const,
+          },
+          legKind: "fee" as const,
+          providerTransfers: [],
+        },
+        {
+          entryPath: "provider leg",
+          fact: {
+            externalId: "rejected-provider-quantity-transaction",
+            rawRecordId: "00000000-0000-0000-0000-000000000860",
+            timestamp,
+            quantity: "-0.10000000",
+            fiatAmount: null,
+            fiatCurrency: null,
+            kind: "acquisition" as const,
+          },
+          legKind: "acquisition" as const,
+          providerTransfers: [
+            {
+              sourceId: TEST_SOURCE_ID,
+              sourceRawRecordId: "00000000-0000-0000-0000-000000000860",
+              externalId: "rejected-provider-quantity-transfer",
+              externalGroupId: null,
+              providerAssetId,
+              timestamp,
+              direction: "inbound" as const,
+              processingMode: "accounting_only" as const,
+              fromAccountRef: "provider-account",
+              toAccountRef: "principal-account",
+              fromAddress: null,
+              toAddress: null,
+              networkName: null,
+              networkHash: null,
+              observedBlockchainId: null,
+              observedRepresentationType: null,
+              observedContractAddress: null,
+              observedMintAddress: null,
+              observedDecimals: null,
+              amount: "0.10000000",
+              metadata: { role: "principal" },
+            },
+          ],
+        },
+        {
+          entryPath: "disposal leg",
+          fact: {
+            externalId: "rejected-disposal-quantity-transaction",
+            rawRecordId: "00000000-0000-0000-0000-000000000861",
+            timestamp,
+            quantity: "-0.10000000",
+            fiatAmount: null,
+            fiatCurrency: null,
+            kind: "disposal" as const,
+          },
+          legKind: "disposal" as const,
+          providerTransfers: [],
+        },
+      ]
 
-      expect(result.legs).toEqual([
-        expect.objectContaining({
-          sourceRawRecordId: transactionFact.rawRecordId,
-          kind: "fee",
-          amount: expect.stringMatching(/^-0\.1(?:0+)?$/),
-        }),
-      ])
-      expect(review).toMatchObject({
-        reviewStatus: "needs_review",
-        matchedLayer: "fifo_inventory",
-        needsReview: true,
-        categorizationReason: expect.stringContaining(
-          "Review required because a FIFO value could not be processed safely"
-        ),
-      })
+      const persisted = yield* Effect.forEach(scenarios, (scenario) =>
+        Effect.gen(function* () {
+          yield* Effect.promise(() =>
+            runPg(
+              seedRawRecord({
+                externalId: scenario.fact.externalId,
+                rawRecordId: scenario.fact.rawRecordId,
+                timestamp: scenario.fact.timestamp,
+              })
+            )
+          )
+
+          const persistenceInput = makePersistenceInput({
+            cexAccountId: repositoryFixture.cexAccountId,
+            fact: scenario.fact,
+          })
+          const result = yield* Effect.promise(() =>
+            runRepository(
+              Effect.flatMap(SourceNormalizationRepository, (repository) =>
+                repository.persistNormalizedArtifacts({
+                  ...persistenceInput,
+                  providerTransfers: scenario.providerTransfers,
+                  legs: [
+                    {
+                      ...makeLeg(scenario.fact),
+                      amount: scenario.fact.quantity,
+                      kind: scenario.legKind,
+                      fiatAmount: null,
+                      fiatCurrency: null,
+                    },
+                  ],
+                })
+              )
+            )
+          )
+          const review = yield* loadShortageReview(scenario.fact.externalId)
+
+          return { entryPath: scenario.entryPath, result, review }
+        })
+      )
+
+      expect(persisted).toEqual(
+        scenarios.map((scenario) => ({
+          entryPath: scenario.entryPath,
+          result: expect.objectContaining({
+            legs: [
+              expect.objectContaining({
+                sourceRawRecordId: scenario.fact.rawRecordId,
+                kind: scenario.legKind,
+                amount: expect.stringMatching(/^-0\.1(?:0+)?$/),
+              }),
+            ],
+          }),
+          review: expect.objectContaining({
+            reviewStatus: "needs_review",
+            matchedLayer: "fifo_inventory",
+            needsReview: true,
+            categorizationReason: expect.stringContaining(
+              "Review required because a FIFO value could not be processed safely"
+            ),
+          }),
+        }))
+      )
     })
   )
 })

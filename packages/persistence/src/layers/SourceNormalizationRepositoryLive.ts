@@ -89,10 +89,19 @@ const INSUFFICIENT_FIFO_INVENTORY_OPERATION =
   "sourceNormalizationRepository.buildFifoLotAllocations"
 const FIFO_CURRENCY_MISMATCH_OPERATION =
   "sourceNormalizationRepository.buildFifoLotAllocations.currencyMismatch"
-const FIFO_INPUT_REJECTED_OPERATION =
-  "sourceNormalizationRepository.buildFifoLotAllocations.inputRejected"
 const FIFO_MATCHER_REJECTED_OPERATION =
   "sourceNormalizationRepository.buildFifoLotAllocations.matcherRejected"
+
+class FifoInputRejectedError extends Schema.TaggedError<FifoInputRejectedError>()(
+  "FifoInputRejectedError",
+  { cause: Schema.Unknown }
+) {
+  override get message(): string {
+    return `FIFO input rejected: ${String(this.cause)}`
+  }
+}
+
+const isFifoInputRejectedError = Schema.is(FifoInputRejectedError)
 
 /**
  * Wrap residual errors in `SyncEngineStorageError`, but let a typed credit-exhaustion
@@ -177,8 +186,8 @@ const decodeNumericString = ({
 const isFifoInventoryReviewError = (error: SyncEngineStorageError): boolean =>
   error.operation === INSUFFICIENT_FIFO_INVENTORY_OPERATION ||
   error.operation === FIFO_CURRENCY_MISMATCH_OPERATION ||
-  error.operation === FIFO_INPUT_REJECTED_OPERATION ||
-  error.operation === FIFO_MATCHER_REJECTED_OPERATION
+  error.operation === FIFO_MATCHER_REJECTED_OPERATION ||
+  isFifoInputRejectedError(error.cause)
 
 const FIFO_INVENTORY_REVIEW_LAYER = "fifo_inventory"
 const FIFO_INVENTORY_REVIEW_REASON_PREFIX =
@@ -250,53 +259,37 @@ const buildFifoInventoryReview = ({
   }
 }
 
-const decodeAccountingQuantity = ({
-  value,
-  operation,
-}: {
-  readonly value: string
-  readonly operation: string
-}) =>
+const decodeFifoQuantity = (value: string) =>
   Schema.decodeEffect(AccountingQuantity)(value).pipe(
-    Effect.mapError((error) => toSyncEngineStorageError({ error, operation }))
+    Effect.mapError((cause) => new FifoInputRejectedError({ cause }))
   )
 
-const decodeMonetaryAmount = ({
+const decodeFifoMonetaryAmount = ({
   amount,
   currency,
-  operation,
 }: {
   readonly amount: string
   readonly currency: string
-  readonly operation: string
 }) =>
   Schema.decodeEffect(MonetaryAmount)({ amount, currency: currency.toUpperCase() }).pipe(
-    Effect.mapError((error) => toSyncEngineStorageError({ error, operation }))
+    Effect.mapError((cause) => new FifoInputRejectedError({ cause }))
   )
 
-const compareDecimalQuantities = ({
+const compareFifoQuantities = ({
   left,
   right,
-  operation,
 }: {
   readonly left: string
   readonly right: string
-  readonly operation?: string
 }) =>
   Effect.gen(function* () {
-    const leftQuantity = yield* decodeAccountingQuantity({
-      value: left,
-      operation: operation ?? "sourceNormalizationRepository.compareDecimalQuantities.left",
-    })
-    const rightQuantity = yield* decodeAccountingQuantity({
-      value: right,
-      operation: operation ?? "sourceNormalizationRepository.compareDecimalQuantities.right",
-    })
+    const leftQuantity = yield* decodeFifoQuantity(left)
+    const rightQuantity = yield* decodeFifoQuantity(right)
 
     return BigDecimal.Order(leftQuantity, rightQuantity)
   })
 
-const subtractDecimalQuantities = ({
+const subtractFifoQuantities = ({
   left,
   right,
 }: {
@@ -304,21 +297,16 @@ const subtractDecimalQuantities = ({
   readonly right: string
 }) =>
   Effect.gen(function* () {
-    const leftQuantity = yield* decodeAccountingQuantity({
-      value: left,
-      operation: "sourceNormalizationRepository.subtractDecimalQuantities.left",
-    })
-    const rightQuantity = yield* decodeAccountingQuantity({
-      value: right,
-      operation: "sourceNormalizationRepository.subtractDecimalQuantities.right",
-    })
+    const leftQuantity = yield* decodeFifoQuantity(left)
+    const rightQuantity = yield* decodeFifoQuantity(right)
 
     return yield* Option.match(subtractAccountingQuantity(leftQuantity, rightQuantity), {
       onNone: () =>
-        toSyncEngineStorageError({
-          error: `Cannot subtract ${right} from ${left}`,
-          operation: "sourceNormalizationRepository.subtractDecimalQuantities",
-        }),
+        Effect.fail(
+          new FifoInputRejectedError({
+            cause: `Cannot subtract ${right} from ${left}`,
+          })
+        ),
       onSome: (result) => Effect.succeed(formatAccountingQuantity(result)),
     })
   })
@@ -348,15 +336,11 @@ const toCostBasisPerToken = ({
       return "0.000000000000000000"
     }
 
-    const totalCostBasis = yield* decodeMonetaryAmount({
+    const totalCostBasis = yield* decodeFifoMonetaryAmount({
       amount: fiatAmount,
       currency: fiatCurrency,
-      operation: FIFO_INPUT_REJECTED_OPERATION,
     })
-    const quantity = yield* decodeAccountingQuantity({
-      value: quantityAmount,
-      operation: FIFO_INPUT_REJECTED_OPERATION,
-    })
+    const quantity = yield* decodeFifoQuantity(quantityAmount)
     const costBasisPerToken = yield* prorate({
       // The legacy fixed-point adapter discarded the sign of acquisition fiat values.
       total: totalCostBasis.abs(),
@@ -1511,10 +1495,7 @@ const make = Effect.gen(function* () {
     readonly disposalFiatCurrency: string | null
   }) =>
     Effect.gen(function* () {
-      const quantity = yield* decodeAccountingQuantity({
-        value: disposalAmount,
-        operation: FIFO_INPUT_REJECTED_OPERATION,
-      })
+      const quantity = yield* decodeFifoQuantity(disposalAmount)
       const decodedLots = [] as Array<{
         readonly id: string
         readonly remainingQuantity: AccountingQuantity
@@ -1527,14 +1508,10 @@ const make = Effect.gen(function* () {
           break
         }
 
-        const remainingQuantity = yield* decodeAccountingQuantity({
-          value: lot.remainingAmount,
-          operation: FIFO_INPUT_REJECTED_OPERATION,
-        })
-        const storedCostBasisPerUnit = yield* decodeMonetaryAmount({
+        const remainingQuantity = yield* decodeFifoQuantity(lot.remainingAmount)
+        const storedCostBasisPerUnit = yield* decodeFifoMonetaryAmount({
           amount: lot.costBasisPerToken,
           currency: lot.costBasisCurrency,
-          operation: FIFO_INPUT_REJECTED_OPERATION,
         })
         // Only a zero pending basis is a currency-free placeholder. A nonzero pending basis
         // still lacks a factual currency and must not be relabeled to make matching succeed.
@@ -1542,10 +1519,9 @@ const make = Effect.gen(function* () {
           lot.costBasisStatus === "pending_review" &&
           storedCostBasisPerUnit.isZero &&
           disposalFiatCurrency !== null
-            ? yield* decodeMonetaryAmount({
+            ? yield* decodeFifoMonetaryAmount({
                 amount: lot.costBasisPerToken,
                 currency: disposalFiatCurrency,
-                operation: FIFO_INPUT_REJECTED_OPERATION,
               })
             : storedCostBasisPerUnit
 
@@ -1560,9 +1536,8 @@ const make = Effect.gen(function* () {
           remainingQuantity
         )
         if (Option.isNone(nextRemainingDisposalQuantity)) {
-          return yield* toSyncEngineStorageError({
-            error: `Cannot subtract ${lot.remainingAmount} from ${formatAccountingQuantity(remainingDisposalQuantity)}`,
-            operation: FIFO_INPUT_REJECTED_OPERATION,
+          return yield* new FifoInputRejectedError({
+            cause: `Cannot subtract ${lot.remainingAmount} from ${formatAccountingQuantity(remainingDisposalQuantity)}`,
           })
         }
         remainingDisposalQuantity = nextRemainingDisposalQuantity.value
@@ -1570,10 +1545,9 @@ const make = Effect.gen(function* () {
       const proceeds =
         disposalFiatAmount === null
           ? null
-          : yield* decodeMonetaryAmount({
+          : yield* decodeFifoMonetaryAmount({
               amount: disposalFiatAmount,
               currency: disposalFiatCurrency ?? "EUR",
-              operation: FIFO_INPUT_REJECTED_OPERATION,
             }).pipe(Effect.map((amount) => amount.abs()))
       const result = yield* matchFifoLots({
         lots: decodedLots,
@@ -1868,11 +1842,11 @@ const make = Effect.gen(function* () {
         return
       }
 
-      const consumedAmount = yield* subtractDecimalQuantities({
+      const consumedAmount = yield* subtractFifoQuantities({
         left: existingLot.originalAmount,
         right: existingLot.remainingAmount,
       })
-      const consumedComparison = yield* compareDecimalQuantities({
+      const consumedComparison = yield* compareFifoQuantities({
         left: consumedAmount,
         right: "0",
       })
@@ -1885,7 +1859,7 @@ const make = Effect.gen(function* () {
         })
       }
 
-      const comparison = yield* compareDecimalQuantities({ left: amount, right: consumedAmount })
+      const comparison = yield* compareFifoQuantities({ left: amount, right: consumedAmount })
 
       if (comparison < 0) {
         return yield* toSyncEngineStorageError({
@@ -2301,7 +2275,7 @@ const make = Effect.gen(function* () {
                 leg.assetId === assetMapping.assetId
             ),
             (leg) =>
-              compareDecimalQuantities({
+              compareFifoQuantities({
                 left: leg.amount,
                 right: providerTransfer.amount,
               })
@@ -2377,7 +2351,7 @@ const make = Effect.gen(function* () {
             (leg) => leg.kind === matchingLegKind && leg.assetId === assetMapping.assetId
           ),
           (leg) =>
-            compareDecimalQuantities({
+            compareFifoQuantities({
               left: leg.amount,
               right: providerTransfer.amount,
             })
@@ -2454,10 +2428,9 @@ const make = Effect.gen(function* () {
       legs.filter((leg) => leg.kind === "fee"),
       (leg) =>
         Effect.gen(function* () {
-          const amountComparison = yield* compareDecimalQuantities({
+          const amountComparison = yield* compareFifoQuantities({
             left: leg.amount,
             right: "0",
-            operation: FIFO_INPUT_REJECTED_OPERATION,
           })
 
           if (amountComparison === 0) {
