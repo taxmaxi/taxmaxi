@@ -393,6 +393,29 @@ const loadPersistedFiatCurrencies = (externalIds: ReadonlyArray<string>) =>
     )
   )
 
+const loadPersistedLotAccounting = (externalId: string) =>
+  Effect.promise(() =>
+    runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const [lot] = yield* db
+          .select({
+            costBasisPerToken: schema.fifoLots.costBasisPerToken,
+            costBasisCurrency: schema.fifoLots.costBasisCurrency,
+          })
+          .from(schema.fifoLots)
+          .innerJoin(
+            schema.transactionLegs,
+            eq(schema.transactionLegs.id, schema.fifoLots.sourceLegId)
+          )
+          .where(eq(schema.transactionLegs.externalId, externalId))
+          .limit(1)
+
+        return lot
+      })
+    )
+  )
+
 const matchPureFixture = (fixture: DifferentialFixture) =>
   matchFifoLots({
     lots: fixture.acquisitions.map((acquisition) => ({
@@ -400,7 +423,10 @@ const matchPureFixture = (fixture: DifferentialFixture) =>
       remainingQuantity: quantity(acquisition.quantity),
       costBasisPerUnit: MonetaryAmount.unsafeFromString(
         acquisition.costBasisPerUnit,
-        acquisition.fiatCurrency ?? "EUR"
+        (acquisition.fiatAmount === null
+          ? (fixture.disposal.fiatCurrency ?? acquisition.fiatCurrency ?? "EUR")
+          : (acquisition.fiatCurrency ?? "EUR")
+        ).toUpperCase()
       ),
     })),
     disposal: {
@@ -410,8 +436,8 @@ const matchPureFixture = (fixture: DifferentialFixture) =>
           ? null
           : MonetaryAmount.unsafeFromString(
               fixture.disposal.fiatAmount,
-              fixture.disposal.fiatCurrency ?? "EUR"
-            ),
+              (fixture.disposal.fiatCurrency ?? "EUR").toUpperCase()
+            ).abs(),
     },
   })
 
@@ -472,7 +498,7 @@ describe("source FIFO and pure matcher differential", () => {
       )
     })
 
-  const persistLegacyFixture = (fixture: DifferentialFixture) =>
+  const persistRepositoryFixture = (fixture: DifferentialFixture) =>
     Effect.gen(function* () {
       yield* resetFixture()
       yield* Effect.forEach(fixture.acquisitions, (acquisition) =>
@@ -488,7 +514,7 @@ describe("source FIFO and pure matcher differential", () => {
 
   const assertParity = (fixture: DifferentialFixture) =>
     Effect.gen(function* () {
-      const persistedResult = yield* persistLegacyFixture(fixture)
+      const persistedResult = yield* persistRepositoryFixture(fixture)
 
       const pureResult = yield* matchPureFixture(fixture)
 
@@ -582,7 +608,7 @@ describe("source FIFO and pure matcher differential", () => {
           timestamp: DateTime.toDateUtc(DateTime.makeUnsafe("2025-02-01T10:00:00.000Z")),
           quantity: "0.50000000",
           fiatAmount: "1.00000000",
-          fiatCurrency: "EUR",
+          fiatCurrency: "USD",
         },
       })
 
@@ -704,7 +730,7 @@ describe("source FIFO and pure matcher differential", () => {
     })
   )
 
-  it.effect("surfaces mixed fiat currencies as a typed pure-matcher mismatch", () =>
+  it.effect("routes mixed fiat currencies to FIFO review without consuming inventory", () =>
     Effect.gen(function* () {
       const fixture: DifferentialFixture = {
         acquisitions: [
@@ -728,22 +754,186 @@ describe("source FIFO and pure matcher differential", () => {
         },
       }
 
-      const persistedResult = yield* persistLegacyFixture(fixture)
+      const persistedResult = yield* persistRepositoryFixture(fixture)
       const persistedCurrencies = yield* loadPersistedFiatCurrencies([
         "mixed-currency-lot",
         "mixed-currency-disposal",
       ])
       const pureError = yield* Effect.flip(matchPureFixture(fixture))
+      const review = yield* loadShortageReview(fixture.disposal.externalId)
 
       expect(persistedCurrencies).toEqual([
         { externalId: "mixed-currency-lot", fiatCurrency: "USD" },
         { externalId: "mixed-currency-disposal", fiatCurrency: "EUR" },
       ])
       expect(persistedResult).toEqual({
-        lots: [{ lotId: "mixed-currency-lot", remainingQuantity: "0.5" }],
+        lots: [{ lotId: "mixed-currency-lot", remainingQuantity: "1" }],
+        allocations: [],
+      })
+      expect(pureError).toMatchObject({
+        _tag: "CurrencyMismatchError",
+        expected: "EUR",
+        actual: "USD",
+      })
+      expect(review).toMatchObject({
+        reviewStatus: "needs_review",
+        matchedLayer: "fifo_inventory",
+        needsReview: true,
+        categorizationReason: expect.stringContaining("Currency mismatch: expected EUR, got USD"),
+      })
+    })
+  )
+
+  it.effect("normalizes FIFO currency casing and preserves legacy negative cost basis", () =>
+    Effect.gen(function* () {
+      const fixture: DifferentialFixture = {
+        acquisitions: [
+          {
+            externalId: "legacy-tolerant-lot",
+            rawRecordId: "00000000-0000-0000-0000-000000000843",
+            timestamp: DateTime.toDateUtc(DateTime.makeUnsafe("2025-01-01T10:00:00.000Z")),
+            quantity: "1.00000000",
+            fiatAmount: "-2.00000000",
+            fiatCurrency: "eur",
+            costBasisPerUnit: "2",
+          },
+        ],
+        disposal: {
+          externalId: "legacy-tolerant-disposal",
+          rawRecordId: "00000000-0000-0000-0000-000000000844",
+          timestamp: DateTime.toDateUtc(DateTime.makeUnsafe("2025-02-01T10:00:00.000Z")),
+          quantity: "0.50000000",
+          fiatAmount: "3.00000000",
+          fiatCurrency: "EUR",
+        },
+      }
+
+      const persistedResult = yield* assertParity(fixture)
+      const persistedLot = yield* loadPersistedLotAccounting("legacy-tolerant-lot")
+
+      expect(persistedLot).toEqual({
+        costBasisPerToken: "2.000000000000000000",
+        costBasisCurrency: "EUR",
+      })
+      expect(persistedResult.allocations).toEqual([
+        {
+          lotId: "legacy-tolerant-lot",
+          matchedQuantity: "0.5",
+          costBasis: "1.00000000",
+          proceeds: "3.00000000",
+          gainLoss: "2.00000000",
+        },
+      ])
+    })
+  )
+
+  it.effect("routes invalid fiat currency input to FIFO review without failing persistence", () =>
+    Effect.gen(function* () {
+      const acquisition: AcquisitionFact = {
+        externalId: "invalid-currency-lot",
+        rawRecordId: "00000000-0000-0000-0000-000000000845",
+        timestamp: DateTime.toDateUtc(DateTime.makeUnsafe("2025-01-01T10:00:00.000Z")),
+        quantity: "1.00000000",
+        fiatAmount: "2.00000000",
+        fiatCurrency: "USDC",
+        costBasisPerUnit: "2",
+      }
+
+      yield* persistFact({ ...acquisition, kind: "acquisition" })
+
+      const persistedRows = yield* loadPersistedRows([acquisition.externalId])
+      const persistedCurrencies = yield* loadPersistedFiatCurrencies([acquisition.externalId])
+      const review = yield* loadShortageReview(acquisition.externalId)
+
+      expect(persistedRows).toEqual({ lots: [], allocations: [] })
+      expect(persistedCurrencies).toEqual([
+        { externalId: acquisition.externalId, fiatCurrency: "USDC" },
+      ])
+      expect(review).toMatchObject({
+        reviewStatus: "needs_review",
+        matchedLayer: "fifo_inventory",
+        needsReview: true,
+        categorizationReason: expect.stringContaining(
+          "Review required because a FIFO value could not be processed safely"
+        ),
+      })
+    })
+  )
+
+  it.effect("ignores an invalid FIFO lot after the disposal is fully covered", () =>
+    Effect.gen(function* () {
+      const validAcquisition: AcquisitionFact = {
+        externalId: "covered-prefix-valid-lot",
+        rawRecordId: "00000000-0000-0000-0000-000000000854",
+        timestamp: DateTime.toDateUtc(DateTime.makeUnsafe("2025-01-01T10:00:00.000Z")),
+        quantity: "1.00000000",
+        fiatAmount: "2.00000000",
+        fiatCurrency: "EUR",
+        costBasisPerUnit: "2",
+      }
+      const unusedInvalidAcquisition: AcquisitionFact = {
+        externalId: "covered-prefix-invalid-lot",
+        rawRecordId: "00000000-0000-0000-0000-000000000855",
+        timestamp: DateTime.toDateUtc(DateTime.makeUnsafe("2025-01-02T10:00:00.000Z")),
+        quantity: "1.00000000",
+        fiatAmount: null,
+        fiatCurrency: "USDC",
+        costBasisPerUnit: "0",
+      }
+      const disposal: DisposalFact = {
+        externalId: "covered-prefix-disposal",
+        rawRecordId: "00000000-0000-0000-0000-000000000856",
+        timestamp: DateTime.toDateUtc(DateTime.makeUnsafe("2025-02-01T10:00:00.000Z")),
+        quantity: "0.50000000",
+        fiatAmount: "3.00000000",
+        fiatCurrency: "EUR",
+      }
+
+      yield* persistFact({ ...validAcquisition, kind: "acquisition" })
+      yield* Effect.promise(() =>
+        runPg(
+          seedRawRecord({
+            externalId: unusedInvalidAcquisition.externalId,
+            rawRecordId: unusedInvalidAcquisition.rawRecordId,
+            timestamp: unusedInvalidAcquisition.timestamp,
+          })
+        )
+      )
+      const unusedInvalidInput = makePersistenceInput({
+        cexAccountId: repositoryFixture.cexAccountId,
+        fact: { ...unusedInvalidAcquisition, kind: "acquisition" },
+      })
+      yield* Effect.promise(() =>
+        runRepository(
+          Effect.flatMap(SourceNormalizationRepository, (repository) =>
+            repository.persistNormalizedArtifacts({
+              ...unusedInvalidInput,
+              transaction: {
+                ...unusedInvalidInput.transaction,
+                providerFiatAmount: null,
+                providerFiatCurrency: null,
+              },
+            })
+          )
+        )
+      )
+      yield* persistFact({ ...disposal, kind: "disposal" })
+
+      const persistedRows = yield* loadPersistedRows([
+        validAcquisition.externalId,
+        unusedInvalidAcquisition.externalId,
+      ])
+      const persistedResult = yield* renderPersistedResult({ rows: persistedRows })
+      const review = yield* loadShortageReview(disposal.externalId)
+
+      expect(persistedResult).toEqual({
+        lots: [
+          { lotId: validAcquisition.externalId, remainingQuantity: "0.5" },
+          { lotId: unusedInvalidAcquisition.externalId, remainingQuantity: "1" },
+        ],
         allocations: [
           {
-            lotId: "mixed-currency-lot",
+            lotId: validAcquisition.externalId,
             matchedQuantity: "0.5",
             costBasis: "1.00000000",
             proceeds: "3.00000000",
@@ -751,11 +941,472 @@ describe("source FIFO and pure matcher differential", () => {
           },
         ],
       })
-      expect(pureError).toMatchObject({
-        _tag: "CurrencyMismatchError",
-        expected: "EUR",
-        actual: "USD",
+      expect(review).toBeUndefined()
+    })
+  )
+
+  it.effect("reviews a nonzero pending basis instead of assigning the disposal currency", () =>
+    Effect.gen(function* () {
+      const acquisition: AcquisitionFact = {
+        externalId: "missing-basis-currency-lot",
+        rawRecordId: "00000000-0000-0000-0000-000000000846",
+        timestamp: DateTime.toDateUtc(DateTime.makeUnsafe("2025-01-01T10:00:00.000Z")),
+        quantity: "1.00000000",
+        fiatAmount: "2.00000000",
+        fiatCurrency: null,
+        costBasisPerUnit: "2",
+      }
+      const disposal: DisposalFact = {
+        externalId: "missing-basis-currency-disposal",
+        rawRecordId: "00000000-0000-0000-0000-000000000847",
+        timestamp: DateTime.toDateUtc(DateTime.makeUnsafe("2025-02-01T10:00:00.000Z")),
+        quantity: "0.50000000",
+        fiatAmount: "3.00000000",
+        fiatCurrency: "USD",
+      }
+
+      yield* Effect.promise(() =>
+        runPg(
+          seedRawRecord({
+            externalId: acquisition.externalId,
+            rawRecordId: acquisition.rawRecordId,
+            timestamp: acquisition.timestamp,
+          })
+        )
+      )
+      const acquisitionInput = makePersistenceInput({
+        cexAccountId: repositoryFixture.cexAccountId,
+        fact: { ...acquisition, kind: "acquisition" },
       })
+      yield* Effect.promise(() =>
+        runRepository(
+          Effect.flatMap(SourceNormalizationRepository, (repository) =>
+            repository.persistNormalizedArtifacts({
+              ...acquisitionInput,
+              transaction: {
+                ...acquisitionInput.transaction,
+                providerFiatAmount: null,
+                providerFiatCurrency: null,
+              },
+            })
+          )
+        )
+      )
+      yield* persistFact({ ...disposal, kind: "disposal" })
+
+      const persistedRows = yield* loadPersistedRows([acquisition.externalId])
+      const persistedResult = yield* renderPersistedResult({ rows: persistedRows })
+      const review = yield* loadShortageReview(disposal.externalId)
+
+      expect(persistedResult).toEqual({
+        lots: [{ lotId: acquisition.externalId, remainingQuantity: "1" }],
+        allocations: [],
+      })
+      expect(review).toMatchObject({
+        reviewStatus: "needs_review",
+        matchedLayer: "fifo_inventory",
+        needsReview: true,
+        categorizationReason: expect.stringContaining("Currency mismatch"),
+      })
+    })
+  )
+
+  it.effect("preserves legacy absolute-value handling for negative disposal proceeds", () =>
+    Effect.gen(function* () {
+      const persistedResult = yield* assertParity({
+        acquisitions: [
+          {
+            externalId: "negative-proceeds-lot",
+            rawRecordId: "00000000-0000-0000-0000-000000000848",
+            timestamp: DateTime.toDateUtc(DateTime.makeUnsafe("2025-01-01T10:00:00.000Z")),
+            quantity: "1.00000000",
+            fiatAmount: "2.00000000",
+            fiatCurrency: "EUR",
+            costBasisPerUnit: "2",
+          },
+        ],
+        disposal: {
+          externalId: "negative-proceeds-disposal",
+          rawRecordId: "00000000-0000-0000-0000-000000000849",
+          timestamp: DateTime.toDateUtc(DateTime.makeUnsafe("2025-02-01T10:00:00.000Z")),
+          quantity: "0.50000000",
+          fiatAmount: "-3.00000000",
+          fiatCurrency: "EUR",
+        },
+      })
+
+      expect(persistedResult.allocations).toEqual([
+        {
+          lotId: "negative-proceeds-lot",
+          matchedQuantity: "0.5",
+          costBasis: "1.00000000",
+          proceeds: "3.00000000",
+          gainLoss: "2.00000000",
+        },
+      ])
+    })
+  )
+
+  it.effect("rolls back earlier FIFO matches when a later leg needs currency review", () =>
+    Effect.gen(function* () {
+      const acquisition: AcquisitionFact = {
+        externalId: "atomic-review-lot",
+        rawRecordId: "00000000-0000-0000-0000-000000000851",
+        timestamp: DateTime.toDateUtc(DateTime.makeUnsafe("2025-01-01T10:00:00.000Z")),
+        quantity: "1.00000000",
+        fiatAmount: "2.00000000",
+        fiatCurrency: "EUR",
+        costBasisPerUnit: "2",
+      }
+      const firstDisposal: DisposalFact = {
+        externalId: "atomic-review-first-disposal",
+        rawRecordId: "00000000-0000-0000-0000-000000000852",
+        timestamp: DateTime.toDateUtc(DateTime.makeUnsafe("2025-02-01T10:00:00.000Z")),
+        quantity: "0.25000000",
+        fiatAmount: "1.00000000",
+        fiatCurrency: "EUR",
+      }
+      const secondDisposal: DisposalFact = {
+        externalId: "atomic-review-second-disposal",
+        rawRecordId: "00000000-0000-0000-0000-000000000853",
+        timestamp: firstDisposal.timestamp,
+        quantity: "0.25000000",
+        fiatAmount: "1.00000000",
+        fiatCurrency: "USD",
+      }
+
+      yield* persistFact({ ...acquisition, kind: "acquisition" })
+      yield* Effect.promise(() =>
+        runPg(
+          seedRawRecord({
+            externalId: secondDisposal.externalId,
+            rawRecordId: secondDisposal.rawRecordId,
+            timestamp: secondDisposal.timestamp,
+          })
+        )
+      )
+      yield* Effect.promise(() =>
+        runPg(
+          seedRawRecord({
+            externalId: firstDisposal.externalId,
+            rawRecordId: firstDisposal.rawRecordId,
+            timestamp: firstDisposal.timestamp,
+          })
+        )
+      )
+
+      const persistenceInput = makePersistenceInput({
+        cexAccountId: repositoryFixture.cexAccountId,
+        fact: { ...firstDisposal, kind: "disposal" },
+      })
+      yield* Effect.promise(() =>
+        runRepository(
+          Effect.flatMap(SourceNormalizationRepository, (repository) =>
+            repository.persistNormalizedArtifacts({
+              ...persistenceInput,
+              legs: [
+                makeLeg({ ...firstDisposal, kind: "disposal" }),
+                makeLeg({ ...secondDisposal, kind: "disposal" }),
+              ],
+            })
+          )
+        )
+      )
+
+      const persistedRows = yield* loadPersistedRows([acquisition.externalId])
+      const persistedResult = yield* renderPersistedResult({ rows: persistedRows })
+      const review = yield* loadShortageReview(firstDisposal.externalId)
+
+      expect(persistedResult).toEqual({
+        lots: [{ lotId: acquisition.externalId, remainingQuantity: "1" }],
+        allocations: [],
+      })
+      expect(review).toMatchObject({
+        reviewStatus: "needs_review",
+        matchedLayer: "fifo_inventory",
+        needsReview: true,
+        categorizationReason: expect.stringContaining("Currency mismatch"),
+      })
+    })
+  )
+
+  it.effect("rolls back FIFO legs and fee allocations in one savepoint", () =>
+    Effect.gen(function* () {
+      const acquisition: AcquisitionFact = {
+        externalId: "derived-savepoint-lot",
+        rawRecordId: "00000000-0000-0000-0000-000000000857",
+        timestamp: DateTime.toDateUtc(DateTime.makeUnsafe("2025-01-01T10:00:00.000Z")),
+        quantity: "1.00000000",
+        fiatAmount: "2.00000000",
+        fiatCurrency: "EUR",
+        costBasisPerUnit: "2",
+      }
+      const disposal: DisposalFact = {
+        externalId: "derived-savepoint-disposal",
+        rawRecordId: "00000000-0000-0000-0000-000000000858",
+        timestamp: DateTime.toDateUtc(DateTime.makeUnsafe("2025-02-01T10:00:00.000Z")),
+        quantity: "0.25000000",
+        fiatAmount: "1.00000000",
+        fiatCurrency: "EUR",
+      }
+
+      yield* persistFact({ ...acquisition, kind: "acquisition" })
+      yield* Effect.promise(() =>
+        runPg(
+          seedRawRecord({
+            externalId: disposal.externalId,
+            rawRecordId: disposal.rawRecordId,
+            timestamp: disposal.timestamp,
+          })
+        )
+      )
+
+      const persistenceInput = makePersistenceInput({
+        cexAccountId: repositoryFixture.cexAccountId,
+        fact: { ...disposal, kind: "disposal" },
+      })
+      const initialResult = yield* Effect.promise(() =>
+        runRepository(
+          Effect.flatMap(SourceNormalizationRepository, (repository) =>
+            repository.persistNormalizedArtifacts({ ...persistenceInput, legs: [] })
+          )
+        )
+      )
+      const feeLeg = {
+        ...makeLeg({ ...disposal, kind: "disposal" }),
+        externalId: "derived-savepoint-fee",
+        amount: "0.90000000",
+        kind: "fee" as const,
+        fiatAmount: null,
+        fiatCurrency: null,
+        transactionId: initialResult.transaction.id,
+      }
+
+      yield* Effect.promise(() =>
+        runRepository(
+          Effect.flatMap(SourceNormalizationRepository, (repository) =>
+            repository.persistNormalizedArtifacts({
+              ...persistenceInput,
+              legs: [makeLeg({ ...disposal, kind: "disposal" }), feeLeg],
+            })
+          )
+        )
+      )
+
+      const persistedRows = yield* loadPersistedRows([acquisition.externalId])
+      const persistedResult = yield* renderPersistedResult({ rows: persistedRows })
+      const review = yield* loadShortageReview(disposal.externalId)
+      const movementState = yield* Effect.promise(() =>
+        runPg(
+          Effect.gen(function* () {
+            const db = yield* drizzle
+            const movements = yield* db
+              .select({ id: schema.inventoryMovements.id })
+              .from(schema.inventoryMovements)
+              .where(eq(schema.inventoryMovements.transactionId, initialResult.transaction.id))
+            const allocations = yield* db
+              .select({ id: schema.inventoryMovementAllocations.id })
+              .from(schema.inventoryMovementAllocations)
+              .innerJoin(
+                schema.inventoryMovements,
+                eq(
+                  schema.inventoryMovements.id,
+                  schema.inventoryMovementAllocations.inventoryMovementId
+                )
+              )
+              .where(eq(schema.inventoryMovements.transactionId, initialResult.transaction.id))
+
+            return { movements, allocations }
+          })
+        )
+      )
+
+      expect(persistedResult).toEqual({
+        lots: [{ lotId: acquisition.externalId, remainingQuantity: "1" }],
+        allocations: [],
+      })
+      expect(movementState.movements).toHaveLength(1)
+      expect(movementState.allocations).toEqual([])
+      expect(review).toMatchObject({
+        reviewStatus: "needs_review",
+        matchedLayer: "fifo_inventory",
+        needsReview: true,
+        categorizationReason: expect.stringContaining("Insufficient FIFO inventory"),
+      })
+    })
+  )
+
+  it.effect("routes rejected FIFO quantities from every persistence entry path to review", () =>
+    Effect.gen(function* () {
+      const timestamp = DateTime.toDateUtc(DateTime.makeUnsafe("2025-02-01T10:00:00.000Z"))
+      const providerAssetId = yield* Effect.promise(() =>
+        runPg(
+          Effect.gen(function* () {
+            const db = yield* drizzle
+            const [providerAsset] = yield* db
+              .insert(schema.providerAssets)
+              .values({
+                provider: "coinbase",
+                providerAssetId: "rejected-provider-leg-asset",
+                currencyCode: "BTC",
+                retrievedAt: timestamp,
+              })
+              .returning({ id: schema.providerAssets.id })
+
+            if (providerAsset === undefined) {
+              return yield* Effect.die("Failed to create rejected provider-leg asset")
+            }
+
+            yield* db.insert(schema.providerAssetMappings).values({
+              providerAssetRowId: providerAsset.id,
+              mappingKind: "asset",
+              canonicalAssetId: TEST_BTC_ASSET_ID,
+              assetRepresentationId: TEST_BTC_REPRESENTATION_ID,
+              canonicalFiatCurrency: null,
+              mappingStatus: "approved",
+              reviewerNotes: null,
+              sourceNotes: null,
+              createdAt: timestamp,
+              updatedAt: timestamp,
+            })
+
+            return providerAsset.id
+          })
+        )
+      )
+
+      const scenarios = [
+        {
+          entryPath: "fee leg",
+          fact: {
+            externalId: "rejected-fee-quantity-transaction",
+            rawRecordId: "00000000-0000-0000-0000-000000000859",
+            timestamp,
+            quantity: "-0.10000000",
+            fiatAmount: null,
+            fiatCurrency: null,
+            kind: "disposal" as const,
+          },
+          legKind: "fee" as const,
+          providerTransfers: [],
+        },
+        {
+          entryPath: "provider leg",
+          fact: {
+            externalId: "rejected-provider-quantity-transaction",
+            rawRecordId: "00000000-0000-0000-0000-000000000860",
+            timestamp,
+            quantity: "-0.10000000",
+            fiatAmount: null,
+            fiatCurrency: null,
+            kind: "acquisition" as const,
+          },
+          legKind: "acquisition" as const,
+          providerTransfers: [
+            {
+              sourceId: TEST_SOURCE_ID,
+              sourceRawRecordId: "00000000-0000-0000-0000-000000000860",
+              externalId: "rejected-provider-quantity-transfer",
+              externalGroupId: null,
+              providerAssetId,
+              timestamp,
+              direction: "inbound" as const,
+              processingMode: "accounting_only" as const,
+              fromAccountRef: "provider-account",
+              toAccountRef: "principal-account",
+              fromAddress: null,
+              toAddress: null,
+              networkName: null,
+              networkHash: null,
+              observedBlockchainId: null,
+              observedRepresentationType: null,
+              observedContractAddress: null,
+              observedMintAddress: null,
+              observedDecimals: null,
+              amount: "0.10000000",
+              metadata: { role: "principal" },
+            },
+          ],
+        },
+        {
+          entryPath: "disposal leg",
+          fact: {
+            externalId: "rejected-disposal-quantity-transaction",
+            rawRecordId: "00000000-0000-0000-0000-000000000861",
+            timestamp,
+            quantity: "-0.10000000",
+            fiatAmount: null,
+            fiatCurrency: null,
+            kind: "disposal" as const,
+          },
+          legKind: "disposal" as const,
+          providerTransfers: [],
+        },
+      ]
+
+      const persisted = yield* Effect.forEach(scenarios, (scenario) =>
+        Effect.gen(function* () {
+          yield* Effect.promise(() =>
+            runPg(
+              seedRawRecord({
+                externalId: scenario.fact.externalId,
+                rawRecordId: scenario.fact.rawRecordId,
+                timestamp: scenario.fact.timestamp,
+              })
+            )
+          )
+
+          const persistenceInput = makePersistenceInput({
+            cexAccountId: repositoryFixture.cexAccountId,
+            fact: scenario.fact,
+          })
+          const result = yield* Effect.promise(() =>
+            runRepository(
+              Effect.flatMap(SourceNormalizationRepository, (repository) =>
+                repository.persistNormalizedArtifacts({
+                  ...persistenceInput,
+                  providerTransfers: scenario.providerTransfers,
+                  legs: [
+                    {
+                      ...makeLeg(scenario.fact),
+                      amount: scenario.fact.quantity,
+                      kind: scenario.legKind,
+                      fiatAmount: null,
+                      fiatCurrency: null,
+                    },
+                  ],
+                })
+              )
+            )
+          )
+          const review = yield* loadShortageReview(scenario.fact.externalId)
+
+          return { entryPath: scenario.entryPath, result, review }
+        })
+      )
+
+      expect(persisted).toEqual(
+        scenarios.map((scenario) => ({
+          entryPath: scenario.entryPath,
+          result: expect.objectContaining({
+            legs: [
+              expect.objectContaining({
+                sourceRawRecordId: scenario.fact.rawRecordId,
+                kind: scenario.legKind,
+                amount: expect.stringMatching(/^-0\.1(?:0+)?$/),
+              }),
+            ],
+          }),
+          review: expect.objectContaining({
+            reviewStatus: "needs_review",
+            matchedLayer: "fifo_inventory",
+            needsReview: true,
+            categorizationReason: expect.stringContaining(
+              "Review required because a FIFO value could not be processed safely"
+            ),
+          }),
+        }))
+      )
     })
   )
 })

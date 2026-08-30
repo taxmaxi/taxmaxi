@@ -9,18 +9,21 @@
  */
 
 import { createHash } from "node:crypto"
+import { matchFifoLots, type FifoMatchError } from "@my/accounting"
+import {
+  AccountingQuantity,
+  format as formatAccountingQuantity,
+  MonetaryAmount,
+  prorate,
+  subtract as subtractAccountingQuantity,
+} from "@my/core/accounting"
 import { and, asc, eq, gt, inArray, isNotNull, isNull, lte, notInArray, or, sql } from "drizzle-orm"
+import * as BigDecimal from "effect/BigDecimal"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
+import * as Option from "effect/Option"
 import * as Schema from "effect/Schema"
 import { canonicalizeAddress } from "@my/core/assets"
-import {
-  divideToScale,
-  formatScaled,
-  makeFixedPointErrorFactory,
-  parseDecimal,
-  powerOfTen,
-} from "./SourceNormalizationFixedPoint.ts"
 import { drizzle } from "./PgClientLive.ts"
 import { schema } from "../schema/index.ts"
 import {
@@ -69,6 +72,8 @@ interface OpenFifoLotRecord {
   readonly originalAmount: string
   readonly remainingAmount: string
   readonly costBasisPerToken: string
+  readonly costBasisCurrency: string
+  readonly costBasisStatus: "known" | "pending_review"
 }
 
 interface FifoLotAllocation {
@@ -82,6 +87,21 @@ interface FifoLotAllocation {
 
 const INSUFFICIENT_FIFO_INVENTORY_OPERATION =
   "sourceNormalizationRepository.buildFifoLotAllocations"
+const FIFO_CURRENCY_MISMATCH_OPERATION =
+  "sourceNormalizationRepository.buildFifoLotAllocations.currencyMismatch"
+const FIFO_MATCHER_REJECTED_OPERATION =
+  "sourceNormalizationRepository.buildFifoLotAllocations.matcherRejected"
+
+class FifoInputRejectedError extends Schema.TaggedError<FifoInputRejectedError>()(
+  "FifoInputRejectedError",
+  { cause: Schema.Unknown }
+) {
+  override get message(): string {
+    return `FIFO input rejected: ${String(this.cause)}`
+  }
+}
+
+const isFifoInputRejectedError = Schema.is(FifoInputRejectedError)
 
 /**
  * Wrap residual errors in `SyncEngineStorageError`, but let a typed credit-exhaustion
@@ -163,8 +183,11 @@ const decodeNumericString = ({
     )
   )
 
-const isInsufficientFifoInventoryError = (error: SyncEngineStorageError): boolean =>
-  error.operation === INSUFFICIENT_FIFO_INVENTORY_OPERATION
+const isFifoInventoryReviewError = (error: SyncEngineStorageError): boolean =>
+  error.operation === INSUFFICIENT_FIFO_INVENTORY_OPERATION ||
+  error.operation === FIFO_CURRENCY_MISMATCH_OPERATION ||
+  error.operation === FIFO_MATCHER_REJECTED_OPERATION ||
+  isFifoInputRejectedError(error.cause)
 
 const FIFO_INVENTORY_REVIEW_LAYER = "fifo_inventory"
 const FIFO_INVENTORY_REVIEW_REASON_PREFIX =
@@ -185,7 +208,7 @@ const appendReviewSegment = ({
       ? existing
       : `${existing}${separator}${segment}`
 
-const buildInsufficientInventoryReview = ({
+const buildFifoInventoryReview = ({
   transaction,
   existingReview,
   resolvedTransactionType,
@@ -203,9 +226,13 @@ const buildInsufficientInventoryReview = ({
   const principalId = transaction.principalId
 
   const inventoryReason =
-    `${FIFO_INVENTORY_REVIEW_REASON_PREFIX} ` +
-    "This usually means an opening balance, transfer in, or historical acquisition is missing. " +
-    String(error.cause)
+    error.operation === FIFO_CURRENCY_MISMATCH_OPERATION
+      ? `${FIFO_INVENTORY_REVIEW_LAYER}: Review required because the lot cost-basis currency does not match the disposal proceeds currency. ${String(error.cause)}`
+      : error.operation === INSUFFICIENT_FIFO_INVENTORY_OPERATION
+        ? `${FIFO_INVENTORY_REVIEW_REASON_PREFIX} ` +
+          "This usually means an opening balance, transfer in, or historical acquisition is missing. " +
+          String(error.cause)
+        : `${FIFO_INVENTORY_REVIEW_LAYER}: Review required because a FIFO value could not be processed safely. ${String(error.cause)}`
   const preservesReviewedState =
     existingReview?.reviewStatus === "approved" || existingReview?.reviewStatus === "changed"
 
@@ -232,81 +259,76 @@ const buildInsufficientInventoryReview = ({
   }
 }
 
-const fixedPointErrorFactory = makeFixedPointErrorFactory(({ kind, message }) =>
+const decodeFifoQuantity = (value: string) =>
+  Schema.decodeEffect(AccountingQuantity)(value).pipe(
+    Effect.mapError((cause) => new FifoInputRejectedError({ cause }))
+  )
+
+const decodeFifoMonetaryAmount = ({
+  amount,
+  currency,
+}: {
+  readonly amount: string
+  readonly currency: string
+}) =>
+  Schema.decodeEffect(MonetaryAmount)({ amount, currency: currency.toUpperCase() }).pipe(
+    Effect.mapError((cause) => new FifoInputRejectedError({ cause }))
+  )
+
+const compareFifoQuantities = ({
+  left,
+  right,
+}: {
+  readonly left: string
+  readonly right: string
+}) =>
+  Effect.gen(function* () {
+    const leftQuantity = yield* decodeFifoQuantity(left)
+    const rightQuantity = yield* decodeFifoQuantity(right)
+
+    return BigDecimal.Order(leftQuantity, rightQuantity)
+  })
+
+const subtractFifoQuantities = ({
+  left,
+  right,
+}: {
+  readonly left: string
+  readonly right: string
+}) =>
+  Effect.gen(function* () {
+    const leftQuantity = yield* decodeFifoQuantity(left)
+    const rightQuantity = yield* decodeFifoQuantity(right)
+
+    return yield* Option.match(subtractAccountingQuantity(leftQuantity, rightQuantity), {
+      onNone: () =>
+        Effect.fail(
+          new FifoInputRejectedError({
+            cause: `Cannot subtract ${right} from ${left}`,
+          })
+        ),
+      onSome: (result) => Effect.succeed(formatAccountingQuantity(result)),
+    })
+  })
+
+const unitQuantity = AccountingQuantity.make(BigDecimal.fromBigInt(1n))
+
+const toFifoMatchStorageError = (error: FifoMatchError): SyncEngineStorageError =>
   toSyncEngineStorageError({
-    operation: `sourceNormalizationRepository.fixedPoint.${kind}`,
-    error: message,
-  })
-)
-
-const signedDigits = (params: { readonly sign: 1 | -1; readonly digits: bigint }): bigint =>
-  params.sign === -1 ? -params.digits : params.digits
-
-const subtractScaledDecimals = ({
-  left,
-  right,
-  scale,
-}: {
-  readonly left: string
-  readonly right: string
-  readonly scale: number
-}) =>
-  Effect.gen(function* () {
-    const parsedLeft = yield* parseDecimal(left, fixedPointErrorFactory)
-    const parsedRight = yield* parseDecimal(right, fixedPointErrorFactory)
-    const leftDigits = parsedLeft.digits * powerOfTen(scale - parsedLeft.scale)
-    const rightDigits = parsedRight.digits * powerOfTen(scale - parsedRight.scale)
-
-    return formatScaled({ digits: leftDigits - rightDigits, scale })
-  })
-
-const compareDecimalQuantities = ({
-  left,
-  right,
-}: {
-  readonly left: string
-  readonly right: string
-}) =>
-  Effect.gen(function* () {
-    const parsedLeft = yield* parseDecimal(left, fixedPointErrorFactory)
-    const parsedRight = yield* parseDecimal(right, fixedPointErrorFactory)
-    const scale = Math.max(parsedLeft.scale, parsedRight.scale)
-    const leftDigits = signedDigits(parsedLeft) * powerOfTen(scale - parsedLeft.scale)
-    const rightDigits = signedDigits(parsedRight) * powerOfTen(scale - parsedRight.scale)
-
-    if (leftDigits < rightDigits) {
-      return -1
-    }
-
-    if (leftDigits > rightDigits) {
-      return 1
-    }
-
-    return 0
-  })
-
-const subtractDecimalQuantities = ({
-  left,
-  right,
-}: {
-  readonly left: string
-  readonly right: string
-}) =>
-  Effect.gen(function* () {
-    const parsedLeft = yield* parseDecimal(left, fixedPointErrorFactory)
-    const parsedRight = yield* parseDecimal(right, fixedPointErrorFactory)
-    const scale = Math.max(parsedLeft.scale, parsedRight.scale)
-    const leftDigits = signedDigits(parsedLeft) * powerOfTen(scale - parsedLeft.scale)
-    const rightDigits = signedDigits(parsedRight) * powerOfTen(scale - parsedRight.scale)
-
-    return formatScaled({ digits: leftDigits - rightDigits, scale })
+    error,
+    operation:
+      error._tag === "CurrencyMismatchError"
+        ? FIFO_CURRENCY_MISMATCH_OPERATION
+        : FIFO_MATCHER_REJECTED_OPERATION,
   })
 
 const toCostBasisPerToken = ({
   fiatAmount,
+  fiatCurrency,
   quantityAmount,
 }: {
   readonly fiatAmount: string | null
+  readonly fiatCurrency: string
   readonly quantityAmount: string
 }) =>
   Effect.gen(function* () {
@@ -314,54 +336,27 @@ const toCostBasisPerToken = ({
       return "0.000000000000000000"
     }
 
-    const parsedFiat = yield* parseDecimal(fiatAmount, fixedPointErrorFactory)
-    const parsedQuantity = yield* parseDecimal(quantityAmount, fixedPointErrorFactory)
-    return divideToScale({
-      numerator: parsedFiat.digits * powerOfTen(parsedQuantity.scale),
-      denominator: parsedQuantity.digits * powerOfTen(parsedFiat.scale),
+    const totalCostBasis = yield* decodeFifoMonetaryAmount({
+      amount: fiatAmount,
+      currency: fiatCurrency,
+    })
+    const quantity = yield* decodeFifoQuantity(quantityAmount)
+    const costBasisPerToken = yield* prorate({
+      // The legacy fixed-point adapter discarded the sign of acquisition fiat values.
+      total: totalCostBasis.abs(),
+      part: unitQuantity,
+      whole: quantity,
       scale: 18,
-    })
-  })
+    }).pipe(
+      Effect.mapError((error) =>
+        toSyncEngineStorageError({
+          error,
+          operation: FIFO_MATCHER_REJECTED_OPERATION,
+        })
+      )
+    )
 
-const allocateProceeds = ({
-  totalFiat,
-  matchedAmount,
-  totalAmount,
-}: {
-  readonly totalFiat: string | null
-  readonly matchedAmount: string
-  readonly totalAmount: string
-}) =>
-  Effect.gen(function* () {
-    if (totalFiat === null) {
-      return "0.00000000"
-    }
-
-    const parsedFiat = yield* parseDecimal(totalFiat, fixedPointErrorFactory)
-    const parsedMatched = yield* parseDecimal(matchedAmount, fixedPointErrorFactory)
-    const parsedTotal = yield* parseDecimal(totalAmount, fixedPointErrorFactory)
-    return divideToScale({
-      numerator: parsedFiat.digits * parsedMatched.digits * powerOfTen(parsedTotal.scale),
-      denominator: parsedTotal.digits * powerOfTen(parsedFiat.scale + parsedMatched.scale),
-      scale: 8,
-    })
-  })
-
-const calculateMatchedCostBasis = ({
-  costBasisPerToken,
-  matchedAmount,
-}: {
-  readonly costBasisPerToken: string
-  readonly matchedAmount: string
-}) =>
-  Effect.gen(function* () {
-    const parsedCostBasisPerToken = yield* parseDecimal(costBasisPerToken, fixedPointErrorFactory)
-    const parsedMatched = yield* parseDecimal(matchedAmount, fixedPointErrorFactory)
-    return divideToScale({
-      numerator: parsedCostBasisPerToken.digits * parsedMatched.digits,
-      denominator: powerOfTen(parsedCostBasisPerToken.scale + parsedMatched.scale),
-      scale: 8,
-    })
+    return costBasisPerToken.format()
   })
 
 const make = Effect.gen(function* () {
@@ -1376,6 +1371,8 @@ const make = Effect.gen(function* () {
           originalAmount: schema.fifoLots.originalAmount,
           remainingAmount: schema.fifoLots.remainingAmount,
           costBasisPerToken: schema.fifoLots.costBasisPerToken,
+          costBasisCurrency: schema.fifoLots.costBasisCurrency,
+          costBasisStatus: schema.fifoLots.costBasisStatus,
         })
         .from(schema.fifoLots)
         .innerJoin(
@@ -1490,94 +1487,90 @@ const make = Effect.gen(function* () {
     lots,
     disposalAmount,
     disposalFiatAmount,
+    disposalFiatCurrency,
   }: {
     readonly lots: ReadonlyArray<OpenFifoLotRecord>
     readonly disposalAmount: string
     readonly disposalFiatAmount: string | null
+    readonly disposalFiatCurrency: string | null
   }) =>
     Effect.gen(function* () {
-      const allocations = yield* Effect.reduce(
-        lots,
-        () => ({
-          remainingAmount: disposalAmount,
-          items: [] as ReadonlyArray<FifoLotAllocation>,
-        }),
-        (state, lot) =>
-          Effect.gen(function* () {
-            const remainingComparison = yield* compareDecimalQuantities({
-              left: state.remainingAmount,
-              right: "0",
-            })
-            if (remainingComparison === 0) {
-              return state
-            }
+      const quantity = yield* decodeFifoQuantity(disposalAmount)
+      const decodedLots = [] as Array<{
+        readonly id: string
+        readonly remainingQuantity: AccountingQuantity
+        readonly costBasisPerUnit: MonetaryAmount
+      }>
+      let remainingDisposalQuantity = quantity
 
-            const lotComparison = yield* compareDecimalQuantities({
-              left: lot.remainingAmount,
-              right: "0",
-            })
-            if (lotComparison === 0) {
-              return state
-            }
+      for (const lot of lots) {
+        if (BigDecimal.isZero(remainingDisposalQuantity)) {
+          break
+        }
 
-            const matchedAmountComparison = yield* compareDecimalQuantities({
-              left: lot.remainingAmount,
-              right: state.remainingAmount,
-            })
-            const matchedAmount =
-              matchedAmountComparison <= 0 ? lot.remainingAmount : state.remainingAmount
-            const costBasis = yield* calculateMatchedCostBasis({
-              costBasisPerToken: lot.costBasisPerToken,
-              matchedAmount,
-            })
-            const proceeds = yield* allocateProceeds({
-              totalFiat: disposalFiatAmount,
-              matchedAmount,
-              totalAmount: disposalAmount,
-            })
-            const gainLoss = yield* subtractScaledDecimals({
-              left: proceeds,
-              right: costBasis,
-              scale: 8,
-            })
-            const nextRemainingAmount = yield* subtractDecimalQuantities({
-              left: state.remainingAmount,
-              right: matchedAmount,
-            })
-            const nextLotRemainingAmount = yield* subtractDecimalQuantities({
-              left: lot.remainingAmount,
-              right: matchedAmount,
-            })
+        const remainingQuantity = yield* decodeFifoQuantity(lot.remainingAmount)
+        const storedCostBasisPerUnit = yield* decodeFifoMonetaryAmount({
+          amount: lot.costBasisPerToken,
+          currency: lot.costBasisCurrency,
+        })
+        // Only a zero pending basis is a currency-free placeholder. A nonzero pending basis
+        // still lacks a factual currency and must not be relabeled to make matching succeed.
+        const costBasisPerUnit =
+          lot.costBasisStatus === "pending_review" &&
+          storedCostBasisPerUnit.isZero &&
+          disposalFiatCurrency !== null
+            ? yield* decodeFifoMonetaryAmount({
+                amount: lot.costBasisPerToken,
+                currency: disposalFiatCurrency,
+              })
+            : storedCostBasisPerUnit
 
-            return {
-              remainingAmount: nextRemainingAmount,
-              items: [
-                ...state.items,
-                {
-                  fifoLotId: lot.id,
-                  matchedAmount,
-                  costBasis,
-                  proceeds,
-                  gainLoss,
-                  remainingAmount: nextLotRemainingAmount,
-                },
-              ],
-            }
+        decodedLots.push({ id: lot.id, remainingQuantity, costBasisPerUnit })
+
+        if (BigDecimal.Order(remainingQuantity, remainingDisposalQuantity) >= 0) {
+          break
+        }
+
+        const nextRemainingDisposalQuantity = subtractAccountingQuantity(
+          remainingDisposalQuantity,
+          remainingQuantity
+        )
+        if (Option.isNone(nextRemainingDisposalQuantity)) {
+          return yield* new FifoInputRejectedError({
+            cause: `Cannot subtract ${lot.remainingAmount} from ${formatAccountingQuantity(remainingDisposalQuantity)}`,
           })
-      )
+        }
+        remainingDisposalQuantity = nextRemainingDisposalQuantity.value
+      }
+      const proceeds =
+        disposalFiatAmount === null
+          ? null
+          : yield* decodeFifoMonetaryAmount({
+              amount: disposalFiatAmount,
+              currency: disposalFiatCurrency ?? "EUR",
+            }).pipe(Effect.map((amount) => amount.abs()))
+      const result = yield* matchFifoLots({
+        lots: decodedLots,
+        disposal: { quantity, proceeds },
+      }).pipe(Effect.mapError(toFifoMatchStorageError))
 
-      const remainingComparison = yield* compareDecimalQuantities({
-        left: allocations.remainingAmount,
-        right: "0",
-      })
-      if (remainingComparison > 0) {
+      if (result._tag === "InventoryShortage") {
         return yield* toSyncEngineStorageError({
-          operation: "sourceNormalizationRepository.buildFifoLotAllocations",
-          error: `Insufficient FIFO inventory for outbound amount ${allocations.remainingAmount}`,
+          operation: INSUFFICIENT_FIFO_INVENTORY_OPERATION,
+          error: `Insufficient FIFO inventory for outbound amount ${formatAccountingQuantity(result.shortage)}`,
         })
       }
 
-      return allocations.items
+      return result.allocations.map(
+        (allocation): FifoLotAllocation => ({
+          fifoLotId: allocation.lotId,
+          matchedAmount: formatAccountingQuantity(allocation.matchedQuantity),
+          costBasis: allocation.costBasis.format(),
+          proceeds: allocation.proceeds.format(),
+          gainLoss: allocation.gainLoss.format(),
+          remainingAmount: formatAccountingQuantity(allocation.remainingQuantity),
+        })
+      )
     })
 
   const ensureFifoLotForLeg = ({
@@ -1593,8 +1586,10 @@ const make = Effect.gen(function* () {
       }
 
       const now = nowDate()
+      const costBasisCurrency = (leg.fiatCurrency ?? "EUR").toUpperCase()
       const costBasisPerToken = yield* toCostBasisPerToken({
         fiatAmount: leg.fiatAmount,
+        fiatCurrency: costBasisCurrency,
         quantityAmount: leg.amount,
       })
 
@@ -1609,7 +1604,7 @@ const make = Effect.gen(function* () {
           originalAmount: leg.amount,
           remainingAmount: leg.amount,
           costBasisPerToken,
-          costBasisCurrency: leg.fiatCurrency ?? "EUR",
+          costBasisCurrency,
           costBasisStatus:
             leg.fiatAmount === null || leg.fiatCurrency === null ? "pending_review" : "known",
           sourceLegId: leg.id,
@@ -1666,6 +1661,7 @@ const make = Effect.gen(function* () {
         lots: openLots,
         disposalAmount: leg.amount,
         disposalFiatAmount: leg.fiatAmount,
+        disposalFiatCurrency: leg.fiatCurrency,
       })
 
       yield* Effect.forEach(allocations, (allocation) =>
@@ -1846,11 +1842,11 @@ const make = Effect.gen(function* () {
         return
       }
 
-      const consumedAmount = yield* subtractDecimalQuantities({
+      const consumedAmount = yield* subtractFifoQuantities({
         left: existingLot.originalAmount,
         right: existingLot.remainingAmount,
       })
-      const consumedComparison = yield* compareDecimalQuantities({
+      const consumedComparison = yield* compareFifoQuantities({
         left: consumedAmount,
         right: "0",
       })
@@ -1863,7 +1859,7 @@ const make = Effect.gen(function* () {
         })
       }
 
-      const comparison = yield* compareDecimalQuantities({ left: amount, right: consumedAmount })
+      const comparison = yield* compareFifoQuantities({ left: amount, right: consumedAmount })
 
       if (comparison < 0) {
         return yield* toSyncEngineStorageError({
@@ -2105,12 +2101,14 @@ const make = Effect.gen(function* () {
     providerTransfers,
     legs,
     feesOnly,
+    fifoMode,
   }: {
     readonly executor: SourceNormalizationExecutor
     readonly transaction: PersistedSourceTransaction
     readonly providerTransfers: ReadonlyArray<PersistedSourceProviderTransfer>
     readonly legs: ReadonlyArray<PersistedSourceLegRecord>
     readonly feesOnly: boolean
+    readonly fifoMode: "facts_only" | "allocate"
   }) => {
     const orderedProviderTransfers = [
       ...providerTransfers.filter((providerTransfer) => providerTransfer.direction === "inbound"),
@@ -2123,6 +2121,9 @@ const make = Effect.gen(function* () {
           providerTransfer.processingMode === "evidence_only" ||
           providerTransfer.processingMode === "stale"
         ) {
+          if (fifoMode === "facts_only") {
+            return
+          }
           return yield* removeInventoryMovementForProviderTransfer({
             executor,
             providerTransferId: providerTransfer.id,
@@ -2133,6 +2134,9 @@ const make = Effect.gen(function* () {
         const purpose = metadata.purpose
 
         if (feesOnly && purpose !== "fee") {
+          if (fifoMode === "facts_only") {
+            return
+          }
           return yield* removeInventoryMovementForProviderTransfer({
             executor,
             providerTransferId: providerTransfer.id,
@@ -2140,6 +2144,9 @@ const make = Effect.gen(function* () {
         }
 
         if (providerTransfer.providerAssetId === null) {
+          if (fifoMode === "facts_only") {
+            return
+          }
           return yield* removeInventoryMovementForProviderTransfer({
             executor,
             providerTransferId: providerTransfer.id,
@@ -2167,6 +2174,9 @@ const make = Effect.gen(function* () {
           )
 
         if (assetMapping?.assetId === null || assetMapping?.assetId === undefined) {
+          if (fifoMode === "facts_only") {
+            return
+          }
           return yield* removeInventoryMovementForProviderTransfer({
             executor,
             providerTransferId: providerTransfer.id,
@@ -2248,6 +2258,10 @@ const make = Effect.gen(function* () {
           })
         }
 
+        if (fifoMode === "facts_only") {
+          return
+        }
+
         yield* resetInventoryMovementAllocations({
           executor,
           movementId: movement.id,
@@ -2261,7 +2275,7 @@ const make = Effect.gen(function* () {
                 leg.assetId === assetMapping.assetId
             ),
             (leg) =>
-              compareDecimalQuantities({
+              compareFifoQuantities({
                 left: leg.amount,
                 right: providerTransfer.amount,
               })
@@ -2337,7 +2351,7 @@ const make = Effect.gen(function* () {
             (leg) => leg.kind === matchingLegKind && leg.assetId === assetMapping.assetId
           ),
           (leg) =>
-            compareDecimalQuantities({
+            compareFifoQuantities({
               left: leg.amount,
               right: providerTransfer.amount,
             })
@@ -2358,6 +2372,7 @@ const make = Effect.gen(function* () {
           lots: openLots,
           disposalAmount: providerTransfer.amount,
           disposalFiatAmount: null,
+          disposalFiatCurrency: null,
         })
 
         yield* Effect.forEach(allocations, (allocation) =>
@@ -2403,20 +2418,26 @@ const make = Effect.gen(function* () {
   const allocateFeeInventoryMovements = ({
     executor,
     legs,
+    fifoMode,
   }: {
     readonly executor: SourceNormalizationExecutor
     readonly legs: ReadonlyArray<PersistedSourceLegRecord>
+    readonly fifoMode: "facts_only" | "allocate"
   }) =>
     Effect.forEach(
       legs.filter((leg) => leg.kind === "fee"),
       (leg) =>
         Effect.gen(function* () {
-          const amountComparison = yield* compareDecimalQuantities({
+          const amountComparison = yield* compareFifoQuantities({
             left: leg.amount,
             right: "0",
           })
 
           if (amountComparison === 0) {
+            if (fifoMode === "facts_only") {
+              return
+            }
+
             const [existingMovement] = yield* executor
               .select({ id: schema.inventoryMovements.id })
               .from(schema.inventoryMovements)
@@ -2525,6 +2546,10 @@ const make = Effect.gen(function* () {
             })
           }
 
+          if (fifoMode === "facts_only") {
+            return
+          }
+
           yield* resetInventoryMovementAllocations({
             executor,
             movementId: movement.id,
@@ -2541,6 +2566,7 @@ const make = Effect.gen(function* () {
             lots: openLots,
             disposalAmount: leg.amount,
             disposalFiatAmount: null,
+            disposalFiatCurrency: null,
           })
 
           yield* Effect.forEach(allocations, (allocation) =>
@@ -2713,67 +2739,86 @@ const make = Effect.gen(function* () {
             persistedProviderTransfers.map((providerTransfer) => providerTransfer.id)
           )
 
-          if (materializesProviderMovements) {
-            yield* resetInventoryMovementAllocationsForTransaction({
-              executor: tx,
-              transactionId: persistedTransaction.id,
-            })
-            yield* removeStaleProviderInventoryMovements({
-              executor: tx,
-              transactionId: persistedTransaction.id,
-              currentProviderTransferIds,
-            })
-          } else {
-            yield* removeInventoryMovementsForTransaction({
-              executor: tx,
-              transactionId: persistedTransaction.id,
-            })
-          }
-
           yield* clearStaleObservedProviderTransferRepresentations({
             executor: tx,
             transactionId: persistedTransaction.id,
             currentProviderTransferIds,
           })
 
-          const transactionReview = yield* feedFifoLegs({
-            executor: tx,
-            legs: persistedLegs,
-          }).pipe(
-            Effect.andThen(
-              materializesProviderMovements
-                ? allocateProviderInventoryMovements({
-                    executor: tx,
+          // Catch reviewable FIFO input and matcher errors outside this savepoint so every
+          // derived FIFO write rolls back together while the outer transaction persists facts.
+          const transactionReview = yield* Effect.gen(function* () {
+            if (materializesProviderMovements) {
+              yield* allocateProviderInventoryMovements({
+                executor: tx,
+                transaction: persistedTransaction,
+                providerTransfers: persistedProviderTransfers,
+                legs: persistedLegs,
+                feesOnly: hasFailedStatus,
+                fifoMode: "facts_only",
+              })
+              yield* allocateFeeInventoryMovements({
+                executor: tx,
+                legs: persistedLegs,
+                fifoMode: "facts_only",
+              })
+            }
+
+            yield* tx.transaction((fifoTx) =>
+              Effect.gen(function* () {
+                if (materializesProviderMovements) {
+                  yield* resetInventoryMovementAllocationsForTransaction({
+                    executor: fifoTx,
+                    transactionId: persistedTransaction.id,
+                  })
+                  yield* removeStaleProviderInventoryMovements({
+                    executor: fifoTx,
+                    transactionId: persistedTransaction.id,
+                    currentProviderTransferIds,
+                  })
+                } else {
+                  yield* removeInventoryMovementsForTransaction({
+                    executor: fifoTx,
+                    transactionId: persistedTransaction.id,
+                  })
+                }
+
+                yield* feedFifoLegs({
+                  executor: fifoTx,
+                  legs: persistedLegs,
+                })
+                if (materializesProviderMovements) {
+                  yield* allocateProviderInventoryMovements({
+                    executor: fifoTx,
                     transaction: persistedTransaction,
                     providerTransfers: persistedProviderTransfers,
                     legs: persistedLegs,
                     feesOnly: hasFailedStatus,
+                    fifoMode: "allocate",
                   })
-                : Effect.void
-            ),
-            Effect.andThen(
-              materializesProviderMovements
-                ? allocateFeeInventoryMovements({
-                    executor: tx,
+                  yield* allocateFeeInventoryMovements({
+                    executor: fifoTx,
                     legs: persistedLegs,
+                    fifoMode: "allocate",
                   })
-                : Effect.void
+                }
+              })
+            )
+
+            return params.transactionReview
+          }).pipe(
+            wrapSyncEngineStorageError(
+              "sourceNormalizationRepository.persistNormalizedArtifacts.applyFifo"
             ),
-            Effect.as(params.transactionReview),
             Effect.catchTag("SyncEngineStorageError", (error) =>
-              isInsufficientFifoInventoryError(error)
-                ? resetInventoryMovementAllocationsForTransaction({
-                    executor: tx,
-                    transactionId: persistedTransaction.id,
-                  }).pipe(
-                    Effect.as(
-                      buildInsufficientInventoryReview({
-                        transaction: persistedTransaction,
-                        existingReview: params.transactionReview,
-                        resolvedTransactionType: params.resolvedTransactionType,
-                        error,
-                      })
-                    )
+              isFifoInventoryReviewError(error)
+                ? Effect.succeed(
+                    buildFifoInventoryReview({
+                      transaction: persistedTransaction,
+                      existingReview: params.transactionReview,
+                      resolvedTransactionType: params.resolvedTransactionType,
+                      error,
+                    })
                   )
                 : Effect.fail(error)
             )
