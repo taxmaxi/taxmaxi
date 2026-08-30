@@ -33,9 +33,21 @@ import * as Option from "effect/Option"
 import * as Result from "effect/Result"
 import * as Schema from "effect/Schema"
 import { allocateFifoQuantity } from "./FifoLotMatcher.ts"
+import {
+  GERMAN_APPLIED_RULES,
+  GERMAN_RULE_SET_VERSION,
+  germanAcquisitionBlocker,
+  germanAcquisitionIncomeTreatment,
+  germanDispositionBlocker,
+  germanPrivateDisposalTreatment,
+  germanTaxYearOf,
+  IllegalGermanAccountingChoiceError,
+  isGermanJurisdiction,
+  resolveGermanAccountingPolicy,
+  type GermanBlockerCode,
+} from "./GermanJurisdiction.ts"
 
 const ENGINE_VERSION = "1"
-const STRUCTURAL_RULE_SET_VERSION = "structural-v1"
 
 type ChoiceKind = AccountingChoice["_tag"]
 
@@ -48,14 +60,17 @@ export class AccountingChoiceResolutionError extends Schema.TaggedError<Accounti
   }
 ) {}
 
-/** The selected accounting method is not implemented by this engine version. */
-export class UnsupportedAccountingMethodError extends Schema.TaggedError<UnsupportedAccountingMethodError>()(
-  "UnsupportedAccountingMethodError",
-  { method: Schema.String }
+/** No jurisdiction module exists for the requested jurisdiction code. */
+export class UnsupportedJurisdictionError extends Schema.TaggedError<UnsupportedJurisdictionError>()(
+  "UnsupportedJurisdictionError",
+  { jurisdiction: Schema.String }
 ) {}
 
 /** Failures caused by invalid structural engine configuration. */
-export type TaxAccountingError = AccountingChoiceResolutionError | UnsupportedAccountingMethodError
+export type TaxAccountingError =
+  | AccountingChoiceResolutionError
+  | IllegalGermanAccountingChoiceError
+  | UnsupportedJurisdictionError
 
 /** One factual quantity match between an acquisition and a disposition. */
 export interface FactualFifoAllocation {
@@ -93,16 +108,19 @@ export interface DerivedLot {
   readonly costBasisPerUnit: MonetaryAmount | null
 }
 
+/** Jurisdiction-neutral blocker emitted by factual FIFO and valuation processing. */
+export type StructuralBlockerCode =
+  | "unknown_cause"
+  | "missing_valuation"
+  | "ambiguous_valuation"
+  | "valuation_currency_mismatch"
+  | "inventory_shortage"
+  | "movement_shortage"
+  | "blocked_inventory_suffix"
+
 /** Machine-readable fact that kept the structural result from being complete. */
 export interface TaxAccountingBlocker {
-  readonly code:
-    | "unknown_cause"
-    | "missing_valuation"
-    | "ambiguous_valuation"
-    | "valuation_currency_mismatch"
-    | "inventory_shortage"
-    | "movement_shortage"
-    | "blocked_inventory_suffix"
+  readonly code: StructuralBlockerCode | GermanBlockerCode
   readonly eventId: AccountingEventId
   readonly assetId: string
   readonly custodyUnitId: CustodyUnitId
@@ -171,6 +189,7 @@ interface EngineState {
   readonly inventories: Map<string, EngineLot[]>
   readonly allocations: FactualFifoAllocation[]
   readonly realizedResults: RealizedResult[]
+  readonly incomeResults: IncomeResult[]
   readonly blockers: TaxAccountingBlocker[]
   readonly explanationTrace: ExplanationEntry[]
   readonly blockedInventoryKeys: Set<string>
@@ -268,6 +287,24 @@ const resolveChoice = <Kind extends ChoiceKind>({
           reason: active.length === 0 ? "missing" : "multiple_active",
         })
       )
+}
+
+const resolveChoiceOrNull = <Kind extends ChoiceKind>({
+  choices,
+  jurisdiction,
+  choiceKind,
+}: {
+  readonly choices: ReadonlyArray<AccountingChoice>
+  readonly jurisdiction: JurisdictionCode
+  readonly choiceKind: Kind
+}): Effect.Effect<ChoiceByKind<Kind> | null, AccountingChoiceResolutionError> => {
+  const hasRelevantChoice = choices.some(
+    (choice) => hasChoiceKind(choice, choiceKind) && choice.jurisdiction === jurisdiction
+  )
+
+  return hasRelevantChoice
+    ? resolveChoice({ choices, jurisdiction, choiceKind })
+    : Effect.succeed(null)
 }
 
 const selectValuation = ({
@@ -517,16 +554,23 @@ const processAcquisition = ({
   custodyUnitId,
   inventoryKey,
   valuationResolution,
+  useValuation,
+  requiresValuation,
+  incomeTreatmentCode,
   state,
 }: {
   readonly event: AcquisitionEvent
   readonly custodyUnitId: CustodyUnitId
   readonly inventoryKey: string
   readonly valuationResolution: ValuationResolution
+  readonly useValuation: boolean
+  readonly requiresValuation: boolean
+  readonly incomeTreatmentCode: string | null
   readonly state: EngineState
 }): Effect.Effect<void, never> =>
   Effect.gen(function* () {
-    const valuation = valuationResolution._tag === "selected" ? valuationResolution : null
+    const valuation =
+      useValuation && valuationResolution._tag === "selected" ? valuationResolution : null
     const costBasisPerUnit =
       valuation === null
         ? null
@@ -546,7 +590,7 @@ const processAcquisition = ({
       sortLots([...(state.inventories.get(inventoryKey) ?? []), lot])
     )
 
-    if (valuationResolution._tag !== "selected") {
+    if (requiresValuation && valuationResolution._tag !== "selected") {
       appendValuationBlocker({
         state,
         event,
@@ -561,6 +605,17 @@ const processAcquisition = ({
       code: "fifo_lot_created",
       valuationKind: valuation?.kind ?? null,
     })
+
+    if (incomeTreatmentCode !== null && valuation !== null) {
+      state.incomeResults.push({
+        eventId: event.id,
+        assetId: event.assetId,
+        occurredAt: event.occurredAt,
+        quantity: event.quantity,
+        value: valuation.total,
+        treatmentCodes: [incomeTreatmentCode],
+      })
+    }
   })
 
 const processDisposition = ({
@@ -568,16 +623,21 @@ const processDisposition = ({
   custodyUnitId,
   inventoryKey,
   valuationResolution,
+  requiresValuation,
+  producesRealizedResults,
   state,
 }: {
   readonly event: DispositionEvent
   readonly custodyUnitId: CustodyUnitId
   readonly inventoryKey: string
   readonly valuationResolution: ValuationResolution
+  readonly requiresValuation: boolean
+  readonly producesRealizedResults: boolean
   readonly state: EngineState
 }): Effect.Effect<void, never> =>
   Effect.gen(function* () {
-    const valuation = valuationResolution._tag === "selected" ? valuationResolution : null
+    const valuation =
+      requiresValuation && valuationResolution._tag === "selected" ? valuationResolution : null
 
     if (state.blockedInventoryKeys.has(inventoryKey)) {
       appendBlocker({
@@ -611,7 +671,7 @@ const processDisposition = ({
       quantity: allocation.matchedQuantity,
     }))
 
-    if (valuationResolution._tag !== "selected") {
+    if (requiresValuation && valuationResolution._tag !== "selected") {
       appendValuationBlocker({
         state,
         event,
@@ -667,7 +727,7 @@ const processDisposition = ({
               )
             )
 
-      if (costBasis === null || proceeds === null) {
+      if (!producesRealizedResults || costBasis === null || proceeds === null) {
         continue
       }
 
@@ -726,26 +786,51 @@ export const calculate = ({
   valuationFacts,
 }: CalculateInput): Effect.Effect<TaxAccountingResult, TaxAccountingError, never> =>
   Effect.gen(function* () {
-    const methodChoice: AccountingMethodChoice = yield* resolveChoice({
+    if (!isGermanJurisdiction(jurisdiction)) {
+      return yield* new UnsupportedJurisdictionError({ jurisdiction })
+    }
+
+    const methodChoice: AccountingMethodChoice | null = yield* resolveChoiceOrNull({
       choices: accountingChoices,
       jurisdiction,
       choiceKind: "accounting_method",
     })
-    const scopeChoice: InventoryScopeChoice = yield* resolveChoice({
+    const scopeChoice: InventoryScopeChoice | null = yield* resolveChoiceOrNull({
       choices: accountingChoices,
       jurisdiction,
       choiceKind: "inventory_scope",
     })
+    const { accountingMethod, inventoryScope } = yield* resolveGermanAccountingPolicy({
+      methodChoice,
+      scopeChoice,
+    })
 
-    if (methodChoice.method !== "fifo") {
-      return yield* new UnsupportedAccountingMethodError({ method: methodChoice.method })
-    }
-
-    const orderedLedger = [...ledger].sort(compareEvents)
+    const orderedLedger = ledger
+      .filter((event) => germanTaxYearOf(event.occurredAt) <= taxYear)
+      .sort(compareEvents)
+    const targetDispositionIds = new Set(
+      orderedLedger
+        .filter(
+          (event): event is DispositionEvent =>
+            event._tag === "disposition" && germanTaxYearOf(event.occurredAt) === taxYear
+        )
+        .map((event) => event.id)
+    )
+    const dispositionById = new Map(
+      orderedLedger
+        .filter((event): event is DispositionEvent => event._tag === "disposition")
+        .map((event) => [event.id, event])
+    )
+    const acquisitionById = new Map(
+      orderedLedger
+        .filter((event): event is AcquisitionEvent => event._tag === "acquisition")
+        .map((event) => [event.id, event])
+    )
     const state: EngineState = {
       inventories: new Map(),
       allocations: [],
       realizedResults: [],
+      incomeResults: [],
       blockers: [],
       explanationTrace: [],
       blockedInventoryKeys: new Set(),
@@ -753,7 +838,7 @@ export const calculate = ({
 
     for (const event of orderedLedger) {
       if (event._tag === "custody_movement") {
-        processCustodyMovement({ event, inventoryScope: scopeChoice.scope, state })
+        processCustodyMovement({ event, inventoryScope, state })
         continue
       }
 
@@ -761,7 +846,7 @@ export const calculate = ({
       const key = inventoryKey({
         assetId: event.assetId,
         custodyUnitId,
-        inventoryScope: scopeChoice.scope,
+        inventoryScope,
       })
       const valuationResolution = selectValuation({ event, valuationFacts })
       const valuation = valuationResolution._tag === "selected" ? valuationResolution : null
@@ -778,21 +863,56 @@ export const calculate = ({
       }
 
       if (event._tag === "acquisition") {
+        const germanBlocker = germanAcquisitionBlocker(event.cause)
+
+        if (germanBlocker !== null) {
+          appendBlocker({
+            state,
+            code: germanBlocker,
+            eventId: event.id,
+            assetId: event.assetId,
+            custodyUnitId,
+            valuationKind: valuation?.kind ?? null,
+          })
+        }
+
+        const useValuation = germanBlocker === null
+
         yield* processAcquisition({
           event,
           custodyUnitId,
           inventoryKey: key,
           valuationResolution,
+          useValuation,
+          requiresValuation: useValuation,
+          incomeTreatmentCode: germanAcquisitionIncomeTreatment(event.cause),
           state,
         })
         continue
       }
+
+      const germanBlocker = germanDispositionBlocker(event.cause)
+
+      if (germanBlocker !== null) {
+        appendBlocker({
+          state,
+          code: germanBlocker,
+          eventId: event.id,
+          assetId: event.assetId,
+          custodyUnitId,
+          valuationKind: valuation?.kind ?? null,
+        })
+      }
+
+      const producesRealizedResults = germanBlocker === null
 
       yield* processDisposition({
         event,
         custodyUnitId,
         inventoryKey: key,
         valuationResolution,
+        requiresValuation: producesRealizedResults,
+        producesRealizedResults,
         state,
       })
     }
@@ -802,19 +922,42 @@ export const calculate = ({
       jurisdiction,
       taxYear,
       engineVersion: ENGINE_VERSION,
-      ruleSetVersion: STRUCTURAL_RULE_SET_VERSION,
-      accountingMethod: methodChoice.method,
-      inventoryScope: scopeChoice.scope,
-      appliedChoiceIds: [methodChoice.id, scopeChoice.id],
+      ruleSetVersion: GERMAN_RULE_SET_VERSION,
+      accountingMethod,
+      inventoryScope,
+      appliedChoiceIds: [methodChoice?.id, scopeChoice?.id].filter(
+        (choiceId): choiceId is AccountingChoiceId => choiceId !== undefined
+      ),
       appliedRules: [
         "engine.event_order.occurred_at_then_id",
         "engine.inventory.fifo",
-        `engine.inventory.${scopeChoice.scope}`,
+        `engine.inventory.${inventoryScope}`,
+        ...GERMAN_APPLIED_RULES,
       ],
       processedEventIds: orderedLedger.map((event) => event.id),
-      allocations: state.allocations,
-      realizedResults: state.realizedResults,
-      incomeResults: [],
+      allocations: state.allocations.filter((allocation) =>
+        targetDispositionIds.has(allocation.dispositionEventId)
+      ),
+      realizedResults: state.realizedResults
+        .filter((result) => targetDispositionIds.has(result.dispositionEventId))
+        .map((result) => {
+          const disposition = dispositionById.get(result.dispositionEventId)
+          const acquisition = acquisitionById.get(result.acquisitionEventId)
+          const treatment =
+            disposition === undefined || acquisition === undefined
+              ? null
+              : germanPrivateDisposalTreatment({
+                  acquisition: result.acquiredAt,
+                  acquisitionCause: acquisition.cause,
+                  disposition: result.disposedAt,
+                  cause: disposition.cause,
+                })
+
+          return treatment === null ? result : { ...result, treatmentCodes: [treatment] }
+        }),
+      incomeResults: state.incomeResults.filter(
+        (result) => germanTaxYearOf(result.occurredAt) === taxYear
+      ),
       derivedLots: toDerivedLots(state.inventories),
       blockers: state.blockers,
       explanationTrace: state.explanationTrace,
