@@ -810,6 +810,13 @@ const make = Effect.gen(function* () {
             virtualRemainingByLotId.set(allocation.lotId, allocation.remainingQuantity)
           }
         }
+        for (const effect of effects) {
+          if (!rejectedInventoryKeys.has(inventoryKeyForEffect(effect))) {
+            continue
+          }
+          blockedEffectIds.add(effect.id)
+          matchResultByEffectId.delete(effect.id)
+        }
         if (shortageMode === "preserve") {
           for (const effect of effects) {
             if (blockedInventoryKeys.has(inventoryKeyForEffect(effect))) {
