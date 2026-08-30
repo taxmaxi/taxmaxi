@@ -7,6 +7,7 @@ import {
   pgTable,
   text,
   timestamp,
+  unique,
   uniqueIndex,
   uuid,
 } from "drizzle-orm/pg-core"
@@ -51,6 +52,7 @@ export const sources = pgTable(
       sql`${table.addressId} is not null or ${table.cexAccountId} is not null`
     ),
     index("idx_sources_provider_key").on(table.providerKey),
+    unique("sources_id_principal_unique").on(table.id, table.principalId),
     uniqueIndex("sources_principal_address_unique").on(table.principalId, table.addressId),
     uniqueIndex("sources_principal_cex_account_unique").on(table.principalId, table.cexAccountId),
   ]

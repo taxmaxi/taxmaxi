@@ -13,6 +13,9 @@ import * as blockchains from "./BlockchainsTable.ts"
 import * as billing from "./BillingTables.ts"
 import * as cex from "./CexTable.ts"
 import * as cexAccount from "./CexAccountTable.ts"
+import * as calculationRunResults from "./CalculationRunResultsTables.ts"
+import * as calculationRuns from "./CalculationRunsTables.ts"
+import * as custodyUnits from "./CustodyUnitsTables.ts"
 import * as disposalMatches from "./DisposalMatchesTable.ts"
 import * as duneProtocolCandidateObservations from "./DuneProtocolCandidateObservationsTable.ts"
 import * as emailVerificationRequests from "./EmailVerificationRequestsTable.ts"
@@ -72,6 +75,9 @@ export const schema = {
   ...billing,
   ...cex,
   ...cexAccount,
+  ...calculationRunResults,
+  ...calculationRuns,
+  ...custodyUnits,
   ...disposalMatches,
   ...duneProtocolCandidateObservations,
   ...emailVerificationRequests,
@@ -144,6 +150,37 @@ export type { Blockchain, BlockchainInsert } from "./BlockchainsTable.ts"
 export type { BillingAccountRow, CreditLedgerRow, StripeEventRow } from "./BillingTables.ts"
 export type { Cex, CexInsert } from "./CexTable.ts"
 export type { CexAccount, CexAccountInsert } from "./CexAccountTable.ts"
+export type {
+  CalculationRunAllocation,
+  CalculationRunAllocationInsert,
+  CalculationRunBlocker,
+  CalculationRunBlockerInsert,
+  CalculationRunCustodyUnit,
+  CalculationRunCustodyUnitInsert,
+  CalculationRunCustodyUnitSource,
+  CalculationRunCustodyUnitSourceInsert,
+  CalculationRunDerivedLot,
+  CalculationRunDerivedLotInsert,
+  CalculationRunExplanationEntry,
+  CalculationRunExplanationEntryInsert,
+  CalculationRunExplanationMatch,
+  CalculationRunIncomeResult,
+  CalculationRunIncomeResultInsert,
+  CalculationRunRealizedResult,
+  CalculationRunRealizedResultInsert,
+} from "./CalculationRunResultsTables.ts"
+export type {
+  ActiveCalculationRun,
+  ActiveCalculationRunInsert,
+  CalculationRun,
+  CalculationRunInsert,
+} from "./CalculationRunsTables.ts"
+export type {
+  CustodyUnit,
+  CustodyUnitInsert,
+  CustodyUnitSource,
+  CustodyUnitSourceInsert,
+} from "./CustodyUnitsTables.ts"
 export type { DisposalMatch, DisposalMatchInsert } from "./DisposalMatchesTable.ts"
 export type {
   DuneProtocolCandidateObservationInsert,
