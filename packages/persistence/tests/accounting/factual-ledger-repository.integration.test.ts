@@ -42,6 +42,18 @@ const loadFactualLedger = () =>
     )
   )
 
+const loadFactualLedgerError = (reportingCurrency = CurrencyCode.make("EUR")) =>
+  runRepository(
+    Effect.flip(
+      Effect.flatMap(FactualLedgerRepository, (repository) =>
+        repository.load({
+          principalId: TEST_PRINCIPAL_ID,
+          reportingCurrency,
+        })
+      )
+    )
+  )
+
 const seedCexSource = ({
   sourceId,
   fixtureName,
@@ -98,6 +110,7 @@ const seedCustodyReconciliation = ({
   canonicalTimestamp,
   direction,
   amount,
+  canonicalAmount,
   reconciliationStatus,
   status,
   deterministic,
@@ -113,6 +126,7 @@ const seedCustodyReconciliation = ({
   readonly canonicalTimestamp: Date
   readonly direction: "inbound" | "outbound"
   readonly amount: string
+  readonly canonicalAmount?: string
   readonly reconciliationStatus: "matched" | "unmatched"
   readonly status: "approved" | "auto_applied" | "pending"
   readonly deterministic: boolean
@@ -171,7 +185,7 @@ const seedCustodyReconciliation = ({
         fromAccountRef: "own:origin",
         toAccountRef: "own:destination",
         assetId: TEST_BTC_ASSET_ID,
-        amount,
+        amount: canonicalAmount ?? amount,
       })
       .returning({ id: schema.transfers.id })
 
@@ -432,6 +446,145 @@ describe("FactualLedgerRepositoryLive", () => {
           transactionReference: "paid-operation",
         }),
       ])
+    })
+  )
+
+  it.effect("fails non-positive leg quantities through the repository error channel", () =>
+    Effect.gen(function* () {
+      const occurredAt = DateTime.toDateUtc(DateTime.makeUnsafe("2025-02-04T11:00:00.000Z"))
+
+      for (const [id, amount] of [
+        ["10000000-0000-4000-8000-000000000006", "0"],
+        ["10000000-0000-4000-8000-000000000007", "-1"],
+      ] as const) {
+        yield* Effect.promise(() =>
+          runPg(
+            Effect.gen(function* () {
+              const db = yield* drizzle
+              yield* db.insert(schema.transactionLegs).values({
+                id,
+                sourceId: TEST_CUSTODY_SOURCE_ID,
+                externalId: `invalid-quantity-${amount}`,
+                timestamp: occurredAt,
+                principalId: TEST_PRINCIPAL_ID,
+                assetId: TEST_BTC_ASSET_ID,
+                amount,
+                kind: "acquisition",
+                provenance: "deterministic",
+              })
+            })
+          )
+        )
+
+        const error = yield* Effect.promise(() => loadFactualLedgerError())
+        expect(error).toMatchObject({
+          _tag: "PersistenceError",
+          operation: "factualLedgerRepository.load.event",
+        })
+
+        yield* Effect.promise(() =>
+          runPg(
+            Effect.gen(function* () {
+              const db = yield* drizzle
+              yield* db.delete(schema.transactionLegs).where(eq(schema.transactionLegs.id, id))
+            })
+          )
+        )
+      }
+    })
+  )
+
+  it.effect("fails a zero canonical-transfer quantity through the repository error channel", () =>
+    Effect.gen(function* () {
+      const providerTimestamp = DateTime.toDateUtc(DateTime.makeUnsafe("2025-02-04T12:00:00.000Z"))
+      const canonicalTimestamp = DateTime.toDateUtc(DateTime.makeUnsafe("2025-02-04T12:02:00.000Z"))
+
+      yield* Effect.promise(() =>
+        runPg(
+          Effect.gen(function* () {
+            yield* seedCexSource({
+              sourceId: TEST_DESTINATION_SOURCE_ID,
+              fixtureName: "Zero-quantity destination source",
+            })
+            yield* seedCustodyReconciliation({
+              reconciliationId: "10000000-0000-4000-8000-000000000008",
+              fixtureName: "zero-quantity-custody",
+              providerSourceId: TEST_CUSTODY_SOURCE_ID,
+              canonicalSourceId: TEST_DESTINATION_SOURCE_ID,
+              providerTimestamp,
+              canonicalTimestamp,
+              direction: "outbound",
+              amount: "1",
+              canonicalAmount: "0",
+              reconciliationStatus: "matched",
+              status: "approved",
+              deterministic: false,
+            })
+          })
+        )
+      )
+
+      const error = yield* Effect.promise(() => loadFactualLedgerError())
+      expect(error).toMatchObject({
+        _tag: "PersistenceError",
+        operation: "factualLedgerRepository.load.event",
+      })
+    })
+  )
+
+  it.effect("rejects an unsupported reporting currency through the repository error channel", () =>
+    Effect.gen(function* () {
+      const occurredAt = DateTime.toDateUtc(DateTime.makeUnsafe("2025-02-04T13:00:00.000Z"))
+
+      yield* Effect.promise(() =>
+        runPg(
+          Effect.gen(function* () {
+            const db = yield* drizzle
+            const [transaction] = yield* db
+              .insert(schema.transactions)
+              .values({
+                sourceId: TEST_CUSTODY_SOURCE_ID,
+                externalId: "unsupported-reporting-currency",
+                timestamp: occurredAt,
+                transactionType: "buy_fiat",
+                providerFiatAmount: "100",
+                providerFiatCurrency: "NOK",
+                principalId: TEST_PRINCIPAL_ID,
+              })
+              .returning({ id: schema.transactions.id })
+
+            if (transaction === undefined) {
+              return yield* Effect.die("Failed to create unsupported-currency transaction")
+            }
+
+            yield* db.insert(schema.transactionLegs).values({
+              id: "10000000-0000-4000-8000-000000000009",
+              sourceId: TEST_CUSTODY_SOURCE_ID,
+              externalId: "unsupported-reporting-currency-leg",
+              timestamp: occurredAt,
+              principalId: TEST_PRINCIPAL_ID,
+              assetId: TEST_BTC_ASSET_ID,
+              amount: "1",
+              kind: "acquisition",
+              provenance: "deterministic",
+              transactionId: transaction.id,
+            })
+            yield* db.insert(schema.assetPrices).values({
+              assetId: TEST_BTC_ASSET_ID,
+              timestamp: occurredAt,
+              price: "50",
+              currency: "NOK",
+              source: "unsupported-currency-feed",
+            })
+          })
+        )
+      )
+
+      const error = yield* Effect.promise(() => loadFactualLedgerError(CurrencyCode.make("NOK")))
+      expect(error).toMatchObject({
+        _tag: "PersistenceError",
+        operation: "factualLedgerRepository.load.reportingCurrency",
+      })
     })
   )
 

@@ -5,22 +5,17 @@
  */
 
 import {
-  AccountingEventId,
-  AccountingQuantity,
-  AccountingTransactionReference,
   AcquisitionEvent,
   CustodyMovementEvent,
   DispositionEvent,
   MarketQuoteFact,
-  MonetaryAmount,
   ObservedConsiderationFact,
   type AcquisitionCause,
   type AccountingEvent,
   type DispositionCause,
   type ValuationFact,
 } from "@my/core/accounting"
-import { SourceId } from "@my/core/source"
-import { fromDate } from "@my/core/shared/values/Timestamp"
+import { CURRENCIES_BY_CODE, type CurrencyCode } from "@my/core/currency"
 import { aliasedTable, and, asc, eq, gte, inArray, lt, or } from "drizzle-orm"
 import * as BigDecimal from "effect/BigDecimal"
 import * as DateTime from "effect/DateTime"
@@ -80,19 +75,31 @@ const dispositionCause = ({
   return EXCHANGE_TYPES.has(transactionType ?? "") ? "sale" : "unknown"
 }
 
-const decodeQuantity = (value: string) =>
-  Schema.decodeEffect(AccountingQuantity)(value).pipe(
-    Effect.mapError(
-      (cause) =>
-        new PersistenceError({
-          operation: "factualLedgerRepository.load.quantity",
-          cause,
-        })
-    )
+const decodeRequired = <S extends Schema.Constraint>({
+  schema,
+  input,
+  operation,
+}: {
+  readonly schema: S
+  readonly input: unknown
+  readonly operation: string
+}) =>
+  Schema.decodeUnknownEffect(schema)(input).pipe(
+    Effect.mapError((cause) => new PersistenceError({ operation, cause }))
   )
 
 const decodeValuationDecimal = (value: string): BigDecimal.BigDecimal | undefined =>
   Option.getOrUndefined(BigDecimal.fromString(value))
+
+const validateReportingCurrency = (reportingCurrency: CurrencyCode) =>
+  CURRENCIES_BY_CODE.has(reportingCurrency)
+    ? Effect.succeed(reportingCurrency)
+    : Effect.fail(
+        new PersistenceError({
+          operation: "factualLedgerRepository.load.reportingCurrency",
+          cause: `Unsupported reporting currency: ${reportingCurrency}`,
+        })
+      )
 
 const trimmedNonEmpty = (value: string | null | undefined): string | undefined => {
   const trimmed = value?.trim()
@@ -110,7 +117,7 @@ const transactionReference = ({
 }) => {
   for (const candidate of [externalGroupId, externalId, transactionId]) {
     const reference = trimmedNonEmpty(candidate)
-    if (reference !== undefined) return AccountingTransactionReference.make(reference)
+    if (reference !== undefined) return reference
   }
 
   return undefined
@@ -224,7 +231,6 @@ const make = Effect.gen(function* () {
           continue
         }
 
-        const quantity = yield* decodeQuantity(row.amount)
         const reference =
           row.kind === "fee" && row.feeTransactionId !== null
             ? transactionReference({
@@ -234,30 +240,38 @@ const make = Effect.gen(function* () {
               })
             : transactionReference(row)
         const common = {
-          id: AccountingEventId.make(row.id),
-          occurredAt: fromDate(row.timestamp),
+          id: row.id,
+          occurredAt: { epochMillis: row.timestamp.getTime() },
           assetId: row.assetId,
-          quantity,
+          quantity: row.amount,
           ...(reference === undefined ? {} : { transactionReference: reference }),
         }
 
         if (row.kind === "acquisition" || row.kind === "income") {
-          const event = AcquisitionEvent.make({
-            _tag: "acquisition",
-            ...common,
-            custodySourceId: SourceId.make(row.sourceId),
-            cause: acquisitionCause(row.transactionType),
+          const event = yield* decodeRequired({
+            schema: AcquisitionEvent,
+            input: {
+              _tag: "acquisition",
+              ...common,
+              custodySourceId: row.sourceId,
+              cause: acquisitionCause(row.transactionType),
+            },
+            operation: "factualLedgerRepository.load.event",
           })
           events.push(event)
           eventRows.push({ event, row })
           continue
         }
 
-        const event = DispositionEvent.make({
-          _tag: "disposition",
-          ...common,
-          custodySourceId: SourceId.make(row.sourceId),
-          cause: dispositionCause({ kind: row.kind, transactionType: row.transactionType }),
+        const event = yield* decodeRequired({
+          schema: DispositionEvent,
+          input: {
+            _tag: "disposition",
+            ...common,
+            custodySourceId: row.sourceId,
+            cause: dispositionCause({ kind: row.kind, transactionType: row.transactionType }),
+          },
+          operation: "factualLedgerRepository.load.event",
         })
         events.push(event)
         eventRows.push({ event, row })
@@ -362,7 +376,6 @@ const make = Effect.gen(function* () {
         }
         seenCanonicalTransferIds.add(row.canonicalTransferId)
 
-        const quantity = yield* decodeQuantity(row.amount)
         const reference = transactionReference({
           externalGroupId: row.canonicalExternalGroupId,
           externalId: row.canonicalExternalId,
@@ -374,15 +387,19 @@ const make = Effect.gen(function* () {
           row.providerDirection === "outbound" ? row.canonicalSourceId : row.providerSourceId
 
         events.push(
-          CustodyMovementEvent.make({
-            _tag: "custody_movement",
-            id: AccountingEventId.make(row.id),
-            occurredAt: fromDate(row.canonicalTimestamp),
-            assetId: row.assetId,
-            quantity,
-            ...(reference === undefined ? {} : { transactionReference: reference }),
-            fromCustodySourceId: SourceId.make(fromCustodySourceId),
-            toCustodySourceId: SourceId.make(toCustodySourceId),
+          yield* decodeRequired({
+            schema: CustodyMovementEvent,
+            input: {
+              _tag: "custody_movement",
+              id: row.id,
+              occurredAt: { epochMillis: row.canonicalTimestamp.getTime() },
+              assetId: row.assetId,
+              quantity: row.amount,
+              ...(reference === undefined ? {} : { transactionReference: reference }),
+              fromCustodySourceId,
+              toCustodySourceId,
+            },
+            operation: "factualLedgerRepository.load.event",
           })
         )
       }
@@ -396,7 +413,7 @@ const make = Effect.gen(function* () {
     reportingCurrency,
   }: Pick<LoadedLegEvents, "eventRows" | "eventCountByTransactionId"> &
     Pick<LoadParams, "reportingCurrency">) =>
-    Effect.sync(() => {
+    Effect.gen(function* () {
       const valuationFacts: ValuationFact[] = []
       for (const { event, row } of eventRows) {
         if (
@@ -409,7 +426,6 @@ const make = Effect.gen(function* () {
           const providerAmount = decodeValuationDecimal(row.providerFiatAmount)
           if (providerAmount === undefined || BigDecimal.isNegative(providerAmount)) continue
 
-          const amount = MonetaryAmount.fromBigDecimal(providerAmount, reportingCurrency)
           const providerResourcePath = trimmedNonEmpty(row.providerResourcePath)
           const evidenceReference =
             providerResourcePath === undefined
@@ -419,11 +435,18 @@ const make = Effect.gen(function* () {
               : providerResourcePath
 
           valuationFacts.push(
-            ObservedConsiderationFact.make({
-              _tag: "observed_consideration",
-              eventId: event.id,
-              amount,
-              evidenceReference,
+            yield* decodeRequired({
+              schema: ObservedConsiderationFact,
+              input: {
+                _tag: "observed_consideration",
+                eventId: event.id,
+                amount: {
+                  amount: row.providerFiatAmount,
+                  currency: reportingCurrency,
+                },
+                evidenceReference,
+              },
+              operation: "factualLedgerRepository.load.observedConsideration",
             })
           )
         }
@@ -540,7 +563,7 @@ const make = Effect.gen(function* () {
     readonly events: ReadonlyArray<AccountingEvent>
     readonly priceRows: PriceRows
   } & Pick<LoadParams, "reportingCurrency">) =>
-    Effect.sync(() => {
+    Effect.gen(function* () {
       const valuationFacts: ValuationFact[] = []
       const quoteBuckets = makePriceQuoteBuckets(priceRows)
 
@@ -555,12 +578,19 @@ const make = Effect.gen(function* () {
         if (quote === undefined) continue
 
         valuationFacts.push(
-          MarketQuoteFact.make({
-            _tag: "market_quote",
-            eventId: event.id,
-            unitPrice: MonetaryAmount.fromBigDecimal(quote.value, reportingCurrency),
-            quotedAt: fromDate(quote.row.timestamp),
-            source: trimmedNonEmpty(quote.row.source) ?? "asset_prices",
+          yield* decodeRequired({
+            schema: MarketQuoteFact,
+            input: {
+              _tag: "market_quote",
+              eventId: event.id,
+              unitPrice: {
+                amount: quote.row.price,
+                currency: reportingCurrency,
+              },
+              quotedAt: { epochMillis: quote.row.timestamp.getTime() },
+              source: trimmedNonEmpty(quote.row.source) ?? "asset_prices",
+            },
+            operation: "factualLedgerRepository.load.marketQuote",
           })
         )
       }
@@ -570,19 +600,23 @@ const make = Effect.gen(function* () {
 
   const load: FactualLedgerRepositoryShape["load"] = ({ principalId, reportingCurrency }) =>
     Effect.gen(function* () {
+      const supportedReportingCurrency = yield* validateReportingCurrency(reportingCurrency)
       const legEvents = yield* loadLegEvents({ principalId })
       const custodyMovementEvents = yield* loadCustodyMovementEvents({ principalId })
       const events = [...legEvents.events, ...custodyMovementEvents].sort(compareEvents)
       const observedValuationFacts = yield* makeObservedValuationFacts({
         eventRows: legEvents.eventRows,
         eventCountByTransactionId: legEvents.eventCountByTransactionId,
-        reportingCurrency,
+        reportingCurrency: supportedReportingCurrency,
       })
-      const priceRows = yield* loadPriceRows({ events, reportingCurrency })
+      const priceRows = yield* loadPriceRows({
+        events,
+        reportingCurrency: supportedReportingCurrency,
+      })
       const marketValuationFacts = yield* makeMarketValuationFacts({
         events,
         priceRows,
-        reportingCurrency,
+        reportingCurrency: supportedReportingCurrency,
       })
       const valuationFacts = [...observedValuationFacts, ...marketValuationFacts].sort(
         compareValuationFacts
