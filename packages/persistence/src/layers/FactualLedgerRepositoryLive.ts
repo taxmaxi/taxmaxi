@@ -21,7 +21,7 @@ import {
 } from "@my/core/accounting"
 import { SourceId } from "@my/core/source"
 import { fromDate } from "@my/core/shared/values/Timestamp"
-import { aliasedTable, and, asc, eq, inArray, lte, or } from "drizzle-orm"
+import { aliasedTable, and, asc, eq, gte, inArray, lt, or } from "drizzle-orm"
 import * as BigDecimal from "effect/BigDecimal"
 import * as DateTime from "effect/DateTime"
 import * as Effect from "effect/Effect"
@@ -91,18 +91,13 @@ const decodeQuantity = (value: string) =>
     )
   )
 
-const decodeDecimal = ({
-  value,
-  operation,
-}: {
-  readonly value: string
-  readonly operation: string
-}) =>
-  Option.match(BigDecimal.fromString(value), {
-    onNone: () =>
-      Effect.fail(new PersistenceError({ operation, cause: `Invalid decimal: ${value}` })),
-    onSome: Effect.succeed,
-  })
+const decodeValuationDecimal = (value: string): BigDecimal.BigDecimal | undefined =>
+  Option.getOrUndefined(BigDecimal.fromString(value))
+
+const trimmedNonEmpty = (value: string | null | undefined): string | undefined => {
+  const trimmed = value?.trim()
+  return trimmed === undefined || trimmed === "" ? undefined : trimmed
+}
 
 const transactionReference = ({
   externalGroupId,
@@ -113,10 +108,12 @@ const transactionReference = ({
   readonly externalId: string | null
   readonly transactionId: string | null
 }) => {
-  const reference = [externalGroupId, externalId, transactionId].find(
-    (candidate): candidate is string => candidate !== null && candidate.trim() !== ""
-  )
-  return reference === undefined ? undefined : AccountingTransactionReference.make(reference)
+  for (const candidate of [externalGroupId, externalId, transactionId]) {
+    const reference = trimmedNonEmpty(candidate)
+    if (reference !== undefined) return AccountingTransactionReference.make(reference)
+  }
+
+  return undefined
 }
 
 const compareEvents = (left: AccountingEvent, right: AccountingEvent): number => {
@@ -125,6 +122,11 @@ const compareEvents = (left: AccountingEvent, right: AccountingEvent): number =>
 }
 
 const utcDay = (date: Date): string => date.toISOString().slice(0, 10)
+
+const utcDayRange = (day: string): readonly [Date, Date] => {
+  const start = DateTime.makeUnsafe(`${day}T00:00:00.000Z`)
+  return [DateTime.toDateUtc(start), DateTime.toDateUtc(DateTime.add(start, { days: 1 }))]
+}
 
 const compareValuationFacts = (left: ValuationFact, right: ValuationFact): number => {
   const eventOrder = left.eventId.localeCompare(right.eventId)
@@ -394,7 +396,7 @@ const make = Effect.gen(function* () {
     reportingCurrency,
   }: Pick<LoadedLegEvents, "eventRows" | "eventCountByTransactionId"> &
     Pick<LoadParams, "reportingCurrency">) =>
-    Effect.gen(function* () {
+    Effect.sync(() => {
       const valuationFacts: ValuationFact[] = []
       for (const { event, row } of eventRows) {
         if (
@@ -404,16 +406,13 @@ const make = Effect.gen(function* () {
           row.providerFiatAmount !== null &&
           row.providerFiatCurrency === reportingCurrency
         ) {
-          const providerAmount = yield* decodeDecimal({
-            value: row.providerFiatAmount,
-            operation: "factualLedgerRepository.load.providerFiatAmount",
-          })
-          if (BigDecimal.isNegative(providerAmount)) continue
+          const providerAmount = decodeValuationDecimal(row.providerFiatAmount)
+          if (providerAmount === undefined || BigDecimal.isNegative(providerAmount)) continue
 
           const amount = MonetaryAmount.fromBigDecimal(providerAmount, reportingCurrency)
-          const providerResourcePath = row.providerResourcePath?.trim()
+          const providerResourcePath = trimmedNonEmpty(row.providerResourcePath)
           const evidenceReference =
-            providerResourcePath === undefined || providerResourcePath === ""
+            providerResourcePath === undefined
               ? row.transactionSourceRawRecordId === null
                 ? `transaction:${row.transactionId}`
                 : `source_raw_record:${row.transactionSourceRawRecordId}`
@@ -440,12 +439,11 @@ const make = Effect.gen(function* () {
     readonly events: ReadonlyArray<AccountingEvent>
   } & Pick<LoadParams, "reportingCurrency">) => {
     const eventAssetIds = [...new Set(events.map(({ assetId }) => assetId))]
-    const latestEventTimestamp = events.reduce(
-      (latest, event) => Math.max(latest, event.occurredAt.epochMillis),
-      Number.NEGATIVE_INFINITY
-    )
+    const eventDayRanges = [
+      ...new Set(events.map((event) => utcDay(event.occurredAt.toDate()))),
+    ].map(utcDayRange)
 
-    return eventAssetIds.length === 0
+    return eventAssetIds.length === 0 || eventDayRanges.length === 0
       ? Effect.succeed([])
       : db
           .select({
@@ -459,9 +457,13 @@ const make = Effect.gen(function* () {
             and(
               inArray(schema.assetPrices.assetId, eventAssetIds),
               eq(schema.assetPrices.currency, reportingCurrency),
-              lte(
-                schema.assetPrices.timestamp,
-                DateTime.toDateUtc(DateTime.makeUnsafe(latestEventTimestamp))
+              or(
+                ...eventDayRanges.map(([start, end]) =>
+                  and(
+                    gte(schema.assetPrices.timestamp, start),
+                    lt(schema.assetPrices.timestamp, end)
+                  )
+                )
               )
             )
           )
@@ -471,6 +473,65 @@ const make = Effect.gen(function* () {
 
   type PriceRows = Effect.Success<ReturnType<typeof loadPriceRows>>
 
+  type PriceQuote = {
+    readonly row: PriceRows[number]
+    readonly value: BigDecimal.BigDecimal
+  }
+
+  const priceBucketKey = ({
+    assetId,
+    timestamp,
+  }: Pick<PriceRows[number], "assetId" | "timestamp">) => `${assetId}:${utcDay(timestamp)}`
+
+  const makePriceQuoteBuckets = (
+    priceRows: PriceRows
+  ): ReadonlyMap<string, ReadonlyArray<PriceQuote>> => {
+    const buckets = new Map<string, PriceQuote[]>()
+
+    for (const row of priceRows) {
+      const value = decodeValuationDecimal(row.price)
+      if (value === undefined || !BigDecimal.isPositive(value)) continue
+
+      const key = priceBucketKey(row)
+      const bucket = buckets.get(key) ?? []
+      bucket.push({ row, value })
+      buckets.set(key, bucket)
+    }
+
+    for (const bucket of buckets.values()) {
+      bucket.sort((left, right) => left.row.timestamp.getTime() - right.row.timestamp.getTime())
+    }
+
+    return buckets
+  }
+
+  const latestQuoteAtOrBefore = ({
+    quotes,
+    timestamp,
+  }: {
+    readonly quotes: ReadonlyArray<PriceQuote>
+    readonly timestamp: Date
+  }): PriceQuote | undefined => {
+    let low = 0
+    let high = quotes.length - 1
+    let latest: PriceQuote | undefined
+
+    while (low <= high) {
+      const middle = Math.floor((low + high) / 2)
+      const candidate = quotes[middle]
+      if (candidate === undefined) return latest
+
+      if (candidate.row.timestamp <= timestamp) {
+        latest = candidate
+        low = middle + 1
+      } else {
+        high = middle - 1
+      }
+    }
+
+    return latest
+  }
+
   const makeMarketValuationFacts = ({
     events,
     priceRows,
@@ -479,29 +540,18 @@ const make = Effect.gen(function* () {
     readonly events: ReadonlyArray<AccountingEvent>
     readonly priceRows: PriceRows
   } & Pick<LoadParams, "reportingCurrency">) =>
-    Effect.gen(function* () {
+    Effect.sync(() => {
       const valuationFacts: ValuationFact[] = []
+      const quoteBuckets = makePriceQuoteBuckets(priceRows)
 
       for (const event of events) {
-        const quoteCandidates = priceRows.filter(
-          (price) =>
-            price.assetId === event.assetId &&
-            price.timestamp <= event.occurredAt.toDate() &&
-            utcDay(price.timestamp) === utcDay(event.occurredAt.toDate())
+        const quotes = quoteBuckets.get(
+          priceBucketKey({ assetId: event.assetId, timestamp: event.occurredAt.toDate() })
         )
-        let quote:
-          | { readonly row: PriceRows[number]; readonly value: BigDecimal.BigDecimal }
-          | undefined
-        for (const candidate of quoteCandidates.reverse()) {
-          const value = yield* decodeDecimal({
-            value: candidate.price,
-            operation: "factualLedgerRepository.load.marketQuote",
-          })
-          if (BigDecimal.isPositive(value)) {
-            quote = { row: candidate, value }
-            break
-          }
-        }
+        const quote =
+          quotes === undefined
+            ? undefined
+            : latestQuoteAtOrBefore({ quotes, timestamp: event.occurredAt.toDate() })
         if (quote === undefined) continue
 
         valuationFacts.push(
@@ -510,7 +560,7 @@ const make = Effect.gen(function* () {
             eventId: event.id,
             unitPrice: MonetaryAmount.fromBigDecimal(quote.value, reportingCurrency),
             quotedAt: fromDate(quote.row.timestamp),
-            source: quote.row.source?.trim() || "asset_prices",
+            source: trimmedNonEmpty(quote.row.source) ?? "asset_prices",
           })
         )
       }

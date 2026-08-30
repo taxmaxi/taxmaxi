@@ -587,9 +587,12 @@ describe("FactualLedgerRepositoryLive", () => {
   it.effect("keeps provider consideration separate from same-day market quotes", () =>
     Effect.gen(function* () {
       const occurredAt = DateTime.toDateUtc(DateTime.makeUnsafe("2025-02-03T10:00:00.000Z"))
+      const historicalQuoteAt = DateTime.toDateUtc(DateTime.makeUnsafe("2020-01-01T09:00:00.000Z"))
       const earlierQuoteAt = DateTime.toDateUtc(DateTime.makeUnsafe("2025-02-03T09:00:00.000Z"))
+      const latestValidQuoteAt = DateTime.toDateUtc(DateTime.makeUnsafe("2025-02-03T09:40:00.000Z"))
+      const invalidQuoteAt = DateTime.toDateUtc(DateTime.makeUnsafe("2025-02-03T09:50:00.000Z"))
+      const negativeQuoteAt = DateTime.toDateUtc(DateTime.makeUnsafe("2025-02-03T09:55:00.000Z"))
       const laterQuoteAt = DateTime.toDateUtc(DateTime.makeUnsafe("2025-02-03T11:00:00.000Z"))
-      const invalidQuoteAt = DateTime.toDateUtc(DateTime.makeUnsafe("2025-02-03T09:30:00.000Z"))
 
       yield* Effect.promise(() =>
         runPg(
@@ -599,10 +602,11 @@ describe("FactualLedgerRepositoryLive", () => {
               .insert(schema.transactions)
               .values({
                 sourceId: TEST_CUSTODY_SOURCE_ID,
-                externalId: "factual-ledger-valued-purchase",
+                externalGroupId: "   ",
+                externalId: "  factual-ledger-valued-purchase  ",
                 timestamp: occurredAt,
                 transactionType: "buy_fiat",
-                providerResourcePath: "/v2/transactions/valued-purchase",
+                providerResourcePath: "  /v2/transactions/valued-purchase  ",
                 providerFiatAmount: "1250.50",
                 providerFiatCurrency: "EUR",
                 principalId: TEST_PRINCIPAL_ID,
@@ -630,6 +634,13 @@ describe("FactualLedgerRepositoryLive", () => {
             yield* db.insert(schema.assetPrices).values([
               {
                 assetId: TEST_BTC_ASSET_ID,
+                timestamp: historicalQuoteAt,
+                price: "99999",
+                currency: "EUR",
+                source: "unused-historical-feed",
+              },
+              {
+                assetId: TEST_BTC_ASSET_ID,
                 timestamp: earlierQuoteAt,
                 price: "600.25",
                 currency: "EUR",
@@ -637,10 +648,24 @@ describe("FactualLedgerRepositoryLive", () => {
               },
               {
                 assetId: TEST_BTC_ASSET_ID,
+                timestamp: latestValidQuoteAt,
+                price: "650.75",
+                currency: "EUR",
+                source: "  market-feed-latest  ",
+              },
+              {
+                assetId: TEST_BTC_ASSET_ID,
                 timestamp: invalidQuoteAt,
-                price: "-1",
+                price: "NaN",
                 currency: "EUR",
                 source: "invalid-market-feed",
+              },
+              {
+                assetId: TEST_BTC_ASSET_ID,
+                timestamp: negativeQuoteAt,
+                price: "-1",
+                currency: "EUR",
+                source: "negative-market-feed",
               },
               {
                 assetId: TEST_BTC_ASSET_ID,
@@ -655,6 +680,8 @@ describe("FactualLedgerRepositoryLive", () => {
       )
 
       const result = yield* Effect.promise(loadFactualLedger)
+
+      expect(result.events[0]?.transactionReference).toBe("factual-ledger-valued-purchase")
 
       expect(
         result.valuationFacts.map((fact) =>
@@ -683,9 +710,9 @@ describe("FactualLedgerRepositoryLive", () => {
         {
           type: "market_quote",
           eventId: "10000000-0000-4000-8000-000000000010",
-          unitPrice: "600.25",
-          quotedAt: "2025-02-03T09:00:00.000Z",
-          source: "market-feed",
+          unitPrice: "650.75",
+          quotedAt: "2025-02-03T09:40:00.000Z",
+          source: "market-feed-latest",
         },
       ])
     })
@@ -695,12 +722,13 @@ describe("FactualLedgerRepositoryLive", () => {
     Effect.gen(function* () {
       const negativeAt = DateTime.toDateUtc(DateTime.makeUnsafe("2025-04-01T10:00:00.000Z"))
       const ambiguousAt = DateTime.toDateUtc(DateTime.makeUnsafe("2025-04-02T10:00:00.000Z"))
+      const invalidAt = DateTime.toDateUtc(DateTime.makeUnsafe("2025-04-03T10:00:00.000Z"))
 
       yield* Effect.promise(() =>
         runPg(
           Effect.gen(function* () {
             const db = yield* drizzle
-            const [negativeTransaction, ambiguousTransaction] = yield* db
+            const [negativeTransaction, ambiguousTransaction, invalidTransaction] = yield* db
               .insert(schema.transactions)
               .values([
                 {
@@ -721,10 +749,23 @@ describe("FactualLedgerRepositoryLive", () => {
                   providerFiatCurrency: "EUR",
                   principalId: TEST_PRINCIPAL_ID,
                 },
+                {
+                  sourceId: TEST_CUSTODY_SOURCE_ID,
+                  externalId: "invalid-provider-money",
+                  timestamp: invalidAt,
+                  transactionType: "buy_fiat",
+                  providerFiatAmount: "NaN",
+                  providerFiatCurrency: "EUR",
+                  principalId: TEST_PRINCIPAL_ID,
+                },
               ])
               .returning({ id: schema.transactions.id })
 
-            if (negativeTransaction === undefined || ambiguousTransaction === undefined) {
+            if (
+              negativeTransaction === undefined ||
+              ambiguousTransaction === undefined ||
+              invalidTransaction === undefined
+            ) {
               return yield* Effect.die("Failed to create provider-money fixtures")
             }
 
@@ -765,6 +806,18 @@ describe("FactualLedgerRepositoryLive", () => {
                 provenance: "deterministic",
                 transactionId: ambiguousTransaction.id,
               },
+              {
+                id: "10000000-0000-4000-8000-000000000033",
+                sourceId: TEST_CUSTODY_SOURCE_ID,
+                externalId: "invalid-provider-money-leg",
+                timestamp: invalidAt,
+                principalId: TEST_PRINCIPAL_ID,
+                assetId: TEST_BTC_ASSET_ID,
+                amount: "1",
+                kind: "acquisition",
+                provenance: "deterministic",
+                transactionId: invalidTransaction.id,
+              },
             ])
           })
         )
@@ -772,7 +825,7 @@ describe("FactualLedgerRepositoryLive", () => {
 
       const result = yield* Effect.promise(loadFactualLedger)
 
-      expect(result.events).toHaveLength(3)
+      expect(result.events).toHaveLength(4)
       expect(result.valuationFacts.filter(({ _tag }) => _tag === "observed_consideration")).toEqual(
         []
       )
