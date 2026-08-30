@@ -35,4 +35,50 @@ describe("ValuationFact", () => {
       })
     ).toThrow()
   })
+
+  it("rejects negative observed consideration", () => {
+    expect(() =>
+      decodeObservedConsideration({
+        _tag: "observed_consideration",
+        eventId: "11111111-1111-4111-8111-111111111111",
+        amount: { amount: "-0.01", currency: "EUR" },
+        evidenceReference: "coinbase-transaction-42",
+      })
+    ).toThrow()
+  })
+
+  it("accepts zero observed consideration", () => {
+    const observed = decodeObservedConsideration({
+      _tag: "observed_consideration",
+      eventId: "11111111-1111-4111-8111-111111111111",
+      amount: { amount: "0", currency: "EUR" },
+      evidenceReference: "coinbase-transaction-42",
+    })
+
+    expect(observed.amount.toString()).toBe("0 EUR")
+  })
+
+  it("rejects a negative market quote", () => {
+    expect(() =>
+      decodeMarketQuote({
+        _tag: "market_quote",
+        eventId: "22222222-2222-4222-8222-222222222222",
+        unitPrice: { amount: "-0.01", currency: "EUR" },
+        quotedAt: { epochMillis: 1_700_000_000_000 },
+        source: "coingecko",
+      })
+    ).toThrow()
+  })
+
+  it("rejects a zero market quote", () => {
+    expect(() =>
+      decodeMarketQuote({
+        _tag: "market_quote",
+        eventId: "22222222-2222-4222-8222-222222222222",
+        unitPrice: { amount: "0", currency: "EUR" },
+        quotedAt: { epochMillis: 1_700_000_000_000 },
+        source: "coingecko",
+      })
+    ).toThrow()
+  })
 })

@@ -21,30 +21,46 @@ const SupportedFiatMonetaryAmount = MonetaryAmount.pipe(
   )
 )
 
-/** Provider-reported total consideration for one accounting event. */
+const NonNegativeObservedAmount = SupportedFiatMonetaryAmount.pipe(
+  Schema.check(
+    Schema.makeFilter((amount) =>
+      amount.isNegative ? "Observed consideration must not be negative." : undefined
+    )
+  )
+)
+
+const PositiveMarketQuoteUnitPrice = SupportedFiatMonetaryAmount.pipe(
+  Schema.check(
+    Schema.makeFilter((amount) =>
+      amount.isPositive ? undefined : "Market quote unit price must be positive."
+    )
+  )
+)
+
+/** Provider-reported non-negative total consideration for one accounting event. */
 export const ObservedConsiderationFact = Schema.TaggedStruct("observed_consideration", {
   eventId: AccountingEventId,
-  amount: SupportedFiatMonetaryAmount,
+  amount: NonNegativeObservedAmount,
   evidenceReference: NonEmptyString,
 }).annotate({
   identifier: "ObservedConsiderationFact",
   title: "Observed Consideration Fact",
-  description: "Total money reported by a provider for one accounting event",
+  description: "Non-negative total money reported by a provider; zero is valid",
 })
 
 /** The ObservedConsiderationFact type. */
 export type ObservedConsiderationFact = typeof ObservedConsiderationFact.Type
 
-/** Market unit-price quote available for one accounting event. */
+/** Strictly positive market unit-price quote available for one accounting event. */
 export const MarketQuoteFact = Schema.TaggedStruct("market_quote", {
   eventId: AccountingEventId,
-  unitPrice: SupportedFiatMonetaryAmount,
+  unitPrice: PositiveMarketQuoteUnitPrice,
   quotedAt: Timestamp,
   source: NonEmptyString,
 }).annotate({
   identifier: "MarketQuoteFact",
   title: "Market Quote Fact",
-  description: "Market unit-price quote available for one accounting event",
+  description: "Strictly positive market unit-price quote available for one accounting event",
 })
 
 /** The MarketQuoteFact type. */
