@@ -120,17 +120,6 @@ export const matchFifoLots = ({
       })
     }
 
-    for (const lot of lots) {
-      if (lot.costBasisPerUnit.isNegative) {
-        return yield* new FifoInputRejectedError({
-          cause: new FifoMonetaryValueOutOfRangeError({
-            field: "costBasisPerUnit",
-            value: lot.costBasisPerUnit.format(),
-          }),
-        })
-      }
-    }
-
     let remainingQuantity = disposal.quantity
     const allocations: Array<FifoAllocation> = []
 
@@ -141,6 +130,15 @@ export const matchFifoLots = ({
 
       if (BigDecimal.isZero(lot.remainingQuantity)) {
         continue
+      }
+
+      if (lot.costBasisPerUnit.isNegative) {
+        return yield* new FifoInputRejectedError({
+          cause: new FifoMonetaryValueOutOfRangeError({
+            field: "costBasisPerUnit",
+            value: lot.costBasisPerUnit.format(),
+          }),
+        })
       }
 
       const matchedQuantity = min(lot.remainingQuantity, remainingQuantity)

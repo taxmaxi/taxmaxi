@@ -7999,8 +7999,13 @@ describe("TransferReconciliationServiceLive", () => {
     })
   )
 
-  it.effect("keeps a rebuilt disposal in review when a FIFO lot has negative cost basis", () =>
-    Effect.gen(function* () {
+  it.effect.each([
+    ["negative cost basis", "-50000.000000000000000000", "0.00000000"],
+    ["negative remaining quantity", "50000.000000000000000000", "-0.10000000"],
+  ] as const)("keeps a rebuilt disposal in review for %s", (testCase) => {
+    const [, sourceCostBasis, junkRemainingAmount] = testCase
+
+    return Effect.gen(function* () {
       const walletAddress = "bc1qownedwalletrejectedrebuild000000000000000"
       const timestamp = DateTime.toDateUtc(DateTime.makeUnsafe("2025-04-14T09:00:00.000Z"))
       const providerAssetRowId = yield* Effect.promise(() =>
@@ -8092,6 +8097,22 @@ describe("TransferReconciliationServiceLive", () => {
                 fiatCurrency: "EUR",
               })
               .returning({ id: schema.transactionLegs.id })
+            const [junkLeg] = yield* db
+              .insert(schema.transactionLegs)
+              .values({
+                sourceId: ONCHAIN_SOURCE_ID,
+                externalId: "rejected-rebuild-junk-acquisition",
+                timestamp: DateTime.toDateUtc(DateTime.makeUnsafe("2025-04-02T09:00:00.000Z")),
+                principalId: TEST_PRINCIPAL_ID,
+                addressId: ONCHAIN_ADDRESS_ID,
+                assetId: TEST_BTC_ASSET_ID,
+                amount: "0.10000000",
+                kind: "acquisition",
+                provenance: "deterministic",
+                fiatAmount: "5000.00",
+                fiatCurrency: "EUR",
+              })
+              .returning({ id: schema.transactionLegs.id })
             const [disposalTransaction] = yield* db
               .insert(schema.transactions)
               .values({
@@ -8110,6 +8131,7 @@ describe("TransferReconciliationServiceLive", () => {
               reconciliation === undefined ||
               sourceLeg === undefined ||
               receiptLeg === undefined ||
+              junkLeg === undefined ||
               disposalTransaction === undefined
             ) {
               return yield* Effect.die("Failed to seed rejected rebuild fixture")
@@ -8124,9 +8146,24 @@ describe("TransferReconciliationServiceLive", () => {
                 acquiredAt: DateTime.toDateUtc(DateTime.makeUnsafe("2025-04-01T09:00:00.000Z")),
                 originalAmount: "0.10000000",
                 remainingAmount: "0.00000000",
-                costBasisPerToken: "-50000.000000000000000000",
+                costBasisPerToken: sourceCostBasis,
                 costBasisCurrency: "EUR",
                 sourceLegId: sourceLeg.id,
+                sourceLegSequence: 0,
+              })
+              .returning({ id: schema.fifoLots.id })
+            const [junkLot] = yield* db
+              .insert(schema.fifoLots)
+              .values({
+                principalId: TEST_PRINCIPAL_ID,
+                sourceId: ONCHAIN_SOURCE_ID,
+                assetId: TEST_BTC_ASSET_ID,
+                acquiredAt: DateTime.toDateUtc(DateTime.makeUnsafe("2025-04-02T09:00:00.000Z")),
+                originalAmount: "0.10000000",
+                remainingAmount: junkRemainingAmount,
+                costBasisPerToken: "50000.000000000000000000",
+                costBasisCurrency: "EUR",
+                sourceLegId: junkLeg.id,
                 sourceLegSequence: 0,
               })
               .returning({ id: schema.fifoLots.id })
@@ -8182,6 +8219,7 @@ describe("TransferReconciliationServiceLive", () => {
             if (
               sourceLot === undefined ||
               receiptLot === undefined ||
+              junkLot === undefined ||
               movement === undefined ||
               disposalLeg === undefined
             ) {
@@ -8250,7 +8288,7 @@ describe("TransferReconciliationServiceLive", () => {
         needsReview: true,
       })
     })
-  )
+  })
 
   it.effect("commits a funded pair while rolling back an underfunded pair in the same batch", () =>
     Effect.gen(function* () {

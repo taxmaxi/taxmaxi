@@ -569,13 +569,27 @@ const make = Effect.gen(function* () {
                     "transferReconciliationRepository.reconciliationEffectMutations.rebuildFifoEffects.loadCandidateLots"
                   )
                 )
+        const blockedInventoryKeys = new Set<string>()
+        const blockedEffectIds = new Set<string>()
         const virtualRemainingByLotId = new Map<string, AccountingQuantity>()
         for (const lot of candidateLots) {
-          const remainingAmount = yield* decodeFifoQuantity({
+          const decodedRemainingAmount = yield* decodeFifoQuantity({
             value: lot.remainingAmount,
             operation:
               "transferReconciliationRepository.reconciliationEffectMutations.rebuildFifoEffects.preflightLotRemaining",
-          })
+          }).pipe(
+            Effect.map(Option.some),
+            Effect.catchTag("SyncEngineStorageError", (error) =>
+              isFifoInputRejectedError(error.cause)
+                ? Effect.succeed(Option.none())
+                : Effect.fail(error)
+            )
+          )
+          if (Option.isNone(decodedRemainingAmount)) {
+            blockedInventoryKeys.add(`${lot.sourceId}:${lot.principalId}:${lot.assetId}`)
+            continue
+          }
+          const remainingAmount = decodedRemainingAmount.value
           const restoredAmount = restoredAmountByLotId.get(lot.id)
           virtualRemainingByLotId.set(
             lot.id,
@@ -585,8 +599,6 @@ const make = Effect.gen(function* () {
           )
         }
 
-        const blockedInventoryKeys = new Set<string>()
-        const blockedEffectIds = new Set<string>()
         for (const effect of effects) {
           const inventoryKey = inventoryKeyForEffect(effect)
           if (blockedInventoryKeys.has(inventoryKey)) {
