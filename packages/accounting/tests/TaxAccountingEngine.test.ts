@@ -245,6 +245,103 @@ describe("calculate", () => {
         "fifo_basis_carried",
         "fifo_disposition_matched",
       ])
+      const movementTrace = result.explanationTrace.find(
+        (entry) => entry.code === "fifo_basis_carried"
+      )
+      const dispositionTrace = result.explanationTrace.find(
+        (entry) => entry.code === "fifo_disposition_matched"
+      )
+
+      if (movementTrace === undefined || dispositionTrace === undefined) {
+        return expect.fail("expected movement and disposition explanations")
+      }
+
+      expect(
+        movementTrace.matches.map((match) => ({
+          acquisitionEventId: match.acquisitionEventId,
+          quantity: encodeQuantity(match.quantity),
+        }))
+      ).toEqual([{ acquisitionEventId: ACQUISITION_ONE, quantity: "1" }])
+      expect(
+        dispositionTrace.matches.map((match) => ({
+          acquisitionEventId: match.acquisitionEventId,
+          quantity: encodeQuantity(match.quantity),
+        }))
+      ).toEqual([{ acquisitionEventId: ACQUISITION_ONE, quantity: "1" }])
+    })
+  )
+
+  it.effect("inserts moved lots by original acquisition order", () =>
+    Effect.gen(function* () {
+      const movementId = "88888888-8888-4888-8888-888888888888"
+      const olderSourceLot = decodeEvent({
+        _tag: "acquisition",
+        id: ACQUISITION_ONE,
+        occurredAt: { epochMillis: 1_000 },
+        assetId: ASSET_ID,
+        quantity: "1",
+        custodySourceId: SOURCE_ONE,
+        cause: "purchase",
+      })
+      const newerDestinationLot = decodeEvent({
+        _tag: "acquisition",
+        id: ACQUISITION_TWO,
+        occurredAt: { epochMillis: 2_000 },
+        assetId: ASSET_ID,
+        quantity: "1",
+        custodySourceId: SOURCE_TWO,
+        cause: "purchase",
+      })
+      const movement = decodeEvent({
+        _tag: "custody_movement",
+        id: movementId,
+        occurredAt: { epochMillis: 3_000 },
+        assetId: ASSET_ID,
+        quantity: "1",
+        fromCustodySourceId: SOURCE_ONE,
+        toCustodySourceId: SOURCE_TWO,
+      })
+      const disposition = decodeEvent({
+        _tag: "disposition",
+        id: DISPOSITION,
+        occurredAt: { epochMillis: 4_000 },
+        assetId: ASSET_ID,
+        quantity: "1",
+        custodySourceId: SOURCE_TWO,
+        cause: "sale",
+      })
+      const result = yield* runCalculation({
+        ledger: [disposition, movement, newerDestinationLot, olderSourceLot],
+        valuationFacts: [
+          decodeValuationFact({
+            _tag: "observed_consideration",
+            eventId: ACQUISITION_ONE,
+            amount: { amount: "10", currency: "EUR" },
+            evidenceReference: "older-basis",
+          }),
+          decodeValuationFact({
+            _tag: "observed_consideration",
+            eventId: ACQUISITION_TWO,
+            amount: { amount: "20", currency: "EUR" },
+            evidenceReference: "newer-basis",
+          }),
+          decodeValuationFact({
+            _tag: "observed_consideration",
+            eventId: DISPOSITION,
+            amount: { amount: "30", currency: "EUR" },
+            evidenceReference: "sale",
+          }),
+        ],
+      })
+
+      expect(result.realizedResults[0]).toMatchObject({
+        acquisitionEventId: ACQUISITION_ONE,
+      })
+      expect(result.realizedResults[0]?.costBasis.format()).toBe("10")
+      expect(result.derivedLots[0]).toMatchObject({
+        acquisitionEventId: ACQUISITION_TWO,
+        custodyUnitId: SOURCE_TWO,
+      })
     })
   )
 

@@ -15,6 +15,9 @@ import {
   type AccountingEventId,
   type AccountingMethodChoice,
   type AccountingQuantity,
+  type AcquisitionEvent,
+  type CustodyMovementEvent,
+  type DispositionEvent,
   type InventoryScope,
   type InventoryScopeChoice,
   type JurisdictionCode,
@@ -116,13 +119,19 @@ export interface IncomeResult {
   readonly treatmentCodes: ReadonlyArray<string>
 }
 
+/** Quantity taken from one acquisition by an explained engine step. */
+export interface ExplanationMatch {
+  readonly acquisitionEventId: AccountingEventId
+  readonly quantity: AccountingQuantity
+}
+
 /** One deterministic machine-readable explanation entry. */
 export interface ExplanationEntry {
   readonly sequence: number
   readonly eventId: AccountingEventId
   readonly code: string
   readonly valuationKind: ValuationFact["_tag"] | null
-  readonly relatedEventIds: ReadonlyArray<AccountingEventId>
+  readonly matches: ReadonlyArray<ExplanationMatch>
 }
 
 /** Complete structural output of one pure engine invocation. */
@@ -156,6 +165,15 @@ export interface CalculateInput {
 
 interface EngineLot extends DerivedLot {
   readonly id: string
+}
+
+interface EngineState {
+  readonly inventories: Map<string, EngineLot[]>
+  readonly allocations: FactualFifoAllocation[]
+  readonly realizedResults: RealizedResult[]
+  readonly blockers: TaxAccountingBlocker[]
+  readonly explanationTrace: ExplanationEntry[]
+  readonly blockedInventoryKeys: Set<string>
 }
 
 interface ValuationSelection {
@@ -307,11 +325,397 @@ const inventoryKey = ({
 
 const makeCustodyUnitId = (sourceId: string): CustodyUnitId => CustodyUnitId.make(sourceId)
 
+const compareLots = (left: EngineLot, right: EngineLot): number => {
+  const timeDifference = left.acquiredAt.epochMillis - right.acquiredAt.epochMillis
+
+  if (timeDifference !== 0) {
+    return timeDifference
+  }
+
+  const eventDifference = left.acquisitionEventId.localeCompare(right.acquisitionEventId)
+
+  return eventDifference === 0 ? left.id.localeCompare(right.id) : eventDifference
+}
+
+const sortLots = (lots: ReadonlyArray<EngineLot>): EngineLot[] => [...lots].sort(compareLots)
+
 const toDerivedLots = (inventories: ReadonlyMap<string, ReadonlyArray<EngineLot>>): DerivedLot[] =>
   [...inventories.values()]
     .flat()
     .filter((lot) => lot.remainingQuantity.value !== 0n)
     .map(({ id: _id, ...lot }) => lot)
+
+const appendExplanation = ({
+  state,
+  eventId,
+  code,
+  valuationKind,
+  matches = [],
+}: {
+  readonly state: EngineState
+  readonly eventId: AccountingEventId
+  readonly code: string
+  readonly valuationKind: ValuationFact["_tag"] | null
+  readonly matches?: ReadonlyArray<ExplanationMatch>
+}): void => {
+  state.explanationTrace.push({
+    sequence: state.explanationTrace.length,
+    eventId,
+    code,
+    valuationKind,
+    matches,
+  })
+}
+
+const appendBlocker = ({
+  state,
+  code,
+  eventId,
+  assetId,
+  custodyUnitId,
+  missingQuantity = null,
+  valuationKind = null,
+  matches = [],
+}: {
+  readonly state: EngineState
+  readonly code: TaxAccountingBlocker["code"]
+  readonly eventId: AccountingEventId
+  readonly assetId: string
+  readonly custodyUnitId: CustodyUnitId
+  readonly missingQuantity?: AccountingQuantity | null
+  readonly valuationKind?: ValuationFact["_tag"] | null
+  readonly matches?: ReadonlyArray<ExplanationMatch>
+}): void => {
+  state.blockers.push({ code, eventId, assetId, custodyUnitId, missingQuantity })
+  appendExplanation({
+    state,
+    eventId,
+    code: `blocker.${code}`,
+    valuationKind,
+    matches,
+  })
+}
+
+const appendValuationBlocker = ({
+  state,
+  event,
+  custodyUnitId,
+  valuationResolution,
+}: {
+  readonly state: EngineState
+  readonly event: AcquisitionEvent | DispositionEvent
+  readonly custodyUnitId: CustodyUnitId
+  readonly valuationResolution: MissingValuation | AmbiguousValuation
+}): void =>
+  appendBlocker({
+    state,
+    code: valuationResolution._tag === "ambiguous" ? "ambiguous_valuation" : "missing_valuation",
+    eventId: event.id,
+    assetId: event.assetId,
+    custodyUnitId,
+  })
+
+const processCustodyMovement = ({
+  event,
+  inventoryScope,
+  state,
+}: {
+  readonly event: CustodyMovementEvent
+  readonly inventoryScope: InventoryScope
+  readonly state: EngineState
+}): void => {
+  if (inventoryScope === "whole_taxpayer") {
+    appendExplanation({
+      state,
+      eventId: event.id,
+      code: "pooled_custody_movement",
+      valuationKind: null,
+    })
+    return
+  }
+
+  const sourceUnitId = makeCustodyUnitId(event.fromCustodySourceId)
+  const destinationUnitId = makeCustodyUnitId(event.toCustodySourceId)
+  const sourceKey = inventoryKey({
+    assetId: event.assetId,
+    custodyUnitId: sourceUnitId,
+    inventoryScope,
+  })
+  const destinationKey = inventoryKey({
+    assetId: event.assetId,
+    custodyUnitId: destinationUnitId,
+    inventoryScope,
+  })
+
+  if (state.blockedInventoryKeys.has(sourceKey)) {
+    appendBlocker({
+      state,
+      code: "blocked_inventory_suffix",
+      eventId: event.id,
+      assetId: event.assetId,
+      custodyUnitId: sourceUnitId,
+    })
+    state.blockedInventoryKeys.add(destinationKey)
+    return
+  }
+
+  const sourceLots = state.inventories.get(sourceKey) ?? []
+  const movementMatch = allocateFifoQuantity({
+    lots: sourceLots,
+    quantity: event.quantity,
+  })
+  const remainingById = new Map(
+    movementMatch.allocations.map((allocation) => [allocation.lot.id, allocation.remainingQuantity])
+  )
+  state.inventories.set(
+    sourceKey,
+    sourceLots.map((lot) => ({
+      ...lot,
+      remainingQuantity: remainingById.get(lot.id) ?? lot.remainingQuantity,
+    }))
+  )
+  const destinationLots = movementMatch.allocations.map((allocation, index) => ({
+    ...allocation.lot,
+    id: `${allocation.lot.id}:${event.id}:${index}`,
+    custodyUnitId: destinationUnitId,
+    remainingQuantity: allocation.matchedQuantity,
+  }))
+  state.inventories.set(
+    destinationKey,
+    sortLots([...(state.inventories.get(destinationKey) ?? []), ...destinationLots])
+  )
+  const matches = movementMatch.allocations.map((allocation) => ({
+    acquisitionEventId: allocation.lot.acquisitionEventId,
+    quantity: allocation.matchedQuantity,
+  }))
+
+  if (movementMatch.shortage !== null) {
+    appendBlocker({
+      state,
+      code: "movement_shortage",
+      eventId: event.id,
+      assetId: event.assetId,
+      custodyUnitId: sourceUnitId,
+      missingQuantity: movementMatch.shortage,
+      matches,
+    })
+    state.blockedInventoryKeys.add(sourceKey)
+    state.blockedInventoryKeys.add(destinationKey)
+  }
+
+  appendExplanation({
+    state,
+    eventId: event.id,
+    code: "fifo_basis_carried",
+    valuationKind: null,
+    matches,
+  })
+}
+
+const processAcquisition = ({
+  event,
+  custodyUnitId,
+  inventoryKey,
+  valuationResolution,
+  state,
+}: {
+  readonly event: AcquisitionEvent
+  readonly custodyUnitId: CustodyUnitId
+  readonly inventoryKey: string
+  readonly valuationResolution: ValuationResolution
+  readonly state: EngineState
+}): Effect.Effect<void, never> =>
+  Effect.gen(function* () {
+    const valuation = valuationResolution._tag === "selected" ? valuationResolution : null
+    const costBasisPerUnit =
+      valuation === null
+        ? null
+        : Option.getOrNull(yield* Effect.option(divide(valuation.total, event.quantity)))
+    const lot: EngineLot = {
+      id: event.id,
+      acquisitionEventId: event.id,
+      assetId: event.assetId,
+      custodyUnitId,
+      acquiredAt: event.occurredAt,
+      remainingQuantity: event.quantity,
+      costBasisPerUnit,
+    }
+
+    state.inventories.set(
+      inventoryKey,
+      sortLots([...(state.inventories.get(inventoryKey) ?? []), lot])
+    )
+
+    if (valuationResolution._tag !== "selected") {
+      appendValuationBlocker({
+        state,
+        event,
+        custodyUnitId,
+        valuationResolution,
+      })
+    }
+
+    appendExplanation({
+      state,
+      eventId: event.id,
+      code: "fifo_lot_created",
+      valuationKind: valuation?.kind ?? null,
+    })
+  })
+
+const processDisposition = ({
+  event,
+  custodyUnitId,
+  inventoryKey,
+  valuationResolution,
+  state,
+}: {
+  readonly event: DispositionEvent
+  readonly custodyUnitId: CustodyUnitId
+  readonly inventoryKey: string
+  readonly valuationResolution: ValuationResolution
+  readonly state: EngineState
+}): Effect.Effect<void, never> =>
+  Effect.gen(function* () {
+    const valuation = valuationResolution._tag === "selected" ? valuationResolution : null
+
+    if (state.blockedInventoryKeys.has(inventoryKey)) {
+      appendBlocker({
+        state,
+        code: "blocked_inventory_suffix",
+        eventId: event.id,
+        assetId: event.assetId,
+        custodyUnitId,
+        valuationKind: valuation?.kind ?? null,
+      })
+      return
+    }
+
+    const lots = state.inventories.get(inventoryKey) ?? []
+    const match = allocateFifoQuantity({
+      lots,
+      quantity: event.quantity,
+    })
+    const remainingById = new Map(
+      match.allocations.map((allocation) => [allocation.lot.id, allocation.remainingQuantity])
+    )
+    state.inventories.set(
+      inventoryKey,
+      lots.map((lot) => ({
+        ...lot,
+        remainingQuantity: remainingById.get(lot.id) ?? lot.remainingQuantity,
+      }))
+    )
+    const matches = match.allocations.map((allocation) => ({
+      acquisitionEventId: allocation.lot.acquisitionEventId,
+      quantity: allocation.matchedQuantity,
+    }))
+
+    if (valuationResolution._tag !== "selected") {
+      appendValuationBlocker({
+        state,
+        event,
+        custodyUnitId,
+        valuationResolution,
+      })
+    }
+
+    if (match.shortage !== null) {
+      appendBlocker({
+        state,
+        code: "inventory_shortage",
+        eventId: event.id,
+        assetId: event.assetId,
+        custodyUnitId,
+        missingQuantity: match.shortage,
+        valuationKind: valuation?.kind ?? null,
+        matches,
+      })
+      state.blockedInventoryKeys.add(inventoryKey)
+    }
+
+    let currencyMismatchBlocked = false
+
+    for (const matchAllocation of match.allocations) {
+      const lot = matchAllocation.lot
+      const costBasis =
+        lot.costBasisPerUnit === null
+          ? null
+          : round(multiplyByQuantity(lot.costBasisPerUnit, matchAllocation.matchedQuantity), 8)
+
+      state.allocations.push({
+        acquisitionEventId: lot.acquisitionEventId,
+        dispositionEventId: event.id,
+        assetId: event.assetId,
+        custodyUnitId,
+        acquiredAt: lot.acquiredAt,
+        disposedAt: event.occurredAt,
+        quantity: matchAllocation.matchedQuantity,
+        costBasis,
+      })
+      const proceeds =
+        valuation === null
+          ? null
+          : Option.getOrNull(
+              yield* Effect.option(
+                prorate({
+                  total: valuation.total,
+                  part: matchAllocation.matchedQuantity,
+                  whole: event.quantity,
+                  scale: 8,
+                })
+              )
+            )
+
+      if (costBasis === null || proceeds === null) {
+        continue
+      }
+
+      const gainLoss = yield* Effect.result(subtract(proceeds, costBasis))
+
+      if (Result.isFailure(gainLoss)) {
+        if (!currencyMismatchBlocked) {
+          appendBlocker({
+            state,
+            code: "valuation_currency_mismatch",
+            eventId: event.id,
+            assetId: event.assetId,
+            custodyUnitId,
+            valuationKind: valuation?.kind ?? null,
+            matches: [
+              {
+                acquisitionEventId: lot.acquisitionEventId,
+                quantity: matchAllocation.matchedQuantity,
+              },
+            ],
+          })
+          currencyMismatchBlocked = true
+        }
+        continue
+      }
+
+      state.realizedResults.push({
+        acquisitionEventId: lot.acquisitionEventId,
+        dispositionEventId: event.id,
+        assetId: event.assetId,
+        acquiredAt: lot.acquiredAt,
+        disposedAt: event.occurredAt,
+        quantity: matchAllocation.matchedQuantity,
+        costBasis,
+        proceeds,
+        gainLoss: gainLoss.success,
+        treatmentCodes: [],
+      })
+    }
+
+    appendExplanation({
+      state,
+      eventId: event.id,
+      code: "fifo_disposition_matched",
+      valuationKind: valuation?.kind ?? null,
+      matches,
+    })
+  })
 
 /** Calculate a complete deterministic structural result without external services. */
 export const calculate = ({
@@ -338,117 +742,18 @@ export const calculate = ({
     }
 
     const orderedLedger = [...ledger].sort(compareEvents)
-    const inventories = new Map<string, EngineLot[]>()
-    const allocations: FactualFifoAllocation[] = []
-    const realizedResults: RealizedResult[] = []
-    const blockers: TaxAccountingBlocker[] = []
-    const explanationTrace: ExplanationEntry[] = []
-    const blockedInventoryKeys = new Set<string>()
+    const state: EngineState = {
+      inventories: new Map(),
+      allocations: [],
+      realizedResults: [],
+      blockers: [],
+      explanationTrace: [],
+      blockedInventoryKeys: new Set(),
+    }
 
     for (const event of orderedLedger) {
       if (event._tag === "custody_movement") {
-        if (scopeChoice.scope === "whole_taxpayer") {
-          explanationTrace.push({
-            sequence: explanationTrace.length,
-            eventId: event.id,
-            code: "pooled_custody_movement",
-            valuationKind: null,
-            relatedEventIds: [],
-          })
-          continue
-        }
-
-        const sourceUnitId = makeCustodyUnitId(event.fromCustodySourceId)
-        const destinationUnitId = makeCustodyUnitId(event.toCustodySourceId)
-        const sourceKey = inventoryKey({
-          assetId: event.assetId,
-          custodyUnitId: sourceUnitId,
-          inventoryScope: scopeChoice.scope,
-        })
-        const destinationKey = inventoryKey({
-          assetId: event.assetId,
-          custodyUnitId: destinationUnitId,
-          inventoryScope: scopeChoice.scope,
-        })
-
-        if (blockedInventoryKeys.has(sourceKey)) {
-          blockers.push({
-            code: "blocked_inventory_suffix",
-            eventId: event.id,
-            assetId: event.assetId,
-            custodyUnitId: sourceUnitId,
-            missingQuantity: null,
-          })
-          blockedInventoryKeys.add(destinationKey)
-          explanationTrace.push({
-            sequence: explanationTrace.length,
-            eventId: event.id,
-            code: "blocker.blocked_inventory_suffix",
-            valuationKind: null,
-            relatedEventIds: [],
-          })
-          continue
-        }
-
-        const sourceLots = inventories.get(sourceKey) ?? []
-        const movementMatch = allocateFifoQuantity({
-          lots: sourceLots,
-          quantity: event.quantity,
-        })
-        const remainingById = new Map(
-          movementMatch.allocations.map((allocation) => [
-            allocation.lot.id,
-            allocation.remainingQuantity,
-          ])
-        )
-        inventories.set(
-          sourceKey,
-          sourceLots.map((lot) => ({
-            ...lot,
-            remainingQuantity: remainingById.get(lot.id) ?? lot.remainingQuantity,
-          }))
-        )
-        const destinationLots = movementMatch.allocations.flatMap((allocation, index) => {
-          const sourceLot = allocation.lot
-
-          return [
-            {
-              ...sourceLot,
-              id: `${sourceLot.id}:${event.id}:${index}`,
-              custodyUnitId: destinationUnitId,
-              remainingQuantity: allocation.matchedQuantity,
-            },
-          ]
-        })
-        inventories.set(destinationKey, [
-          ...(inventories.get(destinationKey) ?? []),
-          ...destinationLots,
-        ])
-        if (movementMatch.shortage !== null) {
-          blockers.push({
-            code: "movement_shortage",
-            eventId: event.id,
-            assetId: event.assetId,
-            custodyUnitId: sourceUnitId,
-            missingQuantity: movementMatch.shortage,
-          })
-          blockedInventoryKeys.add(sourceKey)
-          blockedInventoryKeys.add(destinationKey)
-          explanationTrace.push({
-            sequence: explanationTrace.length,
-            eventId: event.id,
-            code: "blocker.movement_shortage",
-            valuationKind: null,
-            relatedEventIds: destinationLots.map((lot) => lot.acquisitionEventId),
-          })
-        }
-        explanationTrace.push({
-          sequence: explanationTrace.length,
-          eventId: event.id,
-          code: "fifo_basis_carried",
-          valuationKind: null,
-          relatedEventIds: destinationLots.map((lot) => lot.acquisitionEventId),
-        })
+        processCustodyMovement({ event, inventoryScope: scopeChoice.scope, state })
         continue
       }
 
@@ -462,219 +767,38 @@ export const calculate = ({
       const valuation = valuationResolution._tag === "selected" ? valuationResolution : null
 
       if (event.cause === "unknown") {
-        blockers.push({
+        appendBlocker({
+          state,
           code: "unknown_cause",
           eventId: event.id,
           assetId: event.assetId,
           custodyUnitId,
-          missingQuantity: null,
-        })
-        explanationTrace.push({
-          sequence: explanationTrace.length,
-          eventId: event.id,
-          code: "blocker.unknown_cause",
           valuationKind: valuation?.kind ?? null,
-          relatedEventIds: [],
         })
       }
 
       if (event._tag === "acquisition") {
-        const costBasisPerUnit =
-          valuation === null
-            ? null
-            : Option.getOrNull(yield* Effect.option(divide(valuation.total, event.quantity)))
-        const lot: EngineLot = {
-          id: event.id,
-          acquisitionEventId: event.id,
-          assetId: event.assetId,
+        yield* processAcquisition({
+          event,
           custodyUnitId,
-          acquiredAt: event.occurredAt,
-          remainingQuantity: event.quantity,
-          costBasisPerUnit,
-        }
-        inventories.set(key, [...(inventories.get(key) ?? []), lot])
-        if (valuation === null) {
-          const blockerCode =
-            valuationResolution._tag === "ambiguous" ? "ambiguous_valuation" : "missing_valuation"
-          blockers.push({
-            code: blockerCode,
-            eventId: event.id,
-            assetId: event.assetId,
-            custodyUnitId,
-            missingQuantity: null,
-          })
-          explanationTrace.push({
-            sequence: explanationTrace.length,
-            eventId: event.id,
-            code: `blocker.${blockerCode}`,
-            valuationKind: null,
-            relatedEventIds: [],
-          })
-        }
-        explanationTrace.push({
-          sequence: explanationTrace.length,
-          eventId: event.id,
-          code: "fifo_lot_created",
-          valuationKind: valuation?.kind ?? null,
-          relatedEventIds: [],
+          inventoryKey: key,
+          valuationResolution,
+          state,
         })
         continue
       }
 
-      const lots = inventories.get(key) ?? []
-
-      if (blockedInventoryKeys.has(key)) {
-        blockers.push({
-          code: "blocked_inventory_suffix",
-          eventId: event.id,
-          assetId: event.assetId,
-          custodyUnitId,
-          missingQuantity: null,
-        })
-        explanationTrace.push({
-          sequence: explanationTrace.length,
-          eventId: event.id,
-          code: "blocker.blocked_inventory_suffix",
-          valuationKind: valuation?.kind ?? null,
-          relatedEventIds: [],
-        })
-        continue
-      }
-
-      const match = allocateFifoQuantity({
-        lots,
-        quantity: event.quantity,
-      })
-      const remainingById = new Map(
-        match.allocations.map((allocation) => [allocation.lot.id, allocation.remainingQuantity])
-      )
-      inventories.set(
-        key,
-        lots.map((lot) => ({
-          ...lot,
-          remainingQuantity: remainingById.get(lot.id) ?? lot.remainingQuantity,
-        }))
-      )
-
-      if (valuation === null) {
-        const blockerCode =
-          valuationResolution._tag === "ambiguous" ? "ambiguous_valuation" : "missing_valuation"
-        blockers.push({
-          code: blockerCode,
-          eventId: event.id,
-          assetId: event.assetId,
-          custodyUnitId,
-          missingQuantity: null,
-        })
-        explanationTrace.push({
-          sequence: explanationTrace.length,
-          eventId: event.id,
-          code: `blocker.${blockerCode}`,
-          valuationKind: null,
-          relatedEventIds: [],
-        })
-      }
-
-      if (match.shortage !== null) {
-        blockers.push({
-          code: "inventory_shortage",
-          eventId: event.id,
-          assetId: event.assetId,
-          custodyUnitId,
-          missingQuantity: match.shortage,
-        })
-        blockedInventoryKeys.add(key)
-        explanationTrace.push({
-          sequence: explanationTrace.length,
-          eventId: event.id,
-          code: "blocker.inventory_shortage",
-          valuationKind: valuation?.kind ?? null,
-          relatedEventIds: match.allocations.map((allocation) => allocation.lot.acquisitionEventId),
-        })
-      }
-
-      let currencyMismatchBlocked = false
-
-      for (const matchAllocation of match.allocations) {
-        const lot = matchAllocation.lot
-        const costBasis =
-          lot.costBasisPerUnit === null
-            ? null
-            : round(multiplyByQuantity(lot.costBasisPerUnit, matchAllocation.matchedQuantity), 8)
-
-        allocations.push({
-          acquisitionEventId: lot.acquisitionEventId,
-          dispositionEventId: event.id,
-          assetId: event.assetId,
-          custodyUnitId,
-          acquiredAt: lot.acquiredAt,
-          disposedAt: event.occurredAt,
-          quantity: matchAllocation.matchedQuantity,
-          costBasis,
-        })
-        const proceeds =
-          valuation === null
-            ? null
-            : Option.getOrNull(
-                yield* Effect.option(
-                  prorate({
-                    total: valuation.total,
-                    part: matchAllocation.matchedQuantity,
-                    whole: event.quantity,
-                    scale: 8,
-                  })
-                )
-              )
-
-        if (costBasis !== null && proceeds !== null) {
-          const gainLoss = yield* Effect.result(subtract(proceeds, costBasis))
-
-          if (Result.isFailure(gainLoss)) {
-            if (!currencyMismatchBlocked) {
-              blockers.push({
-                code: "valuation_currency_mismatch",
-                eventId: event.id,
-                assetId: event.assetId,
-                custodyUnitId,
-                missingQuantity: null,
-              })
-              explanationTrace.push({
-                sequence: explanationTrace.length,
-                eventId: event.id,
-                code: "blocker.valuation_currency_mismatch",
-                valuationKind: valuation?.kind ?? null,
-                relatedEventIds: [lot.acquisitionEventId],
-              })
-              currencyMismatchBlocked = true
-            }
-            continue
-          }
-
-          realizedResults.push({
-            acquisitionEventId: lot.acquisitionEventId,
-            dispositionEventId: event.id,
-            assetId: event.assetId,
-            acquiredAt: lot.acquiredAt,
-            disposedAt: event.occurredAt,
-            quantity: matchAllocation.matchedQuantity,
-            costBasis,
-            proceeds,
-            gainLoss: gainLoss.success,
-            treatmentCodes: [],
-          })
-        }
-      }
-      explanationTrace.push({
-        sequence: explanationTrace.length,
-        eventId: event.id,
-        code: "fifo_disposition_matched",
-        valuationKind: valuation?.kind ?? null,
-        relatedEventIds: match.allocations.map((allocation) => allocation.lot.acquisitionEventId),
+      yield* processDisposition({
+        event,
+        custodyUnitId,
+        inventoryKey: key,
+        valuationResolution,
+        state,
       })
     }
 
     return {
-      status: blockers.length === 0 ? "complete" : "partial",
+      status: state.blockers.length === 0 ? "complete" : "partial",
       jurisdiction,
       taxYear,
       engineVersion: ENGINE_VERSION,
@@ -688,11 +812,11 @@ export const calculate = ({
         `engine.inventory.${scopeChoice.scope}`,
       ],
       processedEventIds: orderedLedger.map((event) => event.id),
-      allocations,
-      realizedResults,
+      allocations: state.allocations,
+      realizedResults: state.realizedResults,
       incomeResults: [],
-      derivedLots: toDerivedLots(inventories),
-      blockers,
-      explanationTrace,
+      derivedLots: toDerivedLots(state.inventories),
+      blockers: state.blockers,
+      explanationTrace: state.explanationTrace,
     }
   })
