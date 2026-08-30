@@ -3,6 +3,7 @@ import { AccountingQuantity, MonetaryAmount } from "@my/core/accounting"
 import * as Effect from "effect/Effect"
 import * as Schema from "effect/Schema"
 import {
+  FifoInputRejectedError,
   FifoMonetaryValueOutOfRangeError,
   matchFifoLots,
   type FifoMatchResult,
@@ -191,9 +192,11 @@ describe("matchFifoLots", () => {
       }).pipe(Effect.flip)
 
       expect(error).toEqual(
-        new FifoMonetaryValueOutOfRangeError({
-          field: "proceeds",
-          value: "-0.000000005",
+        new FifoInputRejectedError({
+          cause: new FifoMonetaryValueOutOfRangeError({
+            field: "proceeds",
+            value: "-0.000000005",
+          }),
         })
       )
     })

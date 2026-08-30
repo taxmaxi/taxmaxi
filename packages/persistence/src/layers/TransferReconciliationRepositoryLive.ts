@@ -5,7 +5,12 @@
  * @module TransferReconciliationRepositoryLive
  */
 
-import { matchFifoLots, type FifoMatchError } from "@my/accounting"
+import {
+  FifoInputRejectedError,
+  isFifoInputRejectedError,
+  matchFifoLots,
+  type FifoMatchError,
+} from "@my/accounting"
 import {
   AccountingQuantity,
   add as addAccountingQuantities,
@@ -214,7 +219,6 @@ const make = Effect.gen(function* () {
     )
 
   const RECONCILIATION_FIFO_CURRENCY = CurrencyCode.make("EUR")
-  const ZERO_RECONCILIATION_FIFO_MONEY = MonetaryAmount.zero(RECONCILIATION_FIFO_CURRENCY)
 
   const decodeFifoQuantity = ({
     value,
@@ -231,7 +235,7 @@ const make = Effect.gen(function* () {
           (cause) =>
             new SyncEngineStorageError({
               operation,
-              cause,
+              cause: new FifoInputRejectedError({ cause }),
             })
         )
       )
@@ -257,7 +261,7 @@ const make = Effect.gen(function* () {
           (cause) =>
             new SyncEngineStorageError({
               operation,
-              cause,
+              cause: new FifoInputRejectedError({ cause }),
             })
         )
       )
@@ -540,6 +544,7 @@ const make = Effect.gen(function* () {
                   acquiredAt: schema.fifoLots.acquiredAt,
                   availableAt: schema.transactionLegs.timestamp,
                   remainingAmount: schema.fifoLots.remainingAmount,
+                  costBasisPerToken: schema.fifoLots.costBasisPerToken,
                   createdAt: schema.fifoLots.createdAt,
                 })
                 .from(schema.fifoLots)
@@ -588,39 +593,73 @@ const make = Effect.gen(function* () {
             blockedEffectIds.add(effect.id)
             continue
           }
-          const quantity = yield* decodeFifoQuantity({
-            value: effect.amount,
-            operation:
-              "transferReconciliationRepository.reconciliationEffectMutations.rebuildFifoEffects.preflightEffectAmount",
-          })
-          const result = yield* matchFifoLots({
-            lots: candidateLots.flatMap((lot) => {
-              const remainingQuantity = virtualRemainingByLotId.get(lot.id)
-              return remainingQuantity === undefined ||
-                lot.sourceId !== effect.sourceId ||
-                lot.principalId !== effect.principalId ||
-                lot.assetId !== effect.assetId ||
-                lot.acquiredAt > effect.timestamp ||
-                lot.availableAt > effect.timestamp
-                ? []
-                : [
-                    {
-                      id: lot.id,
-                      remainingQuantity,
-                      costBasisPerUnit: ZERO_RECONCILIATION_FIFO_MONEY,
-                    },
-                  ]
-            }),
-            disposal: { quantity, proceeds: null },
+          const preflightResult = yield* Effect.gen(function* () {
+            const quantity = yield* decodeFifoQuantity({
+              value: effect.amount,
+              operation:
+                "transferReconciliationRepository.reconciliationEffectMutations.rebuildFifoEffects.preflightEffectAmount",
+            })
+            const lots = yield* Effect.forEach(
+              candidateLots.flatMap((lot) => {
+                const remainingQuantity = virtualRemainingByLotId.get(lot.id)
+                return remainingQuantity === undefined ||
+                  BigDecimal.isZero(remainingQuantity) ||
+                  lot.sourceId !== effect.sourceId ||
+                  lot.principalId !== effect.principalId ||
+                  lot.assetId !== effect.assetId ||
+                  lot.acquiredAt > effect.timestamp ||
+                  lot.availableAt > effect.timestamp
+                  ? []
+                  : [{ lot, remainingQuantity }]
+              }),
+              ({ lot, remainingQuantity }) =>
+                decodeReconciliationFifoMoney({
+                  value: lot.costBasisPerToken,
+                  operation:
+                    "transferReconciliationRepository.reconciliationEffectMutations.rebuildFifoEffects.preflightCostBasisPerToken",
+                }).pipe(
+                  Effect.map((costBasisPerUnit) => ({
+                    id: lot.id,
+                    remainingQuantity,
+                    costBasisPerUnit,
+                  }))
+                )
+            )
+            const proceeds =
+              effect.fiatAmount === null
+                ? null
+                : yield* decodeReconciliationFifoMoney({
+                    value: effect.fiatAmount,
+                    operation:
+                      "transferReconciliationRepository.reconciliationEffectMutations.rebuildFifoEffects.preflightFiatAmount",
+                  })
+
+            return yield* matchFifoLots({
+              lots,
+              disposal: { quantity, proceeds },
+            }).pipe(
+              Effect.mapError((error) =>
+                wrapFifoMatchError({
+                  error,
+                  operation:
+                    "transferReconciliationRepository.reconciliationEffectMutations.rebuildFifoEffects.preflightMatch",
+                })
+              )
+            )
           }).pipe(
-            Effect.mapError((error) =>
-              wrapFifoMatchError({
-                error,
-                operation:
-                  "transferReconciliationRepository.reconciliationEffectMutations.rebuildFifoEffects.preflightMatch",
-              })
+            Effect.map(Option.some),
+            Effect.catchTag("SyncEngineStorageError", (error) =>
+              isFifoInputRejectedError(error.cause)
+                ? Effect.succeed(Option.none())
+                : Effect.fail(error)
             )
           )
+          if (Option.isNone(preflightResult)) {
+            blockedInventoryKeys.add(inventoryKey)
+            blockedEffectIds.add(effect.id)
+            continue
+          }
+          const result = preflightResult.value
           if (result._tag === "InventoryShortage") {
             blockedInventoryKeys.add(inventoryKey)
             blockedEffectIds.add(effect.id)
@@ -756,7 +795,7 @@ const make = Effect.gen(function* () {
                   value: effect.fiatAmount,
                   operation:
                     "transferReconciliationRepository.reconciliationEffectMutations.rebuildFifoEffects.fiatAmount",
-                }).pipe(Effect.map((amount) => amount.abs()))
+                })
           const result = yield* matchFifoLots({
             lots,
             disposal: { quantity, proceeds },

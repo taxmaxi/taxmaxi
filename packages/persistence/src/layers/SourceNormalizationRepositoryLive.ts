@@ -9,7 +9,12 @@
  */
 
 import { createHash } from "node:crypto"
-import { matchFifoLots, type FifoMatchError } from "@my/accounting"
+import {
+  FifoInputRejectedError,
+  isFifoInputRejectedError,
+  matchFifoLots,
+  type FifoMatchError,
+} from "@my/accounting"
 import {
   AccountingQuantity,
   format as formatAccountingQuantity,
@@ -91,17 +96,6 @@ const FIFO_CURRENCY_MISMATCH_OPERATION =
   "sourceNormalizationRepository.buildFifoLotAllocations.currencyMismatch"
 const FIFO_MATCHER_REJECTED_OPERATION =
   "sourceNormalizationRepository.buildFifoLotAllocations.matcherRejected"
-
-class FifoInputRejectedError extends Schema.TaggedError<FifoInputRejectedError>()(
-  "FifoInputRejectedError",
-  { cause: Schema.Unknown }
-) {
-  override get message(): string {
-    return `FIFO input rejected: ${String(this.cause)}`
-  }
-}
-
-const isFifoInputRejectedError = Schema.is(FifoInputRejectedError)
 
 /**
  * Wrap residual errors in `SyncEngineStorageError`, but let a typed credit-exhaustion
@@ -1548,7 +1542,7 @@ const make = Effect.gen(function* () {
           : yield* decodeFifoMonetaryAmount({
               amount: disposalFiatAmount,
               currency: disposalFiatCurrency ?? "EUR",
-            }).pipe(Effect.map((amount) => amount.abs()))
+            })
       const result = yield* matchFifoLots({
         lots: decodedLots,
         disposal: { quantity, proceeds },
