@@ -22,9 +22,14 @@ export const CalculationRunId = Schema.String.check(Schema.isUUID()).pipe(
 /** Stable, caller-assigned identity of one immutable calculation run. */
 export type CalculationRunId = typeof CalculationRunId.Type
 
-/** Revision of the factual ledger used as calculation input. */
+/**
+ * Revision of the factual ledger used as calculation input.
+ *
+ * The token records the snapshot transaction ID and a PostgreSQL snapshot with
+ * colons replaced by dots, followed by the canonical factual-content hash.
+ */
 export const InputLedgerRevision = Schema.Trimmed.pipe(
-  Schema.check(Schema.isPattern(/^v1:\d+:[0-9a-f]{64}$/)),
+  Schema.check(Schema.isPattern(/^v2:\d+:\d+\.\d+\.(?:\d+(?:,\d+)*)?:[0-9a-f]{64}$/)),
   Schema.brand("InputLedgerRevision")
 )
 
@@ -127,12 +132,32 @@ export interface GetLatestCalculationRunStatusParams {
   readonly reportingCurrency: CurrencyCode
 }
 
+/** Input for one bounded calculation-maintenance pass. */
+export interface MaintainCalculationRunsParams {
+  readonly staleBefore: Date
+  readonly limit: number
+}
+
+/** Durable work found by one calculation-maintenance pass. */
+export interface CalculationRunMaintenanceResult {
+  readonly failedStaleRuns: number
+  readonly principalIds: ReadonlyArray<PrincipalId>
+}
+
 /** Persistence contract for atomic, write-once calculation results. */
 export interface CalculationRunRepositoryShape {
   /** Read the newest factual revision for one principal and calculation scope. */
   readonly getLatestStatus: (
     params: GetLatestCalculationRunStatusParams
   ) => Effect.Effect<CalculationRunStatusSummary | null, PersistenceError>
+
+  /**
+   * Fail stale running runs, keep their principals pending until a replacement
+   * starts, and find completed source work absent from every run snapshot.
+   */
+  readonly settleStaleAndFindRecomputePrincipals: (
+    params: MaintainCalculationRunsParams
+  ) => Effect.Effect<CalculationRunMaintenanceResult, PersistenceError>
 
   /** Commit one visible running run and its immutable factual-snapshot membership. */
   readonly start: (

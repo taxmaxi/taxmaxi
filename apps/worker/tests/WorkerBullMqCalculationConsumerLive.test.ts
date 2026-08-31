@@ -1,4 +1,5 @@
 import { ConfigProvider, DateTime, Effect, Layer, Result, Schema } from "effect"
+import { TestClock } from "effect/testing"
 import { UnrecoverableError, type JobsOptions } from "bullmq"
 import { describe, expect, it } from "@effect/vitest"
 import { JurisdictionCode, TaxYear } from "@my/core/accounting"
@@ -7,9 +8,11 @@ import { PrincipalId } from "@my/core/ownership"
 import {
   CalculationRunId,
   CalculationRunAlreadyStoredError,
+  CalculationRunRepository,
   CalculationRunService,
   InputLedgerRevision,
   ValuationRevision,
+  type CalculationRunRepositoryShape,
   type CalculationRunServiceShape,
 } from "@my/persistence/services"
 import {
@@ -21,8 +24,13 @@ import {
   type WorkerBullMqCalculationProcessor,
 } from "../src/layers/WorkerBullMqCalculationConsumerLive.ts"
 import {
+  runCalculationMaintenancePass,
+  WorkerCalculationMaintenanceLive,
+} from "../src/layers/WorkerCalculationMaintenanceLive.ts"
+import {
   CALCULATION_RECOMPUTE_JOB_NAME,
   CalculationRecomputeQueue,
+  CalculationRecomputeQueueError,
   CalculationRecomputeQueuePayload,
 } from "@my/sync-engine/services"
 
@@ -32,12 +40,16 @@ class WorkerTestPromiseRejectionError extends Schema.TaggedError<WorkerTestPromi
 ) {}
 
 const principalId = PrincipalId.make("00000000-0000-4000-8000-000000000013")
+const otherPrincipalId = PrincipalId.make("00000000-0000-4000-8000-000000000014")
 
 const makeConfigProvider = () =>
   ConfigProvider.fromEnvRecord({
     QUEUE_REDIS_URL: "redis://localhost:6379",
     CALCULATION_QUEUE_PREFIX: "test-prefix",
     CALCULATION_WORKER_CONCURRENCY: "2",
+    CALCULATION_MAINTENANCE_INTERVAL_MS: "1000",
+    CALCULATION_MAINTENANCE_STALE_AFTER_MS: "5000",
+    CALCULATION_MAINTENANCE_BATCH_SIZE: "100",
     WORKER_ID: "worker-test-1",
   })
 
@@ -52,7 +64,7 @@ const provideConfig = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
 
 const writeResult = {
   activated: true,
-  inputLedgerRevision: InputLedgerRevision.make(`v1:1:${"a".repeat(64)}`),
+  inputLedgerRevision: InputLedgerRevision.make(`v2:1:1.2.:${"a".repeat(64)}`),
   valuationRevision: ValuationRevision.make(`sha256:${"b".repeat(64)}`),
   status: "complete",
 } as const
@@ -82,6 +94,17 @@ const runWithCalculationConsumer = <A>({
       )
     )
   )
+
+const makeMaintenanceRepository = (
+  settleStaleAndFindRecomputePrincipals: CalculationRunRepositoryShape["settleStaleAndFindRecomputePrincipals"]
+) =>
+  CalculationRunRepository.of({
+    fail: () => Effect.die("unused fail"),
+    getLatestStatus: () => Effect.die("unused getLatestStatus"),
+    settleStaleAndFindRecomputePrincipals,
+    persist: () => Effect.die("unused persist"),
+    start: () => Effect.die("unused start"),
+  })
 
 describe("WorkerCalculationRecomputeQueueLive", () => {
   it.effect(
@@ -130,6 +153,92 @@ describe("WorkerCalculationRecomputeQueueLive", () => {
           expect(options.deduplication).toEqual({ id: principalId, keepLastIfActive: true })
         }
       })
+  )
+})
+
+describe("WorkerCalculationMaintenanceLive", () => {
+  it.effect("retries a failed request and continues enqueueing healthy principals", () =>
+    Effect.gen(function* () {
+      const requested: Array<string> = []
+      let firstRequestFails = true
+      const repository = makeMaintenanceRepository(() =>
+        Effect.succeed({
+          failedStaleRuns: 1,
+          principalIds: [principalId, otherPrincipalId],
+        })
+      )
+      const queue = CalculationRecomputeQueue.of({
+        enqueuePrincipalRecompute: (requestedPrincipalId) =>
+          Effect.gen(function* () {
+            requested.push(requestedPrincipalId)
+            if (requestedPrincipalId === principalId && firstRequestFails) {
+              firstRequestFails = false
+              return yield* new CalculationRecomputeQueueError({
+                operation: "test.enqueue",
+                cause: "forced queue failure",
+              })
+            }
+          }),
+      })
+      const pass = runCalculationMaintenancePass({
+        staleBefore: DateTime.toDateUtc(DateTime.makeUnsafe("2026-01-01T00:00:00.000Z")),
+        limit: 100,
+      }).pipe(
+        Effect.provide(
+          Layer.merge(
+            Layer.succeed(CalculationRunRepository, repository),
+            Layer.succeed(CalculationRecomputeQueue, queue)
+          )
+        )
+      )
+
+      const first = yield* pass
+      const retry = yield* pass
+
+      expect(requested).toEqual([principalId, otherPrincipalId, principalId, otherPrincipalId])
+      expect(first).toEqual({
+        failedStaleRuns: 1,
+        requestedRecomputes: 1,
+        failedRequests: 1,
+      })
+      expect(retry).toEqual({
+        failedStaleRuns: 1,
+        requestedRecomputes: 2,
+        failedRequests: 0,
+      })
+    })
+  )
+
+  it.effect("runs once at startup and again on the configured interval", () =>
+    Effect.gen(function* () {
+      let passes = 0
+      const repository = makeMaintenanceRepository(() =>
+        Effect.sync(() => {
+          passes += 1
+          return { failedStaleRuns: 0, principalIds: [] }
+        })
+      )
+      const queue = CalculationRecomputeQueue.of({
+        enqueuePrincipalRecompute: () => Effect.void,
+      })
+
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          expect(passes).toBe(1)
+          yield* TestClock.adjust("1 second")
+          yield* Effect.yieldNow
+          expect(passes).toBe(2)
+        }).pipe(
+          Effect.provide(
+            WorkerCalculationMaintenanceLive.pipe(
+              Layer.provide(Layer.succeed(CalculationRunRepository, repository)),
+              Layer.provide(Layer.succeed(CalculationRecomputeQueue, queue))
+            )
+          ),
+          provideConfig
+        )
+      )
+    })
   )
 })
 

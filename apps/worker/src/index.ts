@@ -30,6 +30,7 @@ import {
   WorkerBullMqCalculationConsumerLive,
   WorkerCalculationRecomputeQueueLive,
 } from "./layers/WorkerBullMqCalculationConsumerLive.ts"
+import { WorkerCalculationMaintenanceLive } from "./layers/WorkerCalculationMaintenanceLive.ts"
 import { WorkerBullMqSourceSyncConsumerLive } from "./layers/WorkerBullMqSourceSyncConsumerLive.ts"
 import { WorkerHealthServerLive } from "./layers/WorkerHealthServerLive.ts"
 import { WorkerSourceSyncStartupRepairLive } from "./layers/WorkerSourceSyncStartupRepairLive.ts"
@@ -85,6 +86,11 @@ const CalculationWorkerRuntimeLive = WorkerBullMqCalculationConsumerLive.pipe(
   Layer.provide(CalculationRunRuntimeLive)
 )
 
+const CalculationMaintenanceRuntimeLive = WorkerCalculationMaintenanceLive.pipe(
+  Layer.provide(CalculationRunRepositoryLive),
+  Layer.provide(WorkerCalculationRecomputeQueueLive)
+)
+
 const AssetResolutionJobExecutorRuntimeLive = AssetResolutionJobExecutorLive.pipe(
   Layer.provide(AssetResolutionCoinGeckoClientLive),
   Layer.provide(AssetResolutionJupiterClientLive),
@@ -100,6 +106,7 @@ const AppLive: Layer.Layer<never, unknown, never> = Layer.mergeAll(
   WorkerHealthServerLive,
   SourceSyncWorkerRuntimeLive,
   CalculationWorkerRuntimeLive,
+  CalculationMaintenanceRuntimeLive,
   AssetResolutionWorkerRuntimeLive
 ).pipe(Layer.provide(PgClientLive))
 
