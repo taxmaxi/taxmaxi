@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it } from "@effect/vitest"
+import { PgClient } from "@effect/sql-pg"
 import type { TaxAccountingResult } from "@my/accounting"
 import {
   AccountingChoiceId,
@@ -15,10 +16,15 @@ import { MonetaryAmount } from "@my/core/shared/values/MonetaryAmount"
 import { Timestamp } from "@my/core/shared/values/Timestamp"
 import { asc, eq, sql } from "drizzle-orm"
 import * as BigDecimal from "effect/BigDecimal"
+import * as DateTime from "effect/DateTime"
 import * as Deferred from "effect/Deferred"
 import * as Effect from "effect/Effect"
+import * as Fiber from "effect/Fiber"
+import * as Layer from "effect/Layer"
 import { PersistenceError } from "../../src/errors/RepositoryError.ts"
 import { CalculationRunRepositoryLive } from "../../src/layers/CalculationRunRepositoryLive.ts"
+import { CalculationRunServiceLive } from "../../src/layers/CalculationRunServiceLive.ts"
+import { FactualLedgerRepositoryLive } from "../../src/layers/FactualLedgerRepositoryLive.ts"
 import { drizzle } from "../../src/layers/PgClientLive.ts"
 import { schema } from "../../src/schema/index.ts"
 import {
@@ -29,6 +35,8 @@ import {
   InputLedgerRevision,
   ValuationRevision,
 } from "../../src/services/CalculationRunRepository.ts"
+import { CalculationRunService } from "../../src/services/CalculationRunService.ts"
+import { FactualLedgerRepository } from "../../src/services/FactualLedgerRepository.ts"
 import {
   TEST_BTC_ASSET_ID,
   makeIntegrationTestDatabaseContext,
@@ -42,6 +50,8 @@ const THIRD_RUN_ID = CalculationRunId.make("00000000-0000-4000-8000-000000000806
 const FOURTH_RUN_ID = CalculationRunId.make("00000000-0000-4000-8000-000000000811")
 const FIFTH_RUN_ID = CalculationRunId.make("00000000-0000-4000-8000-000000000813")
 const SIXTH_RUN_ID = CalculationRunId.make("00000000-0000-4000-8000-000000000814")
+const RECOMPUTE_RUN_ID = CalculationRunId.make("00000000-0000-4000-8000-000000000815")
+const PARTIAL_RECOMPUTE_RUN_ID = CalculationRunId.make("00000000-0000-4000-8000-000000000816")
 const ACQUISITION_EVENT_ID = AccountingEventId.make("00000000-0000-4000-8000-000000000802")
 const DISPOSITION_EVENT_ID = AccountingEventId.make("00000000-0000-4000-8000-000000000803")
 const TEST_PRINCIPAL_ID = PrincipalId.make("00000000-0000-4000-8000-000000000183")
@@ -65,8 +75,16 @@ const runPg = context.runPg
 const runPgEffect = <A, E>(effect: Parameters<typeof runPg<A, E>>[0]) =>
   Effect.promise(() => runPg(effect))
 
+const CalculationRunTestLive = CalculationRunRepositoryLive
+const CalculationRunServiceTestLive = CalculationRunServiceLive.pipe(
+  Layer.provide(Layer.merge(CalculationRunRepositoryLive, FactualLedgerRepositoryLive))
+)
+
 const runRepository = <A, E>(effect: Effect.Effect<A, E, CalculationRunRepository>) =>
-  context.runWithLayer({ effect, layer: CalculationRunRepositoryLive })
+  context.runWithLayer({ effect, layer: CalculationRunTestLive })
+
+const runCalculationService = <A, E>(effect: Effect.Effect<A, E, CalculationRunService>) =>
+  context.runWithLayer({ effect, layer: CalculationRunServiceTestLive })
 
 const quantity = (value: string) => AccountingQuantity.make(BigDecimal.fromStringUnsafe(value))
 
@@ -157,22 +175,87 @@ const persistResult = ({
   principalId = TEST_PRINCIPAL_ID,
   reportingCurrency = EUR,
   result = completeResult(),
+  inputSequence,
 }: {
   readonly id?: CalculationRunId
   readonly principalId?: PrincipalId
   readonly reportingCurrency?: CurrencyCode
   readonly result?: TaxAccountingResult
+  readonly inputSequence?: string
 } = {}) =>
-  Effect.flatMap(CalculationRunRepository, (repository) =>
-    repository.persist({
+  Effect.flatMap(CalculationRunRepository, (repository) => {
+    const sequence = inputSequence ?? (id.slice(-12).replace(/^0+/, "") || "0")
+
+    return repository.persist({
       id,
       principalId,
       reportingCurrency,
-      inputLedgerRevision: InputLedgerRevision.make("ledger-17"),
-      valuationRevision: ValuationRevision.make("prices-9"),
+      inputLedgerRevision: InputLedgerRevision.make(`v1:${sequence}:${"a".repeat(64)}`),
+      valuationRevision: ValuationRevision.make(`sha256:${"b".repeat(64)}`),
       result,
     })
+  })
+
+const recomputeResult = ({
+  id,
+  jurisdiction = "DE",
+}: {
+  readonly id: CalculationRunId
+  readonly jurisdiction?: string
+}) =>
+  Effect.flatMap(CalculationRunService, (service) =>
+    service.recompute({
+      id,
+      principalId: TEST_PRINCIPAL_ID,
+      jurisdiction: JurisdictionCode.make(jurisdiction),
+      taxYear: TaxYear.make(2025),
+      reportingCurrency: EUR,
+      accountingChoices: [],
+    })
   )
+
+const seedAcquisitionFact = ({
+  eventId,
+  externalId,
+  providerFiatAmount,
+}: {
+  readonly eventId: string
+  readonly externalId: string
+  readonly providerFiatAmount: string | null
+}) =>
+  Effect.gen(function* () {
+    const db = yield* drizzle
+    const occurredAt = DateTime.toDateUtc(DateTime.makeUnsafe("2025-02-03T10:00:00.000Z"))
+    const [transaction] = yield* db
+      .insert(schema.transactions)
+      .values({
+        sourceId: TEST_SOURCE_ID,
+        externalId,
+        timestamp: occurredAt,
+        transactionType: "buy_fiat",
+        principalId: TEST_PRINCIPAL_ID,
+        providerFiatAmount,
+        providerFiatCurrency: providerFiatAmount === null ? null : "EUR",
+      })
+      .returning({ id: schema.transactions.id })
+
+    if (transaction === undefined) {
+      return yield* Effect.die("Failed to seed acquisition transaction")
+    }
+
+    yield* db.insert(schema.transactionLegs).values({
+      id: eventId,
+      sourceId: TEST_SOURCE_ID,
+      externalId: `${externalId}-leg`,
+      timestamp: occurredAt,
+      principalId: TEST_PRINCIPAL_ID,
+      assetId: TEST_BTC_ASSET_ID,
+      amount: "1",
+      kind: "acquisition",
+      provenance: "deterministic",
+      transactionId: transaction.id,
+    })
+  })
 
 const seedCalculationRunFixture = ({
   includeOtherPrincipal = false,
@@ -195,7 +278,7 @@ const seedCalculationRunFixture = ({
     }
   })
 
-const readLiveAndStoredMembership = () =>
+const readLiveAndStoredMembership = (runId: CalculationRunId = RUN_ID) =>
   Effect.gen(function* () {
     const db = yield* drizzle
     const [live] = yield* db
@@ -208,7 +291,7 @@ const readLiveAndStoredMembership = () =>
         sourceId: schema.calculationRunCustodyUnitSources.sourceId,
       })
       .from(schema.calculationRunCustodyUnitSources)
-      .where(eq(schema.calculationRunCustodyUnitSources.runId, RUN_ID))
+      .where(eq(schema.calculationRunCustodyUnitSources.runId, runId))
 
     return { live, snapshot }
   })
@@ -286,9 +369,219 @@ const currencyMismatchCases = (): ReadonlyArray<{
 
 await Effect.runPromise(context.recreateTestDatabase())
 
-beforeEach(() => Effect.runPromise(context.recreateTestDatabase()))
+const removeCalculationRunTestTriggers = () =>
+  runPgEffect(
+    Effect.gen(function* () {
+      const db = yield* drizzle
+      yield* db.execute(sql.raw("drop trigger if exists pause_test_older_run on calculation_runs"))
+      yield* db.execute(sql.raw("drop function if exists pause_test_older_run()"))
+    })
+  )
+
+const waitForCalculationRunLockWaiter = () =>
+  runPgEffect(
+    Effect.gen(function* () {
+      const client = yield* PgClient.PgClient
+
+      for (let attempt = 0; attempt < 100; attempt += 1) {
+        const [locks] = yield* client<{ readonly isWaiting: boolean }>`
+          select exists (
+            select 1
+            from pg_locks
+            where granted = false
+          ) as "isWaiting"
+        `
+
+        if (locks?.isWaiting === true) return
+        yield* Effect.sleep("10 millis")
+      }
+
+      return yield* Effect.die("Timed out waiting for the older calculation run")
+    })
+  )
+
+beforeEach(() =>
+  Effect.runPromise(
+    Effect.gen(function* () {
+      yield* context.recreateTestDatabase()
+      yield* removeCalculationRunTestTriggers()
+    })
+  )
+)
 
 describe("CalculationRunRepositoryLive", () => {
+  it.effect("recomputes complete and partial runs from factual snapshots", () =>
+    Effect.gen(function* () {
+      yield* runPgEffect(seedCalculationRunFixture())
+      yield* runPgEffect(
+        seedAcquisitionFact({
+          eventId: "00000000-0000-4000-8000-000000000817",
+          externalId: "valued-acquisition",
+          providerFiatAmount: "100",
+        })
+      )
+
+      const complete = yield* runCalculationService(recomputeResult({ id: RECOMPUTE_RUN_ID }))
+
+      yield* runPgEffect(
+        seedAcquisitionFact({
+          eventId: "00000000-0000-4000-8000-000000000818",
+          externalId: "unvalued-acquisition",
+          providerFiatAmount: null,
+        })
+      )
+
+      const partial = yield* runCalculationService(
+        recomputeResult({ id: PARTIAL_RECOMPUTE_RUN_ID })
+      )
+      const stored = yield* runPgEffect(
+        Effect.gen(function* () {
+          const db = yield* drizzle
+          const runs = yield* db
+            .select({
+              id: schema.calculationRuns.id,
+              inputLedgerRevision: schema.calculationRuns.inputLedgerRevision,
+              valuationRevision: schema.calculationRuns.valuationRevision,
+              status: schema.calculationRuns.status,
+            })
+            .from(schema.calculationRuns)
+            .orderBy(asc(schema.calculationRuns.id))
+          const [active] = yield* db
+            .select({ runId: schema.activeCalculationRuns.runId })
+            .from(schema.activeCalculationRuns)
+          const blockers = yield* db
+            .select({ runId: schema.calculationRunBlockers.runId })
+            .from(schema.calculationRunBlockers)
+
+          return { runs, active, blockers }
+        })
+      )
+
+      expect(complete).toMatchObject({ activated: true, status: "complete" })
+      expect(partial).toMatchObject({ activated: true, status: "partial" })
+      expect(complete.inputLedgerRevision).toMatch(/^v1:\d+:[0-9a-f]{64}$/)
+      expect(complete.valuationRevision).toMatch(/^sha256:[0-9a-f]{64}$/)
+      expect(partial.inputLedgerRevision).not.toBe(complete.inputLedgerRevision)
+      expect(stored.runs).toEqual([
+        expect.objectContaining({ id: RECOMPUTE_RUN_ID, status: "complete" }),
+        expect.objectContaining({ id: PARTIAL_RECOMPUTE_RUN_ID, status: "partial" }),
+      ])
+      expect(stored.active).toEqual({ runId: PARTIAL_RECOMPUTE_RUN_ID })
+      expect(stored.blockers).toEqual([{ runId: PARTIAL_RECOMPUTE_RUN_ID }])
+    })
+  )
+
+  it.effect("keeps mid-calculation fact changes outside the repeatable-read snapshot", () =>
+    Effect.gen(function* () {
+      yield* runPgEffect(seedCalculationRunFixture())
+      yield* runPgEffect(
+        seedAcquisitionFact({
+          eventId: "00000000-0000-4000-8000-000000000817",
+          externalId: "valued-before-snapshot",
+          providerFiatAmount: "100",
+        })
+      )
+      const snapshotLoaded = yield* Deferred.make<void>()
+      const releaseSnapshot = yield* Deferred.make<void>()
+      const coordinatedFactualLedgerLive = Layer.effect(
+        FactualLedgerRepository,
+        Effect.map(FactualLedgerRepository, (repository) =>
+          FactualLedgerRepository.of({
+            load: (params) =>
+              repository.load(params).pipe(
+                Effect.tap(() => Deferred.succeed(snapshotLoaded, undefined)),
+                Effect.tap(() => Deferred.await(releaseSnapshot))
+              ),
+          })
+        )
+      ).pipe(Layer.provide(FactualLedgerRepositoryLive))
+      const coordinatedCalculationServiceLive = CalculationRunServiceLive.pipe(
+        Layer.provide(Layer.merge(CalculationRunRepositoryLive, coordinatedFactualLedgerLive))
+      )
+      const recompute = yield* Effect.forkChild(
+        context.runWithLayer({
+          effect: recomputeResult({ id: RECOMPUTE_RUN_ID }),
+          layer: coordinatedCalculationServiceLive,
+        })
+      )
+
+      yield* Deferred.await(snapshotLoaded)
+      yield* runPgEffect(
+        Effect.gen(function* () {
+          const db = yield* drizzle
+          yield* seedAcquisitionFact({
+            eventId: "00000000-0000-4000-8000-000000000818",
+            externalId: "unvalued-after-snapshot",
+            providerFiatAmount: null,
+          })
+          yield* db
+            .update(schema.transactions)
+            .set({ providerFiatAmount: null, providerFiatCurrency: null })
+            .where(eq(schema.transactions.externalId, "valued-before-snapshot"))
+          yield* db.insert(schema.custodyUnits).values({
+            id: GROUPED_CUSTODY_UNIT_ID,
+            principalId: TEST_PRINCIPAL_ID,
+          })
+          yield* db
+            .update(schema.custodyUnitSources)
+            .set({ custodyUnitId: GROUPED_CUSTODY_UNIT_ID })
+            .where(eq(schema.custodyUnitSources.sourceId, TEST_SOURCE_ID))
+        })
+      )
+      yield* Deferred.succeed(releaseSnapshot, undefined)
+
+      const outcome = yield* Fiber.join(recompute)
+      const stored = yield* runPgEffect(
+        Effect.gen(function* () {
+          const db = yield* drizzle
+          const snapshots = yield* readLiveAndStoredMembership(RECOMPUTE_RUN_ID)
+          const [run] = yield* db
+            .select({ processedEventIds: schema.calculationRuns.processedEventIds })
+            .from(schema.calculationRuns)
+            .where(eq(schema.calculationRuns.id, RECOMPUTE_RUN_ID))
+
+          return { ...snapshots, run }
+        })
+      )
+
+      expect(outcome.status).toBe("complete")
+      expect(stored).toEqual({
+        live: { custodyUnitId: GROUPED_CUSTODY_UNIT_ID },
+        snapshot: { custodyUnitId: TEST_SOURCE_ID, sourceId: TEST_SOURCE_ID },
+        run: { processedEventIds: ["00000000-0000-4000-8000-000000000817"] },
+      })
+    })
+  )
+
+  it.effect("does not mutate the prior active result when calculation fails", () =>
+    Effect.gen(function* () {
+      yield* runPgEffect(seedCalculationRunFixture())
+      yield* runRepository(persistResult())
+
+      const error = yield* runCalculationService(
+        Effect.flip(
+          recomputeResult({ id: RECOMPUTE_RUN_ID, jurisdiction: "unsupported-jurisdiction" })
+        )
+      )
+      const stored = yield* runPgEffect(
+        Effect.gen(function* () {
+          const db = yield* drizzle
+          const runs = yield* db
+            .select({ id: schema.calculationRuns.id })
+            .from(schema.calculationRuns)
+          const [active] = yield* db
+            .select({ runId: schema.activeCalculationRuns.runId })
+            .from(schema.activeCalculationRuns)
+
+          return { runs, active }
+        })
+      )
+
+      expect(error._tag).toBe("UnsupportedJurisdictionError")
+      expect(stored).toEqual({ runs: [{ id: RUN_ID }], active: { runId: RUN_ID } })
+    })
+  )
+
   it.effect("writes one complete run and activates its complete result atomically", () =>
     Effect.gen(function* () {
       yield* runPgEffect(seedCalculationRunFixture())
@@ -843,8 +1136,8 @@ describe("CalculationRunRepositoryLive", () => {
                 id: RUN_ID,
                 principalId: TEST_PRINCIPAL_ID,
                 reportingCurrency: EUR,
-                inputLedgerRevision: InputLedgerRevision.make("ledger-17"),
-                valuationRevision: ValuationRevision.make("prices-9"),
+                inputLedgerRevision: InputLedgerRevision.make(`v1:801:${"a".repeat(64)}`),
+                valuationRevision: ValuationRevision.make(`sha256:${"b".repeat(64)}`),
                 result: completeResult(),
               }),
               {
@@ -997,6 +1290,99 @@ describe("CalculationRunRepositoryLive", () => {
         blockers: [{ runId: SECOND_RUN_ID }],
       })
     })
+  )
+
+  it.effect(
+    "keeps a concurrently delayed older run durable but inactive",
+    () =>
+      Effect.gen(function* () {
+        yield* runPgEffect(seedCalculationRunFixture({ includeOtherPrincipal: true }))
+        yield* runPgEffect(
+          Effect.gen(function* () {
+            const db = yield* drizzle
+            yield* db.execute(
+              sql.raw(`
+              create function pause_test_older_run() returns trigger as $$
+              begin
+                if new.id = '${RUN_ID}' then
+                  perform 1
+                  from principals
+                  where id = '${OTHER_PRINCIPAL_ID}'
+                  for update;
+                end if;
+                return new;
+              end;
+              $$ language plpgsql
+            `)
+            )
+            yield* db.execute(
+              sql.raw(`
+              create trigger pause_test_older_run
+              before insert on calculation_runs
+              for each row execute function pause_test_older_run()
+            `)
+            )
+          })
+        )
+        const lockAcquired = yield* Deferred.make<void>()
+        const releaseLock = yield* Deferred.make<void>()
+        const heldLock = runPg(
+          Effect.gen(function* () {
+            const db = yield* drizzle
+            yield* db.transaction((tx) =>
+              Effect.gen(function* () {
+                yield* tx
+                  .select({ id: schema.principals.id })
+                  .from(schema.principals)
+                  .where(eq(schema.principals.id, OTHER_PRINCIPAL_ID))
+                  .for("update")
+                yield* Deferred.succeed(lockAcquired, undefined)
+                yield* Deferred.await(releaseLock)
+              })
+            )
+          })
+        )
+
+        yield* Deferred.await(lockAcquired)
+        const { newer, older } = yield* Effect.gen(function* () {
+          const olderRun = yield* Effect.forkChild(
+            runRepository(persistResult({ id: RUN_ID, inputSequence: "10" }))
+          )
+          yield* waitForCalculationRunLockWaiter()
+          const newer = yield* runRepository(
+            persistResult({ id: SECOND_RUN_ID, inputSequence: "20" })
+          )
+          yield* Deferred.succeed(releaseLock, undefined)
+          const older = yield* Fiber.join(olderRun)
+
+          return { newer, older }
+        }).pipe(Effect.ensuring(Deferred.succeed(releaseLock, undefined)))
+        yield* Effect.promise(() => heldLock)
+        yield* removeCalculationRunTestTriggers()
+
+        const stored = yield* runPgEffect(
+          Effect.gen(function* () {
+            const db = yield* drizzle
+            const runs = yield* db
+              .select({ id: schema.calculationRuns.id })
+              .from(schema.calculationRuns)
+              .orderBy(asc(schema.calculationRuns.id))
+            const [active] = yield* db
+              .select({ runId: schema.activeCalculationRuns.runId })
+              .from(schema.activeCalculationRuns)
+
+            return { runs, active }
+          })
+        )
+
+        expect(newer.activated).toBe(true)
+        expect(older.activated).toBe(false)
+        expect(stored).toEqual({
+          runs: [{ id: RUN_ID }, { id: SECOND_RUN_ID }],
+          active: { runId: SECOND_RUN_ID },
+        })
+      }),
+    10_000
   )
 
   it.effect("keeps active pointers isolated across tax-year and principal scopes", () =>
