@@ -7,7 +7,7 @@
 import type { TaxAccountingResult } from "@my/accounting"
 import { format as formatQuantity } from "@my/core/accounting"
 import type { CurrencyCode } from "@my/core/currency"
-import { and, asc, eq, sql } from "drizzle-orm"
+import { and, asc, desc, eq, ne, sql } from "drizzle-orm"
 import * as DateTime from "effect/DateTime"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
@@ -17,9 +17,13 @@ import { schema } from "../schema/index.ts"
 import {
   CalculationRunAlreadyStoredError,
   CalculationRunCurrencyMismatchError,
+  CalculationRunId,
   CalculationRunRepository,
   type CalculationRunRepositoryShape,
+  type ExposedCalculationRunStatus,
+  type FailCalculationRunParams,
   type PersistCalculationRunParams,
+  type StartCalculationRunParams,
 } from "../services/CalculationRunRepository.ts"
 import { drizzle } from "./PgClientLive.ts"
 
@@ -83,6 +87,72 @@ const make = Effect.gen(function* () {
     readonly result: TaxAccountingResult
     readonly startedAt: Date
   }
+  interface CustodyMembershipRow {
+    readonly custodyUnitId: string
+    readonly principalId: string
+    readonly sourceId: string | null
+  }
+
+  const toExposedStatus = (
+    status: (typeof schema.calculationRuns.$inferSelect)["status"]
+  ): ExposedCalculationRunStatus | null => {
+    switch (status) {
+      case "running":
+      case "complete":
+      case "partial":
+      case "failed":
+        return status
+      case "pending":
+        return null
+    }
+  }
+
+  const getLatestStatus: CalculationRunRepositoryShape["getLatestStatus"] = (params) =>
+    db
+      .select({
+        runId: schema.calculationRuns.id,
+        status: schema.calculationRuns.status,
+        failureCode: schema.calculationRuns.failureCode,
+      })
+      .from(schema.calculationRuns)
+      .where(
+        and(
+          eq(schema.calculationRuns.principalId, params.principalId),
+          eq(schema.calculationRuns.jurisdiction, params.jurisdiction),
+          eq(schema.calculationRuns.taxYear, params.taxYear),
+          eq(schema.calculationRuns.reportingCurrency, params.reportingCurrency),
+          ne(schema.calculationRuns.status, "pending")
+        )
+      )
+      .orderBy(
+        desc(
+          sql<number>`split_part(${schema.calculationRuns.inputLedgerRevision}, ':', 2)::numeric`
+        ),
+        desc(schema.calculationRuns.id)
+      )
+      .limit(1)
+      .pipe(
+        Effect.map((rows) => {
+          const row = rows[0]
+          if (row === undefined) return null
+
+          const status = toExposedStatus(row.status)
+          return status === null
+            ? null
+            : {
+                runId: CalculationRunId.make(row.runId),
+                status,
+                failureCode: row.failureCode,
+              }
+        }),
+        Effect.mapError(
+          (cause) =>
+            new PersistenceError({
+              operation: "calculationRunRepository.getLatestStatus",
+              cause,
+            })
+        )
+      )
 
   const claimRun = ({ tx, params, result, startedAt }: WriteContext) =>
     Effect.gen(function* () {
@@ -112,12 +182,76 @@ const make = Effect.gen(function* () {
         .onConflictDoNothing({ target: schema.calculationRuns.id })
         .returning({ id: schema.calculationRuns.id })
 
-      if (claimedRuns.length === 0) {
+      if (claimedRuns.length === 1) {
+        yield* validateReportingCurrency(params)
+        return true
+      }
+
+      const [runningRun] = yield* tx
+        .select({
+          principalId: schema.calculationRuns.principalId,
+          jurisdiction: schema.calculationRuns.jurisdiction,
+          taxYear: schema.calculationRuns.taxYear,
+          reportingCurrency: schema.calculationRuns.reportingCurrency,
+          engineVersion: schema.calculationRuns.engineVersion,
+          ruleSetVersion: schema.calculationRuns.ruleSetVersion,
+          inputLedgerRevision: schema.calculationRuns.inputLedgerRevision,
+          valuationRevision: schema.calculationRuns.valuationRevision,
+          status: schema.calculationRuns.status,
+        })
+        .from(schema.calculationRuns)
+        .where(eq(schema.calculationRuns.id, params.id))
+        .for("update")
+
+      if (
+        runningRun === undefined ||
+        runningRun.status !== "running" ||
+        runningRun.principalId !== params.principalId ||
+        runningRun.jurisdiction !== result.jurisdiction ||
+        runningRun.taxYear !== result.taxYear ||
+        runningRun.reportingCurrency !== params.reportingCurrency ||
+        runningRun.engineVersion !== result.engineVersion ||
+        runningRun.ruleSetVersion !== result.ruleSetVersion ||
+        runningRun.inputLedgerRevision !== params.inputLedgerRevision ||
+        runningRun.valuationRevision !== params.valuationRevision
+      ) {
         return yield* new CalculationRunAlreadyStoredError({ runId: params.id })
       }
 
       yield* validateReportingCurrency(params)
+      return false
     })
+
+  const writeCustodyMembership = ({
+    tx,
+    runId,
+    membership,
+  }: {
+    readonly tx: CalculationTransaction
+    readonly runId: CalculationRunId
+    readonly membership: ReadonlyArray<CustodyMembershipRow>
+  }) => {
+    const custodyUnits = [
+      ...new Map(
+        membership.map(({ custodyUnitId, principalId }) => [
+          custodyUnitId,
+          { runId, principalId, custodyUnitId },
+        ])
+      ).values(),
+    ]
+    const custodyUnitSources = membership.flatMap(({ custodyUnitId, principalId, sourceId }) =>
+      sourceId === null ? [] : [{ runId, principalId, custodyUnitId, sourceId }]
+    )
+
+    return Effect.gen(function* () {
+      yield* writeBatches(custodyUnits, (batch) =>
+        tx.insert(schema.calculationRunCustodyUnits).values(batch)
+      )
+      yield* writeBatches(custodyUnitSources, (batch) =>
+        tx.insert(schema.calculationRunCustodyUnitSources).values(batch)
+      )
+    })
+  }
 
   const snapshotCustodyMembership = ({ tx, params }: WriteContext) =>
     Effect.gen(function* () {
@@ -138,25 +272,7 @@ const make = Effect.gen(function* () {
         .where(eq(schema.custodyUnits.principalId, params.principalId))
         .orderBy(asc(schema.custodyUnits.id), asc(schema.custodyUnitSources.sourceId))
 
-      const custodyUnits = [
-        ...new Map(
-          liveMembership.map(({ custodyUnitId, principalId }) => [
-            custodyUnitId,
-            { runId: params.id, principalId, custodyUnitId },
-          ])
-        ).values(),
-      ]
-      const custodyUnitSources = liveMembership.flatMap(
-        ({ custodyUnitId, principalId, sourceId }) =>
-          sourceId === null ? [] : [{ runId: params.id, principalId, custodyUnitId, sourceId }]
-      )
-
-      yield* writeBatches(custodyUnits, (batch) =>
-        tx.insert(schema.calculationRunCustodyUnits).values(batch)
-      )
-      yield* writeBatches(custodyUnitSources, (batch) =>
-        tx.insert(schema.calculationRunCustodyUnitSources).values(batch)
-      )
+      yield* writeCustodyMembership({ tx, runId: params.id, membership: liveMembership })
     })
 
   const writeAllocations = ({ tx, params, result }: WriteContext) => {
@@ -322,8 +438,8 @@ const make = Effect.gen(function* () {
 
   const persistWithTransaction = (context: WriteContext) =>
     Effect.gen(function* () {
-      yield* claimRun(context)
-      yield* snapshotCustodyMembership(context)
+      const isNewRun = yield* claimRun(context)
+      if (isNewRun) yield* snapshotCustodyMembership(context)
       yield* writeAllocations(context)
       yield* writeRealizedResults(context)
       yield* writeIncomeResults(context)
@@ -364,7 +480,99 @@ const make = Effect.gen(function* () {
         )
       )
 
-  return CalculationRunRepository.of({ persist })
+  const start: CalculationRunRepositoryShape["start"] = (params: StartCalculationRunParams) =>
+    db
+      .transaction((tx) =>
+        Effect.gen(function* () {
+          const startedAt = yield* DateTime.nowAsDate
+          const startedRuns = yield* tx
+            .insert(schema.calculationRuns)
+            .values({
+              id: params.id,
+              principalId: params.principalId,
+              jurisdiction: params.jurisdiction,
+              taxYear: params.taxYear,
+              reportingCurrency: params.reportingCurrency,
+              engineVersion: params.engineVersion,
+              ruleSetVersion: params.ruleSetVersion,
+              inputLedgerRevision: params.inputLedgerRevision,
+              valuationRevision: params.valuationRevision,
+              status: "running",
+              accountingMethod: null,
+              inventoryScope: null,
+              appliedChoiceIds: [],
+              appliedRules: [],
+              processedEventIds: [],
+              startedAt,
+              completedAt: null,
+              createdAt: startedAt,
+              updatedAt: startedAt,
+            })
+            .onConflictDoNothing({ target: schema.calculationRuns.id })
+            .returning({ id: schema.calculationRuns.id })
+
+          if (startedRuns.length === 0) {
+            return yield* new CalculationRunAlreadyStoredError({ runId: params.id })
+          }
+
+          yield* writeCustodyMembership({
+            tx,
+            runId: params.id,
+            membership: params.custodyUnitMembership.map(({ custodyUnitId, sourceId }) => ({
+              principalId: params.principalId,
+              custodyUnitId,
+              sourceId,
+            })),
+          })
+        })
+      )
+      .pipe(
+        Effect.mapError((error) =>
+          Schema.is(CalculationRunAlreadyStoredError)(error)
+            ? error
+            : new PersistenceError({
+                operation: "calculationRunRepository.start",
+                cause: error,
+              })
+        )
+      )
+
+  const fail: CalculationRunRepositoryShape["fail"] = (params: FailCalculationRunParams) =>
+    Effect.gen(function* () {
+      const completedAt = yield* DateTime.nowAsDate
+      const failedRuns = yield* db
+        .update(schema.calculationRuns)
+        .set({
+          status: "failed",
+          failureCode: params.failureCode,
+          failureMessage: null,
+          completedAt,
+          updatedAt: completedAt,
+        })
+        .where(
+          and(
+            eq(schema.calculationRuns.id, params.id),
+            eq(schema.calculationRuns.principalId, params.principalId),
+            eq(schema.calculationRuns.status, "running")
+          )
+        )
+        .returning({ id: schema.calculationRuns.id })
+
+      if (failedRuns.length === 0) {
+        return yield* new CalculationRunAlreadyStoredError({ runId: params.id })
+      }
+    }).pipe(
+      Effect.mapError((error) =>
+        Schema.is(CalculationRunAlreadyStoredError)(error)
+          ? error
+          : new PersistenceError({
+              operation: "calculationRunRepository.fail",
+              cause: error,
+            })
+      )
+    )
+
+  return CalculationRunRepository.of({ fail, getLatestStatus, persist, start })
 })
 
 /** Live calculation-run repository backed by PostgreSQL. */
