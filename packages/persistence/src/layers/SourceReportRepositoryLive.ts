@@ -75,6 +75,7 @@ interface AssetAccumulator {
   proceeds: BigDecimal.BigDecimal
   realizedGainLoss: BigDecimal.BigDecimal
   currency: string | null
+  hasRunCostBasisEvidence: boolean
   hasPendingCostBasis: boolean
 }
 
@@ -663,6 +664,34 @@ const make = Effect.gen(function* () {
               )
               .pipe(wrapSqlError("sourceReportRepository.listAssetPnl.realized"))
 
+      const basisEvidenceRows =
+        activeRun === null
+          ? []
+          : yield* db
+              .select({ assetId: schema.calculationRunAllocations.assetId })
+              .from(schema.calculationRunAllocations)
+              .innerJoin(
+                schema.calculationRunRealizedResults,
+                and(
+                  eq(
+                    schema.calculationRunRealizedResults.runId,
+                    schema.calculationRunAllocations.runId
+                  ),
+                  eq(
+                    schema.calculationRunRealizedResults.allocationSequence,
+                    schema.calculationRunAllocations.sequence
+                  )
+                )
+              )
+              .where(
+                and(
+                  eq(schema.calculationRunAllocations.runId, activeRun.runId),
+                  eq(schema.calculationRunAllocations.custodyUnitId, activeRun.custodyUnitId)
+                )
+              )
+              .pipe(wrapSqlError("sourceReportRepository.listAssetPnl.basisEvidence"))
+
+      const basisEvidenceAssetIds = new Set(basisEvidenceRows.map((row) => row.assetId))
       const accumulators = new Map<string, AssetAccumulator>()
       const getAccumulator = (asset: SourceReportAsset): AssetAccumulator => {
         const existing = accumulators.get(asset.assetId)
@@ -678,6 +707,7 @@ const make = Effect.gen(function* () {
           proceeds: zeroDecimal(),
           realizedGainLoss: zeroDecimal(),
           currency: null,
+          hasRunCostBasisEvidence: basisEvidenceAssetIds.has(asset.assetId),
           hasPendingCostBasis: false,
         }
         accumulators.set(asset.assetId, created)
@@ -706,6 +736,7 @@ const make = Effect.gen(function* () {
 
       for (const row of lotRows) {
         const accumulator = getAccumulator(assetFromRow(row))
+        accumulator.hasRunCostBasisEvidence = true
         const remainingAmount = yield* decodeDecimal({
           operation: "sourceReportRepository.listAssetPnl.remainingAmount",
           value: row.remainingAmount,
@@ -757,20 +788,22 @@ const make = Effect.gen(function* () {
         calculationRunId: activeRun?.runId ?? null,
         assets: Array.from(accumulators.values())
           .sort((left, right) => left.asset.symbol.localeCompare(right.asset.symbol))
-          .map(
-            (row): SourceAssetPnlRow => ({
+          .map((row): SourceAssetPnlRow => {
+            const hasKnownCostBasis = row.hasRunCostBasisEvidence && !row.hasPendingCostBasis
+
+            return {
               asset: row.asset,
               acquiredAmount: formatDecimal(row.acquiredAmount),
               disposedAmount: formatDecimal(row.disposedAmount),
               openAmount: formatDecimal(row.openAmount),
-              costBasis: row.hasPendingCostBasis ? null : formatDecimal(row.openCostBasis),
-              costBasisStatus: row.hasPendingCostBasis ? "pending_review" : "known",
+              costBasis: hasKnownCostBasis ? formatDecimal(row.openCostBasis) : null,
+              costBasisStatus: hasKnownCostBasis ? "known" : "pending_review",
               proceeds: formatDecimal(row.proceeds),
               realizedGainLoss: formatDecimal(row.realizedGainLoss),
               currency: row.currency,
               review: summarizeReviewRows(reviewRowsByAssetId.get(row.asset.assetId) ?? []),
-            })
-          ),
+            }
+          }),
       }
     })
 

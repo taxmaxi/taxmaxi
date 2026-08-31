@@ -2890,6 +2890,189 @@ describe("SourcesApiLive", () => {
     }).pipe(Effect.provide(HttpLive))
   )
 
+  it.effect("marks open basis pending when the selected run has no asset evidence", () =>
+    Effect.gen(function* () {
+      const fixture = yield* seedSyncEngineRepositoryFixture(REPORT_TEST_FIXTURE)
+      yield* seedSyncEngineAssets({
+        baseBlockchainId: fixture.baseBlockchainId,
+        bitcoinBlockchainId: fixture.bitcoinBlockchainId,
+      })
+      yield* seedSourceReportRows({
+        principalId: fixture.principalId,
+        sourceId: fixture.sourceId,
+      })
+
+      const client = yield* makeAuthenticatedClient({ userId: fixture.userId })
+      const withoutRun = yield* client.sources.listSourceAssetPnl({
+        params: { sourceId: fixture.sourceId },
+      })
+      expect(withoutRun).toMatchObject({
+        calculationRunId: null,
+        assets: [
+          {
+            openAmount: "0",
+            costBasis: null,
+            costBasisStatus: "pending_review",
+          },
+        ],
+      })
+
+      yield* seedSourceReportActiveRun({
+        principalId: fixture.principalId,
+        sourceId: fixture.sourceId,
+      })
+      const db = yield* drizzle
+      yield* db
+        .update(schema.calculationRuns)
+        .set({ status: "partial" })
+        .where(eq(schema.calculationRuns.id, reportFixtureIds.activeCalculationRunId))
+      yield* db
+        .delete(schema.calculationRunDerivedLots)
+        .where(eq(schema.calculationRunDerivedLots.runId, reportFixtureIds.activeCalculationRunId))
+      yield* db
+        .delete(schema.calculationRunRealizedResults)
+        .where(
+          eq(schema.calculationRunRealizedResults.runId, reportFixtureIds.activeCalculationRunId)
+        )
+
+      const omittedFromPartialRun = yield* client.sources.listSourceAssetPnl({
+        params: { sourceId: fixture.sourceId },
+      })
+      expect(omittedFromPartialRun).toMatchObject({
+        calculationRunId: reportFixtureIds.activeCalculationRunId,
+        assets: [
+          {
+            openAmount: "0",
+            costBasis: null,
+            costBasisStatus: "pending_review",
+          },
+        ],
+      })
+    }).pipe(Effect.provide(HttpLive))
+  )
+
+  it.effect("keeps run-proven fully disposed open basis at known zero", () =>
+    Effect.gen(function* () {
+      const fixture = yield* seedSyncEngineRepositoryFixture(REPORT_TEST_FIXTURE)
+      yield* seedSyncEngineAssets({
+        baseBlockchainId: fixture.baseBlockchainId,
+        bitcoinBlockchainId: fixture.bitcoinBlockchainId,
+      })
+      yield* seedSourceReportRows({
+        principalId: fixture.principalId,
+        sourceId: fixture.sourceId,
+      })
+      yield* seedSourceReportActiveRun({
+        principalId: fixture.principalId,
+        sourceId: fixture.sourceId,
+      })
+
+      const db = yield* drizzle
+      yield* db
+        .update(schema.transactionLegs)
+        .set({ amount: "0.4" })
+        .where(eq(schema.transactionLegs.id, reportFixtureIds.acquisitionLegId))
+      yield* db
+        .delete(schema.calculationRunDerivedLots)
+        .where(eq(schema.calculationRunDerivedLots.runId, reportFixtureIds.activeCalculationRunId))
+
+      const client = yield* makeAuthenticatedClient({ userId: fixture.userId })
+      const assetPnl = yield* client.sources.listSourceAssetPnl({
+        params: { sourceId: fixture.sourceId },
+      })
+      expect(assetPnl).toMatchObject({
+        calculationRunId: reportFixtureIds.activeCalculationRunId,
+        assets: [
+          {
+            acquiredAmount: "0.4",
+            disposedAmount: "0.4",
+            openAmount: "0",
+            costBasis: "0",
+            costBasisStatus: "known",
+          },
+        ],
+      })
+    }).pipe(Effect.provide(HttpLive))
+  )
+
+  it.effect("uses grouped run evidence without leaking the disposing source totals", () =>
+    Effect.gen(function* () {
+      const fixture = yield* seedSyncEngineRepositoryFixture(REPORT_TEST_FIXTURE)
+      yield* seedSyncEngineAssets({
+        baseBlockchainId: fixture.baseBlockchainId,
+        bitcoinBlockchainId: fixture.bitcoinBlockchainId,
+      })
+      yield* seedSourceReportRows({
+        principalId: fixture.principalId,
+        sourceId: fixture.sourceId,
+      })
+      yield* seedSourceReportActiveRun({
+        principalId: fixture.principalId,
+        sourceId: fixture.sourceId,
+      })
+      yield* seedOtherReportSource({
+        principalId: fixture.principalId,
+        referenceSourceId: fixture.sourceId,
+      })
+
+      const db = yield* drizzle
+      yield* db.insert(schema.calculationRunCustodyUnitSources).values({
+        runId: reportFixtureIds.activeCalculationRunId,
+        principalId: fixture.principalId,
+        custodyUnitId: fixture.sourceId,
+        sourceId: reportFixtureIds.otherSourceId,
+      })
+      yield* db
+        .update(schema.transactionLegs)
+        .set({ amount: "0.4" })
+        .where(eq(schema.transactionLegs.id, reportFixtureIds.acquisitionLegId))
+      yield* db
+        .update(schema.transactions)
+        .set({ sourceId: reportFixtureIds.otherSourceId })
+        .where(eq(schema.transactions.id, reportFixtureIds.sellTransactionId))
+      yield* db
+        .update(schema.transactionLegs)
+        .set({ sourceId: reportFixtureIds.otherSourceId })
+        .where(eq(schema.transactionLegs.id, reportFixtureIds.disposalLegId))
+      yield* db
+        .update(schema.calculationRunRealizedResults)
+        .set({ sourceId: reportFixtureIds.otherSourceId })
+        .where(
+          eq(schema.calculationRunRealizedResults.runId, reportFixtureIds.activeCalculationRunId)
+        )
+      yield* db
+        .delete(schema.calculationRunDerivedLots)
+        .where(eq(schema.calculationRunDerivedLots.runId, reportFixtureIds.activeCalculationRunId))
+
+      const client = yield* makeAuthenticatedClient({ userId: fixture.userId })
+      const acquisitionSourcePnl = yield* client.sources.listSourceAssetPnl({
+        params: { sourceId: fixture.sourceId },
+      })
+      expect(acquisitionSourcePnl.assets[0]).toMatchObject({
+        acquiredAmount: "0.4",
+        disposedAmount: "0",
+        openAmount: "0",
+        costBasis: "0",
+        costBasisStatus: "known",
+        proceeds: "0",
+        realizedGainLoss: "0",
+      })
+
+      const dispositionSourcePnl = yield* client.sources.listSourceAssetPnl({
+        params: { sourceId: reportFixtureIds.otherSourceId },
+      })
+      expect(dispositionSourcePnl.assets[0]).toMatchObject({
+        acquiredAmount: "0",
+        disposedAmount: "0.4",
+        openAmount: "0",
+        costBasis: "0",
+        costBasisStatus: "known",
+        proceeds: "5000",
+        realizedGainLoss: "1000",
+      })
+    }).pipe(Effect.provide(HttpLive))
+  )
+
   it.effect("does not infer fee or transfer treatments outside engine results", () =>
     Effect.gen(function* () {
       const fixture = yield* seedSyncEngineRepositoryFixture(REPORT_TEST_FIXTURE)
@@ -2946,7 +3129,8 @@ describe("SourcesApiLive", () => {
         acquiredAmount: "1",
         disposedAmount: "0.4",
         openAmount: "0",
-        costBasis: "0",
+        costBasis: null,
+        costBasisStatus: "pending_review",
         proceeds: "0",
         realizedGainLoss: "0",
       })
