@@ -1,14 +1,24 @@
 /** PortfolioApiLive - Current user portfolio handlers. */
 
 import { HttpApiBuilder } from "effect/unstable/httpapi"
-import { PortfolioRepository, type PortfolioAssetPosition } from "@my/persistence/services"
+import { JurisdictionCode, TaxYear } from "@my/core/accounting"
+import { EUR } from "@my/core/currency"
+import { SourceId } from "@my/core/source"
+import {
+  CalculationRunRepository,
+  PortfolioRepository,
+  type PortfolioAssetPosition,
+} from "@my/persistence/services"
 import * as BigDecimal from "effect/BigDecimal"
+import * as DateTime from "effect/DateTime"
 import * as Effect from "effect/Effect"
 import * as Option from "effect/Option"
 import { InternalServerError } from "../definitions/ApiErrors.ts"
 import {
   PortfolioAssetRow,
+  PortfolioActiveRunResponse,
   PortfolioAssetsResponse,
+  PortfolioLatestRunResponse,
   PortfolioSourceNotFoundResponse,
   PortfolioSummary,
 } from "../definitions/PortfolioApi.ts"
@@ -21,6 +31,15 @@ import { PrincipalResolutionService } from "../services/PrincipalResolutionServi
 
 const internalError = (message: string) =>
   new InternalServerError({ requestId: Option.none(), message })
+
+const GERMAN_TIME_ZONE = "Europe/Berlin"
+const GERMAN_JURISDICTION = JurisdictionCode.make("DE")
+
+const currentGermanTaxYear = DateTime.now.pipe(
+  Effect.map(DateTime.setZoneNamedUnsafe(GERMAN_TIME_ZONE)),
+  Effect.map(DateTime.toParts),
+  Effect.map(({ year }) => TaxYear.make(year))
+)
 
 /** Build one valued portfolio row while preserving unavailable cost-basis state. */
 export const makePortfolioAssetRow = ({
@@ -71,6 +90,7 @@ export const makePortfolioAssetRow = ({
 
 export const PortfolioApiLive = HttpApiBuilder.group(TaxMaxiApi, "portfolio", (handlers) =>
   Effect.gen(function* () {
+    const calculationRunRepository = yield* CalculationRunRepository
     const portfolioRepository = yield* PortfolioRepository
     const priceService = yield* CoinGeckoPriceService
     const principalResolutionService = yield* PrincipalResolutionService
@@ -82,11 +102,15 @@ export const PortfolioApiLive = HttpApiBuilder.group(TaxMaxiApi, "portfolio", (h
         )
 
         const currency = urlParams.currency ?? "eur"
+        const taxYear = yield* currentGermanTaxYear
 
-        const positions = yield* portfolioRepository
-          .listAssetPositions({
+        const portfolio = yield* portfolioRepository
+          .getActiveRunPortfolio({
             principalId: principal.id,
-            sourceId: urlParams.sourceId ?? null,
+            sourceId: urlParams.sourceId === undefined ? null : SourceId.make(urlParams.sourceId),
+            jurisdiction: GERMAN_JURISDICTION,
+            taxYear,
+            reportingCurrency: EUR,
           })
           .pipe(
             Effect.catchTag("PortfolioSourceNotFoundError", () =>
@@ -98,6 +122,17 @@ export const PortfolioApiLive = HttpApiBuilder.group(TaxMaxiApi, "portfolio", (h
                 : internalError("Failed to load portfolio assets.")
             )
           )
+
+        const latestRun = yield* calculationRunRepository
+          .getLatestStatus({
+            principalId: principal.id,
+            jurisdiction: GERMAN_JURISDICTION,
+            taxYear,
+            reportingCurrency: EUR,
+          })
+          .pipe(Effect.mapError(() => internalError("Failed to load calculation run status.")))
+
+        const positions = portfolio.positions
 
         const coinIds = Array.from(
           new Set(
@@ -127,6 +162,21 @@ export const PortfolioApiLive = HttpApiBuilder.group(TaxMaxiApi, "portfolio", (h
 
         return PortfolioAssetsResponse.make({
           currency: currency.toUpperCase(),
+          activeRun:
+            portfolio.activeRun === null
+              ? null
+              : PortfolioActiveRunResponse.make({
+                  runId: portfolio.activeRun.runId,
+                  status: portfolio.activeRun.status,
+                }),
+          latestRun:
+            latestRun === null
+              ? null
+              : PortfolioLatestRunResponse.make({
+                  runId: latestRun.runId,
+                  status: latestRun.status,
+                  failureCode: latestRun.failureCode,
+                }),
           summary,
           assets,
         })

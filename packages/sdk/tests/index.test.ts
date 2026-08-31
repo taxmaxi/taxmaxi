@@ -177,6 +177,8 @@ const emptyPortfolioSummary = {
 }
 const portfolioAssetsResponseBody = JSON.stringify({
   currency: "EUR",
+  activeRun: null,
+  latestRun: null,
   summary: emptyPortfolioSummary,
   assets: [],
 })
@@ -990,6 +992,8 @@ describe("TaxMaxi Promise client", () => {
       yield* Effect.promise(() =>
         expect(taxmaxi.portfolio.listAssets({ currency: "EUR" })).resolves.toEqual({
           currency: "EUR",
+          activeRun: null,
+          latestRun: null,
           summary: emptyPortfolioSummary,
           assets: [],
         })

@@ -8,8 +8,9 @@ import { and, asc, eq, gt, isNull, or } from "drizzle-orm"
 import * as BigDecimal from "effect/BigDecimal"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
-import { wrapSqlError } from "../errors/RepositoryError.ts"
+import { PersistenceError, wrapSqlError } from "../errors/RepositoryError.ts"
 import { schema } from "../schema/index.ts"
+import { CalculationRunId } from "../services/CalculationRunRepository.ts"
 import {
   PortfolioRepository,
   PortfolioSourceNotFoundError,
@@ -30,6 +31,18 @@ interface PositionAccumulator {
   hasPendingCostBasis: boolean
 }
 
+interface PositionRow {
+  readonly assetId: string
+  readonly symbol: string
+  readonly name: string
+  readonly logoUrl: string | null
+  readonly coingeckoCoinId: string | null
+  readonly remainingAmount: string
+  readonly costBasisPerToken: string | null
+  readonly costBasisCurrency: string | null
+  readonly costBasisStatus: "known" | "pending_review"
+}
+
 const decodeDecimal = (value: string, operation: string) =>
   Effect.try({
     try: () => BigDecimal.fromStringUnsafe(value),
@@ -41,28 +54,201 @@ const mergeCurrency = (current: string | null, next: string): string | null => {
   return current === next ? current : "mixed"
 }
 
+const aggregatePositions = ({
+  rows,
+  operation,
+}: {
+  readonly rows: ReadonlyArray<PositionRow>
+  readonly operation: string
+}) =>
+  Effect.gen(function* () {
+    const positions = new Map<string, PositionAccumulator>()
+
+    for (const row of rows) {
+      const amount = yield* decodeDecimal(row.remainingAmount, `${operation}.remainingAmount`).pipe(
+        wrapSqlError(`${operation}.remainingAmount`)
+      )
+      const existing = positions.get(row.assetId) ?? {
+        assetId: row.assetId,
+        symbol: row.symbol,
+        name: row.name,
+        logoUrl: row.logoUrl,
+        coingeckoCoinId: row.coingeckoCoinId,
+        amount: BigDecimal.fromBigInt(0n),
+        costBasis: BigDecimal.fromBigInt(0n),
+        costBasisCurrency: null,
+        hasPendingCostBasis: false,
+      }
+
+      existing.amount = BigDecimal.sum(existing.amount, amount)
+
+      if (
+        row.costBasisStatus === "pending_review" ||
+        row.costBasisPerToken === null ||
+        row.costBasisCurrency === null
+      ) {
+        existing.hasPendingCostBasis = true
+      } else {
+        const costBasisPerToken = yield* decodeDecimal(
+          row.costBasisPerToken,
+          `${operation}.costBasisPerToken`
+        ).pipe(wrapSqlError(`${operation}.costBasisPerToken`))
+        existing.costBasis = BigDecimal.sum(
+          existing.costBasis,
+          BigDecimal.multiply(amount, costBasisPerToken)
+        )
+        existing.costBasisCurrency = mergeCurrency(
+          existing.costBasisCurrency,
+          row.costBasisCurrency
+        )
+      }
+
+      positions.set(row.assetId, existing)
+    }
+
+    return Array.from(positions.values()).map(
+      (position): PortfolioAssetPosition => ({
+        ...position,
+        amount: BigDecimal.format(position.amount),
+        costBasis: position.hasPendingCostBasis
+          ? null
+          : BigDecimal.format(BigDecimal.round(position.costBasis, { scale: 8 })),
+        costBasisCurrency: position.hasPendingCostBasis ? null : position.costBasisCurrency,
+        costBasisStatus: position.hasPendingCostBasis ? "pending_review" : "known",
+      })
+    )
+  })
+
 const make = Effect.gen(function* () {
   const db = yield* drizzle
 
-  const listAssetPositions: PortfolioRepositoryShape["listAssetPositions"] = (scope) =>
+  const ensureOwnedSource = ({
+    principalId,
+    sourceId,
+  }: {
+    readonly principalId: string
+    readonly sourceId: string | null
+  }) =>
     Effect.gen(function* () {
+      if (sourceId === null) return
+
+      const [ownedSource] = yield* db
+        .select({ id: schema.sources.id })
+        .from(schema.sources)
+        .where(and(eq(schema.sources.id, sourceId), eq(schema.sources.principalId, principalId)))
+        .limit(1)
+        .pipe(wrapSqlError("portfolioRepository.ownedSource"))
+
+      if (ownedSource === undefined) {
+        return yield* new PortfolioSourceNotFoundError({ sourceId })
+      }
+    })
+
+  const getActiveRunPortfolio: PortfolioRepositoryShape["getActiveRunPortfolio"] = (scope) =>
+    Effect.gen(function* () {
+      yield* ensureOwnedSource(scope)
+
+      const [activeRunRow] = yield* db
+        .select({
+          runId: schema.calculationRuns.id,
+          status: schema.calculationRuns.status,
+        })
+        .from(schema.activeCalculationRuns)
+        .innerJoin(
+          schema.calculationRuns,
+          eq(schema.activeCalculationRuns.runId, schema.calculationRuns.id)
+        )
+        .where(
+          and(
+            eq(schema.activeCalculationRuns.principalId, scope.principalId),
+            eq(schema.activeCalculationRuns.jurisdiction, scope.jurisdiction),
+            eq(schema.activeCalculationRuns.taxYear, scope.taxYear),
+            eq(schema.activeCalculationRuns.reportingCurrency, scope.reportingCurrency)
+          )
+        )
+        .limit(1)
+        .pipe(wrapSqlError("portfolioRepository.getActiveRunPortfolio.activeRun"))
+
+      if (activeRunRow === undefined) {
+        return { activeRun: null, positions: [] }
+      }
+
+      if (activeRunRow.status !== "complete" && activeRunRow.status !== "partial") {
+        return yield* new PersistenceError({
+          operation: "portfolioRepository.getActiveRunPortfolio.activeRunStatus",
+          cause: `Active calculation run has non-readable status ${activeRunRow.status}`,
+        })
+      }
+
+      const activeRun = {
+        runId: CalculationRunId.make(activeRunRow.runId),
+        status: activeRunRow.status,
+      } as const
+
+      let custodyUnitId: string | null = null
       if (scope.sourceId !== null) {
-        const [ownedSource] = yield* db
-          .select({ id: schema.sources.id })
-          .from(schema.sources)
+        const [membership] = yield* db
+          .select({ custodyUnitId: schema.calculationRunCustodyUnitSources.custodyUnitId })
+          .from(schema.calculationRunCustodyUnitSources)
           .where(
             and(
-              eq(schema.sources.id, scope.sourceId),
-              eq(schema.sources.principalId, scope.principalId)
+              eq(schema.calculationRunCustodyUnitSources.runId, activeRun.runId),
+              eq(schema.calculationRunCustodyUnitSources.principalId, scope.principalId),
+              eq(schema.calculationRunCustodyUnitSources.sourceId, scope.sourceId)
             )
           )
           .limit(1)
-          .pipe(wrapSqlError("portfolioRepository.listAssetPositions.source"))
+          .pipe(wrapSqlError("portfolioRepository.getActiveRunPortfolio.sourceMembership"))
 
-        if (ownedSource === undefined) {
-          return yield* new PortfolioSourceNotFoundError({ sourceId: scope.sourceId })
+        if (membership === undefined) {
+          return { activeRun, positions: [] }
         }
+
+        custodyUnitId = membership.custodyUnitId
       }
+
+      const rows = yield* db
+        .select({
+          assetId: schema.assets.id,
+          symbol: schema.assets.symbol,
+          name: schema.assets.name,
+          logoUrl: schema.assets.logoUrl,
+          coingeckoCoinId: schema.assets.coingeckoCoinId,
+          remainingAmount: schema.calculationRunDerivedLots.remainingQuantity,
+          costBasisPerToken: schema.calculationRunDerivedLots.costBasisPerUnit,
+        })
+        .from(schema.calculationRunDerivedLots)
+        .innerJoin(schema.assets, eq(schema.calculationRunDerivedLots.assetId, schema.assets.id))
+        .where(
+          and(
+            eq(schema.calculationRunDerivedLots.runId, activeRun.runId),
+            gt(schema.calculationRunDerivedLots.remainingQuantity, "0"),
+            custodyUnitId === null
+              ? undefined
+              : eq(schema.calculationRunDerivedLots.custodyUnitId, custodyUnitId)
+          )
+        )
+        .orderBy(asc(schema.assets.symbol), asc(schema.assets.id))
+        .pipe(wrapSqlError("portfolioRepository.getActiveRunPortfolio.lots"))
+
+      const positions = yield* aggregatePositions({
+        rows: rows.map((row) => ({
+          ...row,
+          costBasisCurrency: scope.reportingCurrency,
+          costBasisStatus: row.costBasisPerToken === null ? "pending_review" : "known",
+        })),
+        operation: "portfolioRepository.getActiveRunPortfolio",
+      })
+
+      return {
+        activeRun,
+        positions,
+      }
+    })
+
+  const listAssetPositions: PortfolioRepositoryShape["listAssetPositions"] = (scope) =>
+    Effect.gen(function* () {
+      yield* ensureOwnedSource(scope)
 
       const rows = yield* db
         .select({
@@ -96,64 +282,13 @@ const make = Effect.gen(function* () {
         .orderBy(asc(schema.assets.symbol), asc(schema.assets.id))
         .pipe(wrapSqlError("portfolioRepository.listAssetPositions.lots"))
 
-      const positions = new Map<string, PositionAccumulator>()
-
-      for (const row of rows) {
-        const amount = yield* decodeDecimal(
-          row.remainingAmount,
-          "portfolioRepository.listAssetPositions.remainingAmount"
-        ).pipe(wrapSqlError("portfolioRepository.listAssetPositions.remainingAmount"))
-
-        const existing = positions.get(row.assetId) ?? {
-          assetId: row.assetId,
-          symbol: row.symbol,
-          name: row.name,
-          logoUrl: row.logoUrl,
-          coingeckoCoinId: row.coingeckoCoinId,
-          amount: BigDecimal.fromBigInt(0n),
-          costBasis: BigDecimal.fromBigInt(0n),
-          costBasisCurrency: null,
-          hasPendingCostBasis: false,
-        }
-
-        existing.amount = BigDecimal.sum(existing.amount, amount)
-
-        if (row.costBasisStatus === "pending_review") {
-          existing.hasPendingCostBasis = true
-        } else {
-          const costBasisPerToken = yield* decodeDecimal(
-            row.costBasisPerToken,
-            "portfolioRepository.listAssetPositions.costBasisPerToken"
-          ).pipe(wrapSqlError("portfolioRepository.listAssetPositions.costBasisPerToken"))
-
-          existing.costBasis = BigDecimal.sum(
-            existing.costBasis,
-            BigDecimal.multiply(amount, costBasisPerToken)
-          )
-
-          existing.costBasisCurrency = mergeCurrency(
-            existing.costBasisCurrency,
-            row.costBasisCurrency
-          )
-        }
-
-        positions.set(row.assetId, existing)
-      }
-
-      return Array.from(positions.values()).map(
-        (position): PortfolioAssetPosition => ({
-          ...position,
-          amount: BigDecimal.format(position.amount),
-          costBasis: position.hasPendingCostBasis
-            ? null
-            : BigDecimal.format(BigDecimal.round(position.costBasis, { scale: 8 })),
-          costBasisCurrency: position.hasPendingCostBasis ? null : position.costBasisCurrency,
-          costBasisStatus: position.hasPendingCostBasis ? "pending_review" : "known",
-        })
-      )
+      return yield* aggregatePositions({
+        rows,
+        operation: "portfolioRepository.listAssetPositions",
+      })
     })
 
-  return PortfolioRepository.of({ listAssetPositions })
+  return PortfolioRepository.of({ getActiveRunPortfolio, listAssetPositions })
 })
 
 /** Live portfolio repository layer. */

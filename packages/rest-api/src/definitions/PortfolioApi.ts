@@ -30,10 +30,27 @@ export class PortfolioSummary extends Schema.Class<PortfolioSummary>("PortfolioS
   profitLossPercentage: Schema.NullOr(Schema.BigDecimalFromString),
 }) {}
 
+export class PortfolioActiveRunResponse extends Schema.Class<PortfolioActiveRunResponse>(
+  "PortfolioActiveRunResponse"
+)({
+  runId: Schema.String,
+  status: Schema.Literals(["complete", "partial"]),
+}) {}
+
+export class PortfolioLatestRunResponse extends Schema.Class<PortfolioLatestRunResponse>(
+  "PortfolioLatestRunResponse"
+)({
+  runId: Schema.String,
+  status: Schema.Literals(["running", "complete", "partial", "failed"]),
+  failureCode: Schema.NullOr(Schema.String),
+}) {}
+
 export class PortfolioAssetsResponse extends Schema.Class<PortfolioAssetsResponse>(
   "PortfolioAssetsResponse"
 )({
   currency: Schema.String,
+  activeRun: Schema.NullOr(PortfolioActiveRunResponse),
+  latestRun: Schema.NullOr(PortfolioLatestRunResponse),
   summary: PortfolioSummary,
   assets: Schema.Array(PortfolioAssetRow),
 }) {}
@@ -58,7 +75,7 @@ const listPortfolioAssets = HttpApiEndpoint.get("listPortfolioAssets", "/assets"
   OpenApi.annotations({
     summary: "List portfolio assets",
     description:
-      "Returns current open asset positions across all user sources or one selected source, valued with CoinGecko prices.",
+      "Returns positions from the active calculation run across all user sources or one selected source, plus the latest run status and live CoinGecko values.",
   })
 )
 
