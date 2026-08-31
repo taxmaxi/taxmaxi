@@ -23,6 +23,22 @@ import {
 } from "../services/CalculationRunRepository.ts"
 import { drizzle } from "./PgClientLive.ts"
 
+const INSERT_BATCH_ROW_COUNT = 500
+
+const writeBatches = <Row, Error, Requirements>(
+  rows: ReadonlyArray<Row>,
+  writeBatch: (batch: [Row, ...Array<Row>]) => Effect.Effect<unknown, Error, Requirements>
+): Effect.Effect<void, Error, Requirements> =>
+  Effect.gen(function* () {
+    for (let start = 0; start < rows.length; start += INSERT_BATCH_ROW_COUNT) {
+      const first = rows[start]
+
+      if (first !== undefined) {
+        yield* writeBatch([first, ...rows.slice(start + 1, start + INSERT_BATCH_ROW_COUNT)])
+      }
+    }
+  })
+
 const resultCurrencies = (result: TaxAccountingResult): ReadonlyArray<CurrencyCode> => [
   ...result.allocations.flatMap(({ costBasis }) =>
     costBasis === null ? [] : [costBasis.currency]
@@ -65,10 +81,10 @@ const make = Effect.gen(function* () {
     readonly tx: CalculationTransaction
     readonly params: PersistCalculationRunParams
     readonly result: TaxAccountingResult
-    readonly now: Date
+    readonly startedAt: Date
   }
 
-  const claimRun = ({ tx, params, result, now }: WriteContext) =>
+  const claimRun = ({ tx, params, result, startedAt }: WriteContext) =>
     Effect.gen(function* () {
       const claimedRuns = yield* tx
         .insert(schema.calculationRuns)
@@ -82,16 +98,16 @@ const make = Effect.gen(function* () {
           ruleSetVersion: result.ruleSetVersion,
           inputLedgerRevision: params.inputLedgerRevision,
           valuationRevision: params.valuationRevision,
-          status: result.status,
-          accountingMethod: result.accountingMethod,
-          inventoryScope: result.inventoryScope,
-          appliedChoiceIds: result.appliedChoiceIds,
-          appliedRules: result.appliedRules,
-          processedEventIds: result.processedEventIds,
-          startedAt: now,
-          completedAt: now,
-          createdAt: now,
-          updatedAt: now,
+          status: "pending",
+          accountingMethod: null,
+          inventoryScope: null,
+          appliedChoiceIds: [],
+          appliedRules: [],
+          processedEventIds: [],
+          startedAt,
+          completedAt: null,
+          createdAt: startedAt,
+          updatedAt: startedAt,
         })
         .onConflictDoNothing({ target: schema.calculationRuns.id })
         .returning({ id: schema.calculationRuns.id })
@@ -135,13 +151,12 @@ const make = Effect.gen(function* () {
           sourceId === null ? [] : [{ runId: params.id, principalId, custodyUnitId, sourceId }]
       )
 
-      if (custodyUnits.length > 0) {
-        yield* tx.insert(schema.calculationRunCustodyUnits).values(custodyUnits)
-      }
-
-      if (custodyUnitSources.length > 0) {
-        yield* tx.insert(schema.calculationRunCustodyUnitSources).values(custodyUnitSources)
-      }
+      yield* writeBatches(custodyUnits, (batch) =>
+        tx.insert(schema.calculationRunCustodyUnits).values(batch)
+      )
+      yield* writeBatches(custodyUnitSources, (batch) =>
+        tx.insert(schema.calculationRunCustodyUnitSources).values(batch)
+      )
     })
 
   const writeAllocations = ({ tx, params, result }: WriteContext) => {
@@ -159,9 +174,7 @@ const make = Effect.gen(function* () {
       costBasis: allocation.costBasis?.format() ?? null,
     }))
 
-    return rows.length === 0
-      ? Effect.void
-      : tx.insert(schema.calculationRunAllocations).values(rows)
+    return writeBatches(rows, (batch) => tx.insert(schema.calculationRunAllocations).values(batch))
   }
 
   const writeRealizedResults = ({ tx, params, result }: WriteContext) => {
@@ -180,9 +193,9 @@ const make = Effect.gen(function* () {
       treatmentCodes: realized.treatmentCodes,
     }))
 
-    return rows.length === 0
-      ? Effect.void
-      : tx.insert(schema.calculationRunRealizedResults).values(rows)
+    return writeBatches(rows, (batch) =>
+      tx.insert(schema.calculationRunRealizedResults).values(batch)
+    )
   }
 
   const writeIncomeResults = ({ tx, params, result }: WriteContext) => {
@@ -197,9 +210,9 @@ const make = Effect.gen(function* () {
       treatmentCodes: income.treatmentCodes,
     }))
 
-    return rows.length === 0
-      ? Effect.void
-      : tx.insert(schema.calculationRunIncomeResults).values(rows)
+    return writeBatches(rows, (batch) =>
+      tx.insert(schema.calculationRunIncomeResults).values(batch)
+    )
   }
 
   const writeDerivedLots = ({ tx, params, result }: WriteContext) => {
@@ -215,9 +228,7 @@ const make = Effect.gen(function* () {
       costBasisPerUnit: lot.costBasisPerUnit?.format() ?? null,
     }))
 
-    return rows.length === 0
-      ? Effect.void
-      : tx.insert(schema.calculationRunDerivedLots).values(rows)
+    return writeBatches(rows, (batch) => tx.insert(schema.calculationRunDerivedLots).values(batch))
   }
 
   const writeBlockers = ({ tx, params, result }: WriteContext) => {
@@ -233,7 +244,7 @@ const make = Effect.gen(function* () {
         blocker.missingQuantity === null ? null : formatQuantity(blocker.missingQuantity),
     }))
 
-    return rows.length === 0 ? Effect.void : tx.insert(schema.calculationRunBlockers).values(rows)
+    return writeBatches(rows, (batch) => tx.insert(schema.calculationRunBlockers).values(batch))
   }
 
   const writeExplanations = ({ tx, params, result }: WriteContext) => {
@@ -249,12 +260,38 @@ const make = Effect.gen(function* () {
       })),
     }))
 
-    return rows.length === 0
-      ? Effect.void
-      : tx.insert(schema.calculationRunExplanationEntries).values(rows)
+    return writeBatches(rows, (batch) =>
+      tx.insert(schema.calculationRunExplanationEntries).values(batch)
+    )
   }
 
-  const activateRun = ({ tx, params, result, now }: WriteContext) =>
+  const finalizeRun = ({ tx, params, result }: WriteContext) =>
+    Effect.gen(function* () {
+      const completedAt = yield* DateTime.nowAsDate
+
+      yield* tx
+        .update(schema.calculationRuns)
+        .set({
+          status: result.status,
+          accountingMethod: result.accountingMethod,
+          inventoryScope: result.inventoryScope,
+          appliedChoiceIds: result.appliedChoiceIds,
+          appliedRules: result.appliedRules,
+          processedEventIds: result.processedEventIds,
+          completedAt,
+          updatedAt: completedAt,
+        })
+        .where(eq(schema.calculationRuns.id, params.id))
+
+      return completedAt
+    })
+
+  const activateRun = ({
+    tx,
+    params,
+    result,
+    completedAt,
+  }: WriteContext & { readonly completedAt: Date }) =>
     tx
       .insert(schema.activeCalculationRuns)
       .values({
@@ -263,7 +300,7 @@ const make = Effect.gen(function* () {
         taxYear: result.taxYear,
         reportingCurrency: params.reportingCurrency,
         runId: params.id,
-        updatedAt: now,
+        updatedAt: completedAt,
       })
       .onConflictDoUpdate({
         target: [
@@ -272,16 +309,16 @@ const make = Effect.gen(function* () {
           schema.activeCalculationRuns.taxYear,
           schema.activeCalculationRuns.reportingCurrency,
         ],
-        set: { runId: params.id, updatedAt: now },
+        set: { runId: params.id, updatedAt: completedAt },
       })
 
   const persist: CalculationRunRepositoryShape["persist"] = (params) =>
     db
       .transaction((tx) =>
         Effect.gen(function* () {
-          const now = yield* DateTime.nowAsDate
+          const startedAt = yield* DateTime.nowAsDate
           const { result } = params
-          const context = { tx, params, result, now }
+          const context = { tx, params, result, startedAt }
 
           yield* claimRun(context)
           yield* snapshotCustodyMembership(context)
@@ -291,7 +328,8 @@ const make = Effect.gen(function* () {
           yield* writeDerivedLots(context)
           yield* writeBlockers(context)
           yield* writeExplanations(context)
-          yield* activateRun(context)
+          const completedAt = yield* finalizeRun(context)
+          yield* activateRun({ ...context, completedAt })
         })
       )
       .pipe(

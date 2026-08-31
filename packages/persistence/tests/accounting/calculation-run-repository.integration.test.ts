@@ -436,6 +436,164 @@ describe("CalculationRunRepositoryLive", () => {
     })
   )
 
+  it.effect("batches results beyond PostgreSQL's single-statement parameter limit", () =>
+    Effect.gen(function* () {
+      yield* runPgEffect(seedCalculationRunFixture())
+      const base = completeResult()
+      const allocation = base.allocations[0]
+
+      if (allocation === undefined) {
+        return yield* Effect.die("completeResult must contain one allocation")
+      }
+
+      const allocationCount = 6_000
+      yield* runRepository(
+        persistResult({
+          result: {
+            ...base,
+            allocations: Array.from({ length: allocationCount }, () => allocation),
+          },
+        })
+      )
+
+      const stored = yield* runPgEffect(
+        Effect.gen(function* () {
+          const db = yield* drizzle
+          const [allocationSummary] = yield* db
+            .select({
+              count: sql<number>`count(*)::integer`,
+              firstSequence: sql<number>`min(${schema.calculationRunAllocations.sequence})::integer`,
+              lastSequence: sql<number>`max(${schema.calculationRunAllocations.sequence})::integer`,
+            })
+            .from(schema.calculationRunAllocations)
+            .where(eq(schema.calculationRunAllocations.runId, RUN_ID))
+          const [active] = yield* db
+            .select({ runId: schema.activeCalculationRuns.runId })
+            .from(schema.activeCalculationRuns)
+            .where(eq(schema.activeCalculationRuns.runId, RUN_ID))
+
+          return { allocationSummary, active }
+        })
+      )
+
+      expect(stored).toEqual({
+        allocationSummary: {
+          count: allocationCount,
+          firstSequence: 0,
+          lastSequence: allocationCount - 1,
+        },
+        active: { runId: RUN_ID },
+      })
+    })
+  )
+
+  it.effect("keeps the claimed run pending until child rows are stored", () =>
+    Effect.gen(function* () {
+      yield* runPgEffect(seedCalculationRunFixture())
+      yield* runPgEffect(
+        Effect.gen(function* () {
+          const db = yield* drizzle
+          yield* db.execute(
+            sql.raw(`
+              create function assert_test_run_pending() returns trigger as $$
+              declare parent_status text;
+              declare parent_completed_at timestamptz;
+              begin
+                select status::text, completed_at
+                  into parent_status, parent_completed_at
+                  from calculation_runs
+                  where id = new.run_id;
+                if parent_status <> 'pending' or parent_completed_at is not null then
+                  raise exception 'run was finalized before child persistence';
+                end if;
+                return new;
+              end;
+              $$ language plpgsql
+            `)
+          )
+          yield* db.execute(
+            sql.raw(`
+              create trigger assert_test_run_pending
+              before insert on calculation_run_allocations
+              for each row execute function assert_test_run_pending()
+            `)
+          )
+          yield* db.execute(
+            sql.raw(`
+              create function assert_test_run_finalized() returns trigger as $$
+              declare parent_status text;
+              declare parent_started_at timestamptz;
+              declare parent_completed_at timestamptz;
+              begin
+                select status::text, started_at, completed_at
+                  into parent_status, parent_started_at, parent_completed_at
+                  from calculation_runs
+                  where id = new.run_id;
+                if parent_status <> 'complete'
+                  or parent_completed_at is null
+                  or parent_completed_at < parent_started_at then
+                  raise exception 'run was activated before finalization';
+                end if;
+                return new;
+              end;
+              $$ language plpgsql
+            `)
+          )
+          yield* db.execute(
+            sql.raw(`
+              create trigger assert_test_run_finalized
+              before insert on active_calculation_runs
+              for each row execute function assert_test_run_finalized()
+            `)
+          )
+        })
+      )
+
+      const removeLifecycleAssertions = runPgEffect(
+        Effect.gen(function* () {
+          const db = yield* drizzle
+          yield* db.execute(
+            sql.raw("drop trigger if exists assert_test_run_pending on calculation_run_allocations")
+          )
+          yield* db.execute(
+            sql.raw("drop trigger if exists assert_test_run_finalized on active_calculation_runs")
+          )
+          yield* db.execute(sql.raw("drop function if exists assert_test_run_pending()"))
+          yield* db.execute(sql.raw("drop function if exists assert_test_run_finalized()"))
+        })
+      )
+
+      yield* runRepository(persistResult()).pipe(Effect.ensuring(removeLifecycleAssertions))
+
+      const [stored] = yield* runPgEffect(
+        Effect.gen(function* () {
+          const db = yield* drizzle
+          return yield* db
+            .select({
+              status: schema.calculationRuns.status,
+              accountingMethod: schema.calculationRuns.accountingMethod,
+              inventoryScope: schema.calculationRuns.inventoryScope,
+              startedAt: schema.calculationRuns.startedAt,
+              completedAt: schema.calculationRuns.completedAt,
+            })
+            .from(schema.calculationRuns)
+            .where(eq(schema.calculationRuns.id, RUN_ID))
+        })
+      )
+
+      expect(stored).toMatchObject({
+        status: "complete",
+        accountingMethod: "fifo",
+        inventoryScope: "per_custody_unit",
+      })
+      expect(stored?.startedAt).toBeInstanceOf(Date)
+      expect(stored?.completedAt).toBeInstanceOf(Date)
+      expect((stored?.completedAt?.getTime() ?? 0) >= (stored?.startedAt?.getTime() ?? 1)).toBe(
+        true
+      )
+    })
+  )
+
   it.effect("writes and activates a partial run with ordered blockers", () =>
     Effect.gen(function* () {
       yield* runPgEffect(seedCalculationRunFixture())
