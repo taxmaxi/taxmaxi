@@ -179,11 +179,13 @@ const disposedAt = Timestamp.make({ epochMillis: Date.parse("2025-01-02T10:00:00
 
 const completeResult = ({
   custodyUnitId = TEST_CUSTODY_UNIT_ID,
+  custodySourceId = SourceId.make(TEST_SOURCE_ID),
   currency = "EUR",
   jurisdiction = "DE",
   taxYear = 2025,
 }: {
   readonly custodyUnitId?: CustodyUnitId
+  readonly custodySourceId?: SourceId
   readonly currency?: string
   readonly jurisdiction?: string
   readonly taxYear?: number
@@ -214,6 +216,8 @@ const completeResult = ({
     {
       acquisitionEventId: ACQUISITION_EVENT_ID,
       dispositionEventId: DISPOSITION_EVENT_ID,
+      custodySourceId,
+      allocationSequence: 0,
       assetId: TEST_BTC_ASSET_ID,
       acquiredAt,
       disposedAt,
@@ -227,6 +231,7 @@ const completeResult = ({
   incomeResults: [
     {
       eventId: ACQUISITION_EVENT_ID,
+      custodySourceId,
       assetId: TEST_BTC_ASSET_ID,
       occurredAt: acquiredAt,
       quantity: quantity("0.01"),
@@ -1210,6 +1215,8 @@ describe("CalculationRunRepositoryLive", () => {
           const realizedResults = yield* db
             .select({
               sequence: schema.calculationRunRealizedResults.sequence,
+              sourceId: schema.calculationRunRealizedResults.sourceId,
+              allocationSequence: schema.calculationRunRealizedResults.allocationSequence,
               gainLoss: schema.calculationRunRealizedResults.gainLoss,
             })
             .from(schema.calculationRunRealizedResults)
@@ -1217,6 +1224,7 @@ describe("CalculationRunRepositoryLive", () => {
           const incomeResults = yield* db
             .select({
               sequence: schema.calculationRunIncomeResults.sequence,
+              sourceId: schema.calculationRunIncomeResults.sourceId,
               value: schema.calculationRunIncomeResults.value,
             })
             .from(schema.calculationRunIncomeResults)
@@ -1279,12 +1287,15 @@ describe("CalculationRunRepositoryLive", () => {
           : BigDecimal.equals(BigDecimal.fromStringUnsafe(allocation.quantity), quantity("0.25"))
       ).toBe(true)
       expect(realized?.sequence).toBe(0)
+      expect(realized?.sourceId).toBe(TEST_SOURCE_ID)
+      expect(realized?.allocationSequence).toBe(allocation?.sequence)
       expect(
         realized === undefined
           ? false
           : BigDecimal.equals(BigDecimal.fromStringUnsafe(realized.gainLoss), quantity("5000"))
       ).toBe(true)
       expect(income?.sequence).toBe(0)
+      expect(income?.sourceId).toBe(TEST_SOURCE_ID)
       expect(
         income === undefined
           ? false
@@ -1976,7 +1987,10 @@ describe("CalculationRunRepositoryLive", () => {
         persistResult({
           id: THIRD_RUN_ID,
           principalId: OTHER_PRINCIPAL_ID,
-          result: completeResult({ custodyUnitId: OTHER_CUSTODY_UNIT_ID }),
+          result: completeResult({
+            custodyUnitId: OTHER_CUSTODY_UNIT_ID,
+            custodySourceId: SourceId.make(OTHER_SOURCE_ID),
+          }),
         })
       )
       yield* runRepository(

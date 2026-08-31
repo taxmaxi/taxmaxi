@@ -24,6 +24,7 @@ const SOURCE_TWO = "22222222-2222-4222-8222-222222222222"
 const ACQUISITION_ONE = "33333333-3333-4333-8333-333333333333"
 const ACQUISITION_TWO = "44444444-4444-4444-8444-444444444444"
 const DISPOSITION = "55555555-5555-4555-8555-555555555555"
+const PRIOR_DISPOSITION = "88888888-8888-4888-8888-888888888888"
 
 const choices = [
   decodeChoice({
@@ -49,14 +50,16 @@ const choices = [
 const runCalculation = ({
   ledger,
   valuationFacts,
+  taxYear = 1970,
 }: {
   readonly ledger: ReadonlyArray<AccountingEventType>
   readonly valuationFacts: ReadonlyArray<ValuationFactType>
+  readonly taxYear?: number
 }) =>
   calculate({
     ledger,
     jurisdiction: JurisdictionCode.make("DE"),
-    taxYear: TaxYear.make(1970),
+    taxYear: TaxYear.make(taxYear),
     accountingChoices: choices,
     valuationFacts,
   })
@@ -130,6 +133,8 @@ describe("calculate", () => {
       expect(
         result.realizedResults.map((realized) => ({
           acquisitionEventId: realized.acquisitionEventId,
+          custodySourceId: realized.custodySourceId,
+          allocationSequence: realized.allocationSequence,
           proceeds: realized.proceeds.format(),
           gainLoss: realized.gainLoss.format(),
           treatmentCodes: realized.treatmentCodes,
@@ -137,12 +142,16 @@ describe("calculate", () => {
       ).toEqual([
         {
           acquisitionEventId: ACQUISITION_ONE,
+          custodySourceId: SOURCE_ONE,
+          allocationSequence: 0,
           proceeds: "40",
           gainLoss: "10",
           treatmentCodes: ["de.taxable_private_disposal"],
         },
         {
           acquisitionEventId: ACQUISITION_TWO,
+          custodySourceId: SOURCE_ONE,
+          allocationSequence: 1,
           proceeds: "40",
           gainLoss: "30",
           treatmentCodes: ["de.taxable_private_disposal"],
@@ -167,6 +176,104 @@ describe("calculate", () => {
         inventoryScope: "per_custody_unit",
         blockers: [],
         incomeResults: [],
+      })
+    })
+  )
+
+  it.effect("attributes income to its acquisition custody source", () =>
+    Effect.gen(function* () {
+      const acquisition = decodeEvent({
+        _tag: "acquisition",
+        id: ACQUISITION_ONE,
+        occurredAt: { epochMillis: 1_000 },
+        assetId: ASSET_ID,
+        quantity: "2",
+        custodySourceId: SOURCE_TWO,
+        cause: "passive_staking_reward",
+      })
+
+      const result = yield* runCalculation({
+        ledger: [acquisition],
+        valuationFacts: [
+          decodeValuationFact({
+            _tag: "market_quote",
+            eventId: ACQUISITION_ONE,
+            unitPrice: { amount: "12.50", currency: "EUR" },
+            quotedAt: acquisition.occurredAt,
+            source: "fixture",
+          }),
+        ],
+      })
+
+      expect(result.incomeResults).toHaveLength(1)
+      expect(result.incomeResults[0]).toMatchObject({
+        eventId: ACQUISITION_ONE,
+        custodySourceId: SOURCE_TWO,
+      })
+    })
+  )
+
+  it.effect("links realized results to reindexed target-year allocations", () =>
+    Effect.gen(function* () {
+      const acquisition = decodeEvent({
+        _tag: "acquisition",
+        id: ACQUISITION_ONE,
+        occurredAt: { epochMillis: Date.parse("1970-01-01T10:00:00.000Z") },
+        assetId: ASSET_ID,
+        quantity: "2",
+        custodySourceId: SOURCE_ONE,
+        cause: "purchase",
+      })
+      const priorDisposition = decodeEvent({
+        _tag: "disposition",
+        id: PRIOR_DISPOSITION,
+        occurredAt: { epochMillis: Date.parse("1970-06-01T10:00:00.000Z") },
+        assetId: ASSET_ID,
+        quantity: "1",
+        custodySourceId: SOURCE_ONE,
+        cause: "sale",
+      })
+      const targetDisposition = decodeEvent({
+        _tag: "disposition",
+        id: DISPOSITION,
+        occurredAt: { epochMillis: Date.parse("1971-06-01T10:00:00.000Z") },
+        assetId: ASSET_ID,
+        quantity: "1",
+        custodySourceId: SOURCE_ONE,
+        cause: "sale",
+      })
+
+      const result = yield* runCalculation({
+        ledger: [targetDisposition, priorDisposition, acquisition],
+        taxYear: 1971,
+        valuationFacts: [
+          decodeValuationFact({
+            _tag: "observed_consideration",
+            eventId: ACQUISITION_ONE,
+            amount: { amount: "20", currency: "EUR" },
+            evidenceReference: "basis",
+          }),
+          decodeValuationFact({
+            _tag: "observed_consideration",
+            eventId: PRIOR_DISPOSITION,
+            amount: { amount: "15", currency: "EUR" },
+            evidenceReference: "prior-sale",
+          }),
+          decodeValuationFact({
+            _tag: "observed_consideration",
+            eventId: DISPOSITION,
+            amount: { amount: "30", currency: "EUR" },
+            evidenceReference: "target-sale",
+          }),
+        ],
+      })
+
+      expect(result.allocations).toHaveLength(1)
+      expect(result.allocations[0]?.dispositionEventId).toBe(DISPOSITION)
+      expect(result.realizedResults).toHaveLength(1)
+      expect(result.realizedResults[0]).toMatchObject({
+        dispositionEventId: DISPOSITION,
+        allocationSequence: 0,
       })
     })
   )
@@ -404,7 +511,11 @@ describe("calculate", () => {
         { acquisitionEventId: ACQUISITION_TWO, quantity: "1", costBasis: "20" },
       ])
       expect(result.realizedResults).toHaveLength(1)
-      expect(result.realizedResults[0]?.acquisitionEventId).toBe(ACQUISITION_TWO)
+      expect(result.realizedResults[0]).toMatchObject({
+        acquisitionEventId: ACQUISITION_TWO,
+        custodySourceId: SOURCE_ONE,
+        allocationSequence: 1,
+      })
       expect(result.realizedResults[0]?.proceeds.format()).toBe("50")
       expect(result.realizedResults[0]?.gainLoss.format()).toBe("30")
       expect(result.blockers.map((blocker) => blocker.code)).toEqual(["missing_valuation"])

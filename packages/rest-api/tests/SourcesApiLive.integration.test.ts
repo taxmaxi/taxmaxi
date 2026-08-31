@@ -739,6 +739,8 @@ const seedClaimCalculationResultRows = ({
     yield* db.insert(schema.calculationRunRealizedResults).values({
       runId,
       sequence: 0,
+      sourceId,
+      allocationSequence: 0,
       acquisitionEventId,
       dispositionEventId,
       assetId,
@@ -753,6 +755,7 @@ const seedClaimCalculationResultRows = ({
     yield* db.insert(schema.calculationRunIncomeResults).values({
       runId,
       sequence: 0,
+      sourceId,
       eventId: acquisitionEventId,
       assetId,
       occurredAt,
