@@ -47,7 +47,10 @@ import {
   type GermanBlockerCode,
 } from "./GermanJurisdiction.ts"
 
-const ENGINE_VERSION = "1"
+/** Version recorded for every result produced by this engine contract. */
+export const ACCOUNTING_ENGINE_VERSION = "1"
+
+export { GERMAN_RULE_SET_VERSION }
 
 type ChoiceKind = AccountingChoice["_tag"]
 
@@ -921,7 +924,7 @@ export const calculate = ({
       status: state.blockers.length === 0 ? "complete" : "partial",
       jurisdiction,
       taxYear,
-      engineVersion: ENGINE_VERSION,
+      engineVersion: ACCOUNTING_ENGINE_VERSION,
       ruleSetVersion: GERMAN_RULE_SET_VERSION,
       accountingMethod,
       inventoryScope,

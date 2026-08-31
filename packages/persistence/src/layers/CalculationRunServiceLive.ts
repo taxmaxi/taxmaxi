@@ -5,8 +5,10 @@
  */
 
 import {
+  ACCOUNTING_ENGINE_VERSION,
   AccountingChoiceResolutionError,
   calculate,
+  GERMAN_RULE_SET_VERSION,
   type TaxAccountingError,
   UnsupportedJurisdictionError,
 } from "@my/accounting"
@@ -38,6 +40,8 @@ import {
   type CustodyUnitMembership,
 } from "../services/FactualLedgerRepository.ts"
 import { drizzle } from "./PgClientLive.ts"
+
+const CALCULATION_FAILED_CODE = "calculation_failed"
 
 const IllegalAccountingChoiceErrorTag = Schema.TaggedStruct("IllegalAccountingChoiceError", {})
 
@@ -105,7 +109,7 @@ const make = Effect.gen(function* () {
   const calculationRunRepository = yield* CalculationRunRepository
   const factualLedgerRepository = yield* FactualLedgerRepository
 
-  const recompute: CalculationRunServiceShape["recompute"] = (params) =>
+  const loadSnapshot = (params: Parameters<CalculationRunServiceShape["recompute"]>[0]) =>
     db
       .transaction((tx) =>
         Effect.gen(function* () {
@@ -134,22 +138,7 @@ const make = Effect.gen(function* () {
             custodyUnitMembership: factualLedger.custodyUnitMembership,
           })
           const valuationRevision = makeValuationRevision(factualLedger.valuationFacts)
-          const result = yield* calculate({
-            ledger: factualLedger.events,
-            jurisdiction: params.jurisdiction,
-            taxYear: params.taxYear,
-            accountingChoices: params.accountingChoices,
-            valuationFacts: factualLedger.valuationFacts,
-          })
-
-          return yield* calculationRunRepository.persist({
-            id: params.id,
-            principalId: params.principalId,
-            reportingCurrency: params.reportingCurrency,
-            inputLedgerRevision,
-            valuationRevision,
-            result,
-          })
+          return { factualLedger, inputLedgerRevision, valuationRevision }
         })
       )
       .pipe(
@@ -159,9 +148,79 @@ const make = Effect.gen(function* () {
           Schema.is(PersistenceError)(error) ||
           isTaxAccountingError(error)
             ? error
-            : new PersistenceError({ operation: "calculationRunService.recompute", cause: error })
+            : new PersistenceError({
+                operation: "calculationRunService.loadSnapshot",
+                cause: error,
+              })
         )
       )
+
+  const recompute: CalculationRunServiceShape["recompute"] = (params) =>
+    Effect.gen(function* () {
+      const snapshot = yield* loadSnapshot(params)
+
+      yield* calculationRunRepository.start({
+        id: params.id,
+        principalId: params.principalId,
+        jurisdiction: params.jurisdiction,
+        taxYear: params.taxYear,
+        reportingCurrency: params.reportingCurrency,
+        engineVersion: ACCOUNTING_ENGINE_VERSION,
+        ruleSetVersion: GERMAN_RULE_SET_VERSION,
+        inputLedgerRevision: snapshot.inputLedgerRevision,
+        valuationRevision: snapshot.valuationRevision,
+        custodyUnitMembership: snapshot.factualLedger.custodyUnitMembership,
+      })
+
+      return yield* calculate({
+        ledger: snapshot.factualLedger.events,
+        jurisdiction: params.jurisdiction,
+        taxYear: params.taxYear,
+        accountingChoices: params.accountingChoices,
+        valuationFacts: snapshot.factualLedger.valuationFacts,
+      }).pipe(
+        Effect.flatMap((result) =>
+          calculationRunRepository.persist({
+            id: params.id,
+            principalId: params.principalId,
+            reportingCurrency: params.reportingCurrency,
+            inputLedgerRevision: snapshot.inputLedgerRevision,
+            valuationRevision: snapshot.valuationRevision,
+            result,
+          })
+        ),
+        Effect.onError((originalCause) =>
+          calculationRunRepository
+            .fail({
+              id: params.id,
+              principalId: params.principalId,
+              failureCode: CALCULATION_FAILED_CODE,
+            })
+            .pipe(
+              Effect.catchCause((settlementCause) =>
+                Effect.logError(
+                  {
+                    runId: params.id,
+                    principalId: params.principalId,
+                    originalCause,
+                    settlementCause,
+                  },
+                  "calculation-run-service:failure-settlement-failed"
+                )
+              )
+            )
+        )
+      )
+    }).pipe(
+      Effect.mapError((error) =>
+        Schema.is(CalculationRunAlreadyStoredError)(error) ||
+        Schema.is(CalculationRunCurrencyMismatchError)(error) ||
+        Schema.is(PersistenceError)(error) ||
+        isTaxAccountingError(error)
+          ? error
+          : new PersistenceError({ operation: "calculationRunService.recompute", cause: error })
+      )
+    )
 
   return CalculationRunService.of({ recompute })
 })

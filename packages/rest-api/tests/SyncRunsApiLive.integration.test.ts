@@ -4,12 +4,15 @@ import { HttpApiClient } from "effect/unstable/httpapi"
 import { HttpClient, HttpClientRequest, HttpRouter } from "effect/unstable/http"
 import { NodeHttpServer } from "@effect/platform-node"
 import { beforeEach, describe, expect, it } from "@effect/vitest"
+import { JurisdictionCode, TaxYear } from "@my/core/accounting"
 import {
   AuthService,
   HashedPassword,
   PasswordHasher,
   type AuthServiceShape,
 } from "@my/core/authentication"
+import { EUR } from "@my/core/currency"
+import { PrincipalId } from "@my/core/ownership"
 import {
   SOURCE_SYNC_QUEUE_NAME,
   SourceSyncJobRepository,
@@ -22,12 +25,26 @@ import {
 import { SourceSyncRunServiceLive, SourceSyncServiceLive } from "@my/sync-engine/layers"
 import * as Chunk from "effect/Chunk"
 import * as ConfigProvider from "effect/ConfigProvider"
+import * as Deferred from "effect/Deferred"
 import * as Effect from "effect/Effect"
+import * as Fiber from "effect/Fiber"
 import * as Layer from "effect/Layer"
+import { PersistenceError } from "../../persistence/src/errors/RepositoryError.ts"
+import {
+  CalculationRunRepositoryLive,
+  CalculationRunServiceLive,
+  FactualLedgerRepositoryLive,
+} from "../../persistence/src/layers/index.ts"
 import { drizzle, runSqlUnsafe } from "../../persistence/src/layers/PgClientLive.ts"
 import { RepositoriesLive } from "../../persistence/src/layers/RepositoriesLive.ts"
 import { schema } from "../../persistence/src/schema/index.ts"
-import { TaxCalculationService } from "../../persistence/src/services/index.ts"
+import {
+  CalculationRunId,
+  CalculationRunRepository,
+  CalculationRunService,
+  TaxCalculationService,
+  type ExposedCalculationRunStatus,
+} from "../../persistence/src/services/index.ts"
 import { makeIntegrationTestDatabaseContext } from "../../persistence/tests/support/integration-test-kit.ts"
 import { TaxMaxiApi } from "../src/definitions/TaxMaxiApi.ts"
 import { AnonSessionServiceLive } from "../src/layers/AnonSessionServiceLive.ts"
@@ -144,6 +161,32 @@ const PersistenceLayer = Layer.mergeAll(
 
 const HttpLive = HttpRouter.serve(
   TaxMaxiApiLive.pipe(
+    Layer.provide(AnonSessionServiceTestLive),
+    Layer.provide(SIWXProofVerifierTestLive),
+    Layer.provide(X402PaymentValidatorTestLive),
+    Layer.provide(SimpleTokenValidatorLive)
+  )
+).pipe(Layer.provideMerge(PersistenceLayer), Layer.provideMerge(NodeHttpServer.layerTest))
+
+const CalculationRunStatusFailureTestLive = Layer.succeed(
+  CalculationRunRepository,
+  CalculationRunRepository.of({
+    fail: () => Effect.die("CalculationRunRepository test stub: fail"),
+    getLatestStatus: () =>
+      Effect.fail(
+        new PersistenceError({
+          operation: "calculationRunRepository.getLatestStatus.test",
+          cause: "forced calculation status read failure",
+        })
+      ),
+    persist: () => Effect.die("CalculationRunRepository test stub: persist"),
+    start: () => Effect.die("CalculationRunRepository test stub: start"),
+  })
+)
+
+const HttpWithCalculationRunStatusFailureLive = HttpRouter.serve(
+  TaxMaxiApiLive.pipe(
+    Layer.provide(CalculationRunStatusFailureTestLive),
     Layer.provide(AnonSessionServiceTestLive),
     Layer.provide(SIWXProofVerifierTestLive),
     Layer.provide(X402PaymentValidatorTestLive),
@@ -277,6 +320,62 @@ const markJobTerminal = ({
     ],
   })
 
+const currentGermanTaxYear = DateTime.now.pipe(
+  Effect.map(DateTime.setZoneNamedUnsafe("Europe/Berlin")),
+  Effect.map(DateTime.toParts),
+  Effect.map(({ year }) => year)
+)
+
+const seedCalculationRun = ({
+  id,
+  principalId,
+  status,
+  revisionSequence,
+  jurisdiction = "DE",
+  taxYear,
+  reportingCurrency = "EUR",
+  createdAt = DateTime.toDateUtc(DateTime.makeUnsafe("2026-01-01T00:10:00.000Z")),
+}: {
+  readonly id: string
+  readonly principalId: string
+  readonly status: ExposedCalculationRunStatus
+  readonly revisionSequence: number
+  readonly jurisdiction?: string
+  readonly taxYear?: number
+  readonly reportingCurrency?: string
+  readonly createdAt?: Date
+}) =>
+  Effect.gen(function* () {
+    const db = yield* drizzle
+    const effectiveTaxYear = taxYear ?? (yield* currentGermanTaxYear)
+    const isSuccessful = status === "complete" || status === "partial"
+    const isTerminal = isSuccessful || status === "failed"
+
+    yield* db.insert(schema.calculationRuns).values({
+      id,
+      principalId,
+      jurisdiction,
+      taxYear: effectiveTaxYear,
+      reportingCurrency,
+      engineVersion: "test-engine-v1",
+      ruleSetVersion: "test-rules-v1",
+      inputLedgerRevision: `v1:${revisionSequence}:${"a".repeat(64)}`,
+      valuationRevision: `sha256:${"b".repeat(64)}`,
+      status,
+      accountingMethod: isSuccessful ? "fifo" : null,
+      inventoryScope: isSuccessful ? "per_custody_unit" : null,
+      appliedChoiceIds: [],
+      appliedRules: [],
+      processedEventIds: [],
+      failureCode: status === "failed" ? "calculation_stale_recomputed" : null,
+      failureMessage: null,
+      startedAt: createdAt,
+      completedAt: isTerminal ? createdAt : null,
+      createdAt,
+      updatedAt: createdAt,
+    })
+  })
+
 await Effect.runPromise(context.recreateTestDatabase())
 
 describe("SyncRunsApiLive", () => {
@@ -306,7 +405,230 @@ describe("SyncRunsApiLive", () => {
       expect(run.items.map((item) => item.sourceId).sort()).toEqual(sourceIds.sort())
       expect(run.items.every((item) => item.provider === "coinbase")).toBe(true)
       expect(run.items.every((item) => item.status === "queued")).toBe(true)
+      expect(run.calculationRun).toBeNull()
       expect(queueEvents).toHaveLength(2)
+    }).pipe(Effect.provide(HttpLive), Effect.scoped)
+  )
+
+  it.effect("returns a started sync when its post-start calculation status read fails", () =>
+    Effect.gen(function* () {
+      const userId = nextTestUuid()
+      const principalId = nextTestUuid()
+      yield* seedCoinbaseSources({ userId, principalId, sourceIds: [nextTestUuid()] })
+
+      const client = yield* makeAuthenticatedClient({ userId })
+      const run = yield* client.syncRuns.startSyncRun(undefined)
+
+      expect(run.runId).toBeDefined()
+      expect(run.calculationRun).toBeNull()
+      expect(queueEvents).toHaveLength(1)
+    }).pipe(Effect.provide(HttpWithCalculationRunStatusFailureLive), Effect.scoped)
+  )
+
+  it.effect("returns a stable code when a calculation status read fails", () =>
+    Effect.gen(function* () {
+      const userId = nextTestUuid()
+      const principalId = nextTestUuid()
+      yield* seedCoinbaseSources({ userId, principalId, sourceIds: [nextTestUuid()] })
+
+      const client = yield* makeAuthenticatedClient({ userId })
+      const started = yield* client.syncRuns.startSyncRun(undefined)
+      const result = yield* client.syncRuns
+        .getSyncRun({ params: { runId: started.runId } })
+        .pipe(Effect.result)
+
+      expect(result._tag).toBe("Failure")
+      if (result._tag === "Failure") {
+        expect(result.failure._tag).toBe("CalculationRunStatusUnavailableError")
+        if (result.failure._tag === "CalculationRunStatusUnavailableError") {
+          expect(result.failure.code).toBe("calculation_run_status_unavailable")
+        }
+      }
+    }).pipe(Effect.provide(HttpWithCalculationRunStatusFailureLive), Effect.scoped)
+  )
+
+  it.effect("observes a committed running calculation before its terminal result", () =>
+    Effect.gen(function* () {
+      const userId = nextTestUuid()
+      const principalId = nextTestUuid()
+      const runId = nextTestUuid()
+      yield* seedCoinbaseSources({ userId, principalId, sourceIds: [nextTestUuid()] })
+
+      const terminalWriteReached = yield* Deferred.make<void>()
+      const releaseTerminalWrite = yield* Deferred.make<void>()
+      const CoordinatedCalculationRunRepositoryLive = Layer.effect(
+        CalculationRunRepository,
+        Effect.map(CalculationRunRepository, (repository) =>
+          CalculationRunRepository.of({
+            fail: repository.fail,
+            getLatestStatus: repository.getLatestStatus,
+            persist: (params) =>
+              Effect.gen(function* () {
+                yield* Deferred.succeed(terminalWriteReached, undefined)
+                yield* Deferred.await(releaseTerminalWrite)
+                return yield* repository.persist(params)
+              }),
+            start: repository.start,
+          })
+        )
+      ).pipe(Layer.provide(CalculationRunRepositoryLive))
+      const CoordinatedCalculationRunServiceLive = CalculationRunServiceLive.pipe(
+        Layer.provide(
+          Layer.merge(CoordinatedCalculationRunRepositoryLive, FactualLedgerRepositoryLive)
+        )
+      )
+      const taxYear = TaxYear.make(yield* currentGermanTaxYear)
+      const calculation = yield* Effect.forkChild(
+        context.runWithLayer({
+          effect: Effect.flatMap(CalculationRunService, (service) =>
+            service.recompute({
+              id: CalculationRunId.make(runId),
+              principalId: PrincipalId.make(principalId),
+              jurisdiction: JurisdictionCode.make("DE"),
+              taxYear,
+              reportingCurrency: EUR,
+              accountingChoices: [],
+            })
+          ),
+          layer: CoordinatedCalculationRunServiceLive,
+        })
+      )
+
+      yield* Deferred.await(terminalWriteReached)
+      const client = yield* makeAuthenticatedClient({ userId })
+      const syncRun = yield* client.syncRuns.startSyncRun(undefined)
+      const whileRunning = yield* client.syncRuns.getSyncRun({
+        params: { runId: syncRun.runId },
+      })
+
+      expect(whileRunning.calculationRun).toEqual({
+        runId,
+        status: "running",
+        failureCode: null,
+      })
+
+      yield* Deferred.succeed(releaseTerminalWrite, undefined)
+      yield* Fiber.join(calculation)
+      const afterCompletion = yield* client.syncRuns.getSyncRun({
+        params: { runId: syncRun.runId },
+      })
+
+      expect(afterCompletion.calculationRun).toEqual({
+        runId,
+        status: "complete",
+        failureCode: null,
+      })
+    }).pipe(Effect.provide(HttpLive), Effect.scoped)
+  )
+
+  it.effect("returns no calculation run from another principal", () =>
+    Effect.gen(function* () {
+      const userId = nextTestUuid()
+      const principalId = nextTestUuid()
+      const otherUserId = nextTestUuid()
+      const otherPrincipalId = nextTestUuid()
+      yield* seedCoinbaseSources({ userId, principalId, sourceIds: [nextTestUuid()] })
+      yield* seedPrincipalUser({ userId: otherUserId, principalId: otherPrincipalId })
+      yield* seedCalculationRun({
+        id: nextTestUuid(),
+        principalId: otherPrincipalId,
+        status: "complete",
+        revisionSequence: 1,
+      })
+
+      const client = yield* makeAuthenticatedClient({ userId })
+      const started = yield* client.syncRuns.startSyncRun(undefined)
+      const loaded = yield* client.syncRuns.getSyncRun({ params: { runId: started.runId } })
+
+      expect(loaded.calculationRun).toBeNull()
+    }).pipe(Effect.provide(HttpLive), Effect.scoped)
+  )
+
+  it.effect("returns the latest DE/EUR/current-year calculation status by ledger revision", () =>
+    Effect.gen(function* () {
+      const userId = nextTestUuid()
+      const principalId = nextTestUuid()
+      yield* seedCoinbaseSources({ userId, principalId, sourceIds: [nextTestUuid()] })
+
+      const client = yield* makeAuthenticatedClient({ userId })
+      const started = yield* client.syncRuns.startSyncRun(undefined)
+      const statuses: ReadonlyArray<ExposedCalculationRunStatus> = [
+        "running",
+        "complete",
+        "partial",
+        "failed",
+      ]
+
+      for (const [index, status] of statuses.entries()) {
+        const runId = nextTestUuid()
+        yield* seedCalculationRun({
+          id: runId,
+          principalId,
+          status,
+          revisionSequence: index + 1,
+        })
+
+        const loaded = yield* client.syncRuns.getSyncRun({ params: { runId: started.runId } })
+        expect(loaded.calculationRun).toEqual({
+          runId,
+          status,
+          failureCode: status === "failed" ? "calculation_stale_recomputed" : null,
+        })
+      }
+
+      const lowerTieRunId = "00000000-0000-4000-8000-000000000001"
+      const higherTieRunId = "00000000-0000-4000-8000-000000000002"
+      yield* seedCalculationRun({
+        id: lowerTieRunId,
+        principalId,
+        status: "partial",
+        revisionSequence: 5,
+      })
+      yield* seedCalculationRun({
+        id: higherTieRunId,
+        principalId,
+        status: "complete",
+        revisionSequence: 5,
+      })
+
+      const deterministicTie = yield* client.syncRuns.getSyncRun({
+        params: { runId: started.runId },
+      })
+      expect(deterministicTie.calculationRun).toEqual({
+        runId: higherTieRunId,
+        status: "complete",
+        failureCode: null,
+      })
+
+      yield* seedCalculationRun({
+        id: nextTestUuid(),
+        principalId,
+        status: "complete",
+        revisionSequence: 2,
+        createdAt: DateTime.toDateUtc(DateTime.makeUnsafe("2026-01-01T00:20:00.000Z")),
+      })
+      yield* seedCalculationRun({
+        id: nextTestUuid(),
+        principalId,
+        status: "complete",
+        revisionSequence: 99,
+        reportingCurrency: "USD",
+      })
+      const taxYear = yield* currentGermanTaxYear
+      yield* seedCalculationRun({
+        id: nextTestUuid(),
+        principalId,
+        status: "complete",
+        revisionSequence: 100,
+        taxYear: taxYear - 1,
+      })
+
+      const loaded = yield* client.syncRuns.getSyncRun({ params: { runId: started.runId } })
+      expect(loaded.calculationRun).toEqual({
+        runId: higherTieRunId,
+        status: "complete",
+        failureCode: null,
+      })
     }).pipe(Effect.provide(HttpLive), Effect.scoped)
   )
 

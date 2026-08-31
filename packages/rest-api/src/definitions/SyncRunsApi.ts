@@ -17,6 +17,12 @@ export class SyncRunNotFoundError extends Schema.TaggedError<SyncRunNotFoundErro
   { httpApiStatus: 404 }
 ) {}
 
+export class CalculationRunStatusUnavailableError extends Schema.TaggedError<CalculationRunStatusUnavailableError>()(
+  "CalculationRunStatusUnavailableError",
+  { code: Schema.Literal("calculation_run_status_unavailable") },
+  { httpApiStatus: 500 }
+) {}
+
 export class SyncRunItemResponse extends Schema.Class<SyncRunItemResponse>("SyncRunItemResponse")({
   sourceId: Schema.String,
   jobId: Schema.NullOr(Schema.String),
@@ -33,6 +39,14 @@ export class SyncRunItemResponse extends Schema.Class<SyncRunItemResponse>("Sync
   message: Schema.NullOr(Schema.String),
 }) {}
 
+export class CalculationRunSummaryResponse extends Schema.Class<CalculationRunSummaryResponse>(
+  "CalculationRunSummaryResponse"
+)({
+  runId: Schema.String,
+  status: Schema.Literals(["running", "complete", "partial", "failed"]),
+  failureCode: Schema.NullOr(Schema.String),
+}) {}
+
 export class SyncRunResponse extends Schema.Class<SyncRunResponse>("SyncRunResponse")({
   runId: Schema.String,
   status: Schema.Literals(["queued", "running", "completed", "failed", "partially_failed"]),
@@ -44,6 +58,7 @@ export class SyncRunResponse extends Schema.Class<SyncRunResponse>("SyncRunRespo
   startedAt: Schema.NullOr(Schema.DateTimeUtc),
   completedAt: Schema.NullOr(Schema.DateTimeUtc),
   message: Schema.NullOr(Schema.String),
+  calculationRun: Schema.NullOr(CalculationRunSummaryResponse),
   items: Schema.Array(SyncRunItemResponse),
 }) {}
 
@@ -62,7 +77,7 @@ const getSyncRun = HttpApiEndpoint.get("getSyncRun", "/sync-runs/:runId", {
     runId: Schema.String,
   }),
   success: SyncRunResponse,
-  error: [SyncRunNotFoundError, InternalServerError],
+  error: [SyncRunNotFoundError, CalculationRunStatusUnavailableError, InternalServerError],
 }).annotateMerge(
   OpenApi.annotations({
     summary: "Get user-wide sync run",

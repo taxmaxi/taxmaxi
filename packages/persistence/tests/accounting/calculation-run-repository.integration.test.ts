@@ -14,11 +14,14 @@ import { CurrencyCode } from "@my/core/currency"
 import { PrincipalId } from "@my/core/ownership"
 import { MonetaryAmount } from "@my/core/shared/values/MonetaryAmount"
 import { Timestamp } from "@my/core/shared/values/Timestamp"
+import { SourceId } from "@my/core/source"
 import { asc, eq, sql } from "drizzle-orm"
 import * as BigDecimal from "effect/BigDecimal"
+import * as Cause from "effect/Cause"
 import * as DateTime from "effect/DateTime"
 import * as Deferred from "effect/Deferred"
 import * as Effect from "effect/Effect"
+import * as Exit from "effect/Exit"
 import * as Fiber from "effect/Fiber"
 import * as Layer from "effect/Layer"
 import { PersistenceError } from "../../src/errors/RepositoryError.ts"
@@ -32,6 +35,7 @@ import {
   CalculationRunCurrencyMismatchError,
   CalculationRunId,
   CalculationRunRepository,
+  type CalculationRunRepositoryShape,
   InputLedgerRevision,
   ValuationRevision,
 } from "../../src/services/CalculationRunRepository.ts"
@@ -79,6 +83,28 @@ const CalculationRunTestLive = CalculationRunRepositoryLive
 const CalculationRunServiceTestLive = CalculationRunServiceLive.pipe(
   Layer.provide(Layer.merge(CalculationRunRepositoryLive, FactualLedgerRepositoryLive))
 )
+
+const calculationRunServiceWithPersist = (
+  makePersist: (
+    repository: CalculationRunRepositoryShape
+  ) => CalculationRunRepositoryShape["persist"]
+) => {
+  const repositoryLive = Layer.effect(
+    CalculationRunRepository,
+    Effect.map(CalculationRunRepository, (repository) =>
+      CalculationRunRepository.of({
+        fail: repository.fail,
+        getLatestStatus: repository.getLatestStatus,
+        persist: makePersist(repository),
+        start: repository.start,
+      })
+    )
+  ).pipe(Layer.provide(CalculationRunRepositoryLive))
+
+  return CalculationRunServiceLive.pipe(
+    Layer.provide(Layer.merge(repositoryLive, FactualLedgerRepositoryLive))
+  )
+}
 
 const runRepository = <A, E>(effect: Effect.Effect<A, E, CalculationRunRepository>) =>
   context.runWithLayer({ effect, layer: CalculationRunTestLive })
@@ -211,6 +237,25 @@ const recomputeResult = ({
       taxYear: TaxYear.make(2025),
       reportingCurrency: EUR,
       accountingChoices: [],
+    })
+  )
+
+const readRunSettlement = (id: CalculationRunId) =>
+  runPgEffect(
+    Effect.gen(function* () {
+      const db = yield* drizzle
+      const [run] = yield* db
+        .select({
+          status: schema.calculationRuns.status,
+          failureCode: schema.calculationRuns.failureCode,
+        })
+        .from(schema.calculationRuns)
+        .where(eq(schema.calculationRuns.id, id))
+      const [active] = yield* db
+        .select({ runId: schema.activeCalculationRuns.runId })
+        .from(schema.activeCalculationRuns)
+
+      return { run, active }
     })
   )
 
@@ -410,6 +455,77 @@ beforeEach(() =>
 )
 
 describe("CalculationRunRepositoryLive", () => {
+  it.effect("starts a visible run and settles it as failed without activation", () =>
+    Effect.gen(function* () {
+      yield* runPgEffect(seedCalculationRunFixture())
+
+      const statuses = yield* runRepository(
+        Effect.flatMap(CalculationRunRepository, (repository) =>
+          Effect.gen(function* () {
+            yield* repository.start({
+              id: RECOMPUTE_RUN_ID,
+              principalId: TEST_PRINCIPAL_ID,
+              jurisdiction: JurisdictionCode.make("DE"),
+              taxYear: TaxYear.make(2025),
+              reportingCurrency: EUR,
+              engineVersion: "1",
+              ruleSetVersion: "de-crypto-income-tax-v2025-03-06",
+              inputLedgerRevision: InputLedgerRevision.make(`v1:815:${"a".repeat(64)}`),
+              valuationRevision: ValuationRevision.make(`sha256:${"b".repeat(64)}`),
+              custodyUnitMembership: [
+                {
+                  sourceId: SourceId.make(TEST_SOURCE_ID),
+                  custodyUnitId: TEST_CUSTODY_UNIT_ID,
+                },
+              ],
+            })
+
+            const running = yield* repository.getLatestStatus({
+              principalId: TEST_PRINCIPAL_ID,
+              jurisdiction: JurisdictionCode.make("DE"),
+              taxYear: TaxYear.make(2025),
+              reportingCurrency: EUR,
+            })
+            yield* repository.fail({
+              id: RECOMPUTE_RUN_ID,
+              principalId: TEST_PRINCIPAL_ID,
+              failureCode: "calculation_failed",
+            })
+            const failed = yield* repository.getLatestStatus({
+              principalId: TEST_PRINCIPAL_ID,
+              jurisdiction: JurisdictionCode.make("DE"),
+              taxYear: TaxYear.make(2025),
+              reportingCurrency: EUR,
+            })
+
+            return { running, failed }
+          })
+        )
+      )
+
+      const active = yield* runPgEffect(
+        Effect.gen(function* () {
+          const db = yield* drizzle
+          return yield* db
+            .select({ runId: schema.activeCalculationRuns.runId })
+            .from(schema.activeCalculationRuns)
+        })
+      )
+
+      expect(statuses.running).toEqual({
+        runId: RECOMPUTE_RUN_ID,
+        status: "running",
+        failureCode: null,
+      })
+      expect(statuses.failed).toEqual({
+        runId: RECOMPUTE_RUN_ID,
+        status: "failed",
+        failureCode: "calculation_failed",
+      })
+      expect(active).toEqual([])
+    })
+  )
+
   it.effect("recomputes complete and partial runs from factual snapshots", () =>
     Effect.gen(function* () {
       yield* runPgEffect(seedCalculationRunFixture())
@@ -567,8 +683,13 @@ describe("CalculationRunRepositoryLive", () => {
         Effect.gen(function* () {
           const db = yield* drizzle
           const runs = yield* db
-            .select({ id: schema.calculationRuns.id })
+            .select({
+              id: schema.calculationRuns.id,
+              status: schema.calculationRuns.status,
+              failureCode: schema.calculationRuns.failureCode,
+            })
             .from(schema.calculationRuns)
+            .orderBy(asc(schema.calculationRuns.id))
           const [active] = yield* db
             .select({ runId: schema.activeCalculationRuns.runId })
             .from(schema.activeCalculationRuns)
@@ -578,7 +699,97 @@ describe("CalculationRunRepositoryLive", () => {
       )
 
       expect(error._tag).toBe("UnsupportedJurisdictionError")
-      expect(stored).toEqual({ runs: [{ id: RUN_ID }], active: { runId: RUN_ID } })
+      expect(stored).toEqual({
+        runs: [
+          { id: RUN_ID, status: "complete", failureCode: null },
+          {
+            id: RECOMPUTE_RUN_ID,
+            status: "failed",
+            failureCode: "calculation_failed",
+          },
+        ],
+        active: { runId: RUN_ID },
+      })
+    })
+  )
+
+  it.effect("settles a running run when terminal persistence fails", () =>
+    Effect.gen(function* () {
+      yield* runPgEffect(seedCalculationRunFixture())
+      yield* runRepository(persistResult())
+      const serviceLive = calculationRunServiceWithPersist(
+        () => () =>
+          Effect.fail(
+            new PersistenceError({
+              operation: "calculationRunRepository.persist.test",
+              cause: "forced terminal persistence failure",
+            })
+          )
+      )
+
+      const error = yield* context.runWithLayer({
+        effect: Effect.flip(recomputeResult({ id: RECOMPUTE_RUN_ID })),
+        layer: serviceLive,
+      })
+      const stored = yield* readRunSettlement(RECOMPUTE_RUN_ID)
+
+      expect(error).toBeInstanceOf(PersistenceError)
+      expect(stored).toEqual({
+        run: { status: "failed", failureCode: "calculation_failed" },
+        active: { runId: RUN_ID },
+      })
+    })
+  )
+
+  it.effect("settles a running run while preserving an engine-path defect", () =>
+    Effect.gen(function* () {
+      yield* runPgEffect(seedCalculationRunFixture())
+      const serviceLive = calculationRunServiceWithPersist(
+        () => () => Effect.die("forced calculation defect")
+      )
+
+      const exit = yield* context.runWithLayer({
+        effect: Effect.exit(recomputeResult({ id: RECOMPUTE_RUN_ID })),
+        layer: serviceLive,
+      })
+      const stored = yield* readRunSettlement(RECOMPUTE_RUN_ID)
+
+      expect(Exit.isFailure(exit) && Cause.hasDies(exit.cause)).toBe(true)
+      expect(stored).toEqual({
+        run: { status: "failed", failureCode: "calculation_failed" },
+        active: undefined,
+      })
+    })
+  )
+
+  it.effect("settles a running run while preserving interruption", () =>
+    Effect.gen(function* () {
+      yield* runPgEffect(seedCalculationRunFixture())
+      const terminalWriteReached = yield* Deferred.make<void>()
+      const serviceLive = calculationRunServiceWithPersist(
+        () => () =>
+          Effect.gen(function* () {
+            yield* Deferred.succeed(terminalWriteReached, undefined)
+            return yield* Effect.never
+          })
+      )
+      const calculation = yield* Effect.forkChild(
+        context.runWithLayer({
+          effect: recomputeResult({ id: RECOMPUTE_RUN_ID }),
+          layer: serviceLive,
+        })
+      )
+
+      yield* Deferred.await(terminalWriteReached)
+      yield* Fiber.interrupt(calculation)
+      const exit = yield* Fiber.await(calculation)
+      const stored = yield* readRunSettlement(RECOMPUTE_RUN_ID)
+
+      expect(Exit.hasInterrupts(exit)).toBe(true)
+      expect(stored).toEqual({
+        run: { status: "failed", failureCode: "calculation_failed" },
+        active: undefined,
+      })
     })
   )
 
