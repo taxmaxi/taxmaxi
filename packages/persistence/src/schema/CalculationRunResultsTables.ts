@@ -42,7 +42,9 @@ export const calculationRunCustodyUnits = pgTable(
       columns: [table.runId, table.principalId],
       foreignColumns: [calculationRuns.id, calculationRuns.principalId],
       name: "calculation_run_custody_units_run_principal_fk",
-    }).onDelete("cascade"),
+    })
+      .onDelete("cascade")
+      .onUpdate("cascade"),
     index("idx_calculation_run_custody_units_unit").on(table.custodyUnitId),
   ]
 )
@@ -66,7 +68,9 @@ export const calculationRunCustodyUnitSources = pgTable(
         calculationRunCustodyUnits.custodyUnitId,
       ],
       name: "calculation_run_custody_unit_sources_run_unit_fk",
-    }).onDelete("cascade"),
+    })
+      .onDelete("cascade")
+      .onUpdate("cascade"),
     index("idx_calculation_run_custody_unit_sources_unit").on(table.runId, table.custodyUnitId),
   ]
 )
@@ -99,7 +103,9 @@ export const calculationRunAllocations = pgTable(
         calculationRunCustodyUnits.custodyUnitId,
       ],
       name: "calculation_run_allocations_run_unit_fk",
-    }).onDelete("cascade"),
+    })
+      .onDelete("cascade")
+      .onUpdate("cascade"),
     index("idx_calculation_run_allocations_disposition").on(table.runId, table.dispositionEventId),
     check("calculation_run_allocations_sequence_non_negative", sql`${table.sequence} >= 0`),
     check("calculation_run_allocations_quantity_positive", sql`${table.quantity} > 0`),
@@ -186,7 +192,9 @@ export const calculationRunDerivedLots = pgTable(
         calculationRunCustodyUnits.custodyUnitId,
       ],
       name: "calculation_run_derived_lots_run_unit_fk",
-    }).onDelete("cascade"),
+    })
+      .onDelete("cascade")
+      .onUpdate("cascade"),
     index("idx_calculation_run_derived_lots_inventory").on(
       table.runId,
       table.custodyUnitId,
@@ -223,7 +231,9 @@ export const calculationRunBlockers = pgTable(
         calculationRunCustodyUnits.custodyUnitId,
       ],
       name: "calculation_run_blockers_run_unit_fk",
-    }).onDelete("cascade"),
+    })
+      .onDelete("cascade")
+      .onUpdate("cascade"),
     index("idx_calculation_run_blockers_code").on(table.runId, table.code),
     check("calculation_run_blockers_sequence_non_negative", sql`${table.sequence} >= 0`),
     check(

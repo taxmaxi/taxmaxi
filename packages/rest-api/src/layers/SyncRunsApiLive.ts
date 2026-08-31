@@ -11,6 +11,7 @@ import * as Effect from "effect/Effect"
 import * as Option from "effect/Option"
 import { InternalServerError } from "../definitions/ApiErrors.ts"
 import {
+  SyncCalculationRunResponse,
   SyncRunItemResponse,
   SyncRunNotFoundError,
   SyncRunResponse,
@@ -50,6 +51,10 @@ const toSyncRunResponse = (run: SourceSyncRunDetails): SyncRunResponse =>
         normalizedRecords: item.normalizedRecords,
         failedRecords: item.failedRecords,
         message: item.message,
+        calculationRun:
+          item.calculationRun === null
+            ? null
+            : SyncCalculationRunResponse.make(item.calculationRun),
       })
     ),
   })

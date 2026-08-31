@@ -102,6 +102,7 @@ const makeItem = ({
   normalizedRecords: null,
   failedRecords: null,
   message,
+  calculationRun: null,
   createdAt: now,
   updatedAt: now,
 })

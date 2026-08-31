@@ -22,6 +22,7 @@ const TEST_PRINCIPAL_ID = PrincipalId.make("00000000-0000-4000-8000-000000000183
 const OTHER_USER_ID = "00000000-0000-4000-8000-000000000184"
 const OTHER_PRINCIPAL_ID = PrincipalId.make("00000000-0000-4000-8000-000000000185")
 const OTHER_SOURCE_ID = "00000000-0000-4000-8000-000000000283"
+const GROUPED_CUSTODY_UNIT_ID = "00000000-0000-4000-8000-000000000284"
 
 const context = makeIntegrationTestDatabaseContext({
   databaseNamePrefix: "taxmaxi_factual_ledger_repo",
@@ -249,6 +250,43 @@ describe("FactualLedgerRepositoryLive", () => {
         )
       })
     )
+  )
+
+  it.effect("loads canonically ordered current custody membership as factual input", () =>
+    Effect.gen(function* () {
+      yield* Effect.promise(() =>
+        runPg(
+          Effect.gen(function* () {
+            yield* seedCexSource({
+              sourceId: TEST_DESTINATION_SOURCE_ID,
+              fixtureName: "Grouped destination",
+            })
+            const db = yield* drizzle
+            yield* db.insert(schema.custodyUnits).values({
+              id: GROUPED_CUSTODY_UNIT_ID,
+              principalId: TEST_PRINCIPAL_ID,
+            })
+            yield* db
+              .update(schema.custodyUnitSources)
+              .set({ custodyUnitId: GROUPED_CUSTODY_UNIT_ID })
+              .where(eq(schema.custodyUnitSources.principalId, TEST_PRINCIPAL_ID))
+          })
+        )
+      )
+
+      const result = yield* Effect.promise(loadFactualLedger)
+
+      expect(result.custodyUnitMemberships).toEqual([
+        {
+          sourceId: TEST_CUSTODY_SOURCE_ID,
+          custodyUnitId: GROUPED_CUSTODY_UNIT_ID,
+        },
+        {
+          sourceId: TEST_DESTINATION_SOURCE_ID,
+          custodyUnitId: GROUPED_CUSTODY_UNIT_ID,
+        },
+      ])
+    })
   )
 
   it.effect("loads stored legs as a deterministically ordered factual ledger", () =>

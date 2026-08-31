@@ -6,6 +6,7 @@
 
 import {
   AcquisitionEvent,
+  CustodyUnitMembership,
   CustodyMovementEvent,
   DispositionEvent,
   MarketQuoteFact,
@@ -150,6 +151,30 @@ const make = Effect.gen(function* () {
   const providerSourceTable = aliasedTable(schema.sources, "provider_source")
   const canonicalSourceTable = aliasedTable(schema.sources, "canonical_source")
   type LoadParams = Parameters<FactualLedgerRepositoryShape["load"]>[0]
+
+  const loadCustodyUnitMemberships = ({ principalId }: Pick<LoadParams, "principalId">) =>
+    Effect.gen(function* () {
+      const rows = yield* db
+        .select({
+          sourceId: schema.custodyUnitSources.sourceId,
+          custodyUnitId: schema.custodyUnitSources.custodyUnitId,
+        })
+        .from(schema.custodyUnitSources)
+        .where(eq(schema.custodyUnitSources.principalId, principalId))
+        .orderBy(
+          asc(schema.custodyUnitSources.sourceId),
+          asc(schema.custodyUnitSources.custodyUnitId)
+        )
+        .pipe(wrapSqlError("factualLedgerRepository.load.custodyUnitMemberships"))
+
+      return yield* Effect.forEach(rows, (row) =>
+        decodeRequired({
+          schema: CustodyUnitMembership,
+          input: row,
+          operation: "factualLedgerRepository.load.custodyUnitMembership",
+        })
+      )
+    })
 
   const loadLegEvents = ({ principalId }: Pick<LoadParams, "principalId">) =>
     Effect.gen(function* () {
@@ -601,6 +626,7 @@ const make = Effect.gen(function* () {
   const load: FactualLedgerRepositoryShape["load"] = ({ principalId, reportingCurrency }) =>
     Effect.gen(function* () {
       const supportedReportingCurrency = yield* validateReportingCurrency(reportingCurrency)
+      const custodyUnitMemberships = yield* loadCustodyUnitMemberships({ principalId })
       const legEvents = yield* loadLegEvents({ principalId })
       const custodyMovementEvents = yield* loadCustodyMovementEvents({ principalId })
       const events = [...legEvents.events, ...custodyMovementEvents].sort(compareEvents)
@@ -622,7 +648,7 @@ const make = Effect.gen(function* () {
         compareValuationFacts
       )
 
-      return { events, valuationFacts }
+      return { events, custodyUnitMemberships, valuationFacts }
     })
 
   return FactualLedgerRepository.of({ load })

@@ -8,11 +8,15 @@ import {
   type WorkerSourceSyncStartupRepairQueue,
 } from "../src/layers/WorkerSourceSyncStartupRepairLive.ts"
 import {
+  CalculationRunOrchestrationError,
+  CalculationRunOrchestrator,
+  type CalculationRunOrchestratorShape,
   SOURCE_SYNC_JOB_NAME,
   SOURCE_SYNC_QUEUE_NAME,
   SourceSyncJobRepository,
   SourceSyncJobExecutionRecordConflictError,
   SourceSyncJobExecutionRecordNotFoundError,
+  SyncEngineTransaction,
   type AttachSourceSyncQueueMetadataParams,
   type SourceSyncExecutionJob,
   type SourceSyncJobDetails,
@@ -44,17 +48,21 @@ const isPendingDispatchJob = (
 const makeRepairableJob = ({
   id,
   status,
+  sourceId = "source-1",
+  principalId = "principal-1",
   queueName = null,
   queueJobId = null,
 }: {
   readonly id: string
   readonly status: "pending" | "processing"
+  readonly sourceId?: string
+  readonly principalId?: string
   readonly queueName?: string | null
   readonly queueJobId?: string | null
 }): SourceSyncRepairableActiveJob => ({
   id,
-  sourceId: "source-1",
-  principalId: "principal-1",
+  sourceId,
+  principalId,
   mode: "sync",
   status,
   startedAt: status === "processing" ? baseUpdatedAt : null,
@@ -179,6 +187,59 @@ const makeQueue = (
   close: Effect.void,
 })
 
+const makeCalculationRunOrchestratorLayer = ({
+  wokenPrincipals = [],
+  wakeFailure = false,
+  recoverTerminalCalculations,
+}: {
+  readonly wokenPrincipals?: Array<string>
+  readonly wakeFailure?: boolean
+  readonly recoverTerminalCalculations?: CalculationRunOrchestratorShape["recoverTerminalCalculations"]
+} = {}) =>
+  Layer.succeed(CalculationRunOrchestrator, {
+    withPrincipalSyncLock: ({ effect }) => effect,
+    withPrincipalCalculationLock: ({ effect }) => effect,
+    runAfterSync: () => Effect.die("runAfterSync should not be called"),
+    resumeAfterTerminalSync: () => Effect.die("resumeAfterTerminalSync should not be called"),
+    runAfterPrincipalTerminal: ({ principalId }) =>
+      wakeFailure
+        ? Effect.fail(
+            new CalculationRunOrchestrationError({
+              operation: "test.runAfterPrincipalTerminal",
+              cause: "wake unavailable",
+              retrySourceJob: false,
+            })
+          )
+        : Effect.sync(() => {
+            wokenPrincipals.push(principalId)
+          }),
+    recoverTerminalCalculations:
+      recoverTerminalCalculations ??
+      (() => Effect.succeed({ scannedPrincipals: 0, recoveredPrincipals: 0, failedPrincipals: 0 })),
+  })
+
+const SyncEngineTransactionTestLive = Layer.succeed(SyncEngineTransaction, {
+  run: (effect) => effect,
+})
+
+const makeRollbackTrackingTransactionLayer = ({
+  recovered,
+}: {
+  readonly recovered: Array<RecoverStaleSourceSyncJobParams>
+}) =>
+  Layer.succeed(SyncEngineTransaction, {
+    run: (effect) => {
+      const recoveredCount = recovered.length
+      return effect.pipe(
+        Effect.tapError(() =>
+          Effect.sync(() => {
+            recovered.splice(recoveredCount)
+          })
+        )
+      )
+    },
+  })
+
 const runRepair = ({
   repairableJobs,
   enqueued,
@@ -191,6 +252,8 @@ const runRepair = ({
   materializedOnRecover,
   queueOptions,
   configOverrides,
+  wokenPrincipals,
+  wakeFailure,
 }: {
   readonly repairableJobs: ReadonlyArray<SourceSyncRepairableActiveJob>
   readonly enqueued: Array<SourceSyncQueuePayload>
@@ -206,6 +269,8 @@ const runRepair = ({
     readonly returnedJobIds?: ReadonlyMap<string, string>
   }
   readonly configOverrides?: Record<string, string>
+  readonly wokenPrincipals?: Array<string>
+  readonly wakeFailure?: boolean
 }) =>
   Effect.runPromise(
     Effect.scoped(
@@ -218,7 +283,7 @@ const runRepair = ({
             acquireQueue: (_config: WorkerSourceSyncStartupRepairConfig) =>
               Effect.succeed(makeQueue(enqueued, queueOptions)),
           }).pipe(
-            Layer.provideMerge(
+            Layer.provide(
               makeRepositoryLayer({
                 repairableJobs,
                 attached,
@@ -229,7 +294,14 @@ const runRepair = ({
                 ...(recoverFailureKind === undefined ? {} : { recoverFailureKind }),
                 ...(materializedOnRecover === undefined ? {} : { materializedOnRecover }),
               })
-            )
+            ),
+            Layer.provide(
+              makeCalculationRunOrchestratorLayer({
+                ...(wokenPrincipals === undefined ? {} : { wokenPrincipals }),
+                ...(wakeFailure === undefined ? {} : { wakeFailure }),
+              })
+            ),
+            Layer.provide(makeRollbackTrackingTransactionLayer({ recovered }))
           )
         ),
         Effect.provideService(ConfigProvider.ConfigProvider, makeConfigProvider(configOverrides))
@@ -257,7 +329,11 @@ const runPendingDispatch = ({
         Effect.provide(
           makeWorkerSourceSyncStartupRepairLive({
             acquireQueue: () => Effect.succeed(makeQueue(enqueued)),
-          }).pipe(Layer.provideMerge(makeRepositoryLayer({ repairableJobs, attached, recovered })))
+          }).pipe(
+            Layer.provide(makeRepositoryLayer({ repairableJobs, attached, recovered })),
+            Layer.provide(makeCalculationRunOrchestratorLayer()),
+            Layer.provide(SyncEngineTransactionTestLive)
+          )
         ),
         Effect.provideService(ConfigProvider.ConfigProvider, makeConfigProvider())
       )
@@ -309,7 +385,7 @@ const runDispatchFollowUp = ({
           makeWorkerSourceSyncStartupRepairLive({
             acquireQueue: () => Effect.succeed(makeQueue(enqueued)),
           }).pipe(
-            Layer.provideMerge(
+            Layer.provide(
               makeRepositoryLayer({
                 repairableJobs: [],
                 attached,
@@ -317,7 +393,9 @@ const runDispatchFollowUp = ({
                 visibleJob,
                 executionJob,
               })
-            )
+            ),
+            Layer.provide(makeCalculationRunOrchestratorLayer()),
+            Layer.provide(SyncEngineTransactionTestLive)
           )
         ),
         Effect.provideService(ConfigProvider.ConfigProvider, makeConfigProvider())
@@ -327,6 +405,55 @@ const runDispatchFollowUp = ({
 }
 
 describe("WorkerSourceSyncStartupRepairLive", () => {
+  it.effect("retries unfinished calculation settlement on a later maintenance pass", () =>
+    Effect.gen(function* () {
+      let recoveryAttempts = 0
+      const enqueued: Array<SourceSyncQueuePayload> = []
+
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const repair = yield* WorkerSourceSyncStartupRepair
+          yield* repair.repair
+          yield* repair.dispatchPending
+        }).pipe(
+          Effect.provide(
+            makeWorkerSourceSyncStartupRepairLive({
+              acquireQueue: () => Effect.succeed(makeQueue(enqueued)),
+            }).pipe(
+              Layer.provide(
+                makeRepositoryLayer({ repairableJobs: [], attached: [], recovered: [] })
+              ),
+              Layer.provide(
+                makeCalculationRunOrchestratorLayer({
+                  recoverTerminalCalculations: () =>
+                    Effect.sync(() => {
+                      recoveryAttempts += 1
+                      return recoveryAttempts === 1
+                        ? {
+                            scannedPrincipals: 1,
+                            recoveredPrincipals: 0,
+                            failedPrincipals: 1,
+                          }
+                        : {
+                            scannedPrincipals: 1,
+                            recoveredPrincipals: 1,
+                            failedPrincipals: 0,
+                          }
+                    }),
+                })
+              ),
+              Layer.provide(SyncEngineTransactionTestLive)
+            )
+          ),
+          Effect.provideService(ConfigProvider.ConfigProvider, makeConfigProvider())
+        )
+      )
+
+      expect(recoveryAttempts).toBe(2)
+      expect(enqueued).toEqual([])
+    })
+  )
+
   it.effect("reuses one queue connection across pending dispatch passes", () =>
     Effect.gen(function* () {
       let acquireCount = 0
@@ -352,9 +479,11 @@ describe("WorkerSourceSyncStartupRepairLive", () => {
                   }
                 }),
             }).pipe(
-              Layer.provideMerge(
+              Layer.provide(
                 makeRepositoryLayer({ repairableJobs: [], attached: [], recovered: [] })
-              )
+              ),
+              Layer.provide(makeCalculationRunOrchestratorLayer()),
+              Layer.provide(SyncEngineTransactionTestLive)
             )
           ),
           Effect.provideService(ConfigProvider.ConfigProvider, makeConfigProvider())
@@ -366,7 +495,7 @@ describe("WorkerSourceSyncStartupRepairLive", () => {
     })
   )
 
-  it.effect("dispatches pending jobs without recovering processing jobs", () =>
+  it.effect("dispatches pending jobs and retries stale processing recovery", () =>
     Effect.gen(function* () {
       const enqueued: Array<SourceSyncQueuePayload> = []
       const attached: Array<AttachSourceSyncQueueMetadataParams> = []
@@ -386,8 +515,10 @@ describe("WorkerSourceSyncStartupRepairLive", () => {
 
       expect(enqueued.map((payload) => payload.jobId)).toEqual(["job-pending"])
       expect(attached.map((params) => params.jobId)).toEqual(["job-pending"])
-      expect(recovered).toEqual([])
-      expect(summary).toMatchObject({ scannedJobs: 1, requeuedPending: 1, failedProcessing: 0 })
+      expect(recovered).toEqual([
+        expect.objectContaining({ jobId: "job-processing", sourceId: "source-1" }),
+      ])
+      expect(summary).toMatchObject({ scannedJobs: 2, requeuedPending: 1, failedProcessing: 1 })
     })
   )
 
@@ -615,6 +746,7 @@ describe("WorkerSourceSyncStartupRepairLive", () => {
       const enqueued: Array<SourceSyncQueuePayload> = []
       const attached: Array<AttachSourceSyncQueueMetadataParams> = []
       const recovered: Array<RecoverStaleSourceSyncJobParams> = []
+      const wokenPrincipals: Array<string> = []
 
       const summary = yield* Effect.promise(() =>
         runRepair({
@@ -622,6 +754,7 @@ describe("WorkerSourceSyncStartupRepairLive", () => {
           enqueued,
           attached,
           recovered,
+          wokenPrincipals,
         })
       )
 
@@ -634,6 +767,7 @@ describe("WorkerSourceSyncStartupRepairLive", () => {
           message: "Startup repair failed stale processing source sync job.",
         }),
       ])
+      expect(wokenPrincipals).toEqual(["principal-1"])
       expect(summary).toMatchObject({
         scannedJobs: 1,
         requeuedPending: 0,
@@ -641,6 +775,61 @@ describe("WorkerSourceSyncStartupRepairLive", () => {
         skippedJobs: 0,
         erroredJobs: 0,
         stoppedAfterErrors: false,
+      })
+    })
+  )
+
+  it.effect("isolates a stale wake failure and leaves the principal recoverable", () =>
+    Effect.gen(function* () {
+      const recovered: Array<RecoverStaleSourceSyncJobParams> = []
+
+      const summary = yield* Effect.promise(() =>
+        runRepair({
+          repairableJobs: [makeRepairableJob({ id: "job-processing", status: "processing" })],
+          enqueued: [],
+          attached: [],
+          recovered,
+          wakeFailure: true,
+        })
+      )
+
+      expect(recovered).toEqual([])
+      expect(summary).toMatchObject({ erroredJobs: 1, stoppedAfterErrors: false })
+    })
+  )
+
+  it.effect("continues with healthy queued work after one principal's stale wake fails", () =>
+    Effect.gen(function* () {
+      const enqueued: Array<SourceSyncQueuePayload> = []
+      const attached: Array<AttachSourceSyncQueueMetadataParams> = []
+      const recovered: Array<RecoverStaleSourceSyncJobParams> = []
+
+      const summary = yield* Effect.promise(() =>
+        runRepair({
+          repairableJobs: [
+            makeRepairableJob({ id: "job-poison", status: "processing" }),
+            makeRepairableJob({
+              id: "job-healthy",
+              status: "pending",
+              sourceId: "source-healthy",
+              principalId: "principal-healthy",
+            }),
+          ],
+          enqueued,
+          attached,
+          recovered,
+          wakeFailure: true,
+        })
+      )
+
+      expect(recovered).toEqual([])
+      expect(enqueued.map(({ jobId }) => jobId)).toEqual(["job-healthy"])
+      expect(attached.map(({ jobId }) => jobId)).toEqual(["job-healthy"])
+      expect(summary).toMatchObject({
+        scannedJobs: 2,
+        requeuedPending: 1,
+        failedProcessing: 0,
+        erroredJobs: 1,
       })
     })
   )

@@ -16,11 +16,14 @@ import * as Exit from "effect/Exit"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import * as Option from "effect/Option"
+import * as Ref from "effect/Ref"
 import * as Result from "effect/Result"
 import * as Schema from "effect/Schema"
 import * as Timestamp from "@my/core/shared/values/Timestamp"
 import { FetchProviderRawBatchParams } from "../shared/SourceProviderRawBatch.ts"
 import {
+  CalculationRunOrchestrationError,
+  CalculationRunOrchestrator,
   SourceNormalizationRepository,
   ProviderAssetRepository,
   SourceNotFoundError,
@@ -118,8 +121,11 @@ type SourceSyncExecutionError =
   | SourceReplaySchedulingPendingError
   | SyncEngineStorageError
   | SourceSyncCreditExhaustedError
+  | SourceSyncJobExecutionNotFoundError
+  | SourceSyncJobExecutionConflictError
 
 const DEFAULT_SYNC_PAGE_SIZE = 100
+const MAX_SOURCE_SYNC_HEARTBEAT_INTERVAL_MS = 10_000
 const DEFAULT_SOURCE_SYNC_WORKER_ID = "source-sync-inline-executor"
 
 const UnknownSyncErrorSchema = Schema.Struct({
@@ -138,8 +144,12 @@ const SOURCE_SYNC_PAGE_SIZE_CONFIG = Config.int("SOURCE_SYNC_PAGE_SIZE").pipe(
 const SOURCE_SYNC_HEARTBEAT_INTERVAL_MS_CONFIG = Config.int(
   "SOURCE_SYNC_HEARTBEAT_INTERVAL_MS"
 ).pipe(
-  Config.map((configuredInterval) => (configuredInterval > 0 ? configuredInterval : 10_000)),
-  Config.orElse(() => Config.succeed(10_000))
+  Config.map((configuredInterval) =>
+    configuredInterval > 0
+      ? Math.min(configuredInterval, MAX_SOURCE_SYNC_HEARTBEAT_INTERVAL_MS)
+      : MAX_SOURCE_SYNC_HEARTBEAT_INTERVAL_MS
+  ),
+  Config.orElse(() => Config.succeed(MAX_SOURCE_SYNC_HEARTBEAT_INTERVAL_MS))
 )
 
 const errorMessage = (error: unknown): string => {
@@ -180,6 +190,7 @@ const make = Effect.gen(function* () {
   const sourceReplayRepository = yield* SourceReplayRepository
   const syncEngineTransaction = yield* SyncEngineTransaction
   const transferReconciliationService = yield* TransferReconciliationService
+  const calculationRunOrchestrator = yield* CalculationRunOrchestrator
   const pageSize = yield* SOURCE_SYNC_PAGE_SIZE_CONFIG
   const heartbeatIntervalMs = yield* SOURCE_SYNC_HEARTBEAT_INTERVAL_MS_CONFIG
 
@@ -225,22 +236,36 @@ const make = Effect.gen(function* () {
     )
 
   const withActiveJobHeartbeat = <A, E, R>({
+    completionStarted,
     effect,
     jobId,
     workerId,
   }: {
     readonly effect: Effect.Effect<A, E, R>
+    readonly completionStarted?: Ref.Ref<boolean>
     readonly jobId: string
     readonly workerId: string
-  }): Effect.Effect<A, E | SyncEngineStorageError, R> =>
-    effect.pipe(
-      Effect.raceFirst(
-        heartbeatSourceSyncJob({ jobId, workerId }).pipe(
-          Effect.delay(heartbeatIntervalMs),
-          Effect.forever
-        )
+  }): Effect.Effect<A, E | SyncEngineStorageError, R> => {
+    const heartbeat = heartbeatSourceSyncJob({ jobId, workerId }).pipe(
+      Effect.catch((error) =>
+        completionStarted === undefined
+          ? Effect.fail(error)
+          : Ref.get(completionStarted).pipe(
+              Effect.flatMap((started) => (started ? Effect.never : Effect.fail(error)))
+            )
       )
     )
+    const heartbeatTick =
+      completionStarted === undefined
+        ? heartbeat
+        : Ref.get(completionStarted).pipe(
+            Effect.flatMap((started) => (started ? Effect.never : heartbeat))
+          )
+
+    return effect.pipe(
+      Effect.raceFirst(heartbeatTick.pipe(Effect.delay(heartbeatIntervalMs), Effect.forever))
+    )
+  }
 
   const resolveProviderModule = ({
     providerKey,
@@ -1223,13 +1248,13 @@ const make = Effect.gen(function* () {
 
         return replayExecution
       }).pipe(
-        Effect.catchCause((cause) =>
-          sourceNormalizationRepository
-            .releaseReplayTransactionCredits({
-              reservationId: jobId,
-              references: reservedReferences,
-            })
-            .pipe(Effect.andThen(Effect.failCause(cause)))
+        Effect.onExit((exit) =>
+          Exit.isFailure(exit)
+            ? sourceNormalizationRepository.releaseReplayTransactionCredits({
+                reservationId: jobId,
+                references: reservedReferences,
+              })
+            : Effect.void
         )
       )
     }).pipe(
@@ -1494,6 +1519,51 @@ const make = Effect.gen(function* () {
       )
     )
 
+  const runCalculationAfterPrincipalTerminal = ({
+    principalId,
+    sourceId,
+    jobId,
+  }: {
+    readonly principalId: string
+    readonly sourceId: string
+    readonly jobId: string
+  }) =>
+    calculationRunOrchestrator.runAfterPrincipalTerminal({ principalId }).pipe(
+      Effect.mapError(
+        (cause) =>
+          new SyncEngineStorageError({
+            operation: cause.operation,
+            cause: { sourceId, jobId, principalId, cause: cause.cause },
+          })
+      )
+    )
+
+  const resumeTerminalJob = ({
+    jobId,
+    reason,
+  }: {
+    readonly jobId: string
+    readonly reason: string
+  }) =>
+    calculationRunOrchestrator.resumeAfterTerminalSync({ jobId }).pipe(
+      Effect.mapError(
+        (cause) =>
+          new SyncEngineStorageError({
+            operation: cause.operation,
+            cause: cause.cause,
+          })
+      ),
+      Effect.flatMap((terminalJob) =>
+        terminalJob === null
+          ? Effect.fail(new SourceSyncJobExecutionConflictError({ jobId, reason }))
+          : Effect.succeed({
+              _tag: "Terminal" as const,
+              sourceId: terminalJob.sourceId,
+              status: terminalJob.status,
+            })
+      )
+    )
+
   const execute: SourceSyncJobExecutorShape["execute"] = ({
     jobId,
     workerId = DEFAULT_SOURCE_SYNC_WORKER_ID,
@@ -1508,7 +1578,7 @@ const make = Effect.gen(function* () {
           SourceSyncJobExecutionRecordNotFoundError: () =>
             Effect.fail(new SourceSyncJobExecutionNotFoundError({ jobId })),
           SourceSyncJobExecutionRecordConflictError: (error) =>
-            Effect.fail(new SourceSyncJobExecutionConflictError({ jobId, reason: error.reason })),
+            resumeTerminalJob({ jobId, reason: error.reason }),
           SourceSyncJobExecutionRecordPayloadError: (error) =>
             Effect.fail(new SourceSyncJobExecutionPayloadError({ jobId, reason: error.reason })),
         })
@@ -1522,6 +1592,14 @@ const make = Effect.gen(function* () {
         })
       }
 
+      if (executionReadiness._tag === "Terminal") {
+        return makePlainSourceSyncJobSummary({
+          sourceId: executionReadiness.sourceId,
+          jobId,
+          status: executionReadiness.status,
+        })
+      }
+
       const claimResult = yield* sourceSyncJobRepository
         .claimJob({ jobId, workerId, startedAt: nowDate() })
         .pipe(
@@ -1532,7 +1610,7 @@ const make = Effect.gen(function* () {
             SourceSyncJobExecutionRecordNotFoundError: () =>
               Effect.fail(new SourceSyncJobExecutionNotFoundError({ jobId })),
             SourceSyncJobExecutionRecordConflictError: (error) =>
-              Effect.fail(new SourceSyncJobExecutionConflictError({ jobId, reason: error.reason })),
+              resumeTerminalJob({ jobId, reason: error.reason }),
           })
         )
 
@@ -1544,15 +1622,27 @@ const make = Effect.gen(function* () {
         })
       }
 
+      if (claimResult._tag === "Terminal") {
+        return makePlainSourceSyncJobSummary({
+          sourceId: claimResult.sourceId,
+          jobId,
+          status: claimResult.status,
+        })
+      }
+
       const executionJob = claimResult.job
-      const source = yield* loadSource({
-        principalId: executionJob.principalId,
-        sourceId: executionJob.sourceId,
-      }).pipe(
-        Effect.catchTag("SourceNotFoundError", () =>
-          Effect.fail(new SourceSyncJobExecutionNotFoundError({ jobId }))
-        )
-      )
+      const source = yield* withActiveJobHeartbeat({
+        jobId,
+        workerId,
+        effect: loadSource({
+          principalId: executionJob.principalId,
+          sourceId: executionJob.sourceId,
+        }).pipe(
+          Effect.catchTag("SourceNotFoundError", () =>
+            Effect.fail(new SourceSyncJobExecutionNotFoundError({ jobId }))
+          )
+        ),
+      })
       const provider = source.providerKey ?? "unknown"
       const mode = executionJob.mode
 
@@ -1563,15 +1653,67 @@ const make = Effect.gen(function* () {
         provider,
         mode,
       })
+      const completionStarted = yield* Ref.make(false)
 
-      const result: Result.Result<SourceSyncExecutionState, SourceSyncExecutionError> = yield* (
-        mode === "sync"
-          ? runSync({ source, jobId, workerId })
-          : runReplay({ source, jobId, workerId })
-      ).pipe(trackSourceSyncJobDuration({ provider, mode }), Effect.result)
+      const result: Result.Result<SourceSyncExecutionState, SourceSyncExecutionError> =
+        yield* withActiveJobHeartbeat({
+          completionStarted,
+          jobId,
+          workerId,
+          effect: calculationRunOrchestrator
+            .withPrincipalSyncLock({
+              principalId: source.principalId,
+              effect: withActiveJobHeartbeat({
+                completionStarted,
+                jobId,
+                workerId,
+                effect: heartbeatSourceSyncJob({ jobId, workerId }).pipe(
+                  Effect.andThen(
+                    mode === "sync"
+                      ? runSync({ source, jobId, workerId })
+                      : runReplay({ source, jobId, workerId })
+                  ),
+                  trackSourceSyncJobDuration({ provider, mode }),
+                  Effect.tap((state) =>
+                    Ref.set(completionStarted, true).pipe(
+                      Effect.andThen(sourceSyncJobRepository.completeJob({ jobId, state })),
+                      Effect.catchTags({
+                        SourceSyncJobExecutionRecordNotFoundError: () =>
+                          Effect.fail(new SourceSyncJobExecutionNotFoundError({ jobId })),
+                        SourceSyncJobExecutionRecordConflictError: (recordError) =>
+                          Effect.fail(
+                            new SourceSyncJobExecutionConflictError({
+                              jobId,
+                              reason: recordError.reason,
+                            })
+                          ),
+                      })
+                    )
+                  )
+                ),
+              }),
+            })
+            .pipe(
+              Effect.mapError((cause) =>
+                Schema.is(CalculationRunOrchestrationError)(cause)
+                  ? new SyncEngineStorageError({
+                      operation: cause.operation,
+                      cause: cause.cause,
+                    })
+                  : cause
+              )
+            ),
+        }).pipe(Effect.result)
 
       return yield* Result.match(result, {
         onFailure: (error) => {
+          if (
+            error._tag === "SourceSyncJobExecutionNotFoundError" ||
+            error._tag === "SourceSyncJobExecutionConflictError"
+          ) {
+            return Effect.fail(error)
+          }
+
           if (error._tag === "SourceSyncCreditExhaustedError") {
             return finalizeSyncCreditRequired({
               sourceId: source.id,
@@ -1579,7 +1721,15 @@ const make = Effect.gen(function* () {
               provider,
               mode,
               error,
-            })
+            }).pipe(
+              Effect.tap(() =>
+                runCalculationAfterPrincipalTerminal({
+                  principalId: source.principalId,
+                  sourceId: source.id,
+                  jobId,
+                })
+              )
+            )
           }
 
           if (
@@ -1621,23 +1771,43 @@ const make = Effect.gen(function* () {
             provider,
             mode,
             error,
-          })
-        },
-        onSuccess: (state) =>
-          Effect.gen(function* () {
-            yield* sourceSyncJobRepository.completeJob({ jobId, state }).pipe(
-              Effect.catchTags({
-                SourceSyncJobExecutionRecordNotFoundError: () =>
-                  Effect.fail(new SourceSyncJobExecutionNotFoundError({ jobId })),
-                SourceSyncJobExecutionRecordConflictError: (recordError) =>
-                  Effect.fail(
-                    new SourceSyncJobExecutionConflictError({
-                      jobId,
-                      reason: recordError.reason,
-                    })
-                  ),
+          }).pipe(
+            Effect.tap(() =>
+              runCalculationAfterPrincipalTerminal({
+                principalId: source.principalId,
+                sourceId: source.id,
+                jobId,
               })
             )
+          )
+        },
+        onSuccess: () =>
+          Effect.gen(function* () {
+            yield* calculationRunOrchestrator
+              .runAfterSync({ jobId, principalId: source.principalId })
+              .pipe(
+                Effect.tapError((error) =>
+                  Effect.logError(
+                    {
+                      sourceId: source.id,
+                      jobId,
+                      principalId: source.principalId,
+                      operation: error.operation,
+                    },
+                    "source-sync:calculation-run-failed"
+                  )
+                ),
+                Effect.catch((error) =>
+                  error.retrySourceJob
+                    ? Effect.fail(
+                        new SyncEngineStorageError({
+                          operation: error.operation,
+                          cause: error.cause,
+                        })
+                      )
+                    : Effect.void
+                )
+              )
 
             yield* recordSourceSyncJobOutcome({ provider, mode, outcome: "completed" })
 

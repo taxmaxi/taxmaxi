@@ -122,7 +122,9 @@ export const activeCalculationRuns = pgTable(
         calculationRuns.reportingCurrency,
       ],
       name: "active_calculation_runs_matching_scope_fk",
-    }).onDelete("cascade"),
+    })
+      .onDelete("cascade")
+      .onUpdate("cascade"),
     unique("active_calculation_runs_run_unique").on(table.runId),
   ]
 )

@@ -21,6 +21,16 @@ export type SyncRunStatus = "queued" | "running" | "completed" | "failed" | "par
  */
 export type SyncRunItemStatus = "queued" | "running" | "completed" | "failed"
 
+/** Calculation status linked to a source job at the T13 orchestration boundary. */
+export type SyncRunCalculationStatus = "pending" | "running" | "complete" | "partial" | "failed"
+
+/** Calculation run started by one source sync item. */
+export interface SyncRunCalculationRecord {
+  readonly runId: string
+  readonly status: SyncRunCalculationStatus
+  readonly failureCode: string | null
+}
+
 /**
  * SyncRunRecord - Persisted aggregate sync run projection.
  */
@@ -58,6 +68,7 @@ export interface SyncRunItemRecord {
   readonly normalizedRecords: number | null
   readonly failedRecords: number | null
   readonly message: string | null
+  readonly calculationRun: SyncRunCalculationRecord | null
   readonly createdAt: Date
   readonly updatedAt: Date
 }

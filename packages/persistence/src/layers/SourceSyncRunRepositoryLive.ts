@@ -24,6 +24,7 @@ import {
   SyncEngineStorageError,
   type SourceSyncRunRepositoryShape,
   type SourceSyncJobStatus,
+  type SyncRunCalculationStatus,
   type SyncRunItemRecord,
   type SyncRunItemStatus,
   type SyncRunRecord,
@@ -163,6 +164,9 @@ const rowToRunItem = (item: {
   readonly progressDetails: unknown
   readonly itemMessage: string | null
   readonly jobMessage: string | null
+  readonly calculationRunId: string | null
+  readonly calculationRunStatus: SyncRunCalculationStatus | null
+  readonly calculationFailureCode: string | null
   readonly createdAt: Date
   readonly updatedAt: Date
 }): Effect.Effect<SyncRunItemRecord> =>
@@ -192,6 +196,14 @@ const rowToRunItem = (item: {
       normalizedRecords: progress?.normalizedRecords ?? null,
       failedRecords: progress?.failedRecords ?? null,
       message: item.itemMessage ?? item.jobMessage,
+      calculationRun:
+        item.calculationRunId === null || item.calculationRunStatus === null
+          ? null
+          : {
+              runId: item.calculationRunId,
+              status: item.calculationRunStatus,
+              failureCode: item.calculationFailureCode,
+            },
       createdAt: item.createdAt,
       updatedAt: item.updatedAt,
     }
@@ -226,6 +238,9 @@ const make = Effect.gen(function* () {
     progressDetails: schema.processingJobs.progressDetails,
     itemMessage: schema.syncRunItems.message,
     jobMessage: schema.processingJobs.errorMessage,
+    calculationRunId: schema.calculationRuns.id,
+    calculationRunStatus: schema.calculationRuns.status,
+    calculationFailureCode: schema.calculationRuns.failureCode,
     createdAt: schema.syncRunItems.createdAt,
     updatedAt: schema.syncRunItems.updatedAt,
   } as const
@@ -265,6 +280,10 @@ const make = Effect.gen(function* () {
         .leftJoin(
           schema.processingJobs,
           eq(schema.processingJobs.id, schema.syncRunItems.processingJobId)
+        )
+        .leftJoin(
+          schema.calculationRuns,
+          eq(schema.calculationRuns.id, schema.syncRunItems.processingJobId)
         )
         .where(
           and(eq(schema.syncRunItems.runId, runId), eq(schema.syncRunItems.sourceId, sourceId))
@@ -416,6 +435,10 @@ const make = Effect.gen(function* () {
         .leftJoin(
           schema.processingJobs,
           eq(schema.processingJobs.id, schema.syncRunItems.processingJobId)
+        )
+        .leftJoin(
+          schema.calculationRuns,
+          eq(schema.calculationRuns.id, schema.syncRunItems.processingJobId)
         )
         .where(eq(schema.syncRunItems.runId, runId))
         .pipe(wrapSyncEngineSqlError("sourceSyncRunRepository.listRunItems.select"))

@@ -4,7 +4,7 @@
  * @module FactualLedgerRepository
  */
 
-import type { AccountingEvent, ValuationFact } from "@my/core/accounting"
+import type { AccountingEvent, CustodyUnitMembership, ValuationFact } from "@my/core/accounting"
 import type { CurrencyCode } from "@my/core/currency"
 import type { PrincipalId } from "@my/core/ownership"
 import * as Context from "effect/Context"
@@ -20,6 +20,7 @@ export interface LoadFactualLedgerParams {
 /** Stored accounting facts ready for the pure tax-accounting engine. */
 export interface FactualLedger {
   readonly events: ReadonlyArray<AccountingEvent>
+  readonly custodyUnitMemberships: ReadonlyArray<CustodyUnitMembership>
   readonly valuationFacts: ReadonlyArray<ValuationFact>
 }
 

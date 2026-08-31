@@ -1,8 +1,11 @@
 import * as DateTime from "effect/DateTime"
 import * as ConfigProvider from "effect/ConfigProvider"
+import * as Deferred from "effect/Deferred"
 import * as Effect from "effect/Effect"
+import * as Fiber from "effect/Fiber"
 import * as Layer from "effect/Layer"
 import * as Option from "effect/Option"
+import { TestClock } from "effect/testing"
 import { describe, expect, it } from "@effect/vitest"
 import { SourceSyncJobExecutorLive } from "../../src/layers/SourceSyncJobExecutorLive.ts"
 import {
@@ -12,6 +15,8 @@ import {
   UnsupportedSyncProviderError,
 } from "../../src/shared/SourceProviderRawBatch.ts"
 import {
+  CalculationRunOrchestrationError,
+  CalculationRunOrchestrator,
   ProviderAssetRepository,
   SourceNormalizationRepository,
   SourceProviderRecoverableNormalizationError,
@@ -21,6 +26,7 @@ import {
   SourceReplayRepository,
   SourceRepository,
   SourceSyncJobExecutionRecordConflictError,
+  SourceSyncJobExecutionConflictError,
   SourceSyncJobExecutionRecordNotFoundError,
   SourceSyncJobExecutionRecordPayloadError,
   SourceSyncJobPrerequisitesPendingError,
@@ -100,6 +106,12 @@ const makeExecutorLayer = ({
   mode,
   failFetch = false,
   executionJobFailure,
+  claimJobFailure,
+  terminalCalculationStatus,
+  calculationAfterSyncFailure = false,
+  completeJobFailure = false,
+  completionStarted,
+  releaseCompletion,
   sourceProviderKey = "coinbase",
   fetchedProviderRecords = [],
   checkpointRawRecords = [],
@@ -122,6 +134,8 @@ const makeExecutorLayer = ({
   holdReplayReset = false,
   heartbeatFailureAt,
   heartbeatIntervalMs = 10_000,
+  principalLockWaitMs = 0,
+  simulateStaleRepairWhileWaiting = false,
   pageSize = 100,
   prepareReplayTransactions = false,
   events,
@@ -129,6 +143,12 @@ const makeExecutorLayer = ({
   readonly mode: SourceSyncJobMode
   readonly failFetch?: boolean
   readonly executionJobFailure?: "not-found" | "conflict" | "payload"
+  readonly claimJobFailure?: "conflict"
+  readonly terminalCalculationStatus?: "completed" | "failed" | "credit_required"
+  readonly calculationAfterSyncFailure?: boolean
+  readonly completeJobFailure?: boolean
+  readonly completionStarted?: Deferred.Deferred<void>
+  readonly releaseCompletion?: Deferred.Deferred<void>
   readonly sourceProviderKey?: string
   readonly fetchedProviderRecords?: ReadonlyArray<ProviderRawRecord>
   readonly checkpointRawRecords?: ReadonlyArray<SourceRawRecord>
@@ -151,11 +171,14 @@ const makeExecutorLayer = ({
   readonly holdReplayReset?: boolean
   readonly heartbeatFailureAt?: number
   readonly heartbeatIntervalMs?: number
+  readonly principalLockWaitMs?: number
+  readonly simulateStaleRepairWhileWaiting?: boolean
   readonly pageSize?: number
   readonly prepareReplayTransactions?: boolean
   readonly events: Array<string>
 }) => {
   let heartbeatCount = 0
+  let jobStatus: "processing" | "completed" | "failed" = "processing"
   let remainingCreditFailures = failCreditOnce ? 1 : Number.POSITIVE_INFINITY
   const normalizedRawRecordIds = new Set<string>()
   const reservedReplayReferences = new Set<string>()
@@ -172,6 +195,61 @@ const makeExecutorLayer = ({
   const SourceRepositoryTestLive = Layer.succeed(SourceRepository, {
     findOwnedSourceSyncContext: () => Effect.succeed(Option.some(syncSource)),
     listPrincipalSourceSyncContexts: () => Effect.succeed(principalSources ?? [syncSource]),
+  })
+
+  const CalculationRunOrchestratorTestLive = Layer.succeed(CalculationRunOrchestrator, {
+    withPrincipalSyncLock: ({ effect }) =>
+      Effect.gen(function* () {
+        if (principalLockWaitMs > 0) {
+          events.push("principal-lock:waiting")
+          yield* Effect.sleep(principalLockWaitMs)
+        }
+        if (simulateStaleRepairWhileWaiting && heartbeatCount === 0) {
+          jobStatus = "failed"
+          events.push("stale-repair:failed")
+        }
+        events.push("principal-lock:acquired")
+        return yield* effect.pipe(
+          Effect.ensuring(
+            Effect.sync(() => {
+              events.push("principal-lock:released")
+            })
+          )
+        )
+      }),
+    withPrincipalCalculationLock: ({ effect }) => effect,
+    runAfterSync: () =>
+      Effect.sync(() => {
+        events.push("calculation-after-sync")
+      }).pipe(
+        Effect.andThen(
+          calculationAfterSyncFailure
+            ? Effect.fail(
+                new CalculationRunOrchestrationError({
+                  operation: "calculationRunOrchestrator.recordFailure",
+                  cause: "calculation storage unavailable",
+                  retrySourceJob: true,
+                })
+              )
+            : Effect.void
+        )
+      ),
+    resumeAfterTerminalSync: () =>
+      Effect.succeed(
+        terminalCalculationStatus === undefined
+          ? null
+          : {
+              sourceId: source.id,
+              principalId: source.principalId,
+              status: terminalCalculationStatus,
+            }
+      ),
+    runAfterPrincipalTerminal: () =>
+      Effect.sync(() => {
+        events.push("calculation-after-terminal")
+      }),
+    recoverTerminalCalculations: () =>
+      Effect.succeed({ scannedPrincipals: 0, recoveredPrincipals: 0, failedPrincipals: 0 }),
   })
 
   const SourceSyncJobRepositoryTestLive = Layer.succeed(SourceSyncJobRepository, {
@@ -209,23 +287,32 @@ const makeExecutorLayer = ({
       }
     },
     claimJob: ({ jobId, workerId }) =>
-      waitForPrerequisites
-        ? Effect.fail(new SourceSyncJobPrerequisitesPendingError({ jobId, sourceId: source.id }))
-        : Effect.sync(() => {
-            events.push(`claim:${workerId}`)
-            return {
-              id: "job-1",
-              sourceId: source.id,
-              principalId: source.principalId,
-              mode,
-              status: "processing" as const,
-            }
-          }),
+      claimJobFailure === "conflict"
+        ? Effect.fail(
+            new SourceSyncJobExecutionRecordConflictError({
+              jobId,
+              reason: "Job became terminal before it could be claimed.",
+            })
+          )
+        : waitForPrerequisites
+          ? Effect.fail(new SourceSyncJobPrerequisitesPendingError({ jobId, sourceId: source.id }))
+          : Effect.sync(() => {
+              jobStatus = "processing"
+              events.push(`claim:${workerId}`)
+              return {
+                id: "job-1",
+                sourceId: source.id,
+                principalId: source.principalId,
+                mode,
+                status: "processing" as const,
+              }
+            }),
     heartbeatJob: ({ jobId, workerId }) =>
       Effect.suspend(() => {
         heartbeatCount += 1
         events.push(`heartbeat:${workerId}`)
-        return heartbeatFailureAt !== undefined && heartbeatCount >= heartbeatFailureAt
+        return jobStatus !== "processing" ||
+          (heartbeatFailureAt !== undefined && heartbeatCount >= heartbeatFailureAt)
           ? Effect.fail(
               new SourceSyncJobExecutionRecordConflictError({
                 jobId,
@@ -242,10 +329,24 @@ const makeExecutorLayer = ({
     listRepairableActiveJobs: unusedJobLifecycleMethods.listRepairableActiveJobs,
     listPendingJobsNeedingDispatch: unusedJobLifecycleMethods.listPendingJobsNeedingDispatch,
     completeJob: ({ state }) =>
-      Effect.sync(() => {
-        events.push(`complete:${state.fetchedRecords}:${state.normalizedRecords}`)
-        events.push(`failed:${state.failedRecords}`)
-      }),
+      jobStatus === "failed" || completeJobFailure
+        ? Effect.fail(
+            new SourceSyncJobExecutionRecordConflictError({
+              jobId: "job-1",
+              reason: "Stale repair already failed the job.",
+            })
+          )
+        : Effect.gen(function* () {
+            jobStatus = "completed"
+            if (completionStarted !== undefined) {
+              yield* Deferred.succeed(completionStarted, undefined)
+            }
+            if (releaseCompletion !== undefined) {
+              yield* Deferred.await(releaseCompletion)
+            }
+            events.push(`complete:${state.fetchedRecords}:${state.normalizedRecords}`)
+            events.push(`failed:${state.failedRecords}`)
+          }),
     failJob: ({ message }) =>
       Effect.sync(() => {
         events.push(`fail:${message}`)
@@ -707,6 +808,7 @@ const makeExecutorLayer = ({
     Layer.provide(ProviderAssetRepositoryTestLive),
     Layer.provide(SyncEngineTransactionTestLive),
     Layer.provide(TransferReconciliationServiceTestLive),
+    Layer.provide(CalculationRunOrchestratorTestLive),
     Layer.provide(
       ConfigProvider.layer(
         ConfigProvider.fromUnknown({
@@ -764,7 +866,181 @@ describe("SourceSyncJobExecutor", () => {
       expect(events).toContain("heartbeat:source-sync-inline-executor")
       expect(events).toContain("progress:0:done")
       expect(events).toContain("complete:0:0")
+      expect(events.indexOf("complete:0:0")).toBeLessThan(events.indexOf("principal-lock:released"))
+      expect(events.indexOf("principal-lock:released")).toBeLessThan(
+        events.indexOf("calculation-after-sync")
+      )
     })
+  )
+
+  it.effect("does not finalize provider failure after terminal completion conflicts", () =>
+    Effect.gen(function* () {
+      const events: Array<string> = []
+      const error = yield* Effect.gen(function* () {
+        const executor = yield* SourceSyncJobExecutor
+        return yield* Effect.flip(executor.execute({ jobId: "job-1" }))
+      }).pipe(Effect.provide(makeExecutorLayer({ mode: "sync", completeJobFailure: true, events })))
+
+      expect(error).toBeInstanceOf(SourceSyncJobExecutionConflictError)
+      expect(events).toContain("principal-lock:released")
+      expect(events.some((event) => event.startsWith("fail:"))).toBe(false)
+      expect(events).not.toContain("calculation-after-sync")
+    })
+  )
+
+  it.effect("quiesces heartbeats before terminal completion while keeping the shared lock", () =>
+    Effect.gen(function* () {
+      const events: Array<string> = []
+      const completionStarted = yield* Deferred.make<void>()
+      const releaseCompletion = yield* Deferred.make<void>()
+      const execution = Effect.gen(function* () {
+        const executor = yield* SourceSyncJobExecutor
+        return yield* executor.execute({ jobId: "job-1" })
+      }).pipe(
+        Effect.provide(
+          makeExecutorLayer({
+            mode: "sync",
+            heartbeatIntervalMs: 10_000,
+            completionStarted,
+            releaseCompletion,
+            events,
+          })
+        )
+      )
+      const fiber = yield* execution.pipe(Effect.forkChild)
+
+      yield* Deferred.await(completionStarted)
+      yield* TestClock.adjust("15 seconds")
+      expect(fiber.pollUnsafe()).toBeUndefined()
+      expect(events).not.toContain("principal-lock:released")
+
+      yield* Deferred.succeed(releaseCompletion, undefined)
+      const result = yield* Fiber.join(fiber)
+
+      expect(result.status).toBe("completed")
+      expect(events).toContain("calculation-after-sync")
+      expect(events.indexOf("complete:0:0")).toBeLessThan(events.indexOf("principal-lock:released"))
+    })
+  )
+
+  it.effect("heartbeats while waiting for the principal lock before mutating facts", () =>
+    Effect.gen(function* () {
+      const events: Array<string> = []
+      const execution = Effect.gen(function* () {
+        const executor = yield* SourceSyncJobExecutor
+        return yield* executor.execute({ jobId: "job-1" })
+      }).pipe(
+        Effect.provide(
+          makeExecutorLayer({
+            mode: "sync",
+            heartbeatIntervalMs: 60_000,
+            principalLockWaitMs: 35_000,
+            simulateStaleRepairWhileWaiting: true,
+            events,
+          })
+        )
+      )
+      const fiber = yield* execution.pipe(Effect.forkChild)
+
+      yield* TestClock.adjust("40 seconds")
+      const result = yield* Fiber.join(fiber)
+
+      expect(result.status).toBe("completed")
+      expect(events).not.toContain("stale-repair:failed")
+      expect(events.indexOf("heartbeat:source-sync-inline-executor")).toBeLessThan(
+        events.indexOf("principal-lock:acquired")
+      )
+      expect(events.indexOf("principal-lock:acquired")).toBeLessThan(events.indexOf("fetch:none"))
+      expect(events).toContain("complete:0:0")
+    })
+  )
+
+  it.effect("does not mutate facts when stale repair wins during the principal lock wait", () =>
+    Effect.gen(function* () {
+      const events: Array<string> = []
+      const execution = Effect.gen(function* () {
+        const executor = yield* SourceSyncJobExecutor
+        return yield* executor.execute({ jobId: "job-1" })
+      }).pipe(
+        Effect.provide(
+          makeExecutorLayer({
+            mode: "sync",
+            heartbeatIntervalMs: 10_000,
+            principalLockWaitMs: 5_000,
+            simulateStaleRepairWhileWaiting: true,
+            events,
+          })
+        )
+      )
+      const fiber = yield* execution.pipe(Effect.forkChild)
+
+      yield* TestClock.adjust("6 seconds")
+      const result = yield* Fiber.join(fiber)
+
+      expect(result.status).toBe("failed")
+      expect(events).toContain("stale-repair:failed")
+      expect(events).toContain("principal-lock:acquired")
+      expect(events).toContain("heartbeat:source-sync-inline-executor")
+      expect(events).not.toContain("fetch:none")
+      expect(events.some((event) => event.startsWith("progress:"))).toBe(false)
+      expect(events.some((event) => event.startsWith("persist-normalized:"))).toBe(false)
+      expect(events).not.toContain("reset-derived-state")
+      expect(events.some((event) => event.startsWith("complete:"))).toBe(false)
+    })
+  )
+
+  it.effect("resumes calculation when the job becomes terminal before claim", () =>
+    Effect.gen(function* () {
+      const result = yield* Effect.gen(function* () {
+        const executor = yield* SourceSyncJobExecutor
+        return yield* executor.execute({ jobId: "job-1" })
+      }).pipe(
+        Effect.provide(
+          makeExecutorLayer({
+            mode: "sync",
+            claimJobFailure: "conflict",
+            terminalCalculationStatus: "completed",
+            events: [],
+          })
+        )
+      )
+
+      expect(result).toMatchObject({
+        sourceId: source.id,
+        jobId: "job-1",
+        status: "completed",
+      })
+    })
+  )
+
+  it.effect(
+    "returns calculation settlement failure after the source job's final queue attempt",
+    () =>
+      Effect.gen(function* () {
+        const events: Array<string> = []
+        const result = yield* Effect.gen(function* () {
+          const executor = yield* SourceSyncJobExecutor
+          return yield* executor.execute({
+            jobId: "job-1",
+            retryPolicy: {
+              attemptNumber: 3,
+              maxAttempts: 3,
+              nextRetryAt: DateTime.toDateUtc(DateTime.makeUnsafe("2026-01-01T00:01:00.000Z")),
+            },
+          })
+        }).pipe(
+          Effect.result,
+          Effect.provide(
+            makeExecutorLayer({ mode: "sync", calculationAfterSyncFailure: true, events })
+          )
+        )
+
+        expect(events).toContain("complete:0:0")
+        expect(result._tag).toBe("Failure")
+        if (result._tag === "Failure") {
+          expect(result.failure._tag).toBe("SyncEngineStorageError")
+        }
+      })
   )
 
   it.effect("runs a non-Coinbase provider module through fetch and normalization hooks", () =>
@@ -1015,8 +1291,9 @@ describe("SourceSyncJobExecutor", () => {
               event === "rollback-reconciliations" ||
               event === "reset-derived-state"
           )
-          .slice(0, 9)
+          .slice(0, 10)
       ).toEqual([
+        "heartbeat:source-sync-inline-executor",
         "normalize:raw-1",
         "heartbeat:source-sync-inline-executor",
         "normalize:raw-2",
@@ -1041,7 +1318,7 @@ describe("SourceSyncJobExecutor", () => {
           makeExecutorLayer({
             mode: "replay",
             replayRawRecords: [makeReplayRawRecord(1), makeReplayRawRecord(2)],
-            heartbeatFailureAt: 3,
+            heartbeatFailureAt: 4,
             pageSize: 1,
             events,
           })
@@ -1066,7 +1343,7 @@ describe("SourceSyncJobExecutor", () => {
           makeExecutorLayer({
             mode: "replay",
             replayRawRecords: [makeReplayRawRecord(1), makeReplayRawRecord(2)],
-            heartbeatFailureAt: 4,
+            heartbeatFailureAt: 5,
             heartbeatIntervalMs: 1,
             holdReplayCreditReservation: true,
             pageSize: 1,
@@ -1094,7 +1371,7 @@ describe("SourceSyncJobExecutor", () => {
           makeExecutorLayer({
             mode: "replay",
             replayRawRecords: [makeReplayRawRecord(1), makeReplayRawRecord(2)],
-            heartbeatFailureAt: 6,
+            heartbeatFailureAt: 7,
             heartbeatIntervalMs: 1,
             holdReplayReset: true,
             prepareReplayTransactions: true,
@@ -1268,6 +1545,7 @@ describe("SourceSyncJobExecutor", () => {
         )
 
         expect(result.status).toBe("credit_required")
+        expect(events).toContain("calculation-after-terminal")
         expect(result.resumable).toBe(true)
         expect(result.creditOutcome).toEqual({
           reasonCode: "no_usable_credits",
@@ -1428,6 +1706,7 @@ describe("SourceSyncJobExecutor", () => {
       expect(result.message).toBe("provider unavailable")
       expect(events).toContain("failure-metadata:provider unavailable")
       expect(events).toContain("fail:provider unavailable")
+      expect(events).toContain("calculation-after-terminal")
     })
   )
 

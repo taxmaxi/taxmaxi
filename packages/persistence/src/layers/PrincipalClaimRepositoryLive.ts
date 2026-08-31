@@ -176,6 +176,29 @@ const wrapClaimTransferSqlError =
 
 const make = Effect.gen(function* () {
   const db = yield* drizzle
+  type ClaimTransaction = Parameters<Parameters<typeof db.transaction>[0]>[0]
+
+  const transferCalculationRunOwnership = ({
+    tx,
+    anonymousPrincipalId,
+    userPrincipalId,
+    now,
+  }: {
+    readonly tx: ClaimTransaction
+    readonly anonymousPrincipalId: PrincipalId
+    readonly userPrincipalId: PrincipalId
+    readonly now: Date
+  }) =>
+    Effect.gen(function* () {
+      yield* tx
+        .delete(schema.activeCalculationRuns)
+        .where(eq(schema.activeCalculationRuns.principalId, anonymousPrincipalId))
+
+      yield* tx
+        .update(schema.calculationRuns)
+        .set({ principalId: userPrincipalId, updatedAt: now })
+        .where(eq(schema.calculationRuns.principalId, anonymousPrincipalId))
+    })
 
   const create: PrincipalClaimRepositoryService["create"] = (params) =>
     Effect.gen(function* () {
@@ -691,6 +714,13 @@ const make = Effect.gen(function* () {
                 )
               )
 
+            yield* transferCalculationRunOwnership({
+              tx,
+              anonymousPrincipalId: params.anonymousPrincipalId,
+              userPrincipalId: params.userPrincipalId,
+              now,
+            })
+
             yield* tx
               .update(schema.syncRuns)
               .set({ principalId: params.userPrincipalId, updatedAt: now })
@@ -923,6 +953,13 @@ const make = Effect.gen(function* () {
                   eq(schema.processingJobs.principalId, params.anonymousPrincipalId)
                 )
               )
+
+            yield* transferCalculationRunOwnership({
+              tx,
+              anonymousPrincipalId: params.anonymousPrincipalId,
+              userPrincipalId: params.userPrincipalId,
+              now,
+            })
 
             yield* tx
               .update(schema.syncRuns)

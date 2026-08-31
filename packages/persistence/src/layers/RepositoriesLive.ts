@@ -66,6 +66,9 @@ import { SourceSyncStateRepositoryLive } from "./SourceSyncStateRepositoryLive.t
 import { SyncEngineSourceRepositoryLive } from "./SyncEngineSourceRepositoryLive.ts"
 import { TransferReconciliationRepositoryLive } from "./TransferReconciliationRepositoryLive.ts"
 import { SyncEngineTransactionLive } from "./SyncEngineTransactionLive.ts"
+import { CalculationRunRepositoryLive } from "./CalculationRunRepositoryLive.ts"
+import { FactualLedgerRepositoryLive } from "./FactualLedgerRepositoryLive.ts"
+import { CalculationRunOrchestratorLive } from "./CalculationRunOrchestratorLive.ts"
 import { CoinbaseAuthProvider } from "../services/CoinbaseAuthProvider.ts"
 import { CoinbaseConfigTag } from "../services/CoinbaseConfig.ts"
 import { GoogleAuthProvider } from "../services/GoogleAuthProvider.ts"
@@ -104,6 +107,11 @@ import { PersistenceError } from "../errors/RepositoryError.ts"
  * )
  * ```
  */
+const CalculationRunOrchestratorWithDepsLive = CalculationRunOrchestratorLive.pipe(
+  Layer.provide(FactualLedgerRepositoryLive),
+  Layer.provide(CalculationRunRepositoryLive)
+)
+
 export const RepositoriesLive = Layer.mergeAll(
   BillingRepositoryLive,
   UserRepositoryLive,
@@ -138,7 +146,10 @@ export const RepositoriesLive = Layer.mergeAll(
   SourceSyncStateRepositoryLive,
   SyncEngineSourceRepositoryLive,
   SyncEngineTransactionLive,
-  TransferReconciliationRepositoryLive
+  TransferReconciliationRepositoryLive,
+  FactualLedgerRepositoryLive,
+  CalculationRunRepositoryLive,
+  CalculationRunOrchestratorWithDepsLive
 )
 
 // =============================================================================

@@ -35,6 +35,7 @@ const calculateGerman = ({
 } = {}) =>
   calculate({
     ledger,
+    custodyUnitMemberships: [],
     jurisdiction: JurisdictionCode.make("DE"),
     taxYear: TaxYear.make(taxYear),
     accountingChoices,
@@ -147,6 +148,7 @@ describe("German private-assets jurisdiction", () => {
     Effect.gen(function* () {
       const error = yield* calculate({
         ledger: [],
+        custodyUnitMemberships: [],
         jurisdiction: JurisdictionCode.make("US"),
         taxYear: TaxYear.make(2025),
         accountingChoices: [],

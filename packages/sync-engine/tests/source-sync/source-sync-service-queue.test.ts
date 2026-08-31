@@ -5,12 +5,14 @@ import * as Option from "effect/Option"
 import { describe, expect, it } from "@effect/vitest"
 import { SourceSyncServiceLive } from "../../src/layers/SourceSyncServiceLive.ts"
 import {
+  CalculationRunOrchestrator,
   SourceRepository,
   SourceSyncJobPrerequisitesPendingError,
   SourceSyncJobRepository,
   SourceSyncQueue,
   SourceSyncQueueError,
   SourceSyncService,
+  SyncEngineTransaction,
   type CreateOrReuseSourceSyncJobResult,
   type SourceSyncActiveJob,
   type SourceSyncJobMode,
@@ -141,10 +143,29 @@ const makeServiceLayer = ({
           }),
   })
 
+  const CalculationRunOrchestratorTestLive = Layer.succeed(CalculationRunOrchestrator, {
+    withPrincipalSyncLock: ({ effect }) => effect,
+    withPrincipalCalculationLock: ({ effect }) => effect,
+    runAfterSync: () => Effect.die("runAfterSync should not be called"),
+    resumeAfterTerminalSync: () => Effect.die("resumeAfterTerminalSync should not be called"),
+    runAfterPrincipalTerminal: () =>
+      Effect.sync(() => {
+        repositoryEvents.push("calculation-after-terminal")
+      }),
+    recoverTerminalCalculations: () =>
+      Effect.succeed({ scannedPrincipals: 0, recoveredPrincipals: 0, failedPrincipals: 0 }),
+  })
+
+  const SyncEngineTransactionTestLive = Layer.succeed(SyncEngineTransaction, {
+    run: (effect) => effect,
+  })
+
   return SourceSyncServiceLive.pipe(
     Layer.provide(SourceRepositoryTestLive),
     Layer.provide(SourceSyncJobRepositoryTestLive),
-    Layer.provide(SourceSyncQueueTestLive)
+    Layer.provide(SourceSyncQueueTestLive),
+    Layer.provide(CalculationRunOrchestratorTestLive),
+    Layer.provide(SyncEngineTransactionTestLive)
   )
 }
 
@@ -567,7 +588,11 @@ describe("SourceSyncService queue orchestration", () => {
         resumable: false,
         creditOutcome: null,
       })
-      expect(repositoryEvents).toEqual(["recover:job-stale", "create:sync"])
+      expect(repositoryEvents).toEqual([
+        "recover:job-stale",
+        "calculation-after-terminal",
+        "create:sync",
+      ])
       expect(enqueued).toHaveLength(1)
       expect(enqueued[0]).toMatchObject({
         jobId: "job-sync",

@@ -90,8 +90,10 @@ const preservedTestResetTablesSql = PRESERVED_TEST_RESET_TABLES.map(quoteSqlLite
 
 export const makeIntegrationTestDatabaseContext = ({
   databaseNamePrefix,
+  maxConnections = 10,
 }: {
   readonly databaseNamePrefix: string
+  readonly maxConnections?: number
 }) => {
   const databaseName = makeIntegrationTestDatabaseName({
     databaseNamePrefix,
@@ -109,6 +111,7 @@ export const makeIntegrationTestDatabaseContext = ({
 
   const TestPgClientLive = makePgClientLayerForTests({
     url: testDatabaseUrl,
+    maxConnections,
   })
 
   const AdminPgClientLive = makePgClientLayerForTests({

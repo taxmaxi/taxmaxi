@@ -17,6 +17,14 @@ export class SyncRunNotFoundError extends Schema.TaggedError<SyncRunNotFoundErro
   { httpApiStatus: 404 }
 ) {}
 
+export class SyncCalculationRunResponse extends Schema.Class<SyncCalculationRunResponse>(
+  "SyncCalculationRunResponse"
+)({
+  runId: Schema.String,
+  status: Schema.Literals(["pending", "running", "complete", "partial", "failed"]),
+  failureCode: Schema.NullOr(Schema.String),
+}) {}
+
 export class SyncRunItemResponse extends Schema.Class<SyncRunItemResponse>("SyncRunItemResponse")({
   sourceId: Schema.String,
   jobId: Schema.NullOr(Schema.String),
@@ -31,6 +39,7 @@ export class SyncRunItemResponse extends Schema.Class<SyncRunItemResponse>("Sync
   normalizedRecords: Schema.NullOr(Schema.Finite),
   failedRecords: Schema.NullOr(Schema.Finite),
   message: Schema.NullOr(Schema.String),
+  calculationRun: Schema.NullOr(SyncCalculationRunResponse),
 }) {}
 
 export class SyncRunResponse extends Schema.Class<SyncRunResponse>("SyncRunResponse")({

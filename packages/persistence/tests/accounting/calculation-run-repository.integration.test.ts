@@ -11,21 +11,24 @@ import {
 } from "@my/core/accounting"
 import { CurrencyCode } from "@my/core/currency"
 import { PrincipalId } from "@my/core/ownership"
+import { SourceId } from "@my/core/source"
 import { MonetaryAmount } from "@my/core/shared/values/MonetaryAmount"
 import { Timestamp } from "@my/core/shared/values/Timestamp"
 import { asc, eq, sql } from "drizzle-orm"
 import * as BigDecimal from "effect/BigDecimal"
 import * as Deferred from "effect/Deferred"
+import * as DateTime from "effect/DateTime"
 import * as Effect from "effect/Effect"
 import { PersistenceError } from "../../src/errors/RepositoryError.ts"
 import { CalculationRunRepositoryLive } from "../../src/layers/CalculationRunRepositoryLive.ts"
 import { drizzle } from "../../src/layers/PgClientLive.ts"
-import { schema } from "../../src/schema/index.ts"
+import { schema, type ProcessingJobInsert } from "../../src/schema/index.ts"
 import {
   CalculationRunAlreadyStoredError,
   CalculationRunCurrencyMismatchError,
   CalculationRunId,
   CalculationRunRepository,
+  CalculationRunTriggerRepository,
   InputLedgerRevision,
   ValuationRevision,
 } from "../../src/services/CalculationRunRepository.ts"
@@ -46,6 +49,7 @@ const ACQUISITION_EVENT_ID = AccountingEventId.make("00000000-0000-4000-8000-000
 const DISPOSITION_EVENT_ID = AccountingEventId.make("00000000-0000-4000-8000-000000000803")
 const TEST_PRINCIPAL_ID = PrincipalId.make("00000000-0000-4000-8000-000000000183")
 const TEST_SOURCE_ID = "00000000-0000-4000-8000-000000000281"
+const TEST_SOURCE = SourceId.make(TEST_SOURCE_ID)
 const TEST_CUSTODY_UNIT_ID = CustodyUnitId.make(TEST_SOURCE_ID)
 const MISSING_CUSTODY_UNIT_ID = CustodyUnitId.make("00000000-0000-4000-8000-000000000807")
 const OTHER_USER_ID = "00000000-0000-4000-8000-000000000808"
@@ -53,6 +57,9 @@ const OTHER_PRINCIPAL_ID = PrincipalId.make("00000000-0000-4000-8000-00000000080
 const OTHER_SOURCE_ID = "00000000-0000-4000-8000-000000000810"
 const OTHER_CUSTODY_UNIT_ID = CustodyUnitId.make(OTHER_SOURCE_ID)
 const GROUPED_CUSTODY_UNIT_ID = "00000000-0000-4000-8000-000000000812"
+const ACTIONABLE_USER_ID = "00000000-0000-4000-8000-000000000815"
+const ACTIONABLE_PRINCIPAL_ID = PrincipalId.make("00000000-0000-4000-8000-000000000816")
+const ACTIONABLE_SOURCE_ID = "00000000-0000-4000-8000-000000000817"
 const EUR = CurrencyCode.make("EUR")
 const USD = CurrencyCode.make("USD")
 
@@ -66,6 +73,9 @@ const runPgEffect = <A, E>(effect: Parameters<typeof runPg<A, E>>[0]) =>
   Effect.promise(() => runPg(effect))
 
 const runRepository = <A, E>(effect: Effect.Effect<A, E, CalculationRunRepository>) =>
+  context.runWithLayer({ effect, layer: CalculationRunRepositoryLive })
+
+const runTriggerRepository = <A, E>(effect: Effect.Effect<A, E, CalculationRunTriggerRepository>) =>
   context.runWithLayer({ effect, layer: CalculationRunRepositoryLive })
 
 const quantity = (value: string) => AccountingQuantity.make(BigDecimal.fromStringUnsafe(value))
@@ -156,11 +166,16 @@ const persistResult = ({
   id = RUN_ID,
   principalId = TEST_PRINCIPAL_ID,
   reportingCurrency = EUR,
+  custodyUnitMemberships = [{ sourceId: TEST_SOURCE, custodyUnitId: TEST_CUSTODY_UNIT_ID }],
   result = completeResult(),
 }: {
   readonly id?: CalculationRunId
   readonly principalId?: PrincipalId
   readonly reportingCurrency?: CurrencyCode
+  readonly custodyUnitMemberships?: ReadonlyArray<{
+    readonly sourceId: SourceId
+    readonly custodyUnitId: CustodyUnitId
+  }>
   readonly result?: TaxAccountingResult
 } = {}) =>
   Effect.flatMap(CalculationRunRepository, (repository) =>
@@ -170,6 +185,7 @@ const persistResult = ({
       reportingCurrency,
       inputLedgerRevision: InputLedgerRevision.make("ledger-17"),
       valuationRevision: ValuationRevision.make("prices-9"),
+      custodyUnitMemberships,
       result,
     })
   )
@@ -845,6 +861,9 @@ describe("CalculationRunRepositoryLive", () => {
                 reportingCurrency: EUR,
                 inputLedgerRevision: InputLedgerRevision.make("ledger-17"),
                 valuationRevision: ValuationRevision.make("prices-9"),
+                custodyUnitMemberships: [
+                  { sourceId: TEST_SOURCE, custodyUnitId: TEST_CUSTODY_UNIT_ID },
+                ],
                 result: completeResult(),
               }),
               {
@@ -1011,6 +1030,9 @@ describe("CalculationRunRepositoryLive", () => {
         persistResult({
           id: THIRD_RUN_ID,
           principalId: OTHER_PRINCIPAL_ID,
+          custodyUnitMemberships: [
+            { sourceId: SourceId.make(OTHER_SOURCE_ID), custodyUnitId: OTHER_CUSTODY_UNIT_ID },
+          ],
           result: completeResult({ custodyUnitId: OTHER_CUSTODY_UNIT_ID }),
         })
       )
@@ -1213,5 +1235,418 @@ describe("CalculationRunRepositoryLive", () => {
         realized: [{ runId: RUN_ID }],
       })
     })
+  )
+
+  it.effect("applies the recovery limit after excluding principals with active source jobs", () =>
+    Effect.gen(function* () {
+      yield* runPgEffect(
+        Effect.gen(function* () {
+          yield* seedSyncEngineRepositoryFixture({
+            principalId: TEST_PRINCIPAL_ID,
+            sourceId: TEST_SOURCE_ID,
+          })
+          yield* seedSyncEngineRepositoryFixture({
+            userId: OTHER_USER_ID,
+            principalId: OTHER_PRINCIPAL_ID,
+            sourceId: OTHER_SOURCE_ID,
+          })
+          yield* seedSyncEngineRepositoryFixture({
+            userId: ACTIONABLE_USER_ID,
+            principalId: ACTIONABLE_PRINCIPAL_ID,
+            sourceId: ACTIONABLE_SOURCE_ID,
+          })
+
+          const db = yield* drizzle
+          const firstBlockedAt = DateTime.toDateUtc(DateTime.makeUnsafe("2026-01-01T00:00:00.000Z"))
+          const secondBlockedAt = DateTime.toDateUtc(
+            DateTime.makeUnsafe("2026-01-02T00:00:00.000Z")
+          )
+          const actionableAt = DateTime.toDateUtc(DateTime.makeUnsafe("2026-01-03T00:00:00.000Z"))
+          yield* db.insert(schema.processingJobs).values([
+            {
+              id: RUN_ID,
+              sourceId: TEST_SOURCE_ID,
+              principalId: TEST_PRINCIPAL_ID,
+              status: "completed",
+              completedAt: firstBlockedAt,
+              createdAt: firstBlockedAt,
+              updatedAt: firstBlockedAt,
+            },
+            {
+              id: SECOND_RUN_ID,
+              sourceId: TEST_SOURCE_ID,
+              principalId: TEST_PRINCIPAL_ID,
+              status: "processing",
+              startedAt: firstBlockedAt,
+              heartbeatAt: firstBlockedAt,
+              createdAt: firstBlockedAt,
+              updatedAt: firstBlockedAt,
+            },
+            {
+              id: THIRD_RUN_ID,
+              sourceId: OTHER_SOURCE_ID,
+              principalId: OTHER_PRINCIPAL_ID,
+              status: "completed",
+              completedAt: secondBlockedAt,
+              createdAt: secondBlockedAt,
+              updatedAt: secondBlockedAt,
+            },
+            {
+              id: FOURTH_RUN_ID,
+              sourceId: OTHER_SOURCE_ID,
+              principalId: OTHER_PRINCIPAL_ID,
+              status: "processing",
+              startedAt: secondBlockedAt,
+              heartbeatAt: secondBlockedAt,
+              createdAt: secondBlockedAt,
+              updatedAt: secondBlockedAt,
+            },
+            {
+              id: FIFTH_RUN_ID,
+              sourceId: ACTIONABLE_SOURCE_ID,
+              principalId: ACTIONABLE_PRINCIPAL_ID,
+              status: "completed",
+              completedAt: actionableAt,
+              createdAt: actionableAt,
+              updatedAt: actionableAt,
+            },
+          ])
+        })
+      )
+
+      const candidates = yield* runTriggerRepository(
+        Effect.flatMap(CalculationRunTriggerRepository, (repository) =>
+          repository.listRecoverableTerminalPrincipals({ limit: 1 })
+        )
+      )
+
+      expect(candidates).toEqual([{ principalId: ACTIONABLE_PRINCIPAL_ID }])
+    })
+  )
+
+  it.effect("orders completed jobs by immutable completion time after ownership updates", () =>
+    Effect.gen(function* () {
+      yield* runPgEffect(
+        Effect.gen(function* () {
+          yield* seedSyncEngineRepositoryFixture({
+            principalId: TEST_PRINCIPAL_ID,
+            sourceId: TEST_SOURCE_ID,
+          })
+
+          const db = yield* drizzle
+          const olderCompletion = DateTime.toDateUtc(
+            DateTime.makeUnsafe("2026-01-01T00:00:00.000Z")
+          )
+          const newerCompletion = DateTime.toDateUtc(
+            DateTime.makeUnsafe("2026-01-02T00:00:00.000Z")
+          )
+          const ownershipUpdate = DateTime.toDateUtc(
+            DateTime.makeUnsafe("2026-01-03T00:00:00.000Z")
+          )
+
+          yield* db.insert(schema.processingJobs).values([
+            {
+              id: RUN_ID,
+              sourceId: TEST_SOURCE_ID,
+              principalId: TEST_PRINCIPAL_ID,
+              status: "completed",
+              completedAt: olderCompletion,
+              createdAt: olderCompletion,
+              updatedAt: ownershipUpdate,
+            },
+            {
+              id: SECOND_RUN_ID,
+              sourceId: TEST_SOURCE_ID,
+              principalId: TEST_PRINCIPAL_ID,
+              status: "completed",
+              completedAt: newerCompletion,
+              createdAt: newerCompletion,
+              updatedAt: newerCompletion,
+            },
+          ])
+          yield* db.insert(schema.calculationRuns).values({
+            id: SECOND_RUN_ID,
+            principalId: TEST_PRINCIPAL_ID,
+            jurisdiction: "DE",
+            taxYear: 2025,
+            reportingCurrency: "EUR",
+            engineVersion: "1",
+            ruleSetVersion: "de-2025",
+            inputLedgerRevision: "latest-ledger",
+            valuationRevision: "latest-valuations",
+            status: "complete",
+            accountingMethod: "fifo",
+            inventoryScope: "per_custody_unit",
+            appliedChoiceIds: [],
+            appliedRules: [],
+            processedEventIds: [],
+            startedAt: newerCompletion,
+            completedAt: newerCompletion,
+          })
+        })
+      )
+
+      const result = yield* runTriggerRepository(
+        Effect.gen(function* () {
+          const repository = yield* CalculationRunTriggerRepository
+          const latest = yield* repository.findLatestCompletedJob({
+            principalId: TEST_PRINCIPAL_ID,
+          })
+          const candidates = yield* repository.listRecoverableTerminalPrincipals({ limit: 10 })
+          return { latest, candidates }
+        })
+      )
+
+      expect(result).toEqual({ latest: { id: SECOND_RUN_ID }, candidates: [] })
+    })
+  )
+
+  it.effect("advances a bounded recovery cursor across both candidate classes", () =>
+    Effect.gen(function* () {
+      const fixtures = [
+        {
+          userId: "10000000-0000-4000-8000-000000000901",
+          principalId: PrincipalId.make("10000000-0000-4000-8000-000000000911"),
+          sourceId: "10000000-0000-4000-8000-000000000921",
+          olderJobId: CalculationRunId.make("10000000-0000-4000-8000-000000000931"),
+          latestJobId: CalculationRunId.make("10000000-0000-4000-8000-000000000941"),
+          candidateClass: "latest",
+        },
+        {
+          userId: "10000000-0000-4000-8000-000000000902",
+          principalId: PrincipalId.make("10000000-0000-4000-8000-000000000912"),
+          sourceId: "10000000-0000-4000-8000-000000000922",
+          olderJobId: CalculationRunId.make("10000000-0000-4000-8000-000000000932"),
+          latestJobId: CalculationRunId.make("10000000-0000-4000-8000-000000000942"),
+          candidateClass: "latest",
+        },
+        {
+          userId: "10000000-0000-4000-8000-000000000903",
+          principalId: PrincipalId.make("10000000-0000-4000-8000-000000000913"),
+          sourceId: "10000000-0000-4000-8000-000000000923",
+          olderJobId: CalculationRunId.make("10000000-0000-4000-8000-000000000933"),
+          latestJobId: CalculationRunId.make("10000000-0000-4000-8000-000000000943"),
+          candidateClass: "running",
+        },
+        {
+          userId: "10000000-0000-4000-8000-000000000904",
+          principalId: PrincipalId.make("10000000-0000-4000-8000-000000000914"),
+          sourceId: "10000000-0000-4000-8000-000000000924",
+          olderJobId: CalculationRunId.make("10000000-0000-4000-8000-000000000934"),
+          latestJobId: CalculationRunId.make("10000000-0000-4000-8000-000000000944"),
+          candidateClass: "running",
+        },
+      ] as const
+      const completedAt = DateTime.toDateUtc(DateTime.makeUnsafe("2026-01-01T00:00:00.000Z"))
+
+      yield* runPgEffect(
+        Effect.gen(function* () {
+          for (const fixture of fixtures) {
+            yield* seedSyncEngineRepositoryFixture(fixture)
+          }
+
+          const db = yield* drizzle
+          const jobs: Array<ProcessingJobInsert> = []
+          for (const fixture of fixtures) {
+            if (fixture.candidateClass === "running") {
+              jobs.push({
+                id: fixture.olderJobId,
+                sourceId: fixture.sourceId,
+                principalId: fixture.principalId,
+                status: "completed",
+                completedAt,
+                createdAt: completedAt,
+                updatedAt: completedAt,
+              })
+            }
+            jobs.push({
+              id: fixture.latestJobId,
+              sourceId: fixture.sourceId,
+              principalId: fixture.principalId,
+              status: "completed",
+              completedAt,
+              createdAt: completedAt,
+              updatedAt: completedAt,
+            })
+          }
+          const [firstJob, ...remainingJobs] = jobs
+          if (firstJob === undefined) return yield* Effect.die("Expected recovery jobs")
+          yield* db.insert(schema.processingJobs).values([firstJob, ...remainingJobs])
+        })
+      )
+
+      yield* runRepository(
+        Effect.gen(function* () {
+          const repository = yield* CalculationRunRepository
+          for (const fixture of fixtures.filter(
+            ({ candidateClass }) => candidateClass === "running"
+          )) {
+            const begin = (id: CalculationRunId) =>
+              repository.begin({
+                id,
+                principalId: fixture.principalId,
+                jurisdiction: JurisdictionCode.make("DE"),
+                taxYear: TaxYear.make(2025),
+                reportingCurrency: EUR,
+                engineVersion: "1",
+                ruleSetVersion: "de-crypto-income-tax-v2025-03-06",
+                inputLedgerRevision: InputLedgerRevision.make("ledger-fairness"),
+                valuationRevision: ValuationRevision.make("prices-fairness"),
+              })
+            yield* begin(fixture.olderJobId)
+            yield* begin(fixture.latestJobId)
+            yield* repository.fail({
+              id: fixture.latestJobId,
+              failureCode: "test_terminal",
+              failureMessage: "Latest run is already terminal.",
+            })
+          }
+        })
+      )
+
+      const pages = yield* runTriggerRepository(
+        Effect.gen(function* () {
+          const repository = yield* CalculationRunTriggerRepository
+          const selected: Array<string> = []
+          for (let page = 0; page < fixtures.length + 1; page += 1) {
+            const [candidate] = yield* repository.listRecoverableTerminalPrincipals({ limit: 1 })
+            if (candidate !== undefined) selected.push(candidate.principalId)
+          }
+          return selected
+        })
+      )
+
+      expect(pages).toEqual([
+        ...fixtures.map(({ principalId }) => principalId),
+        fixtures[0].principalId,
+      ])
+    })
+  )
+
+  it.effect(
+    "discovers and settles running calculations superseded by the latest completed job",
+    () =>
+      Effect.gen(function* () {
+        yield* runPgEffect(seedCalculationRunFixture())
+        const olderCompletedAt = DateTime.toDateUtc(DateTime.makeUnsafe("2026-01-01T00:00:00.000Z"))
+        const newerCompletedAt = DateTime.toDateUtc(DateTime.makeUnsafe("2026-01-02T00:00:00.000Z"))
+        const newestCompletedAt = DateTime.toDateUtc(
+          DateTime.makeUnsafe("2026-01-03T00:00:00.000Z")
+        )
+
+        yield* runPgEffect(
+          Effect.gen(function* () {
+            const db = yield* drizzle
+            yield* db.insert(schema.processingJobs).values([
+              {
+                id: RUN_ID,
+                sourceId: TEST_SOURCE_ID,
+                principalId: TEST_PRINCIPAL_ID,
+                status: "completed",
+                completedAt: olderCompletedAt,
+                createdAt: olderCompletedAt,
+                updatedAt: olderCompletedAt,
+              },
+              {
+                id: SECOND_RUN_ID,
+                sourceId: TEST_SOURCE_ID,
+                principalId: TEST_PRINCIPAL_ID,
+                status: "completed",
+                completedAt: newerCompletedAt,
+                createdAt: newerCompletedAt,
+                updatedAt: newerCompletedAt,
+              },
+            ])
+          })
+        )
+        yield* runRepository(
+          Effect.flatMap(CalculationRunRepository, (repository) =>
+            repository.begin({
+              id: RUN_ID,
+              principalId: TEST_PRINCIPAL_ID,
+              jurisdiction: JurisdictionCode.make("DE"),
+              taxYear: TaxYear.make(2025),
+              reportingCurrency: EUR,
+              engineVersion: "1",
+              ruleSetVersion: "de-crypto-income-tax-v2025-03-06",
+              inputLedgerRevision: InputLedgerRevision.make("ledger-old"),
+              valuationRevision: ValuationRevision.make("prices-old"),
+            })
+          )
+        )
+        yield* runRepository(persistResult({ id: SECOND_RUN_ID }))
+
+        const supersededCandidate = yield* runTriggerRepository(
+          Effect.flatMap(CalculationRunTriggerRepository, (repository) =>
+            repository.listRecoverableTerminalPrincipals({ limit: 10 })
+          )
+        )
+        expect(supersededCandidate).toEqual([{ principalId: TEST_PRINCIPAL_ID }])
+
+        const failedCount = yield* runRepository(
+          Effect.flatMap(CalculationRunRepository, (repository) =>
+            repository.failSuperseded({
+              principalId: TEST_PRINCIPAL_ID,
+              latestRunId: SECOND_RUN_ID,
+              failureCode: "calculation_superseded",
+              failureMessage:
+                "A newer completed source job superseded this interrupted calculation.",
+            })
+          )
+        )
+        const settled = yield* runPgEffect(
+          Effect.gen(function* () {
+            const db = yield* drizzle
+            const runs = yield* db
+              .select({
+                id: schema.calculationRuns.id,
+                status: schema.calculationRuns.status,
+                failureCode: schema.calculationRuns.failureCode,
+              })
+              .from(schema.calculationRuns)
+              .orderBy(asc(schema.calculationRuns.id))
+            const [active] = yield* db
+              .select({ runId: schema.activeCalculationRuns.runId })
+              .from(schema.activeCalculationRuns)
+            const realized = yield* db
+              .select({ runId: schema.calculationRunRealizedResults.runId })
+              .from(schema.calculationRunRealizedResults)
+
+            return { runs, active, realized }
+          })
+        )
+
+        expect(failedCount).toBe(1)
+        expect(settled).toEqual({
+          runs: [
+            { id: RUN_ID, status: "failed", failureCode: "calculation_superseded" },
+            { id: SECOND_RUN_ID, status: "complete", failureCode: null },
+          ],
+          active: { runId: SECOND_RUN_ID },
+          realized: [{ runId: SECOND_RUN_ID }],
+        })
+
+        yield* runPgEffect(
+          Effect.gen(function* () {
+            const db = yield* drizzle
+            yield* db.insert(schema.processingJobs).values({
+              id: THIRD_RUN_ID,
+              sourceId: TEST_SOURCE_ID,
+              principalId: TEST_PRINCIPAL_ID,
+              status: "completed",
+              completedAt: newestCompletedAt,
+              createdAt: newestCompletedAt,
+              updatedAt: newestCompletedAt,
+            })
+          })
+        )
+
+        const missingLatestRun = yield* runTriggerRepository(
+          Effect.flatMap(CalculationRunTriggerRepository, (repository) =>
+            repository.listRecoverableTerminalPrincipals({ limit: 10 })
+          )
+        )
+        expect(missingLatestRun).toEqual([{ principalId: TEST_PRINCIPAL_ID }])
+      })
   )
 })

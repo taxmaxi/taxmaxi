@@ -1,6 +1,7 @@
 export * from "./AccountingChoice.ts"
 export * from "./AccountingEvent.ts"
 export * from "./AccountingQuantity.ts"
+export * from "./CustodyUnitMembership.ts"
 export * from "./ValuationFact.ts"
 export {
   DivisionByZeroError,

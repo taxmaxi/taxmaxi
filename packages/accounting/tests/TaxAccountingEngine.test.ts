@@ -3,10 +3,12 @@ import {
   AccountingChoice,
   AccountingEvent,
   AccountingQuantity,
+  CustodyUnitMembership,
   JurisdictionCode,
   TaxYear,
   ValuationFact,
   type AccountingEvent as AccountingEventType,
+  type CustodyUnitMembership as CustodyUnitMembershipType,
   type ValuationFact as ValuationFactType,
 } from "@my/core/accounting"
 import * as Effect from "effect/Effect"
@@ -15,12 +17,14 @@ import { calculate } from "../src/index.ts"
 
 const decodeChoice = Schema.decodeUnknownSync(AccountingChoice)
 const decodeEvent = Schema.decodeUnknownSync(AccountingEvent)
+const decodeCustodyUnitMembership = Schema.decodeUnknownSync(CustodyUnitMembership)
 const decodeValuationFact = Schema.decodeUnknownSync(ValuationFact)
 const encodeQuantity = Schema.encodeSync(AccountingQuantity)
 
 const ASSET_ID = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
 const SOURCE_ONE = "11111111-1111-4111-8111-111111111111"
 const SOURCE_TWO = "22222222-2222-4222-8222-222222222222"
+const GROUPED_CUSTODY_UNIT = "22222222-2222-4222-8222-333333333333"
 const ACQUISITION_ONE = "33333333-3333-4333-8333-333333333333"
 const ACQUISITION_TWO = "44444444-4444-4444-8444-444444444444"
 const DISPOSITION = "55555555-5555-4555-8555-555555555555"
@@ -49,12 +53,15 @@ const choices = [
 const runCalculation = ({
   ledger,
   valuationFacts,
+  custodyUnitMemberships = [],
 }: {
   readonly ledger: ReadonlyArray<AccountingEventType>
   readonly valuationFacts: ReadonlyArray<ValuationFactType>
+  readonly custodyUnitMemberships?: ReadonlyArray<CustodyUnitMembershipType>
 }) =>
   calculate({
     ledger,
+    custodyUnitMemberships,
     jurisdiction: JurisdictionCode.make("DE"),
     taxYear: TaxYear.make(1970),
     accountingChoices: choices,
@@ -168,6 +175,62 @@ describe("calculate", () => {
         blockers: [],
         incomeResults: [],
       })
+    })
+  )
+
+  it.effect("matches inventory across sources recorded in one custody unit", () =>
+    Effect.gen(function* () {
+      const acquisition = decodeEvent({
+        _tag: "acquisition",
+        id: ACQUISITION_ONE,
+        occurredAt: { epochMillis: 1_000 },
+        assetId: ASSET_ID,
+        quantity: "1",
+        custodySourceId: SOURCE_ONE,
+        cause: "purchase",
+      })
+      const disposition = decodeEvent({
+        _tag: "disposition",
+        id: DISPOSITION,
+        occurredAt: { epochMillis: 2_000 },
+        assetId: ASSET_ID,
+        quantity: "1",
+        custodySourceId: SOURCE_TWO,
+        cause: "sale",
+      })
+
+      const result = yield* runCalculation({
+        ledger: [acquisition, disposition],
+        custodyUnitMemberships: [
+          decodeCustodyUnitMembership({
+            sourceId: SOURCE_ONE,
+            custodyUnitId: GROUPED_CUSTODY_UNIT,
+          }),
+          decodeCustodyUnitMembership({
+            sourceId: SOURCE_TWO,
+            custodyUnitId: GROUPED_CUSTODY_UNIT,
+          }),
+        ],
+        valuationFacts: [
+          decodeValuationFact({
+            _tag: "observed_consideration",
+            eventId: ACQUISITION_ONE,
+            amount: { amount: "25", currency: "EUR" },
+            evidenceReference: "buy",
+          }),
+          decodeValuationFact({
+            _tag: "observed_consideration",
+            eventId: DISPOSITION,
+            amount: { amount: "40", currency: "EUR" },
+            evidenceReference: "sale",
+          }),
+        ],
+      })
+
+      expect(result.status).toBe("complete")
+      expect(result.allocations).toHaveLength(1)
+      expect(result.allocations[0]?.custodyUnitId).toBe(GROUPED_CUSTODY_UNIT)
+      expect(result.blockers).toEqual([])
     })
   )
 
@@ -651,6 +714,7 @@ describe("calculate", () => {
 
       const broken = yield* calculate({
         ledger: [],
+        custodyUnitMemberships: [],
         jurisdiction: JurisdictionCode.make("DE"),
         taxYear: TaxYear.make(1970),
         accountingChoices: [
@@ -670,6 +734,7 @@ describe("calculate", () => {
       }).pipe(Effect.flip)
       const cyclic = yield* calculate({
         ledger: [],
+        custodyUnitMemberships: [],
         jurisdiction: JurisdictionCode.make("DE"),
         taxYear: TaxYear.make(1970),
         accountingChoices: [
@@ -811,6 +876,7 @@ describe("calculate", () => {
       })
       const error = yield* calculate({
         ledger: [disposition, movement, acquisition],
+        custodyUnitMemberships: [],
         jurisdiction: JurisdictionCode.make("DE"),
         taxYear: TaxYear.make(1970),
         accountingChoices: [
@@ -987,6 +1053,7 @@ describe("calculate", () => {
     Effect.gen(function* () {
       const baseInput = {
         ledger: [],
+        custodyUnitMemberships: [],
         jurisdiction: JurisdictionCode.make("DE"),
         taxYear: TaxYear.make(1970),
         valuationFacts: [],

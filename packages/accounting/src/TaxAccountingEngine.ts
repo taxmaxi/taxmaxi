@@ -16,6 +16,7 @@ import {
   type AccountingMethodChoice,
   type AccountingQuantity,
   type AcquisitionEvent,
+  type CustodyUnitMembership,
   type CustodyMovementEvent,
   type DispositionEvent,
   type InventoryScope,
@@ -28,6 +29,7 @@ import {
 } from "@my/core/accounting"
 import { divide, MonetaryAmount, round, subtract } from "@my/core/shared/values/MonetaryAmount"
 import type { Timestamp } from "@my/core/shared/values/Timestamp"
+import type { SourceId } from "@my/core/source"
 import * as Effect from "effect/Effect"
 import * as Option from "effect/Option"
 import * as Result from "effect/Result"
@@ -47,7 +49,11 @@ import {
   type GermanBlockerCode,
 } from "./GermanJurisdiction.ts"
 
-const ENGINE_VERSION = "1"
+/** Version stamped on every result produced by this engine implementation. */
+export const TAX_ACCOUNTING_ENGINE_VERSION = "1"
+
+/** German private-assets rule-set version used by the supported DE module. */
+export { GERMAN_RULE_SET_VERSION }
 
 type ChoiceKind = AccountingChoice["_tag"]
 
@@ -175,6 +181,7 @@ export interface TaxAccountingResult {
 /** Inputs to the pure tax-accounting engine. */
 export interface CalculateInput {
   readonly ledger: ReadonlyArray<AccountingEvent>
+  readonly custodyUnitMemberships: ReadonlyArray<CustodyUnitMembership>
   readonly jurisdiction: JurisdictionCode
   readonly taxYear: TaxYear
   readonly accountingChoices: ReadonlyArray<AccountingChoice>
@@ -360,7 +367,14 @@ const inventoryKey = ({
   readonly inventoryScope: InventoryScope
 }): string => (inventoryScope === "whole_taxpayer" ? assetId : `${assetId}:${custodyUnitId}`)
 
-const makeCustodyUnitId = (sourceId: string): CustodyUnitId => CustodyUnitId.make(sourceId)
+const makeCustodyUnitResolver = (memberships: ReadonlyArray<CustodyUnitMembership>) => {
+  const custodyUnitBySourceId = new Map(
+    memberships.map(({ sourceId, custodyUnitId }) => [sourceId, custodyUnitId])
+  )
+
+  return (sourceId: SourceId): CustodyUnitId =>
+    custodyUnitBySourceId.get(sourceId) ?? CustodyUnitId.make(sourceId)
+}
 
 const compareLots = (left: EngineLot, right: EngineLot): number => {
   const timeDifference = left.acquiredAt.epochMillis - right.acquiredAt.epochMillis
@@ -455,10 +469,12 @@ const appendValuationBlocker = ({
 const processCustodyMovement = ({
   event,
   inventoryScope,
+  resolveCustodyUnitId,
   state,
 }: {
   readonly event: CustodyMovementEvent
   readonly inventoryScope: InventoryScope
+  readonly resolveCustodyUnitId: (sourceId: SourceId) => CustodyUnitId
   readonly state: EngineState
 }): void => {
   if (inventoryScope === "whole_taxpayer") {
@@ -471,8 +487,17 @@ const processCustodyMovement = ({
     return
   }
 
-  const sourceUnitId = makeCustodyUnitId(event.fromCustodySourceId)
-  const destinationUnitId = makeCustodyUnitId(event.toCustodySourceId)
+  const sourceUnitId = resolveCustodyUnitId(event.fromCustodySourceId)
+  const destinationUnitId = resolveCustodyUnitId(event.toCustodySourceId)
+  if (sourceUnitId === destinationUnitId) {
+    appendExplanation({
+      state,
+      eventId: event.id,
+      code: "same_custody_unit_movement",
+      valuationKind: null,
+    })
+    return
+  }
   const sourceKey = inventoryKey({
     assetId: event.assetId,
     custodyUnitId: sourceUnitId,
@@ -780,6 +805,7 @@ const processDisposition = ({
 /** Calculate a complete deterministic structural result without external services. */
 export const calculate = ({
   ledger,
+  custodyUnitMemberships,
   jurisdiction,
   taxYear,
   accountingChoices,
@@ -804,6 +830,7 @@ export const calculate = ({
       methodChoice,
       scopeChoice,
     })
+    const resolveCustodyUnitId = makeCustodyUnitResolver(custodyUnitMemberships)
 
     const orderedLedger = ledger
       .filter((event) => germanTaxYearOf(event.occurredAt) <= taxYear)
@@ -838,11 +865,11 @@ export const calculate = ({
 
     for (const event of orderedLedger) {
       if (event._tag === "custody_movement") {
-        processCustodyMovement({ event, inventoryScope, state })
+        processCustodyMovement({ event, inventoryScope, resolveCustodyUnitId, state })
         continue
       }
 
-      const custodyUnitId = makeCustodyUnitId(event.custodySourceId)
+      const custodyUnitId = resolveCustodyUnitId(event.custodySourceId)
       const key = inventoryKey({
         assetId: event.assetId,
         custodyUnitId,
@@ -921,7 +948,7 @@ export const calculate = ({
       status: state.blockers.length === 0 ? "complete" : "partial",
       jurisdiction,
       taxYear,
-      engineVersion: ENGINE_VERSION,
+      engineVersion: TAX_ACCOUNTING_ENGINE_VERSION,
       ruleSetVersion: GERMAN_RULE_SET_VERSION,
       accountingMethod,
       inventoryScope,

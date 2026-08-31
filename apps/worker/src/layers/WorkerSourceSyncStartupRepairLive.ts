@@ -8,10 +8,15 @@ import { Queue, type JobsOptions } from "bullmq"
 import { Config, Context, DateTime, Effect, Layer, Schema } from "effect"
 import { Redis } from "ioredis"
 import {
+  CalculationRunOrchestrator,
+  CalculationRunOrchestrationError,
   SOURCE_SYNC_JOB_NAME,
   SOURCE_SYNC_QUEUE_NAME,
   SourceSyncJobRepository,
   SourceSyncQueuePayload,
+  SyncEngineTransaction,
+  terminalizeSourceJobAndWakeCalculation,
+  type CalculationRunOrchestratorShape,
   type SourceSyncJobExecutionRecordConflictError,
   type SourceSyncJobExecutionRecordNotFoundError,
   type SourceSyncJobDetails,
@@ -19,6 +24,7 @@ import {
   type SourceSyncJobRepositoryShape,
   type SourceSyncRepairableActiveJob,
   type SyncEngineStorageError,
+  type SyncEngineTransactionShape,
 } from "@my/sync-engine/services"
 
 const DEFAULT_QUEUE_PREFIX = "taxmaxi"
@@ -433,24 +439,56 @@ const repairPendingJob = ({
   })
 
 const recoverStaleProcessingJob = ({
+  calculationRunOrchestrator,
   job,
   repository,
+  syncEngineTransaction,
   now,
   staleBefore,
 }: {
+  readonly calculationRunOrchestrator: CalculationRunOrchestratorShape
   readonly job: SourceSyncRepairableActiveJob
   readonly repository: SourceSyncJobRepositoryShape
+  readonly syncEngineTransaction: SyncEngineTransactionShape
   readonly now: Date
   readonly staleBefore: Date
 }) =>
   Effect.gen(function* () {
-    yield* repository.recoverStaleActiveJob({
-      sourceId: job.sourceId,
-      jobId: job.id,
-      staleBefore,
-      message: "Startup repair failed stale processing source sync job.",
-      completedAt: now,
-    })
+    yield* terminalizeSourceJobAndWakeCalculation({
+      calculationRunOrchestrator,
+      principalId: job.principalId,
+      transaction: syncEngineTransaction,
+      terminalize: repository.recoverStaleActiveJob({
+        sourceId: job.sourceId,
+        jobId: job.id,
+        staleBefore,
+        message: "Startup repair failed stale processing source sync job.",
+        completedAt: now,
+      }),
+      wake: calculationRunOrchestrator
+        .runAfterPrincipalTerminal({
+          principalId: job.principalId,
+        })
+        .pipe(
+          Effect.mapError(
+            (cause) =>
+              new WorkerSourceSyncStartupRepairError({
+                operation:
+                  "workerSourceSyncStartupRepair.recoverStaleProcessingJob.wakeCalculation",
+                cause: cause.cause,
+              })
+          )
+        ),
+    }).pipe(
+      Effect.mapError((error) =>
+        Schema.is(CalculationRunOrchestrationError)(error)
+          ? new WorkerSourceSyncStartupRepairError({
+              operation: "workerSourceSyncStartupRepair.recoverStaleProcessingJob.wakeCalculation",
+              cause: error,
+            })
+          : error
+      )
+    )
 
     yield* Effect.logWarning(
       {
@@ -470,27 +508,38 @@ const recoverStaleProcessingJob = ({
   })
 
 const repairJob = ({
+  calculationRunOrchestrator,
   job,
   queue,
   repository,
   config,
   now,
   staleBefore,
+  syncEngineTransaction,
 }: {
+  readonly calculationRunOrchestrator: CalculationRunOrchestratorShape
   readonly job: SourceSyncRepairableActiveJob
   readonly queue: WorkerSourceSyncStartupRepairQueue
   readonly repository: SourceSyncJobRepositoryShape
   readonly config: WorkerSourceSyncStartupRepairConfig
   readonly now: Date
   readonly staleBefore: Date
-}): Effect.Effect<WorkerSourceSyncStartupRepairJobOutcome> => {
+  readonly syncEngineTransaction: SyncEngineTransactionShape
+}): Effect.Effect<WorkerSourceSyncStartupRepairJobOutcome, WorkerSourceSyncStartupRepairError> => {
   const effect: Effect.Effect<
     WorkerSourceSyncStartupRepairJobOutcome,
     WorkerSourceSyncStartupRepairJobError
   > =
     job.status === "pending"
       ? repairPendingJob({ job, queue, repository, config, now })
-      : recoverStaleProcessingJob({ job, repository, now, staleBefore })
+      : recoverStaleProcessingJob({
+          calculationRunOrchestrator,
+          job,
+          repository,
+          syncEngineTransaction,
+          now,
+          staleBefore,
+        })
 
   return effect.pipe(
     Effect.catch((cause) => {
@@ -508,7 +557,7 @@ const repairJob = ({
         ).pipe(Effect.as(makeSkippedJob()))
       }
 
-      return Effect.logWarning(
+      return Effect.logError(
         {
           jobId: job.id,
           sourceId: job.sourceId,
@@ -576,6 +625,8 @@ export const makeWorkerSourceSyncStartupRepairLive = (
     WorkerSourceSyncStartupRepair,
     Effect.gen(function* () {
       const repository = yield* SourceSyncJobRepository
+      const calculationRunOrchestrator = yield* CalculationRunOrchestrator
+      const syncEngineTransaction = yield* SyncEngineTransaction
       const config = yield* loadConfig
       const acquireQueue = options.acquireQueue ?? acquireLiveQueue
       const queue = yield* Effect.acquireRelease(acquireQueue(config), (queueToClose) =>
@@ -617,7 +668,17 @@ export const makeWorkerSourceSyncStartupRepairLive = (
 
           const outcomes = yield* Effect.forEach(
             jobs,
-            (job) => repairJob({ job, queue, repository, config, now, staleBefore }),
+            (job) =>
+              repairJob({
+                calculationRunOrchestrator,
+                job,
+                queue,
+                repository,
+                config,
+                now,
+                staleBefore,
+                syncEngineTransaction,
+              }),
             { concurrency: 1 }
           )
 
@@ -648,7 +709,17 @@ export const makeWorkerSourceSyncStartupRepairLive = (
           )
         const outcomes = yield* Effect.forEach(
           jobs,
-          (job) => repairJob({ job, queue, repository, config, now, staleBefore }),
+          (job) =>
+            repairJob({
+              calculationRunOrchestrator,
+              job,
+              queue,
+              repository,
+              config,
+              now,
+              staleBefore,
+              syncEngineTransaction,
+            }),
           { concurrency: 1 }
         )
 
@@ -680,29 +751,59 @@ export const makeWorkerSourceSyncStartupRepairLive = (
         )
 
       const repair = Effect.gen(function* () {
-        const summary = yield* repairUntilDrained(queue, emptySummary)
-
+        const sourceSummary = yield* repairUntilDrained(queue, emptySummary)
+        const calculationSummary = yield* calculationRunOrchestrator
+          .recoverTerminalCalculations({ limit: config.batchSize })
+          .pipe(
+            Effect.mapError(
+              (cause) =>
+                new WorkerSourceSyncStartupRepairError({
+                  operation: "workerSourceSyncStartupRepair.recoverTerminalCalculations",
+                  cause,
+                })
+            )
+          )
         yield* Effect.logInfo(
           {
-            ...summary,
+            ...sourceSummary,
+            calculationRecovery: calculationSummary,
             staleAfterMs: config.staleAfterMs,
             batchSize: config.batchSize,
           },
           "source-sync-worker:startup-repair-completed"
         )
 
-        return summary
+        return sourceSummary
       })
 
       const dispatchPending = Effect.gen(function* () {
-        const summary = yield* dispatchPendingBatch
-
+        // Periodic dispatch is also the durable retry for stale repair work that
+        // failed during startup. Keep each principal isolated in repairJob.
+        const repairSummary = yield* repairBatch(queue)
+        const pendingSummary = yield* dispatchPendingBatch
+        const sourceSummary = combineSummaries(repairSummary, pendingSummary)
+        const calculationSummary = yield* calculationRunOrchestrator
+          .recoverTerminalCalculations({ limit: config.batchSize })
+          .pipe(
+            Effect.mapError(
+              (cause) =>
+                new WorkerSourceSyncStartupRepairError({
+                  operation: "workerSourceSyncStartupRepair.recoverTerminalCalculations",
+                  cause,
+                })
+            )
+          )
         yield* Effect.logInfo(
-          { ...summary, staleAfterMs: config.staleAfterMs, batchSize: config.batchSize },
+          {
+            ...sourceSummary,
+            calculationRecovery: calculationSummary,
+            staleAfterMs: config.staleAfterMs,
+            batchSize: config.batchSize,
+          },
           "source-sync-worker:pending-dispatch-completed"
         )
 
-        return summary
+        return sourceSummary
       })
 
       const dispatchFollowUp = (params: DispatchSourceSyncFollowUpParams) =>

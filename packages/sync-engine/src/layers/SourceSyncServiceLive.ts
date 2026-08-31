@@ -10,6 +10,9 @@ import * as Layer from "effect/Layer"
 import * as Option from "effect/Option"
 import * as Schema from "effect/Schema"
 import {
+  CalculationRunOrchestrator,
+  CalculationRunOrchestrationError,
+  terminalizeSourceJobAndWakeCalculation,
   SourceNotFoundError,
   SourceRepository,
   type SourceSyncJobMode,
@@ -18,6 +21,7 @@ import {
   SourceSyncQueue,
   SourceSyncQueuePayload,
   SourceSyncService,
+  SyncEngineTransaction,
   SyncEngineStorageError,
   makePlainSourceSyncJobSummary,
   toPublicSourceSyncJobStatus,
@@ -48,6 +52,8 @@ const make = Effect.gen(function* () {
   const sourceRepository = yield* SourceRepository
   const sourceSyncJobRepository = yield* SourceSyncJobRepository
   const sourceSyncQueue = yield* SourceSyncQueue
+  const calculationRunOrchestrator = yield* CalculationRunOrchestrator
+  const syncEngineTransaction = yield* SyncEngineTransaction
 
   const loadSource = ({
     principalId,
@@ -71,10 +77,12 @@ const make = Effect.gen(function* () {
     )
 
   const recoverStaleActiveJob = ({
+    principalId,
     sourceId,
     jobId,
     updatedAt,
   }: {
+    readonly principalId: string
     readonly sourceId: string
     readonly jobId: string
     readonly updatedAt: Date
@@ -99,22 +107,39 @@ const make = Effect.gen(function* () {
         "source-sync:recovering-stale-job"
       )
 
-      yield* sourceSyncJobRepository
-        .recoverStaleActiveJob({
+      yield* terminalizeSourceJobAndWakeCalculation({
+        calculationRunOrchestrator,
+        principalId,
+        transaction: syncEngineTransaction,
+        terminalize: sourceSyncJobRepository.recoverStaleActiveJob({
           sourceId,
           jobId,
           staleBefore,
           message,
           completedAt,
+        }),
+        wake: calculationRunOrchestrator.runAfterPrincipalTerminal({ principalId }).pipe(
+          Effect.mapError(
+            (cause) =>
+              new SyncEngineStorageError({
+                operation: cause.operation,
+                cause: cause.cause,
+              })
+          )
+        ),
+      }).pipe(
+        Effect.mapError((error) =>
+          Schema.is(CalculationRunOrchestrationError)(error)
+            ? new SyncEngineStorageError({ operation: error.operation, cause: error.cause })
+            : error
+        ),
+        Effect.catchTags({
+          SourceSyncJobExecutionRecordNotFoundError: (error) =>
+            Effect.logWarning({ sourceId, jobId, error }, "source-sync:stale-job-not-found"),
+          SourceSyncJobExecutionRecordConflictError: (error) =>
+            Effect.logWarning({ sourceId, jobId, error }, "source-sync:stale-job-not-active"),
         })
-        .pipe(
-          Effect.catchTags({
-            SourceSyncJobExecutionRecordNotFoundError: (error) =>
-              Effect.logWarning({ sourceId, jobId, error }, "source-sync:stale-job-not-found"),
-            SourceSyncJobExecutionRecordConflictError: (error) =>
-              Effect.logWarning({ sourceId, jobId, error }, "source-sync:stale-job-not-active"),
-          })
-        )
+      )
     }).pipe(
       sourceSyncSpan({
         name: "source-sync.recover-stale-job",
@@ -210,6 +235,7 @@ const make = Effect.gen(function* () {
           isStaleActiveProcessingJob({ updatedAt: activeJob.updatedAt, now: nowDate() })
         ) {
           yield* recoverStaleActiveJob({
+            principalId,
             sourceId: source.id,
             jobId: activeJob.id,
             updatedAt: activeJob.updatedAt,
