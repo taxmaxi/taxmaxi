@@ -7,6 +7,7 @@
 import * as Context from "effect/Context"
 import type * as Effect from "effect/Effect"
 import * as Schema from "effect/Schema"
+import { PrincipalId } from "@my/core/ownership"
 import { SourceSyncJobModeSchema, type SourceSyncJobMode } from "./SourceSyncModels.ts"
 
 /**
@@ -62,3 +63,38 @@ export interface SourceSyncQueueShape {
 export class SourceSyncQueue extends Context.Service<SourceSyncQueue, SourceSyncQueueShape>()(
   "SourceSyncQueue"
 ) {}
+
+/** Stable BullMQ queue name for principal-wide accounting recomputations. */
+export const CALCULATION_RECOMPUTE_QUEUE_NAME = "calculation-recompute"
+
+/** Stable BullMQ job name for one principal-wide accounting recomputation. */
+export const CALCULATION_RECOMPUTE_JOB_NAME = "calculation.recompute"
+
+/** Transport payload for one principal-wide calculation request. */
+export class CalculationRecomputeQueuePayload extends Schema.Class<CalculationRecomputeQueuePayload>(
+  "CalculationRecomputeQueuePayload"
+)({
+  principalId: PrincipalId,
+}) {}
+
+/** Failure to enqueue a calculation request. */
+export class CalculationRecomputeQueueError extends Schema.TaggedError<CalculationRecomputeQueueError>()(
+  "CalculationRecomputeQueueError",
+  {
+    operation: Schema.String,
+    cause: Schema.Unknown,
+  }
+) {}
+
+/** Queue producer used after a source job commits its completed state. */
+export interface CalculationRecomputeQueueShape {
+  readonly enqueuePrincipalRecompute: (
+    principalId: string
+  ) => Effect.Effect<void, CalculationRecomputeQueueError>
+}
+
+/** Context tag for principal calculation requests. */
+export class CalculationRecomputeQueue extends Context.Service<
+  CalculationRecomputeQueue,
+  CalculationRecomputeQueueShape
+>()("CalculationRecomputeQueue") {}
