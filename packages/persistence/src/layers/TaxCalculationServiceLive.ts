@@ -104,7 +104,7 @@ const make = Effect.gen(function* () {
   }) =>
     Effect.gen(function* () {
       const [source] = yield* db
-        .select({ id: schema.sources.id, principalId: schema.sources.principalId })
+        .select({ principalId: schema.sources.principalId })
         .from(schema.sources)
         .where(eq(schema.sources.id, sourceId))
         .limit(1)

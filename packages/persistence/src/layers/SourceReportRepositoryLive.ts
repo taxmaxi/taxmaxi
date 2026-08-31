@@ -549,6 +549,7 @@ const make = Effect.gen(function* () {
       const assetIds = new Set<string>()
       let disposalCount = 0
       let feeCount = 0
+      let incomeCount = 0
       for (const row of legRows) {
         assetIds.add(row.assetId)
         if (row.kind === "disposal" && row.derivationRule !== "internal_transfer_out") {
@@ -556,6 +557,9 @@ const make = Effect.gen(function* () {
         }
         if (row.kind === "fee") {
           feeCount += 1
+        }
+        if (row.kind === "income") {
+          incomeCount += 1
         }
       }
       for (const row of fifoLotRows) {
@@ -575,7 +579,7 @@ const make = Effect.gen(function* () {
         assetCount: assetIds.size,
         fifoLotCount: fifoLotRows.length,
         disposalCount,
-        incomeCount: incomeRows.length,
+        incomeCount,
         feeCount,
         realizedGainLoss: formatDecimal(realizedGainLoss),
         incomeTotal: formatDecimal(incomeTotal),
@@ -930,6 +934,7 @@ const make = Effect.gen(function* () {
           : yield* db
               .select({
                 disposalLegId: schema.calculationRunRealizedResults.dispositionEventId,
+                quantity: schema.calculationRunRealizedResults.quantity,
                 costBasis: schema.calculationRunRealizedResults.costBasis,
                 proceeds: schema.calculationRunRealizedResults.proceeds,
                 gainLoss: schema.calculationRunRealizedResults.gainLoss,
@@ -968,6 +973,7 @@ const make = Effect.gen(function* () {
           let costBasis = zeroDecimal()
           let proceeds = zeroDecimal()
           let gainLoss = zeroDecimal()
+          let realizedQuantity = zeroDecimal()
 
           const treatments: Array<SourceReportTaxableTreatment> = []
           const matches = matchRows.filter((match) => match.disposalLegId === row.legId)
@@ -985,11 +991,25 @@ const make = Effect.gen(function* () {
               operation: "sourceReportRepository.listTaxEvents.gainLoss",
               value: match.gainLoss,
             })
+            const matchQuantity = yield* decodeDecimal({
+              operation: "sourceReportRepository.listTaxEvents.realizedQuantity",
+              value: match.quantity,
+            })
             costBasis = BigDecimal.sum(costBasis, matchCostBasis)
             proceeds = BigDecimal.sum(proceeds, matchProceeds)
             gainLoss = BigDecimal.sum(gainLoss, matchGainLoss)
+            realizedQuantity = BigDecimal.sum(realizedQuantity, matchQuantity)
             treatments.push(taxableTreatmentForCodes(match.treatmentCodes))
           }
+
+          const eventAmount = yield* decodeDecimal({
+            operation: "sourceReportRepository.listTaxEvents.eventAmount",
+            value: row.amount,
+          })
+          const hasCompleteRealizedResult =
+            row.kind === "disposal" &&
+            matches.length > 0 &&
+            BigDecimal.equals(realizedQuantity, BigDecimal.abs(eventAmount))
 
           const income = incomeRows.find((result) => result.eventId === row.legId)
           const incomeValue =
@@ -1008,19 +1028,27 @@ const make = Effect.gen(function* () {
             asset: assetFromRow(row),
             amount: String(row.amount),
             fiatAmount:
-              incomeValue === null
-                ? row.fiatAmount === null
+              row.kind === "income"
+                ? incomeValue === null
                   ? null
-                  : String(row.fiatAmount)
-                : formatDecimal(incomeValue),
+                  : formatDecimal(incomeValue)
+                : row.fiatAmount === null
+                  ? null
+                  : String(row.fiatAmount),
             fiatCurrency:
-              incomeValue === null ? row.fiatCurrency : (activeRun?.reportingCurrency ?? null),
-            costBasis: matches.length === 0 ? null : formatDecimal(costBasis),
-            proceeds: matches.length === 0 ? null : formatDecimal(proceeds),
-            gainLoss: matches.length === 0 ? null : formatDecimal(gainLoss),
+              row.kind === "income"
+                ? incomeValue === null
+                  ? null
+                  : (activeRun?.reportingCurrency ?? null)
+                : row.fiatCurrency,
+            costBasis: hasCompleteRealizedResult ? formatDecimal(costBasis) : null,
+            proceeds: hasCompleteRealizedResult ? formatDecimal(proceeds) : null,
+            gainLoss: hasCompleteRealizedResult ? formatDecimal(gainLoss) : null,
             taxableTreatment:
               row.kind === "disposal"
-                ? disposalTaxableTreatment(treatments)
+                ? hasCompleteRealizedResult
+                  ? disposalTaxableTreatment(treatments)
+                  : "unknown"
                 : income === undefined
                   ? "unknown"
                   : taxableTreatmentForCodes(income.treatmentCodes),
@@ -1330,15 +1358,14 @@ const make = Effect.gen(function* () {
       yield* loadOwnedSource(params)
       const activeRun = yield* loadActiveRun(params)
 
-      const [leg] = yield* db
+      const [liveLeg] = yield* db
         .select({
-          legId: schema.transactionLegs.id,
+          sourceId: schema.transactionLegs.sourceId,
           transactionId: schema.transactionLegs.transactionId,
           assetId: schema.assets.id,
           symbol: schema.assets.symbol,
           name: schema.assets.name,
           amount: schema.transactionLegs.amount,
-          fiatAmount: schema.transactionLegs.fiatAmount,
           timestamp: schema.transactionLegs.timestamp,
           provenance: schema.transactionLegs.provenance,
           derivationRule: schema.transactionLegs.derivationRule,
@@ -1348,19 +1375,64 @@ const make = Effect.gen(function* () {
         .where(
           and(
             eq(schema.transactionLegs.id, params.legId),
-            eq(schema.transactionLegs.sourceId, params.sourceId),
+            eq(schema.transactionLegs.principalId, params.principalId),
             eq(schema.transactionLegs.kind, "disposal")
           )
         )
         .limit(1)
         .pipe(wrapSqlError("sourceReportRepository.explainDisposal.leg"))
 
-      if (leg === undefined) {
+      const allocations =
+        activeRun === null
+          ? []
+          : yield* db
+              .select({
+                sequence: schema.calculationRunAllocations.sequence,
+                assetId: schema.assets.id,
+                symbol: schema.assets.symbol,
+                name: schema.assets.name,
+                acquiredAt: schema.calculationRunAllocations.acquiredAt,
+                disposedAt: schema.calculationRunAllocations.disposedAt,
+                matchedAmount: schema.calculationRunAllocations.quantity,
+              })
+              .from(schema.calculationRunAllocations)
+              .innerJoin(
+                schema.assets,
+                eq(schema.calculationRunAllocations.assetId, schema.assets.id)
+              )
+              .where(
+                and(
+                  eq(schema.calculationRunAllocations.runId, activeRun.runId),
+                  eq(schema.calculationRunAllocations.custodyUnitId, activeRun.custodyUnitId),
+                  eq(schema.calculationRunAllocations.dispositionEventId, params.legId)
+                )
+              )
+              .orderBy(asc(schema.calculationRunAllocations.sequence))
+              .pipe(wrapSqlError("sourceReportRepository.explainDisposal.allocations"))
+
+      const firstAllocation = allocations[0]
+      const routeLiveLeg = liveLeg?.sourceId === params.sourceId ? liveLeg : null
+      if (firstAllocation === undefined && routeLiveLeg === null) {
         return yield* new SourceReportSourceNotFoundError({ sourceId: params.sourceId })
       }
 
-      const matches =
+      const allocationSequences = allocations.map((row) => row.sequence)
+      const blockers =
         activeRun === null
+          ? []
+          : yield* db
+              .select({ missingQuantity: schema.calculationRunBlockers.missingQuantity })
+              .from(schema.calculationRunBlockers)
+              .where(
+                and(
+                  eq(schema.calculationRunBlockers.runId, activeRun.runId),
+                  eq(schema.calculationRunBlockers.custodyUnitId, activeRun.custodyUnitId),
+                  eq(schema.calculationRunBlockers.eventId, params.legId)
+                )
+              )
+              .pipe(wrapSqlError("sourceReportRepository.explainDisposal.blockers"))
+      const realizedRows =
+        activeRun === null || allocationSequences.length === 0
           ? []
           : yield* db
               .select({
@@ -1383,21 +1455,47 @@ const make = Effect.gen(function* () {
               .where(
                 and(
                   eq(schema.calculationRunRealizedResults.runId, activeRun.runId),
-                  eq(schema.calculationRunRealizedResults.sourceId, params.sourceId),
-                  eq(schema.calculationRunRealizedResults.dispositionEventId, params.legId)
+                  inArray(
+                    schema.calculationRunRealizedResults.allocationSequence,
+                    allocationSequences
+                  )
                 )
               )
               .orderBy(asc(schema.calculationRunRealizedResults.sequence))
               .pipe(wrapSqlError("sourceReportRepository.explainDisposal.realized"))
 
+      let allocatedAmount = zeroDecimal()
+      let missingAmount = zeroDecimal()
+      let firstAcquiredAt: Date | null = null
+      for (const row of allocations) {
+        const matchedAmount = yield* decodeDecimal({
+          operation: "sourceReportRepository.explainDisposal.allocatedAmount",
+          value: row.matchedAmount,
+        })
+        allocatedAmount = BigDecimal.sum(allocatedAmount, matchedAmount)
+        firstAcquiredAt =
+          firstAcquiredAt === null || row.acquiredAt.getTime() < firstAcquiredAt.getTime()
+            ? row.acquiredAt
+            : firstAcquiredAt
+      }
+      for (const row of blockers) {
+        const missingQuantity = yield* optionalDecimal({
+          operation: "sourceReportRepository.explainDisposal.missingQuantity",
+          value: row.missingQuantity,
+        })
+        if (Option.isSome(missingQuantity)) {
+          missingAmount = BigDecimal.sum(missingAmount, missingQuantity.value)
+        }
+      }
+
       let costBasis = zeroDecimal()
       let proceeds = zeroDecimal()
       let gainLoss = zeroDecimal()
-      let firstAcquiredAt: Date | null = null
+      let valuedAmount = zeroDecimal()
 
       const matchedLots: Array<SourceDisposalMatchedLot> = []
 
-      for (const row of matches) {
+      for (const row of realizedRows) {
         const rowCostBasis = yield* decodeDecimal({
           operation: "sourceReportRepository.explainDisposal.costBasis",
           value: row.costBasis,
@@ -1418,10 +1516,7 @@ const make = Effect.gen(function* () {
         costBasis = BigDecimal.sum(costBasis, rowCostBasis)
         proceeds = BigDecimal.sum(proceeds, rowProceeds)
         gainLoss = BigDecimal.sum(gainLoss, rowGainLoss)
-        firstAcquiredAt =
-          firstAcquiredAt === null || row.acquiredAt.getTime() < firstAcquiredAt.getTime()
-            ? row.acquiredAt
-            : firstAcquiredAt
+        valuedAmount = BigDecimal.sum(valuedAmount, matchedAmount)
 
         matchedLots.push({
           lotId: row.lotId,
@@ -1435,25 +1530,42 @@ const make = Effect.gen(function* () {
         })
       }
 
-      const amount = yield* decodeDecimal({
-        operation: "sourceReportRepository.explainDisposal.amount",
-        value: leg.amount,
-      })
+      const amount =
+        liveLeg !== undefined
+          ? yield* decodeDecimal({
+              operation: "sourceReportRepository.explainDisposal.amount",
+              value: liveLeg.amount,
+            })
+          : BigDecimal.sum(allocatedAmount, missingAmount)
+      const fullyValued =
+        allocations.length > 0 &&
+        blockers.length === 0 &&
+        BigDecimal.equals(valuedAmount, BigDecimal.abs(amount))
+      const factualRow = firstAllocation ?? liveLeg
+      if (factualRow === undefined) {
+        return yield* new SourceReportSourceNotFoundError({ sourceId: params.sourceId })
+      }
+      const disposedAt = firstAllocation?.disposedAt ?? liveLeg?.timestamp
+      if (disposedAt === undefined) {
+        return yield* new SourceReportSourceNotFoundError({ sourceId: params.sourceId })
+      }
 
       return {
         calculationRunId: activeRun?.runId ?? null,
-        disposalLegId: leg.legId,
-        transactionId: leg.transactionId,
-        asset: assetFromRow(leg),
+        disposalLegId: params.legId,
+        transactionId: liveLeg?.transactionId ?? null,
+        asset: assetFromRow(factualRow),
         amount: formatDecimal(amount),
-        proceeds: matches.length === 0 ? null : formatDecimal(proceeds),
-        costBasis: formatDecimal(costBasis),
-        gainLoss: formatDecimal(gainLoss),
+        proceeds: fullyValued ? formatDecimal(proceeds) : null,
+        costBasis: fullyValued ? formatDecimal(costBasis) : null,
+        gainLoss: fullyValued ? formatDecimal(gainLoss) : null,
         acquiredAt: isoOrNull(firstAcquiredAt),
-        disposedAt: leg.timestamp.toISOString(),
-        taxableTreatment: disposalTaxableTreatment(matchedLots.map((lot) => lot.taxableTreatment)),
-        provenance: leg.provenance,
-        derivationRule: leg.derivationRule,
+        disposedAt: disposedAt.toISOString(),
+        taxableTreatment: fullyValued
+          ? disposalTaxableTreatment(matchedLots.map((lot) => lot.taxableTreatment))
+          : "unknown",
+        provenance: liveLeg?.provenance ?? "deterministic",
+        derivationRule: liveLeg?.derivationRule ?? null,
         matchedLots,
       } satisfies SourceDisposalExplanation
     })

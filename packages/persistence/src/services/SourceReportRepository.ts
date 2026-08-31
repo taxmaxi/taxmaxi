@@ -224,8 +224,8 @@ export interface SourceDisposalExplanation {
   readonly asset: SourceReportAsset
   readonly amount: string
   readonly proceeds: string | null
-  readonly costBasis: string
-  readonly gainLoss: string
+  readonly costBasis: string | null
+  readonly gainLoss: string | null
   readonly acquiredAt: string | null
   readonly disposedAt: string
   readonly taxableTreatment: SourceReportTaxableTreatment
