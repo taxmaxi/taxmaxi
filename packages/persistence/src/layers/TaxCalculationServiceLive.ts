@@ -1,17 +1,13 @@
 /**
- * TaxCalculationServiceLive - Drizzle-backed tax summary aggregation.
- *
- * Validates that source-scoped tax inputs are complete and consistently valued
- * in the reporting currency before producing a deterministic yearly summary.
+ * TaxCalculationServiceLive - Active-run-backed source tax summaries.
  *
  * @module TaxCalculationServiceLive
  */
 
-import { and, count, eq, gte, inArray, isNull, lt, notInArray, or, sql } from "drizzle-orm"
+import { and, eq } from "drizzle-orm"
 import { EUR } from "@my/core/currency"
 import { withObservedOperation } from "@my/core/shared/observability/ObservedOperation"
 import * as BigDecimal from "effect/BigDecimal"
-import * as DateTime from "effect/DateTime"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import * as Metric from "effect/Metric"
@@ -21,19 +17,18 @@ import { PersistenceError, wrapSqlError } from "../errors/RepositoryError.ts"
 import { schema } from "../schema/index.ts"
 import {
   TaxCalculationIncompleteDataError,
-  TaxCalculationPendingObservationsError,
   TaxCalculationService,
-  TaxCalculationUnsupportedCurrencyError,
   UnsupportedJurisdictionError,
   type TaxCalculationServiceError,
   type TaxCalculationServiceShape,
 } from "../services/TaxCalculationService.ts"
 import { drizzle } from "./PgClientLive.ts"
 
-const HOLDING_PERIOD_YEARS = 1
 const SUPPORTED_JURISDICTION = "germany"
+const RUN_JURISDICTION = "DE"
 const REPORTING_CURRENCY = EUR
-const BLOCKING_OBSERVATION_LIST_LIMIT = 50
+const TAXABLE_TREATMENT = "de.taxable_private_disposal"
+const TAX_FREE_TREATMENT = "de.tax_free_holding_period"
 const taxCalculationOutcomeMetric = Metric.frequency("taxmaxi_tax_calculation_outcomes", {
   description: "Outcome frequencies for source-scoped tax calculations.",
 })
@@ -41,26 +36,11 @@ const taxCalculationDurationMetric = Metric.timer("taxmaxi_tax_calculation_durat
   description: "Duration of successful source-scoped tax calculations.",
 })
 
-interface DisposalMatchRow {
-  readonly disposalLegId: string
-  readonly fifoLotId: string
-  readonly gainLoss: unknown
-  readonly acquiredAt: Date
-  readonly disposedAt: Date
-  readonly disposalCurrency: string | null
-  readonly costBasisCurrency: string
-}
-
-interface IncomeLegRow {
-  readonly legId: string
-  readonly fiatAmount: unknown
-  readonly fiatCurrency: string | null
-}
-
 interface TaxSummaryTotals {
   readonly taxableGains: BigDecimal.BigDecimal
   readonly taxableLosses: BigDecimal.BigDecimal
   readonly taxFreeGains: BigDecimal.BigDecimal
+  readonly incomeTotal: BigDecimal.BigDecimal
 }
 
 const zeroAmount = (): BigDecimal.BigDecimal => BigDecimal.fromBigInt(0n)
@@ -69,34 +49,30 @@ const emptyTotals = (): TaxSummaryTotals => ({
   taxableGains: zeroAmount(),
   taxableLosses: zeroAmount(),
   taxFreeGains: zeroAmount(),
+  incomeTotal: zeroAmount(),
 })
 
-const startOfYearUtc = (year: number): Date =>
-  DateTime.toDateUtc(DateTime.makeUnsafe({ year, month: 1, day: 1 }))
-
-const endOfYearUtc = (year: number): Date =>
-  DateTime.toDateUtc(DateTime.makeUnsafe({ year: year + 1, month: 1, day: 1 }))
-
-const holdingPeriodEnd = (acquiredAt: Date): Date => {
-  const acquiredDateTime = DateTime.makeUnsafe(acquiredAt)
-  const { year } = DateTime.toPartsUtc(acquiredDateTime)
-  return DateTime.toDateUtc(
-    DateTime.setParts(acquiredDateTime, { year: year + HOLDING_PERIOD_YEARS })
+const decodeDecimal = ({
+  value,
+  operation,
+}: {
+  readonly value: unknown
+  readonly operation: string
+}) =>
+  Schema.decodeUnknownEffect(Schema.BigDecimalFromString)(value).pipe(
+    Effect.mapError(
+      () =>
+        new PersistenceError({
+          operation,
+          cause: `Invalid decimal value: ${String(value)}`,
+        })
+    )
   )
-}
-
-const isTaxFreeDisposal = ({
-  acquiredAt,
-  disposedAt,
-}: Pick<DisposalMatchRow, "acquiredAt" | "disposedAt">): boolean =>
-  disposedAt.getTime() >= holdingPeriodEnd(acquiredAt).getTime()
 
 const normalizeTaxCalculationError = (error: unknown): TaxCalculationServiceError =>
   Schema.is(SourceNotFoundError)(error) ||
   Schema.is(UnsupportedJurisdictionError)(error) ||
   Schema.is(TaxCalculationIncompleteDataError)(error) ||
-  Schema.is(TaxCalculationPendingObservationsError)(error) ||
-  Schema.is(TaxCalculationUnsupportedCurrencyError)(error) ||
   Schema.is(PersistenceError)(error)
     ? error
     : new PersistenceError({
@@ -119,419 +95,66 @@ const trackTaxCalculationDuration = ({ jurisdiction }: { readonly jurisdiction: 
 const make = Effect.gen(function* () {
   const db = yield* drizzle
 
-  const selectSourceFields = {
-    id: schema.sources.id,
-  } as const
-
-  const selectDisposalMatchFields = {
-    disposalLegId: schema.disposalMatches.disposalLegId,
-    fifoLotId: schema.disposalMatches.fifoLotId,
-    gainLoss: schema.disposalMatches.gainLoss,
-    acquiredAt: schema.fifoLots.acquiredAt,
-    disposedAt: schema.transactionLegs.timestamp,
-    disposalCurrency: schema.transactionLegs.fiatCurrency,
-    costBasisCurrency: schema.fifoLots.costBasisCurrency,
-  } as const
-
-  const selectIncomeLegFields = {
-    legId: schema.transactionLegs.id,
-    fiatAmount: schema.transactionLegs.fiatAmount,
-    fiatCurrency: schema.transactionLegs.fiatCurrency,
-  } as const
-
-  /**
-   * Decode a database numeric value into a BigDecimal.
-   *
-   * @param value - Raw database value
-   * @param operation - Error context for persistence failures
-   * @returns Parsed decimal value
-   */
-  const decodeDecimal = ({
-    value,
-    operation,
-  }: {
-    readonly value: unknown
-    readonly operation: string
-  }): Effect.Effect<BigDecimal.BigDecimal, PersistenceError> =>
-    Schema.decodeUnknownEffect(Schema.BigDecimalFromString)(value).pipe(
-      Effect.mapError(
-        () =>
-          new PersistenceError({
-            operation,
-            cause: `Invalid decimal value: ${String(value)}`,
-          })
-      )
-    )
-
-  /**
-   * Convert an exact decimal total into the public numeric API shape.
-   *
-   * @param amount - Exact decimal total
-   * @returns Numeric response value
-   */
-  const toResponseNumber = (amount: BigDecimal.BigDecimal): number =>
-    Number(BigDecimal.format(amount))
-
-  /**
-   * Validate that a tax-visible amount is valued in the reporting currency.
-   *
-   * @param sourceId - Owning source identifier
-   * @param field - Field description for actionable error messages
-   * @param currency - Currency to validate
-   * @returns The validated reporting currency
-   */
-  const ensureReportingCurrency = ({
+  const loadActiveRun = ({
     sourceId,
-    field,
-    currency,
+    year,
   }: {
     readonly sourceId: string
-    readonly field: string
-    readonly currency: string | null
+    readonly year: number
   }) =>
     Effect.gen(function* () {
-      if (currency === null) {
-        return yield* new TaxCalculationIncompleteDataError({
-          sourceId,
-          field,
-          reason: "missing fiat currency",
-        })
-      }
-
-      if (currency !== REPORTING_CURRENCY) {
-        return yield* new TaxCalculationUnsupportedCurrencyError({
-          sourceId,
-          field,
-          expectedCurrency: REPORTING_CURRENCY,
-          actualCurrency: currency,
-        })
-      }
-
-      return REPORTING_CURRENCY
-    })
-
-  /**
-   * Load the source row to enforce the source-scoped contract.
-   *
-   * @param sourceId - Source identifier from the API path
-   * @returns The matched source row
-   */
-  const loadSource = (sourceId: string) =>
-    Effect.gen(function* () {
       const [source] = yield* db
-        .select(selectSourceFields)
+        .select({ id: schema.sources.id, principalId: schema.sources.principalId })
         .from(schema.sources)
         .where(eq(schema.sources.id, sourceId))
         .limit(1)
-        .pipe(wrapSqlError("taxCalculationService.loadSource.select"))
+        .pipe(wrapSqlError("taxCalculationService.loadActiveRun.source"))
 
       if (source === undefined) {
         return yield* new SourceNotFoundError({ sourceId })
       }
 
-      return source
-    }).pipe(
-      withObservedOperation({
-        name: "persistence.tax-calculation.load-source",
-        attributes: { sourceId },
-        kind: "client",
-      })
-    )
+      const principalId = source.principalId
 
-  /**
-   * Filter for observations used by the source whose transactions stay
-   * outside derived accounting AND make the calculation incomplete: no
-   * mapping row yet, or a mapping that is still an open question
-   * (pending_review or rejected). A settled observation remains blocking
-   * while its current-conclusion rebuild is incomplete because derived rows may
-   * still reflect its previous state. Rebuild status is written by the job
-   * lifecycle in SourceSyncJobRepositoryLive when replays finish, so this
-   * predicate only trusts the stored status. Shared by the count and the
-   * list so the two can never disagree about what blocks a calculation.
-   *
-   * @param sourceId - Source identifier
-   * @returns Drizzle where condition over source uses joined with mappings
-   */
-  const blockingObservationFilter = (sourceId: string) =>
-    and(
-      eq(schema.providerAssetSourceUses.sourceId, sourceId),
-      or(
-        isNull(schema.providerAssetMappings.id),
-        notInArray(schema.providerAssetMappings.mappingStatus, ["approved", "excluded"]),
-        and(
-          inArray(schema.providerAssetMappings.mappingStatus, ["approved", "excluded"]),
-          sql<boolean>`exists (
-            select 1
-            from ${schema.assetDecisionRematerializations} rematerialization
-            inner join ${schema.assetResolutionDecisions} decision
-              on decision.id = rematerialization.decision_id
-            inner join ${schema.assetResolutionCurrentState} current_state
-              on current_state.provider_asset_row_id = decision.provider_asset_row_id
-             and (
-               current_state.current_conclusion_id = decision.id
-               or (
-                 current_state.current_conclusion_id is null
-                 and decision.human_claim is null
-                 and decision.outcome in ('pending', 'fail_closed')
-               )
-             )
-            where rematerialization.source_id = ${schema.providerAssetSourceUses.sourceId}
-              and decision.provider_asset_row_id = ${schema.providerAssetMappings.providerAssetRowId}
-              and rematerialization.status <> 'complete'
-          )`
+      const [run] = yield* db
+        .select({
+          runId: schema.calculationRuns.id,
+          status: schema.calculationRuns.status,
+        })
+        .from(schema.activeCalculationRuns)
+        .innerJoin(
+          schema.calculationRuns,
+          eq(schema.activeCalculationRuns.runId, schema.calculationRuns.id)
         )
-      )
-    )
-
-  /**
-   * Count provider asset observations used by the source whose transactions
-   * are still outside derived accounting. Any unapproved mapping keeps its
-   * transactions out of legs and FIFO, so the calculation must report pending
-   * instead of a silently short total.
-   *
-   * @param sourceId - Source identifier
-   * @returns Number of observations blocking the calculation
-   */
-  const countPendingObservations = (sourceId: string) =>
-    Effect.gen(function* () {
-      const [row] = yield* db
-        .select({ pendingObservations: count() })
-        .from(schema.providerAssetSourceUses)
-        .leftJoin(
-          schema.providerAssetMappings,
-          eq(
-            schema.providerAssetMappings.providerAssetRowId,
-            schema.providerAssetSourceUses.providerAssetRowId
+        .innerJoin(
+          schema.calculationRunCustodyUnitSources,
+          and(
+            eq(schema.calculationRunCustodyUnitSources.runId, schema.calculationRuns.id),
+            eq(schema.calculationRunCustodyUnitSources.principalId, principalId),
+            eq(schema.calculationRunCustodyUnitSources.sourceId, sourceId)
           )
         )
-        .where(blockingObservationFilter(sourceId))
-        .pipe(wrapSqlError("taxCalculationService.countPendingObservations"))
-
-      return row?.pendingObservations ?? 0
-    }).pipe(
-      withObservedOperation({
-        name: "persistence.tax-calculation.count-pending-observations",
-        attributes: { sourceId },
-        kind: "client",
-      })
-    )
-
-  /**
-   * Load a bounded list of provider asset observations that block a source's
-   * tax calculation, named by provider and currency code so a user can act on
-   * them without guessing from missing IDs.
-   *
-   * @param sourceId - Source identifier
-   * @returns Blocking observations, capped at BLOCKING_OBSERVATION_LIST_LIMIT
-   */
-  const loadBlockingObservations = (sourceId: string) =>
-    db
-      .select({
-        provider: schema.providerAssets.provider,
-        currencyCode: schema.providerAssets.currencyCode,
-      })
-      .from(schema.providerAssetSourceUses)
-      .innerJoin(
-        schema.providerAssets,
-        eq(schema.providerAssets.id, schema.providerAssetSourceUses.providerAssetRowId)
-      )
-      .leftJoin(
-        schema.providerAssetMappings,
-        eq(
-          schema.providerAssetMappings.providerAssetRowId,
-          schema.providerAssetSourceUses.providerAssetRowId
+        .where(
+          and(
+            eq(schema.activeCalculationRuns.principalId, principalId),
+            eq(schema.activeCalculationRuns.jurisdiction, RUN_JURISDICTION),
+            eq(schema.activeCalculationRuns.taxYear, year),
+            eq(schema.activeCalculationRuns.reportingCurrency, REPORTING_CURRENCY)
+          )
         )
-      )
-      .where(blockingObservationFilter(sourceId))
-      .limit(BLOCKING_OBSERVATION_LIST_LIMIT)
-      .pipe(
-        wrapSqlError("taxCalculationService.loadBlockingObservations"),
-        withObservedOperation({
-          name: "persistence.tax-calculation.load-blocking-observations",
-          attributes: { sourceId },
-          kind: "client",
-        })
-      )
+        .limit(1)
+        .pipe(wrapSqlError("taxCalculationService.loadActiveRun.run"))
 
-  /**
-   * Load disposal matches that fall within the selected tax year.
-   *
-   * @param sourceId - Source identifier
-   * @param yearStart - Inclusive UTC year start
-   * @param yearEnd - Exclusive UTC year end
-   * @returns Disposal matches with valuation metadata
-   */
-  const loadDisposalMatches = ({
-    sourceId,
-    yearStart,
-    yearEnd,
-  }: {
-    readonly sourceId: string
-    readonly yearStart: Date
-    readonly yearEnd: Date
-  }) =>
-    db
-      .select(selectDisposalMatchFields)
-      .from(schema.disposalMatches)
-      .innerJoin(
-        schema.transactionLegs,
-        eq(schema.disposalMatches.disposalLegId, schema.transactionLegs.id)
-      )
-      .innerJoin(schema.fifoLots, eq(schema.disposalMatches.fifoLotId, schema.fifoLots.id))
-      .where(
-        and(
-          eq(schema.transactionLegs.sourceId, sourceId),
-          gte(schema.transactionLegs.timestamp, yearStart),
-          lt(schema.transactionLegs.timestamp, yearEnd)
-        )
-      )
-      .pipe(
-        wrapSqlError("taxCalculationService.loadDisposalMatches"),
-        withObservedOperation({
-          name: "persistence.tax-calculation.load-disposal-matches",
-          attributes: {
-            sourceId,
-            yearStart: yearStart.toISOString(),
-            yearEnd: yearEnd.toISOString(),
-          },
-          kind: "client",
-        })
-      )
-
-  /**
-   * Load income legs that contribute to the selected tax year.
-   *
-   * @param sourceId - Source identifier
-   * @param yearStart - Inclusive UTC year start
-   * @param yearEnd - Exclusive UTC year end
-   * @returns Income legs with fiat valuation fields
-   */
-  const loadIncomeLegs = ({
-    sourceId,
-    yearStart,
-    yearEnd,
-  }: {
-    readonly sourceId: string
-    readonly yearStart: Date
-    readonly yearEnd: Date
-  }) =>
-    db
-      .select(selectIncomeLegFields)
-      .from(schema.transactionLegs)
-      .where(
-        and(
-          eq(schema.transactionLegs.sourceId, sourceId),
-          eq(schema.transactionLegs.kind, "income"),
-          gte(schema.transactionLegs.timestamp, yearStart),
-          lt(schema.transactionLegs.timestamp, yearEnd)
-        )
-      )
-      .pipe(
-        wrapSqlError("taxCalculationService.loadIncomeLegs"),
-        withObservedOperation({
-          name: "persistence.tax-calculation.load-income-legs",
-          attributes: {
-            sourceId,
-            yearStart: yearStart.toISOString(),
-            yearEnd: yearEnd.toISOString(),
-          },
-          kind: "client",
-        })
-      )
-
-  /**
-   * Aggregate disposal gain/loss rows into taxable and tax-free totals.
-   *
-   * @param sourceId - Source identifier for error reporting
-   * @param rows - Disposal match rows for the selected year
-   * @returns Running tax summary totals
-   */
-  const summarizeDisposals = ({
-    sourceId,
-    rows,
-  }: {
-    readonly sourceId: string
-    readonly rows: ReadonlyArray<DisposalMatchRow>
-  }) =>
-    Effect.reduce(rows, emptyTotals, (totals, row) =>
-      Effect.gen(function* () {
-        yield* ensureReportingCurrency({
+      if (run === undefined || (run.status !== "complete" && run.status !== "partial")) {
+        return yield* new TaxCalculationIncompleteDataError({
           sourceId,
-          field: `disposal leg ${row.disposalLegId} fiat currency`,
-          currency: row.disposalCurrency,
+          field: "calculation run",
+          reason: "no readable active calculation run contains this source",
         })
-        yield* ensureReportingCurrency({
-          sourceId,
-          field: `FIFO lot ${row.fifoLotId} cost basis currency`,
-          currency: row.costBasisCurrency,
-        })
+      }
 
-        const gainLoss = yield* decodeDecimal({
-          value: row.gainLoss,
-          operation: "taxCalculationService.summarizeDisposals.gainLoss",
-        })
-
-        if (!BigDecimal.isNegative(gainLoss)) {
-          return isTaxFreeDisposal(row)
-            ? {
-                ...totals,
-                taxFreeGains: BigDecimal.sum(totals.taxFreeGains, gainLoss),
-              }
-            : {
-                ...totals,
-                taxableGains: BigDecimal.sum(totals.taxableGains, gainLoss),
-              }
-        }
-
-        if (isTaxFreeDisposal(row)) {
-          return totals
-        }
-
-        return {
-          ...totals,
-          taxableLosses: BigDecimal.sum(totals.taxableLosses, BigDecimal.abs(gainLoss)),
-        }
-      })
-    )
-
-  /**
-   * Aggregate income legs after validating complete fiat valuation metadata.
-   *
-   * @param sourceId - Source identifier for error reporting
-   * @param rows - Income rows for the selected year
-   * @returns Exact income total in the reporting currency
-   */
-  const summarizeIncome = ({
-    sourceId,
-    rows,
-  }: {
-    readonly sourceId: string
-    readonly rows: ReadonlyArray<IncomeLegRow>
-  }) =>
-    Effect.reduce(rows, zeroAmount, (incomeTotal, row) =>
-      Effect.gen(function* () {
-        yield* ensureReportingCurrency({
-          sourceId,
-          field: `income leg ${row.legId} fiat currency`,
-          currency: row.fiatCurrency,
-        })
-
-        if (row.fiatAmount === null) {
-          return yield* new TaxCalculationIncompleteDataError({
-            sourceId,
-            field: `income leg ${row.legId} fiat amount`,
-            reason: "missing fiat valuation",
-          })
-        }
-
-        const fiatAmount = yield* decodeDecimal({
-          value: row.fiatAmount,
-          operation: "taxCalculationService.summarizeIncome.fiatAmount",
-        })
-
-        return BigDecimal.sum(incomeTotal, fiatAmount)
-      })
-    )
+      return run
+    })
 
   const calculateTax: TaxCalculationServiceShape["calculateTax"] = ({
     sourceId,
@@ -543,77 +166,78 @@ const make = Effect.gen(function* () {
         return yield* new UnsupportedJurisdictionError({ jurisdiction })
       }
 
-      yield* loadSource(sourceId)
-
-      const pendingObservationCount = yield* countPendingObservations(sourceId)
-
-      if (pendingObservationCount > 0) {
-        const blockingObservations = yield* loadBlockingObservations(sourceId)
-
-        return yield* new TaxCalculationPendingObservationsError({
-          sourceId,
-          pendingObservationCount,
-          blockingObservations,
+      const run = yield* loadActiveRun({ sourceId, year })
+      const realizedRows = yield* db
+        .select({
+          gainLoss: schema.calculationRunRealizedResults.gainLoss,
+          treatmentCodes: schema.calculationRunRealizedResults.treatmentCodes,
         })
+        .from(schema.calculationRunRealizedResults)
+        .where(
+          and(
+            eq(schema.calculationRunRealizedResults.runId, run.runId),
+            eq(schema.calculationRunRealizedResults.sourceId, sourceId)
+          )
+        )
+        .pipe(wrapSqlError("taxCalculationService.calculateTax.realized"))
+      const incomeRows = yield* db
+        .select({ value: schema.calculationRunIncomeResults.value })
+        .from(schema.calculationRunIncomeResults)
+        .where(
+          and(
+            eq(schema.calculationRunIncomeResults.runId, run.runId),
+            eq(schema.calculationRunIncomeResults.sourceId, sourceId)
+          )
+        )
+        .pipe(wrapSqlError("taxCalculationService.calculateTax.income"))
+
+      let totals = emptyTotals()
+      for (const row of realizedRows) {
+        const gainLoss = yield* decodeDecimal({
+          value: row.gainLoss,
+          operation: "taxCalculationService.calculateTax.gainLoss",
+        })
+        if (row.treatmentCodes.includes(TAX_FREE_TREATMENT)) {
+          if (!BigDecimal.isNegative(gainLoss)) {
+            totals = {
+              ...totals,
+              taxFreeGains: BigDecimal.sum(totals.taxFreeGains, gainLoss),
+            }
+          }
+          continue
+        }
+        if (!row.treatmentCodes.includes(TAXABLE_TREATMENT)) {
+          continue
+        }
+        totals = BigDecimal.isNegative(gainLoss)
+          ? {
+              ...totals,
+              taxableLosses: BigDecimal.sum(totals.taxableLosses, BigDecimal.abs(gainLoss)),
+            }
+          : {
+              ...totals,
+              taxableGains: BigDecimal.sum(totals.taxableGains, gainLoss),
+            }
+      }
+      for (const row of incomeRows) {
+        const value = yield* decodeDecimal({
+          value: row.value,
+          operation: "taxCalculationService.calculateTax.incomeValue",
+        })
+        totals = { ...totals, incomeTotal: BigDecimal.sum(totals.incomeTotal, value) }
       }
 
-      const yearStart = startOfYearUtc(year)
-      const yearEnd = endOfYearUtc(year)
+      yield* recordTaxCalculationOutcome({ jurisdiction, outcome: "completed" })
 
-      const disposalRows = yield* loadDisposalMatches({
-        sourceId,
-        yearStart,
-        yearEnd,
-      })
-      const incomeRows = yield* loadIncomeLegs({
-        sourceId,
-        yearStart,
-        yearEnd,
-      })
-
-      yield* Effect.annotateCurrentSpan({
-        sourceId,
-        jurisdiction,
-        year,
-        disposalRowCount: disposalRows.length,
-        incomeRowCount: incomeRows.length,
-      })
-
-      const disposalTotals = yield* summarizeDisposals({
-        sourceId,
-        rows: disposalRows,
-      })
-      const incomeTotal = yield* summarizeIncome({
-        sourceId,
-        rows: incomeRows,
-      })
-
-      const summary = {
+      return {
+        calculationRunId: run.runId,
         year,
         currency: REPORTING_CURRENCY,
-        taxableGains: toResponseNumber(disposalTotals.taxableGains),
-        taxableLosses: toResponseNumber(disposalTotals.taxableLosses),
-        taxFreeGains: toResponseNumber(disposalTotals.taxFreeGains),
-        incomeTotal: toResponseNumber(incomeTotal),
-      } as const
-
-      yield* recordTaxCalculationOutcome({
-        jurisdiction,
-        outcome: "completed",
-      })
-
-      yield* Effect.logInfo(
-        {
-          sourceId,
-          jurisdiction,
-          year,
-          disposalRowCount: disposalRows.length,
-          incomeRowCount: incomeRows.length,
-        },
-        "tax-calculation:completed"
-      )
-
-      return summary
+        taxableGains: Number(BigDecimal.format(totals.taxableGains)),
+        taxableLosses: Number(BigDecimal.format(totals.taxableLosses)),
+        taxFreeGains: Number(BigDecimal.format(totals.taxFreeGains)),
+        incomeTotal: Number(BigDecimal.format(totals.incomeTotal)),
+      }
     }).pipe(
       withObservedOperation({
         name: "persistence.tax-calculation.calculate-tax",
@@ -624,31 +248,16 @@ const make = Effect.gen(function* () {
       Effect.tapError((error) =>
         Effect.all(
           [
-            recordTaxCalculationOutcome({
-              jurisdiction,
-              outcome: error._tag,
-            }),
-            Effect.logError(
-              {
-                sourceId,
-                jurisdiction,
-                year,
-                error,
-              },
-              "tax-calculation:failed"
-            ),
+            recordTaxCalculationOutcome({ jurisdiction, outcome: error._tag }),
+            Effect.logError({ sourceId, jurisdiction, year, error }, "tax-calculation:failed"),
           ],
           { discard: true }
         )
       )
     )
 
-  return {
-    calculateTax,
-  } satisfies TaxCalculationServiceShape
+  return TaxCalculationService.of({ calculateTax })
 })
 
-/**
- * TaxCalculationServiceLive - Live layer for source tax calculation.
- */
+/** Live active-run tax-calculation reader. */
 export const TaxCalculationServiceLive = Layer.effect(TaxCalculationService, make)

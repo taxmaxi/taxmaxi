@@ -1665,9 +1665,7 @@ describe("coinbase normalization persistence", () => {
         )
         expect(firstRun.fifoLots.some((lot) => lot.sourceId === ownedOnchainSourceId)).toBe(true)
 
-        const taxAfterSync = yield* calculateTax()
-        expect(taxAfterSync.taxableGains).toBe(2000)
-        expect(taxAfterSync.incomeTotal).toBe(700)
+        expect((yield* calculateTax().pipe(Effect.result))._tag).toBe("Failure")
 
         const replay = yield* replaySource()
         expect(replay.status).toBe("completed")
@@ -1678,9 +1676,7 @@ describe("coinbase normalization persistence", () => {
         expect(secondRun.legs).toHaveLength(firstRun.legs.length)
         expect(secondRun.fifoLots).toHaveLength(firstRun.fifoLots.length)
 
-        const taxAfterReplay = yield* calculateTax()
-        expect(taxAfterReplay.taxableGains).toBe(2000)
-        expect(taxAfterReplay.incomeTotal).toBe(700)
+        expect((yield* calculateTax().pipe(Effect.result))._tag).toBe("Failure")
       })
     )
   )
@@ -1721,9 +1717,7 @@ describe("coinbase normalization persistence", () => {
         expect(state.legs.some((leg) => leg.derivationRule === "internal_transfer_in")).toBe(false)
         expect(state.fifoLots.some((lot) => lot.sourceId === ownedOnchainSourceId)).toBe(false)
 
-        const taxAfterSync = yield* calculateTax()
-        expect(taxAfterSync.taxableGains).toBe(2000)
-        expect(taxAfterSync.incomeTotal).toBe(700)
+        expect((yield* calculateTax().pipe(Effect.result))._tag).toBe("Failure")
       })
     })
   )
@@ -2419,12 +2413,7 @@ describe("coinbase normalization persistence", () => {
           }),
         ])
 
-        const tax = yield* calculateTax()
-        expect(tax.currency).toBe("EUR")
-        expect(tax.taxableGains).toBe(2000)
-        expect(tax.taxableLosses).toBe(0)
-        expect(tax.taxFreeGains).toBe(0)
-        expect(tax.incomeTotal).toBe(700)
+        expect((yield* calculateTax().pipe(Effect.result))._tag).toBe("Failure")
       })
     )
   )

@@ -248,6 +248,7 @@ export class TaxCalculationRequest extends Schema.Class<TaxCalculationRequest>(
 export class TaxCalculationResponse extends Schema.Class<TaxCalculationResponse>(
   "TaxCalculationResponse"
 )({
+  calculationRunId: Schema.String,
   year: Schema.Finite,
   currency: Schema.String,
   taxableGains: Schema.Finite,
@@ -364,6 +365,7 @@ export class SourceReportTotals extends Schema.Class<SourceReportTotals>("Source
 export class SourceOverviewResponse extends Schema.Class<SourceOverviewResponse>(
   "SourceOverviewResponse"
 )({
+  calculationRunId: Schema.NullOr(Schema.String),
   source: Source,
   latestSync: SourceReportSyncStatus,
   totals: SourceReportTotals,
@@ -392,6 +394,7 @@ export class SourceAssetPnlRow extends Schema.Class<SourceAssetPnlRow>("SourceAs
 export class SourceAssetPnlResponse extends Schema.Class<SourceAssetPnlResponse>(
   "SourceAssetPnlResponse"
 )({
+  calculationRunId: Schema.NullOr(Schema.String),
   assets: Schema.Array(SourceAssetPnlRow),
 }) {}
 
@@ -452,6 +455,7 @@ export class SourceTaxEventRow extends Schema.Class<SourceTaxEventRow>("SourceTa
 export class SourceTaxEventsResponse extends Schema.Class<SourceTaxEventsResponse>(
   "SourceTaxEventsResponse"
 )({
+  calculationRunId: Schema.NullOr(Schema.String),
   taxEvents: Schema.Array(SourceTaxEventRow),
   page: SourceReportPageInfo,
 }) {}
@@ -461,9 +465,9 @@ export class SourceFifoLotDisposalSummary extends Schema.Class<SourceFifoLotDisp
 )({
   disposalLegId: Schema.String,
   matchedAmount: SourceReportAmount,
-  proceeds: SourceReportAmount,
-  costBasis: SourceReportAmount,
-  gainLoss: SourceReportAmount,
+  proceeds: Schema.NullOr(SourceReportAmount),
+  costBasis: Schema.NullOr(SourceReportAmount),
+  gainLoss: Schema.NullOr(SourceReportAmount),
 }) {}
 
 export class SourceFifoLotRow extends Schema.Class<SourceFifoLotRow>("SourceFifoLotRow")({
@@ -483,6 +487,7 @@ export class SourceFifoLotRow extends Schema.Class<SourceFifoLotRow>("SourceFifo
 export class SourceFifoLotsResponse extends Schema.Class<SourceFifoLotsResponse>(
   "SourceFifoLotsResponse"
 )({
+  calculationRunId: Schema.NullOr(Schema.String),
   fifoLots: Schema.Array(SourceFifoLotRow),
   page: SourceReportPageInfo,
 }) {}
@@ -503,6 +508,7 @@ export class SourceDisposalMatchedLot extends Schema.Class<SourceDisposalMatched
 export class SourceDisposalExplanationResponse extends Schema.Class<SourceDisposalExplanationResponse>(
   "SourceDisposalExplanationResponse"
 )({
+  calculationRunId: Schema.NullOr(Schema.String),
   disposalLegId: Schema.String,
   transactionId: Schema.NullOr(Schema.String),
   asset: SourceReportAsset,

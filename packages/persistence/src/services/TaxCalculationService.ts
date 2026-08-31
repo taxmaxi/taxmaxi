@@ -1,5 +1,5 @@
 /**
- * TaxCalculationService - Service interface for calculating taxes of a source
+ * TaxCalculationService - Service interface for reading active-run tax summaries
  *
  * Uses Effect Context.Tag pattern for dependency injection.
  * All operations return Effect with typed errors.
@@ -105,7 +105,7 @@ export type TaxCalculationServiceError =
   | PersistenceError
 
 /**
- * CalculateTaxParams - Input for calculating tax for a source in a given jurisdiction and year.
+ * CalculateTaxParams - Active-run selection for a source, jurisdiction, and year.
  */
 export interface CalculateTaxParams {
   readonly sourceId: string
@@ -117,6 +117,7 @@ export interface CalculateTaxParams {
  * CalculateTaxResult - Tax calculation aggregate values.
  */
 export interface CalculateTaxResult {
+  readonly calculationRunId: string
   readonly year: number
   readonly currency: CurrencyCode
   readonly taxableGains: number
@@ -130,10 +131,10 @@ export interface CalculateTaxResult {
  */
 export interface TaxCalculationServiceShape {
   /**
-   * Calculate tax for a supported jurisdiction and year.
+   * Read a supported jurisdiction and year from the source principal's active run.
    *
-   * @param params - Source, jurisdiction, and tax year to compute
-   * @returns A deterministic tax summary for the selected source and year
+   * @param params - Source, jurisdiction, and tax year used to select the run
+   * @returns The stored tax summary and identity of the selected active run
    */
   readonly calculateTax: (
     params: CalculateTaxParams
