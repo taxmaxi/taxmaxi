@@ -812,7 +812,13 @@ const makeClaimRaceResult = (taxYear: number): TaxAccountingResult => ({
   explanationTrace: [],
 })
 
-const captureClaimInputLedgerRevision = (principalId: string) =>
+const captureClaimInputLedgerRevision = ({
+  principalId,
+  visibleTransactionId,
+}: {
+  readonly principalId: string
+  readonly visibleTransactionId?: string
+}) =>
   Effect.gen(function* () {
     const db = yield* drizzle
     return yield* db.transaction((tx) =>
@@ -829,6 +835,17 @@ const captureClaimInputLedgerRevision = (principalId: string) =>
 
         if (snapshot === undefined) {
           return yield* Effect.die("Failed to capture claim race snapshot")
+        }
+
+        if (visibleTransactionId !== undefined) {
+          const [visibleFact] = yield* tx
+            .select({ principalId: schema.transactions.principalId })
+            .from(schema.transactions)
+            .where(eq(schema.transactions.id, visibleTransactionId))
+
+          if (visibleFact?.principalId !== principalId) {
+            return yield* Effect.die("Claim overlap snapshot did not see the anonymous fact")
+          }
         }
 
         return InputLedgerRevision.make(
@@ -948,26 +965,24 @@ const persistClaimRaceRun = ({
 
 const assertClaimActivationFence = ({
   anonymousPrincipalId,
+  fenceAtOrBelowInput = false,
   inputLedgerRevision,
   runId,
-  staleWrite,
   taxYear,
 }: {
   readonly anonymousPrincipalId: string
+  readonly fenceAtOrBelowInput?: boolean
   readonly inputLedgerRevision: InputLedgerRevision
   readonly runId: string
-  readonly staleWrite?: { readonly activated: boolean }
   readonly taxYear: number
 }) =>
   Effect.gen(function* () {
-    const write =
-      staleWrite ??
-      (yield* persistClaimRaceRun({
-        inputLedgerRevision,
-        principalId: anonymousPrincipalId,
-        runId,
-        taxYear,
-      }))
+    const write = yield* persistClaimRaceRun({
+      inputLedgerRevision,
+      principalId: anonymousPrincipalId,
+      runId,
+      taxYear,
+    })
     expect(write.activated).toBe(false)
 
     const db = yield* drizzle
@@ -992,11 +1007,17 @@ const assertClaimActivationFence = ({
 
     expect(staleRun).toEqual({ status: "complete" })
     expect(fencedPointer?.runId).toBeNull()
-    expect(BigInt(fencedPointer?.minimumActivationRevision ?? "0")).toBeGreaterThan(
-      BigInt(inputLedgerRevision.split(":")[1] ?? "0")
-    )
+    const fenceRevision = BigInt(fencedPointer?.minimumActivationRevision ?? "0")
+    const inputRevision = BigInt(inputLedgerRevision.split(":")[1] ?? "0")
+    if (fenceAtOrBelowInput) {
+      expect(fenceRevision).toBeLessThanOrEqual(inputRevision)
+    } else {
+      expect(fenceRevision).toBeGreaterThan(inputRevision)
+    }
 
-    const postFenceRevision = yield* captureClaimInputLedgerRevision(anonymousPrincipalId)
+    const postFenceRevision = yield* captureClaimInputLedgerRevision({
+      principalId: anonymousPrincipalId,
+    })
     const freshRunId = nextTestUuid()
     const freshWrite = yield* persistClaimRaceRun({
       inputLedgerRevision: postFenceRevision,
@@ -2239,7 +2260,9 @@ describe("SourcesApiLive", () => {
         sourceId: created.source.id,
         targetPrincipalId: principalId,
       })
-      const preClaimRevision = yield* captureClaimInputLedgerRevision(created.source.principalId)
+      const preClaimRevision = yield* captureClaimInputLedgerRevision({
+        principalId: created.source.principalId,
+      })
       const lateRunId = nextTestUuid()
 
       const authenticatedClient = yield* makeAuthenticatedClient({ userId })
@@ -2722,7 +2745,9 @@ describe("SourcesApiLive", () => {
         sourceId: created.source.id,
         targetPrincipalId: principalId,
       })
-      const preClaimRevision = yield* captureClaimInputLedgerRevision(created.source.principalId)
+      const preClaimRevision = yield* captureClaimInputLedgerRevision({
+        principalId: created.source.principalId,
+      })
       const lateRunId = nextTestUuid()
       yield* startClaimRaceRun({
         inputLedgerRevision: preClaimRevision,
@@ -2748,6 +2773,11 @@ describe("SourcesApiLive", () => {
         })
       )
       yield* waitForClaimPointerPause
+      const overlappingRevision = yield* captureClaimInputLedgerRevision({
+        principalId: created.source.principalId,
+        visibleTransactionId: calculationGraph.transactionId,
+      })
+      const overlappingRunId = nextTestUuid()
       const persistFiber = yield* Effect.forkChild(
         persistClaimRaceRun({
           inputLedgerRevision: preClaimRevision,
@@ -2781,11 +2811,17 @@ describe("SourcesApiLive", () => {
         anonymousPrincipalId: created.source.principalId,
         targetPrincipalId: principalId,
       })
+      const [lateRun] = yield* db
+        .select({ status: schema.calculationRuns.status })
+        .from(schema.calculationRuns)
+        .where(eq(schema.calculationRuns.id, lateRunId))
+      expect(staleWrite.activated).toBe(false)
+      expect(lateRun).toEqual({ status: "complete" })
       yield* assertClaimActivationFence({
         anonymousPrincipalId: created.source.principalId,
-        inputLedgerRevision: preClaimRevision,
-        runId: lateRunId,
-        staleWrite,
+        fenceAtOrBelowInput: true,
+        inputLedgerRevision: overlappingRevision,
+        runId: overlappingRunId,
         taxYear: calculationGraph.taxYear,
       })
       expect(calculationQueueEvents).toEqual([principalId])

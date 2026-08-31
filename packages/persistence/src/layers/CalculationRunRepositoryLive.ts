@@ -636,6 +636,10 @@ const make = Effect.gen(function* () {
         setWhere: sql`
           split_part(${params.inputLedgerRevision}, ':', 2)::numeric >=
             ${schema.activeCalculationRuns.minimumActivationRevision}
+          and pg_visible_in_snapshot(
+            ${schema.activeCalculationRuns.minimumActivationRevision}::text::xid8,
+            replace(split_part(${params.inputLedgerRevision}, ':', 3), '.', ':')::pg_snapshot
+          )
           and (
             ${schema.activeCalculationRuns.runId} is null
             or split_part(${params.inputLedgerRevision}, ':', 2)::numeric > (
