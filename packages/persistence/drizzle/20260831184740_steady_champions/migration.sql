@@ -1,0 +1,4 @@
+ALTER TABLE "active_calculation_runs" ADD COLUMN "minimum_activation_revision" numeric(20,0) DEFAULT '0' NOT NULL;--> statement-breakpoint
+ALTER TABLE "active_calculation_runs" ALTER COLUMN "run_id" DROP NOT NULL;--> statement-breakpoint
+ALTER TABLE "active_calculation_runs" ADD CONSTRAINT "active_calculation_runs_run_id_calculation_runs_id_fkey" FOREIGN KEY ("run_id") REFERENCES "calculation_runs"("id") ON DELETE SET NULL;--> statement-breakpoint
+ALTER TABLE "active_calculation_runs" DROP CONSTRAINT "active_calculation_runs_matching_scope_fk", ADD CONSTRAINT "active_calculation_runs_matching_scope_fk" FOREIGN KEY ("run_id","principal_id","jurisdiction","tax_year","reporting_currency") REFERENCES "calculation_runs"("id","principal_id","jurisdiction","tax_year","reporting_currency");

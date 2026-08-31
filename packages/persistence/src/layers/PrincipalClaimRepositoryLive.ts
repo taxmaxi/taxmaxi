@@ -29,6 +29,8 @@ import {
 } from "../services/PrincipalClaimRepository.ts"
 import { drizzle } from "./PgClientLive.ts"
 
+const GERMAN_TIME_ZONE = "Europe/Berlin"
+
 const selectPrincipalClaimFields = {
   id: schema.principalClaims.id,
   principalId: schema.principalClaims.principalId,
@@ -176,6 +178,53 @@ const wrapClaimTransferSqlError =
 
 const make = Effect.gen(function* () {
   const db = yield* drizzle
+  type ClaimTransaction = Parameters<Parameters<typeof db.transaction>[0]>[0]
+
+  const fenceAndDeleteAnonymousCalculationRuns = ({
+    executor,
+    principalId,
+    updatedAt,
+  }: {
+    readonly executor: ClaimTransaction
+    readonly principalId: PrincipalId
+    readonly updatedAt: Date
+  }) =>
+    Effect.gen(function* () {
+      const taxYear = yield* DateTime.now.pipe(
+        Effect.map(DateTime.setZoneNamedUnsafe(GERMAN_TIME_ZONE)),
+        Effect.map(DateTime.toParts),
+        Effect.map(({ year }) => year)
+      )
+
+      yield* executor
+        .delete(schema.calculationRuns)
+        .where(eq(schema.calculationRuns.principalId, principalId))
+
+      yield* executor
+        .insert(schema.activeCalculationRuns)
+        .values({
+          principalId,
+          jurisdiction: "DE",
+          taxYear,
+          reportingCurrency: "EUR",
+          runId: null,
+          minimumActivationRevision: sql`pg_current_xact_id()::text::numeric`,
+          updatedAt,
+        })
+        .onConflictDoUpdate({
+          target: [
+            schema.activeCalculationRuns.principalId,
+            schema.activeCalculationRuns.jurisdiction,
+            schema.activeCalculationRuns.taxYear,
+            schema.activeCalculationRuns.reportingCurrency,
+          ],
+          set: {
+            runId: null,
+            minimumActivationRevision: sql`pg_current_xact_id()::text::numeric`,
+            updatedAt,
+          },
+        })
+    })
 
   const create: PrincipalClaimRepositoryService["create"] = (params) =>
     Effect.gen(function* () {
@@ -724,6 +773,12 @@ const make = Effect.gen(function* () {
               })
             }
 
+            yield* fenceAndDeleteAnonymousCalculationRuns({
+              executor: tx,
+              principalId: params.anonymousPrincipalId,
+              updatedAt: now,
+            })
+
             return params.sourceId
           })
         )
@@ -956,6 +1011,12 @@ const make = Effect.gen(function* () {
                 message: "Request claims were not consumed.",
               })
             }
+
+            yield* fenceAndDeleteAnonymousCalculationRuns({
+              executor: tx,
+              principalId: params.anonymousPrincipalId,
+              updatedAt: now,
+            })
 
             return params.sourceId
           })

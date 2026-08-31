@@ -28,6 +28,7 @@ import {
 } from "@my/rest-api"
 import { TaxMaxiApi } from "@my/rest-api/contracts"
 import { ApiBullMqSourceSyncQueueLive } from "./layers/ApiBullMqSourceSyncQueueLive.ts"
+import { ApiBullMqCalculationRecomputeQueueLive } from "./layers/ApiBullMqCalculationRecomputeQueueLive.ts"
 import { TracingLive } from "./layers/TracingLive.ts"
 
 const port = 4000
@@ -52,6 +53,7 @@ const ApplicationLive = Layer.mergeAll(
   SyncRuntimeLive,
   SyncRunRuntimeLive,
   TransferReconciliationRuntimeLive,
+  ApiBullMqCalculationRecomputeQueueLive,
   AuthLive
 )
 

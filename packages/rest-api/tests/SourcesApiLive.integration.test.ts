@@ -3,15 +3,22 @@ import { HttpApiClient } from "effect/unstable/httpapi"
 import { Cookies, Headers, HttpClient, HttpClientRequest, HttpRouter } from "effect/unstable/http"
 import { NodeHttpServer } from "@effect/platform-node"
 import { beforeEach, describe, expect, it } from "@effect/vitest"
+import type { TaxAccountingResult } from "../../accounting/src/index.ts"
+import { AccountingMethodId, CustodyUnitId, JurisdictionCode, TaxYear } from "@my/core/accounting"
 import {
   AuthService,
   HashedPassword,
   PasswordHasher,
   type AuthServiceShape,
 } from "@my/core/authentication"
-import { and, eq } from "@my/persistence/query"
+import { CurrencyCode } from "@my/core/currency"
+import { PrincipalId } from "@my/core/ownership"
+import { SourceId } from "@my/core/source"
+import { and, eq, sql } from "@my/persistence/query"
 import * as ConfigProvider from "effect/ConfigProvider"
 import {
+  CalculationRecomputeQueue,
+  CalculationRecomputeQueueError,
   SOURCE_SYNC_QUEUE_NAME,
   SourceSyncJobRepository,
   SourceSyncQueue,
@@ -25,6 +32,7 @@ import {
 import * as Chunk from "effect/Chunk"
 import * as DateTime from "effect/DateTime"
 import * as Effect from "effect/Effect"
+import * as Fiber from "effect/Fiber"
 import * as Layer from "effect/Layer"
 import * as Option from "effect/Option"
 import * as EffectSchema from "effect/Schema"
@@ -34,7 +42,13 @@ import { drizzle } from "../../persistence/src/layers/PgClientLive.ts"
 import { RepositoriesLive } from "../../persistence/src/layers/RepositoriesLive.ts"
 import { TaxCalculationServiceLive } from "../../persistence/src/layers/TaxCalculationServiceLive.ts"
 import { schema } from "../../persistence/src/schema/index.ts"
-import { TaxCalculationService } from "../../persistence/src/services/index.ts"
+import {
+  CalculationRunId,
+  CalculationRunRepository,
+  InputLedgerRevision,
+  TaxCalculationService,
+  ValuationRevision,
+} from "../../persistence/src/services/index.ts"
 import { makeIntegrationTestDatabaseContext } from "../../persistence/tests/support/integration-test-kit.ts"
 import {
   seedSyncEngineAssets,
@@ -64,6 +78,7 @@ const TestPgClientLive = context.TestPgClientLive
 
 const queuedAt = DateTime.toDateUtc(DateTime.makeUnsafe("2026-01-01T00:00:00.000Z"))
 const queueEvents: Array<SourceSyncQueuePayload> = []
+const calculationQueueEvents: Array<string> = []
 const settlementEvents: Array<string> = []
 const validX402PaymentHeader = "valid-test-x402-payment"
 const REPORT_TEST_USER_ID = "00000000-0000-4000-8000-000000000181"
@@ -137,6 +152,23 @@ const SourceSyncQueueFailureTestLive = Layer.succeed(SourceSyncQueue, {
     ),
 })
 
+const CalculationRecomputeQueueTestLive = Layer.succeed(CalculationRecomputeQueue, {
+  enqueuePrincipalRecompute: (principalId) =>
+    Effect.sync(() => {
+      calculationQueueEvents.push(principalId)
+    }),
+})
+
+const CalculationRecomputeQueueFailureTestLive = Layer.succeed(CalculationRecomputeQueue, {
+  enqueuePrincipalRecompute: () =>
+    Effect.fail(
+      new CalculationRecomputeQueueError({
+        operation: "test.enqueuePrincipalRecompute",
+        cause: "queue unavailable",
+      })
+    ),
+})
+
 const SourceSyncRunServiceTestLive = Layer.succeed(SourceSyncRunService, {
   startSyncRun: () => Effect.die("SourceSyncRunService test stub: startSyncRun not implemented"),
   getSyncRun: () => Effect.die("SourceSyncRunService test stub: getSyncRun not implemented"),
@@ -192,13 +224,15 @@ const makePersistenceLayer = <R = never>(
     TaxCalculationService,
     never,
     R
-  > = TaxCalculationServiceTestLive
+  > = TaxCalculationServiceTestLive,
+  calculationRecomputeQueueLayer: Layer.Layer<CalculationRecomputeQueue> = CalculationRecomputeQueueTestLive
 ) =>
   Layer.mergeAll(
     RepositoriesLive,
     makeSourceSyncServiceWithDepsTestLive(sourceSyncQueueLayer),
     SourceSyncRunServiceTestLive,
     taxCalculationServiceLayer,
+    calculationRecomputeQueueLayer,
     TransferReconciliationServiceTestLive,
     AuthServiceTestLive,
     PasswordHasherTestLive
@@ -211,7 +245,8 @@ const makeHttpLive = <R = never>(
     TaxCalculationService,
     never,
     R
-  > = TaxCalculationServiceTestLive
+  > = TaxCalculationServiceTestLive,
+  calculationRecomputeQueueLayer: Layer.Layer<CalculationRecomputeQueue> = CalculationRecomputeQueueTestLive
 ) =>
   HttpRouter.serve(
     TaxMaxiApiLive.pipe(
@@ -221,7 +256,13 @@ const makeHttpLive = <R = never>(
       Layer.provide(SimpleTokenValidatorLive)
     )
   ).pipe(
-    Layer.provideMerge(makePersistenceLayer(sourceSyncQueueLayer, taxCalculationServiceLayer)),
+    Layer.provideMerge(
+      makePersistenceLayer(
+        sourceSyncQueueLayer,
+        taxCalculationServiceLayer,
+        calculationRecomputeQueueLayer
+      )
+    ),
     Layer.provideMerge(NodeHttpServer.layerTest),
     Layer.provide(ConfigProvider.layer(ClaimTokenConfigProvider))
   )
@@ -239,6 +280,12 @@ const NoPayerIdentityHttpLive = makeHttpLive(
 const PaidQueueFailureHttpLive = makeHttpLive(
   SourceSyncQueueFailureTestLive,
   X402PaymentValidatorTrackingTestLive
+)
+const CalculationQueueFailureHttpLive = makeHttpLive(
+  SourceSyncQueueTestLive,
+  X402PaymentValidatorTestLive,
+  TaxCalculationServiceTestLive,
+  CalculationRecomputeQueueFailureTestLive
 )
 const TaxCalculationHttpLive = makeHttpLive(
   SourceSyncQueueTestLive,
@@ -645,6 +692,804 @@ const seedSourceReportRows = ({
     ])
   })
 
+const seedClaimCalculationResultRows = ({
+  runId,
+  principalId,
+  sourceId,
+  assetId,
+  acquisitionEventId,
+  dispositionEventId,
+  occurredAt,
+}: {
+  readonly runId: string
+  readonly principalId: string
+  readonly sourceId: string
+  readonly assetId: string
+  readonly acquisitionEventId: string
+  readonly dispositionEventId: string
+  readonly occurredAt: Date
+}) =>
+  Effect.gen(function* () {
+    const db = yield* drizzle
+
+    yield* db.insert(schema.calculationRunCustodyUnits).values({
+      runId,
+      principalId,
+      custodyUnitId: sourceId,
+    })
+    yield* db.insert(schema.calculationRunCustodyUnitSources).values({
+      runId,
+      principalId,
+      custodyUnitId: sourceId,
+      sourceId,
+    })
+    yield* db.insert(schema.calculationRunAllocations).values({
+      runId,
+      principalId,
+      sequence: 0,
+      acquisitionEventId,
+      dispositionEventId,
+      assetId,
+      custodyUnitId: sourceId,
+      acquiredAt: occurredAt,
+      disposedAt: occurredAt,
+      quantity: "0.25",
+      costBasis: "25",
+    })
+    yield* db.insert(schema.calculationRunRealizedResults).values({
+      runId,
+      sequence: 0,
+      acquisitionEventId,
+      dispositionEventId,
+      assetId,
+      acquiredAt: occurredAt,
+      disposedAt: occurredAt,
+      quantity: "0.25",
+      costBasis: "25",
+      proceeds: "30",
+      gainLoss: "5",
+      treatmentCodes: ["de.taxable_private_disposal"],
+    })
+    yield* db.insert(schema.calculationRunIncomeResults).values({
+      runId,
+      sequence: 0,
+      eventId: acquisitionEventId,
+      assetId,
+      occurredAt,
+      quantity: "1",
+      value: "100",
+      treatmentCodes: ["de.taxable_income_section22_3_staking"],
+    })
+    yield* db.insert(schema.calculationRunDerivedLots).values({
+      runId,
+      principalId,
+      sequence: 0,
+      acquisitionEventId,
+      assetId,
+      custodyUnitId: sourceId,
+      acquiredAt: occurredAt,
+      remainingQuantity: "0.75",
+      costBasisPerUnit: "100",
+    })
+    yield* db.insert(schema.calculationRunBlockers).values({
+      runId,
+      principalId,
+      sequence: 0,
+      code: "missing_valuation",
+      eventId: acquisitionEventId,
+      assetId,
+      custodyUnitId: sourceId,
+      missingQuantity: null,
+    })
+    yield* db.insert(schema.calculationRunExplanationEntries).values({
+      runId,
+      sequence: 0,
+      eventId: acquisitionEventId,
+      code: "valuation_selected",
+      valuationKind: "observed_consideration",
+      matches: [],
+    })
+  })
+
+const CLAIM_REPORTING_CURRENCY = CurrencyCode.make("EUR")
+
+const makeClaimRaceResult = (taxYear: number): TaxAccountingResult => ({
+  status: "complete",
+  jurisdiction: JurisdictionCode.make("DE"),
+  taxYear: TaxYear.make(taxYear),
+  engineVersion: "test-engine-v1",
+  ruleSetVersion: "test-rules-v1",
+  accountingMethod: AccountingMethodId.make("fifo"),
+  inventoryScope: "per_custody_unit",
+  appliedChoiceIds: [],
+  appliedRules: [],
+  processedEventIds: [],
+  allocations: [],
+  realizedResults: [],
+  incomeResults: [],
+  derivedLots: [],
+  blockers: [],
+  explanationTrace: [],
+})
+
+const captureClaimInputLedgerRevision = ({
+  principalId,
+  visibleTransactionId,
+}: {
+  readonly principalId: string
+  readonly visibleTransactionId?: string
+}) =>
+  Effect.gen(function* () {
+    const db = yield* drizzle
+    return yield* db.transaction((tx) =>
+      Effect.gen(function* () {
+        yield* tx.execute(sql`set transaction isolation level repeatable read`)
+        const [snapshot] = yield* tx
+          .select({
+            transactionId: sql<string>`pg_current_xact_id()::text`,
+            visibility: sql<string>`replace(pg_current_snapshot()::text, ':', '.')`,
+          })
+          .from(schema.principals)
+          .where(eq(schema.principals.id, principalId))
+          .limit(1)
+
+        if (snapshot === undefined) {
+          return yield* Effect.die("Failed to capture claim race snapshot")
+        }
+
+        if (visibleTransactionId !== undefined) {
+          const [visibleFact] = yield* tx
+            .select({ principalId: schema.transactions.principalId })
+            .from(schema.transactions)
+            .where(eq(schema.transactions.id, visibleTransactionId))
+
+          if (visibleFact?.principalId !== principalId) {
+            return yield* Effect.die("Claim overlap snapshot did not see the anonymous fact")
+          }
+        }
+
+        return InputLedgerRevision.make(
+          `v2:${snapshot.transactionId}:${snapshot.visibility}:${"a".repeat(64)}`
+        )
+      })
+    )
+  })
+
+const installClaimPointerPause = Effect.gen(function* () {
+  const db = yield* drizzle
+  yield* db.execute(sql`
+    create function pause_claim_pointer_fence() returns trigger as $$
+    begin
+      if new.run_id is null then
+        perform pg_sleep(0.5);
+      end if;
+      return new;
+    end;
+    $$ language plpgsql
+  `)
+  yield* db.execute(sql`
+    create trigger pause_claim_pointer_fence
+    before insert or update on active_calculation_runs
+    for each row execute function pause_claim_pointer_fence()
+  `)
+})
+
+const waitForClaimPointerPause = Effect.gen(function* () {
+  const db = yield* drizzle
+
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    const [activity] = yield* db
+      .select({
+        isPaused: sql<boolean>`exists (
+          select 1
+          from pg_stat_activity
+          where datname = current_database()
+            and pid <> pg_backend_pid()
+            and wait_event = 'PgSleep'
+            and query like 'insert into "active_calculation_runs"%'
+        )`,
+      })
+      .from(schema.principals)
+      .limit(1)
+
+    if (activity?.isPaused === true) return
+    yield* db.execute(sql`select pg_sleep(0.01)`)
+  }
+
+  return yield* Effect.die("Timed out waiting for the claim pointer fence")
+})
+
+const removeClaimPointerPause = Effect.gen(function* () {
+  const db = yield* drizzle
+  yield* db.execute(sql`drop trigger pause_claim_pointer_fence on active_calculation_runs`)
+  yield* db.execute(sql`drop function pause_claim_pointer_fence()`)
+})
+
+const startClaimRaceRun = ({
+  inputLedgerRevision,
+  principalId,
+  runId,
+  sourceId,
+  taxYear,
+}: {
+  readonly inputLedgerRevision: InputLedgerRevision
+  readonly principalId: string
+  readonly runId: string
+  readonly sourceId: string | null
+  readonly taxYear: number
+}) =>
+  Effect.flatMap(CalculationRunRepository, (repository) =>
+    repository.start({
+      id: CalculationRunId.make(runId),
+      principalId: PrincipalId.make(principalId),
+      jurisdiction: JurisdictionCode.make("DE"),
+      taxYear: TaxYear.make(taxYear),
+      reportingCurrency: CLAIM_REPORTING_CURRENCY,
+      engineVersion: "test-engine-v1",
+      ruleSetVersion: "test-rules-v1",
+      inputLedgerRevision,
+      valuationRevision: ValuationRevision.make(`sha256:${"b".repeat(64)}`),
+      custodyUnitMembership:
+        sourceId === null
+          ? []
+          : [
+              {
+                sourceId: SourceId.make(sourceId),
+                custodyUnitId: CustodyUnitId.make(sourceId),
+              },
+            ],
+    })
+  )
+
+const persistClaimRaceRun = ({
+  inputLedgerRevision,
+  principalId,
+  runId,
+  taxYear,
+}: {
+  readonly inputLedgerRevision: InputLedgerRevision
+  readonly principalId: string
+  readonly runId: string
+  readonly taxYear: number
+}) =>
+  Effect.flatMap(CalculationRunRepository, (repository) =>
+    repository.persist({
+      id: CalculationRunId.make(runId),
+      principalId: PrincipalId.make(principalId),
+      reportingCurrency: CLAIM_REPORTING_CURRENCY,
+      inputLedgerRevision,
+      valuationRevision: ValuationRevision.make(`sha256:${"b".repeat(64)}`),
+      result: makeClaimRaceResult(taxYear),
+    })
+  )
+
+const assertClaimActivationFence = ({
+  anonymousPrincipalId,
+  fenceAtOrBelowInput = false,
+  inputLedgerRevision,
+  runId,
+  taxYear,
+}: {
+  readonly anonymousPrincipalId: string
+  readonly fenceAtOrBelowInput?: boolean
+  readonly inputLedgerRevision: InputLedgerRevision
+  readonly runId: string
+  readonly taxYear: number
+}) =>
+  Effect.gen(function* () {
+    const write = yield* persistClaimRaceRun({
+      inputLedgerRevision,
+      principalId: anonymousPrincipalId,
+      runId,
+      taxYear,
+    })
+    expect(write.activated).toBe(false)
+
+    const db = yield* drizzle
+    const [staleRun] = yield* db
+      .select({ status: schema.calculationRuns.status })
+      .from(schema.calculationRuns)
+      .where(eq(schema.calculationRuns.id, runId))
+    const [fencedPointer] = yield* db
+      .select({
+        runId: schema.activeCalculationRuns.runId,
+        minimumActivationRevision: schema.activeCalculationRuns.minimumActivationRevision,
+      })
+      .from(schema.activeCalculationRuns)
+      .where(
+        and(
+          eq(schema.activeCalculationRuns.principalId, anonymousPrincipalId),
+          eq(schema.activeCalculationRuns.jurisdiction, "DE"),
+          eq(schema.activeCalculationRuns.taxYear, taxYear),
+          eq(schema.activeCalculationRuns.reportingCurrency, "EUR")
+        )
+      )
+
+    expect(staleRun).toEqual({ status: "complete" })
+    expect(fencedPointer?.runId).toBeNull()
+    const fenceRevision = BigInt(fencedPointer?.minimumActivationRevision ?? "0")
+    const inputRevision = BigInt(inputLedgerRevision.split(":")[1] ?? "0")
+    if (fenceAtOrBelowInput) {
+      expect(fenceRevision).toBeLessThanOrEqual(inputRevision)
+    } else {
+      expect(fenceRevision).toBeGreaterThan(inputRevision)
+    }
+
+    const postFenceRevision = yield* captureClaimInputLedgerRevision({
+      principalId: anonymousPrincipalId,
+    })
+    const freshRunId = nextTestUuid()
+    const freshWrite = yield* persistClaimRaceRun({
+      inputLedgerRevision: postFenceRevision,
+      principalId: anonymousPrincipalId,
+      runId: freshRunId,
+      taxYear,
+    })
+    expect(freshWrite.activated).toBe(true)
+
+    const [activatedPointer] = yield* db
+      .select({
+        runId: schema.activeCalculationRuns.runId,
+        minimumActivationRevision: schema.activeCalculationRuns.minimumActivationRevision,
+      })
+      .from(schema.activeCalculationRuns)
+      .where(
+        and(
+          eq(schema.activeCalculationRuns.principalId, anonymousPrincipalId),
+          eq(schema.activeCalculationRuns.jurisdiction, "DE"),
+          eq(schema.activeCalculationRuns.taxYear, taxYear),
+          eq(schema.activeCalculationRuns.reportingCurrency, "EUR")
+        )
+      )
+
+    expect(activatedPointer).toEqual({
+      runId: freshRunId,
+      minimumActivationRevision: fencedPointer?.minimumActivationRevision,
+    })
+  })
+
+const seedClaimFactualRows = ({
+  acquisitionEventId,
+  anonymousPrincipalId,
+  assetId,
+  occurredAt,
+  sourceId,
+  transactionId,
+}: {
+  readonly acquisitionEventId: string
+  readonly anonymousPrincipalId: string
+  readonly assetId: string
+  readonly occurredAt: Date
+  readonly sourceId: string
+  readonly transactionId: string
+}) =>
+  Effect.gen(function* () {
+    const db = yield* drizzle
+    yield* db.insert(schema.assets).values({
+      id: assetId,
+      name: "Claim graph asset",
+      symbol: "CGA",
+    })
+    yield* db.insert(schema.transactions).values({
+      id: transactionId,
+      sourceId,
+      principalId: anonymousPrincipalId,
+      externalId: `claim-graph-${transactionId}`,
+      timestamp: occurredAt,
+      transactionType: "buy_fiat",
+    })
+    yield* db.insert(schema.transactionLegs).values({
+      id: acquisitionEventId,
+      sourceId,
+      principalId: anonymousPrincipalId,
+      transactionId,
+      externalId: `claim-graph-leg-${acquisitionEventId}`,
+      timestamp: occurredAt,
+      assetId,
+      amount: "1",
+      kind: "acquisition",
+      provenance: "deterministic",
+    })
+  })
+
+const seedClaimRunHistory = ({
+  acquisitionEventId,
+  anonymousPrincipalId,
+  anonymousRunIds,
+  completedAt,
+  targetPrincipalId,
+  targetRunIds,
+  taxYear,
+}: {
+  readonly acquisitionEventId: string
+  readonly anonymousPrincipalId: string
+  readonly anonymousRunIds: ReadonlyArray<string>
+  readonly completedAt: Date
+  readonly targetPrincipalId: string
+  readonly targetRunIds: ReadonlyArray<string>
+  readonly taxYear: number
+}) =>
+  Effect.gen(function* () {
+    const db = yield* drizzle
+    const [firstAnonymousRunId, secondAnonymousRunId] = anonymousRunIds
+    if (firstAnonymousRunId === undefined || secondAnonymousRunId === undefined) {
+      return yield* Effect.die("Claim graph fixture requires two anonymous runs")
+    }
+
+    yield* db.insert(schema.calculationRuns).values([
+      {
+        id: firstAnonymousRunId,
+        principalId: anonymousPrincipalId,
+        jurisdiction: "DE",
+        taxYear,
+        reportingCurrency: "EUR",
+        engineVersion: "test-engine-v1",
+        ruleSetVersion: "test-rules-v1",
+        inputLedgerRevision: `v2:1:1.0.:${"a".repeat(64)}`,
+        valuationRevision: `sha256:${"b".repeat(64)}`,
+        status: "complete" as const,
+        accountingMethod: "fifo",
+        inventoryScope: "per_custody_unit" as const,
+        appliedChoiceIds: [],
+        appliedRules: [],
+        processedEventIds: [],
+        startedAt: completedAt,
+        completedAt,
+      },
+      {
+        id: secondAnonymousRunId,
+        principalId: anonymousPrincipalId,
+        jurisdiction: "DE",
+        taxYear,
+        reportingCurrency: "EUR",
+        engineVersion: "test-engine-v1",
+        ruleSetVersion: "test-rules-v1",
+        inputLedgerRevision: `v2:2:1.0.:${"c".repeat(64)}`,
+        valuationRevision: `sha256:${"d".repeat(64)}`,
+        status: "partial" as const,
+        accountingMethod: "fifo",
+        inventoryScope: "per_custody_unit" as const,
+        appliedChoiceIds: [],
+        appliedRules: [],
+        processedEventIds: [acquisitionEventId],
+        startedAt: completedAt,
+        completedAt,
+      },
+      ...targetRunIds.map((id, index) => ({
+        id,
+        principalId: targetPrincipalId,
+        jurisdiction: "DE",
+        taxYear,
+        reportingCurrency: "EUR",
+        engineVersion: "test-engine-v1",
+        ruleSetVersion: "test-rules-v1",
+        inputLedgerRevision: `sha256:${index}:${"e".repeat(64)}`,
+        valuationRevision: `sha256:${"f".repeat(64)}`,
+        status: "complete" as const,
+        accountingMethod: "fifo",
+        inventoryScope: "per_custody_unit" as const,
+        appliedChoiceIds: [],
+        appliedRules: [],
+        processedEventIds: [],
+        startedAt: completedAt,
+        completedAt,
+      })),
+    ])
+  })
+
+const seedClaimActivePointers = ({
+  anonymousPrincipalId,
+  anonymousRunId,
+  targetPrincipalId,
+  targetRunId,
+  taxYear,
+}: {
+  readonly anonymousPrincipalId: string
+  readonly anonymousRunId: string
+  readonly targetPrincipalId: string
+  readonly targetRunId: string
+  readonly taxYear: number
+}) =>
+  Effect.flatMap(drizzle, (db) =>
+    db.insert(schema.activeCalculationRuns).values([
+      {
+        principalId: anonymousPrincipalId,
+        jurisdiction: "DE",
+        taxYear,
+        reportingCurrency: "EUR",
+        runId: anonymousRunId,
+      },
+      {
+        principalId: targetPrincipalId,
+        jurisdiction: "DE",
+        taxYear,
+        reportingCurrency: "EUR",
+        runId: targetRunId,
+      },
+    ])
+  )
+
+const seedClaimCalculationGraph = ({
+  anonymousPrincipalId,
+  sourceId,
+  targetPrincipalId,
+}: {
+  readonly anonymousPrincipalId: string
+  readonly sourceId: string
+  readonly targetPrincipalId: string
+}) =>
+  Effect.gen(function* () {
+    const anonymousRunIds = [nextTestUuid(), nextTestUuid()]
+    const targetRunIds = [nextTestUuid(), nextTestUuid()]
+    const [firstAnonymousRunId, secondAnonymousRunId] = anonymousRunIds
+    const [, secondTargetRunId] = targetRunIds
+    if (
+      firstAnonymousRunId === undefined ||
+      secondAnonymousRunId === undefined ||
+      secondTargetRunId === undefined
+    ) {
+      return yield* Effect.die("Claim graph fixture requires two anonymous and target runs")
+    }
+    const assetId = nextTestUuid()
+    const transactionId = nextTestUuid()
+    const acquisitionEventId = nextTestUuid()
+    const dispositionEventId = nextTestUuid()
+    const occurredAt = DateTime.toDateUtc(DateTime.makeUnsafe("2025-04-01T12:00:00.000Z"))
+    const completedAt = DateTime.toDateUtc(DateTime.makeUnsafe("2026-01-01T00:10:00.000Z"))
+    const taxYear = yield* DateTime.now.pipe(
+      Effect.map(DateTime.setZoneNamedUnsafe("Europe/Berlin")),
+      Effect.map(DateTime.toParts),
+      Effect.map(({ year }) => year)
+    )
+
+    yield* seedClaimFactualRows({
+      acquisitionEventId,
+      anonymousPrincipalId,
+      assetId,
+      occurredAt,
+      sourceId,
+      transactionId,
+    })
+    yield* seedClaimRunHistory({
+      acquisitionEventId,
+      anonymousPrincipalId,
+      anonymousRunIds,
+      completedAt,
+      targetPrincipalId,
+      targetRunIds,
+      taxYear,
+    })
+    yield* seedClaimActivePointers({
+      anonymousPrincipalId,
+      anonymousRunId: secondAnonymousRunId,
+      targetPrincipalId,
+      targetRunId: secondTargetRunId,
+      taxYear,
+    })
+
+    yield* seedClaimCalculationResultRows({
+      runId: secondAnonymousRunId,
+      principalId: anonymousPrincipalId,
+      sourceId,
+      assetId,
+      acquisitionEventId,
+      dispositionEventId,
+      occurredAt,
+    })
+
+    return {
+      anonymousRunIds,
+      targetRunIds,
+      transactionId,
+      acquisitionEventId,
+      taxYear,
+    }
+  })
+
+const assertAnonymousClaimRunRowsDeleted = ({
+  anonymousRunIds,
+}: {
+  readonly anonymousRunIds: ReadonlyArray<string>
+}) =>
+  Effect.gen(function* () {
+    const db = yield* drizzle
+    const [firstAnonymousRunId, secondAnonymousRunId] = anonymousRunIds
+    if (firstAnonymousRunId === undefined || secondAnonymousRunId === undefined) {
+      return yield* Effect.die("Claim graph fixture requires two anonymous runs")
+    }
+    type RunIdColumn =
+      | typeof schema.calculationRuns.id
+      | typeof schema.activeCalculationRuns.runId
+      | typeof schema.calculationRunCustodyUnits.runId
+      | typeof schema.calculationRunCustodyUnitSources.runId
+      | typeof schema.calculationRunAllocations.runId
+      | typeof schema.calculationRunRealizedResults.runId
+      | typeof schema.calculationRunIncomeResults.runId
+      | typeof schema.calculationRunDerivedLots.runId
+      | typeof schema.calculationRunBlockers.runId
+      | typeof schema.calculationRunExplanationEntries.runId
+    const isAnonymousRun = (column: RunIdColumn) =>
+      sql`${column} = ${firstAnonymousRunId} or ${column} = ${secondAnonymousRunId}`
+
+    const [
+      anonymousRuns,
+      anonymousPointers,
+      anonymousCustodyUnits,
+      anonymousCustodySources,
+      anonymousAllocations,
+      anonymousRealized,
+      anonymousIncome,
+      anonymousLots,
+      anonymousBlockers,
+      anonymousExplanations,
+    ] = yield* Effect.all([
+      db
+        .select({ runId: schema.calculationRuns.id })
+        .from(schema.calculationRuns)
+        .where(isAnonymousRun(schema.calculationRuns.id)),
+      db
+        .select({ runId: schema.activeCalculationRuns.runId })
+        .from(schema.activeCalculationRuns)
+        .where(isAnonymousRun(schema.activeCalculationRuns.runId)),
+      db
+        .select({ runId: schema.calculationRunCustodyUnits.runId })
+        .from(schema.calculationRunCustodyUnits)
+        .where(isAnonymousRun(schema.calculationRunCustodyUnits.runId)),
+      db
+        .select({ runId: schema.calculationRunCustodyUnitSources.runId })
+        .from(schema.calculationRunCustodyUnitSources)
+        .where(isAnonymousRun(schema.calculationRunCustodyUnitSources.runId)),
+      db
+        .select({ runId: schema.calculationRunAllocations.runId })
+        .from(schema.calculationRunAllocations)
+        .where(isAnonymousRun(schema.calculationRunAllocations.runId)),
+      db
+        .select({ runId: schema.calculationRunRealizedResults.runId })
+        .from(schema.calculationRunRealizedResults)
+        .where(isAnonymousRun(schema.calculationRunRealizedResults.runId)),
+      db
+        .select({ runId: schema.calculationRunIncomeResults.runId })
+        .from(schema.calculationRunIncomeResults)
+        .where(isAnonymousRun(schema.calculationRunIncomeResults.runId)),
+      db
+        .select({ runId: schema.calculationRunDerivedLots.runId })
+        .from(schema.calculationRunDerivedLots)
+        .where(isAnonymousRun(schema.calculationRunDerivedLots.runId)),
+      db
+        .select({ runId: schema.calculationRunBlockers.runId })
+        .from(schema.calculationRunBlockers)
+        .where(isAnonymousRun(schema.calculationRunBlockers.runId)),
+      db
+        .select({ runId: schema.calculationRunExplanationEntries.runId })
+        .from(schema.calculationRunExplanationEntries)
+        .where(isAnonymousRun(schema.calculationRunExplanationEntries.runId)),
+    ])
+
+    for (const rows of [
+      anonymousRuns,
+      anonymousPointers,
+      anonymousCustodyUnits,
+      anonymousCustodySources,
+      anonymousAllocations,
+      anonymousRealized,
+      anonymousIncome,
+      anonymousLots,
+      anonymousBlockers,
+      anonymousExplanations,
+    ]) {
+      expect(rows).toEqual([])
+    }
+  })
+
+const assertClaimPointerFenced = ({
+  anonymousPrincipalId,
+  taxYear,
+}: {
+  readonly anonymousPrincipalId: string
+  readonly taxYear: number
+}) =>
+  Effect.gen(function* () {
+    const db = yield* drizzle
+    const [anonymousPointer] = yield* db
+      .select({
+        runId: schema.activeCalculationRuns.runId,
+        minimumActivationRevision: schema.activeCalculationRuns.minimumActivationRevision,
+      })
+      .from(schema.activeCalculationRuns)
+      .where(
+        and(
+          eq(schema.activeCalculationRuns.principalId, anonymousPrincipalId),
+          eq(schema.activeCalculationRuns.jurisdiction, "DE"),
+          eq(schema.activeCalculationRuns.taxYear, taxYear),
+          eq(schema.activeCalculationRuns.reportingCurrency, "EUR")
+        )
+      )
+
+    expect(anonymousPointer).toEqual({
+      runId: null,
+      minimumActivationRevision: expect.stringMatching(/^\d+$/),
+    })
+  })
+
+const assertClaimTargetPreserved = ({
+  acquisitionEventId,
+  targetPrincipalId,
+  targetRunIds,
+  transactionId,
+}: {
+  readonly acquisitionEventId: string
+  readonly targetPrincipalId: string
+  readonly targetRunIds: ReadonlyArray<string>
+  readonly transactionId: string
+}) =>
+  Effect.gen(function* () {
+    const db = yield* drizzle
+    const [firstTargetRunId, secondTargetRunId] = targetRunIds
+    if (firstTargetRunId === undefined || secondTargetRunId === undefined) {
+      return yield* Effect.die("Claim graph fixture requires two target runs")
+    }
+
+    const targetRuns = yield* db
+      .select({ id: schema.calculationRuns.id, principalId: schema.calculationRuns.principalId })
+      .from(schema.calculationRuns)
+      .where(
+        sql`${schema.calculationRuns.id} = ${firstTargetRunId} or ${schema.calculationRuns.id} = ${secondTargetRunId}`
+      )
+    const [targetPointer] = yield* db
+      .select({ runId: schema.activeCalculationRuns.runId })
+      .from(schema.activeCalculationRuns)
+      .where(eq(schema.activeCalculationRuns.principalId, targetPrincipalId))
+    const [claimedTransaction] = yield* db
+      .select({ principalId: schema.transactions.principalId })
+      .from(schema.transactions)
+      .where(eq(schema.transactions.id, transactionId))
+    const [claimedLeg] = yield* db
+      .select({ principalId: schema.transactionLegs.principalId })
+      .from(schema.transactionLegs)
+      .where(eq(schema.transactionLegs.id, acquisitionEventId))
+
+    expect(targetRuns).toEqual(
+      expect.arrayContaining(
+        targetRunIds.map((id) => ({
+          id,
+          principalId: targetPrincipalId,
+        }))
+      )
+    )
+    expect(targetRuns).toHaveLength(targetRunIds.length)
+    expect(targetPointer).toEqual({ runId: secondTargetRunId })
+    expect(claimedTransaction).toEqual({ principalId: targetPrincipalId })
+    expect(claimedLeg).toEqual({ principalId: targetPrincipalId })
+  })
+
+const assertClaimCalculationGraphDeleted = ({
+  anonymousPrincipalId,
+  anonymousRunIds,
+  targetRunIds,
+  targetPrincipalId,
+  taxYear,
+  transactionId,
+  acquisitionEventId,
+}: {
+  readonly anonymousPrincipalId: string
+  readonly anonymousRunIds: ReadonlyArray<string>
+  readonly targetRunIds: ReadonlyArray<string>
+  readonly targetPrincipalId: string
+  readonly taxYear: number
+  readonly transactionId: string
+  readonly acquisitionEventId: string
+}) =>
+  Effect.all([
+    assertAnonymousClaimRunRowsDeleted({ anonymousRunIds }),
+    assertClaimPointerFenced({ anonymousPrincipalId, taxYear }),
+    assertClaimTargetPreserved({
+      acquisitionEventId,
+      targetPrincipalId,
+      targetRunIds,
+      transactionId,
+    }),
+  ])
+
 const seedSourceReportTaxTreatmentRows = ({
   principalId,
   sourceId,
@@ -770,6 +1615,7 @@ describe("SourcesApiLive", () => {
     Effect.runPromise(
       Effect.gen(function* () {
         queueEvents.length = 0
+        calculationQueueEvents.length = 0
         settlementEvents.length = 0
         yield* context.recreateTestDatabase()
       })
@@ -1409,6 +2255,15 @@ describe("SourcesApiLive", () => {
       const userId = nextTestUuid()
       const principalId = nextTestUuid()
       yield* seedPrincipalUser({ userId, principalId })
+      const calculationGraph = yield* seedClaimCalculationGraph({
+        anonymousPrincipalId: created.source.principalId,
+        sourceId: created.source.id,
+        targetPrincipalId: principalId,
+      })
+      const preClaimRevision = yield* captureClaimInputLedgerRevision({
+        principalId: created.source.principalId,
+      })
+      const lateRunId = nextTestUuid()
 
       const authenticatedClient = yield* makeAuthenticatedClient({ userId })
       const claimResponse = yield* authenticatedClient.principals.claimPrincipal({
@@ -1454,7 +2309,84 @@ describe("SourcesApiLive", () => {
         .where(eq(schema.principalClaims.requestId, created.claim.requestId))
       expect(claims).toHaveLength(2)
       expect(claims.every((claim) => claim.consumedAt instanceof Date)).toBe(true)
+      yield* assertClaimCalculationGraphDeleted({
+        ...calculationGraph,
+        anonymousPrincipalId: created.source.principalId,
+        targetPrincipalId: principalId,
+      })
+      yield* startClaimRaceRun({
+        inputLedgerRevision: preClaimRevision,
+        principalId: created.source.principalId,
+        runId: lateRunId,
+        sourceId: null,
+        taxYear: calculationGraph.taxYear,
+      })
+      yield* assertClaimActivationFence({
+        anonymousPrincipalId: created.source.principalId,
+        inputLedgerRevision: preClaimRevision,
+        runId: lateRunId,
+        taxYear: calculationGraph.taxYear,
+      })
+      expect(calculationQueueEvents).toEqual([principalId])
     }).pipe(Effect.provide(HttpLive), Effect.scoped)
+  )
+
+  it.effect("keeps a committed claim successful when recompute enqueue fails", () =>
+    Effect.gen(function* () {
+      const anonymousClient = yield* makeUnauthenticatedClientWithPayment()
+      const created = yield* anonymousClient.sources.createSource({
+        payload: {
+          type: "onchain",
+          walletAddress: "So11111111111111111111111111111111111111112",
+          name: "Claim survives calculation queue failure",
+          year: 2025,
+          jurisdiction: "germany",
+        },
+      })
+
+      if (created.claim === null || created.syncJob === null) {
+        return yield* Effect.die("Anonymous source creation did not return claim metadata")
+      }
+
+      const userId = nextTestUuid()
+      const principalId = nextTestUuid()
+      yield* seedPrincipalUser({ userId, principalId })
+      const calculationGraph = yield* seedClaimCalculationGraph({
+        anonymousPrincipalId: created.source.principalId,
+        sourceId: created.source.id,
+        targetPrincipalId: principalId,
+      })
+      const authenticatedClient = yield* makeAuthenticatedClient({ userId })
+      const claimResponse = yield* authenticatedClient.principals.claimPrincipal({
+        payload: {
+          requestId: created.claim.requestId,
+          claimToken: created.claim.claimToken,
+          siwxProof: null,
+        },
+      })
+
+      expect(claimResponse.sourceId).toBe(created.source.id)
+      yield* assertClaimCalculationGraphDeleted({
+        ...calculationGraph,
+        anonymousPrincipalId: created.source.principalId,
+        targetPrincipalId: principalId,
+      })
+
+      const db = yield* drizzle
+      const completedAt = DateTime.toDateUtc(DateTime.makeUnsafe("2026-01-01T00:20:00.000Z"))
+      yield* db
+        .update(schema.processingJobs)
+        .set({ status: "completed", completedAt, updatedAt: completedAt })
+        .where(eq(schema.processingJobs.id, created.syncJob.jobId))
+
+      const calculationRunRepository = yield* CalculationRunRepository
+      const maintenance = yield* calculationRunRepository.settleStaleAndFindRecomputePrincipals({
+        staleBefore: completedAt,
+        limit: 10,
+      })
+
+      expect(maintenance.principalIds).toContain(principalId)
+    }).pipe(Effect.provide(CalculationQueueFailureHttpLive), Effect.scoped)
   )
 
   it.effect("lists anonymous paid source handles by payer-wallet SIWX", () =>
@@ -1808,19 +2740,55 @@ describe("SourcesApiLive", () => {
       const userId = nextTestUuid()
       const principalId = nextTestUuid()
       yield* seedPrincipalUser({ userId, principalId })
+      const calculationGraph = yield* seedClaimCalculationGraph({
+        anonymousPrincipalId: created.source.principalId,
+        sourceId: created.source.id,
+        targetPrincipalId: principalId,
+      })
+      const preClaimRevision = yield* captureClaimInputLedgerRevision({
+        principalId: created.source.principalId,
+      })
+      const lateRunId = nextTestUuid()
+      yield* startClaimRaceRun({
+        inputLedgerRevision: preClaimRevision,
+        principalId: created.source.principalId,
+        runId: lateRunId,
+        sourceId: created.source.id,
+        taxYear: calculationGraph.taxYear,
+      })
 
       const authenticatedClient = yield* makeAuthenticatedClient({ userId })
-      const claimResponse = yield* authenticatedClient.principals.claimPrincipal({
-        payload: {
-          requestId: created.claim.requestId,
-          claimToken: null,
-          siwxProof: makeTestSiwxProof({
-            chainType: "solana",
-            walletAddress: TEST_PAYER_WALLET,
-            nonce: created.claim.requestId,
-          }),
-        },
+      yield* installClaimPointerPause
+      const claimFiber = yield* Effect.forkChild(
+        authenticatedClient.principals.claimPrincipal({
+          payload: {
+            requestId: created.claim.requestId,
+            claimToken: null,
+            siwxProof: makeTestSiwxProof({
+              chainType: "solana",
+              walletAddress: TEST_PAYER_WALLET,
+              nonce: created.claim.requestId,
+            }),
+          },
+        })
+      )
+      yield* waitForClaimPointerPause
+      const overlappingRevision = yield* captureClaimInputLedgerRevision({
+        principalId: created.source.principalId,
+        visibleTransactionId: calculationGraph.transactionId,
       })
+      const overlappingRunId = nextTestUuid()
+      const persistFiber = yield* Effect.forkChild(
+        persistClaimRaceRun({
+          inputLedgerRevision: preClaimRevision,
+          principalId: created.source.principalId,
+          runId: lateRunId,
+          taxYear: calculationGraph.taxYear,
+        })
+      )
+      const claimResponse = yield* Fiber.join(claimFiber)
+      const staleWrite = yield* Fiber.join(persistFiber)
+      yield* removeClaimPointerPause
 
       expect(claimResponse.sourceId).toBe(created.source.id)
 
@@ -1838,6 +2806,25 @@ describe("SourcesApiLive", () => {
         sourcePrincipalId: principalId,
         addressPrincipalId: principalId,
       })
+      yield* assertClaimCalculationGraphDeleted({
+        ...calculationGraph,
+        anonymousPrincipalId: created.source.principalId,
+        targetPrincipalId: principalId,
+      })
+      const [lateRun] = yield* db
+        .select({ status: schema.calculationRuns.status })
+        .from(schema.calculationRuns)
+        .where(eq(schema.calculationRuns.id, lateRunId))
+      expect(staleWrite.activated).toBe(false)
+      expect(lateRun).toEqual({ status: "complete" })
+      yield* assertClaimActivationFence({
+        anonymousPrincipalId: created.source.principalId,
+        fenceAtOrBelowInput: true,
+        inputLedgerRevision: overlappingRevision,
+        runId: overlappingRunId,
+        taxYear: calculationGraph.taxYear,
+      })
+      expect(calculationQueueEvents).toEqual([principalId])
     }).pipe(Effect.provide(HttpLive), Effect.scoped)
   )
 
