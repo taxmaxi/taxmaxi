@@ -195,6 +195,95 @@ const seedCalculationRunFixture = ({
     }
   })
 
+const readLiveAndStoredMembership = () =>
+  Effect.gen(function* () {
+    const db = yield* drizzle
+    const [live] = yield* db
+      .select({ custodyUnitId: schema.custodyUnitSources.custodyUnitId })
+      .from(schema.custodyUnitSources)
+      .where(eq(schema.custodyUnitSources.sourceId, TEST_SOURCE_ID))
+    const [snapshot] = yield* db
+      .select({
+        custodyUnitId: schema.calculationRunCustodyUnitSources.custodyUnitId,
+        sourceId: schema.calculationRunCustodyUnitSources.sourceId,
+      })
+      .from(schema.calculationRunCustodyUnitSources)
+      .where(eq(schema.calculationRunCustodyUnitSources.runId, RUN_ID))
+
+    return { live, snapshot }
+  })
+
+const currencyMismatchCases = (): ReadonlyArray<{
+  readonly field: string
+  readonly result: TaxAccountingResult
+}> => {
+  const base = completeResult()
+  const usd = (value: string) => MonetaryAmount.unsafeFromString(value, "USD")
+
+  return [
+    {
+      field: "allocation cost basis",
+      result: {
+        ...base,
+        allocations: base.allocations.map((allocation) => ({
+          ...allocation,
+          costBasis: usd("10000"),
+        })),
+      },
+    },
+    {
+      field: "realized cost basis",
+      result: {
+        ...base,
+        realizedResults: base.realizedResults.map((realized) => ({
+          ...realized,
+          costBasis: usd("10000"),
+        })),
+      },
+    },
+    {
+      field: "realized proceeds",
+      result: {
+        ...base,
+        realizedResults: base.realizedResults.map((realized) => ({
+          ...realized,
+          proceeds: usd("15000"),
+        })),
+      },
+    },
+    {
+      field: "realized gain or loss",
+      result: {
+        ...base,
+        realizedResults: base.realizedResults.map((realized) => ({
+          ...realized,
+          gainLoss: usd("5000"),
+        })),
+      },
+    },
+    {
+      field: "income value",
+      result: {
+        ...base,
+        incomeResults: base.incomeResults.map((income) => ({
+          ...income,
+          value: usd("250"),
+        })),
+      },
+    },
+    {
+      field: "derived-lot cost basis per unit",
+      result: {
+        ...base,
+        derivedLots: base.derivedLots.map((lot) => ({
+          ...lot,
+          costBasisPerUnit: usd("40000"),
+        })),
+      },
+    },
+  ]
+}
+
 await Effect.runPromise(context.recreateTestDatabase())
 
 beforeEach(() => Effect.runPromise(context.recreateTestDatabase()))
@@ -614,15 +703,14 @@ describe("CalculationRunRepositoryLive", () => {
     })
   )
 
-  it.effect("rolls back a claimed run when result money differs from its reporting currency", () =>
+  it.effect("rolls back every monetary field that differs from the reporting currency", () =>
     Effect.gen(function* () {
       yield* runPgEffect(seedCalculationRunFixture())
 
-      const error = yield* runRepository(
-        Effect.flip(persistResult({ result: completeResult({ currency: "USD" }) }))
-      )
-
-      expect(error).toBeInstanceOf(CalculationRunCurrencyMismatchError)
+      for (const { field, result } of currencyMismatchCases()) {
+        const error = yield* runRepository(Effect.flip(persistResult({ result })))
+        expect(error, field).toBeInstanceOf(CalculationRunCurrencyMismatchError)
+      }
 
       const stored = yield* runPgEffect(
         Effect.gen(function* () {
@@ -860,19 +948,7 @@ describe("CalculationRunRepositoryLive", () => {
             .set({ custodyUnitId: GROUPED_CUSTODY_UNIT_ID })
             .where(eq(schema.custodyUnitSources.sourceId, TEST_SOURCE_ID))
 
-          const [live] = yield* db
-            .select({ custodyUnitId: schema.custodyUnitSources.custodyUnitId })
-            .from(schema.custodyUnitSources)
-            .where(eq(schema.custodyUnitSources.sourceId, TEST_SOURCE_ID))
-          const [snapshot] = yield* db
-            .select({
-              custodyUnitId: schema.calculationRunCustodyUnitSources.custodyUnitId,
-              sourceId: schema.calculationRunCustodyUnitSources.sourceId,
-            })
-            .from(schema.calculationRunCustodyUnitSources)
-            .where(eq(schema.calculationRunCustodyUnitSources.runId, RUN_ID))
-
-          return { live, snapshot }
+          return yield* readLiveAndStoredMembership()
         })
       )
 
@@ -883,7 +959,7 @@ describe("CalculationRunRepositoryLive", () => {
     })
   )
 
-  it.effect("captures one membership snapshot while a concurrent regroup commits", () =>
+  it.effect("stores committed membership while a concurrent regroup is uncommitted", () =>
     Effect.gen(function* () {
       yield* runPgEffect(seedCalculationRunFixture())
       const regroupReady = yield* Deferred.make<void>()
@@ -914,24 +990,7 @@ describe("CalculationRunRepositoryLive", () => {
       )
       yield* Effect.promise(() => heldRegroup)
 
-      const snapshots = yield* runPgEffect(
-        Effect.gen(function* () {
-          const db = yield* drizzle
-          const [live] = yield* db
-            .select({ custodyUnitId: schema.custodyUnitSources.custodyUnitId })
-            .from(schema.custodyUnitSources)
-            .where(eq(schema.custodyUnitSources.sourceId, TEST_SOURCE_ID))
-          const [snapshot] = yield* db
-            .select({
-              custodyUnitId: schema.calculationRunCustodyUnitSources.custodyUnitId,
-              sourceId: schema.calculationRunCustodyUnitSources.sourceId,
-            })
-            .from(schema.calculationRunCustodyUnitSources)
-            .where(eq(schema.calculationRunCustodyUnitSources.runId, RUN_ID))
-
-          return { live, snapshot }
-        })
-      )
+      const snapshots = yield* runPgEffect(readLiveAndStoredMembership())
 
       expect(snapshots).toEqual({
         live: { custodyUnitId: GROUPED_CUSTODY_UNIT_ID },
