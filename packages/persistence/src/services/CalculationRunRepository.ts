@@ -20,6 +20,20 @@ export const CalculationRunId = Schema.String.check(Schema.isUUID()).pipe(
 /** Stable, caller-assigned identity of one immutable calculation run. */
 export type CalculationRunId = typeof CalculationRunId.Type
 
+const Revision = Schema.Trimmed.check(Schema.isNonEmpty())
+
+/** Revision of the factual ledger used as calculation input. */
+export const InputLedgerRevision = Revision.pipe(Schema.brand("InputLedgerRevision"))
+
+/** Revision of the factual ledger used as calculation input. */
+export type InputLedgerRevision = typeof InputLedgerRevision.Type
+
+/** Revision of the valuation facts used as calculation input. */
+export const ValuationRevision = Revision.pipe(Schema.brand("ValuationRevision"))
+
+/** Revision of the valuation facts used as calculation input. */
+export type ValuationRevision = typeof ValuationRevision.Type
+
 /** A terminal calculation run cannot be written again under the same ID. */
 export class CalculationRunAlreadyStoredError extends Schema.TaggedError<CalculationRunAlreadyStoredError>()(
   "CalculationRunAlreadyStoredError",
@@ -41,8 +55,8 @@ export interface PersistCalculationRunParams {
   readonly id: CalculationRunId
   readonly principalId: PrincipalId
   readonly reportingCurrency: CurrencyCode
-  readonly inputLedgerRevision: string
-  readonly valuationRevision: string
+  readonly inputLedgerRevision: InputLedgerRevision
+  readonly valuationRevision: ValuationRevision
   readonly result: TaxAccountingResult
 }
 

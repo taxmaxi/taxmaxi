@@ -7,7 +7,7 @@
 import type { TaxAccountingResult } from "@my/accounting"
 import { format as formatQuantity } from "@my/core/accounting"
 import type { CurrencyCode } from "@my/core/currency"
-import { asc, eq } from "drizzle-orm"
+import { and, asc, eq } from "drizzle-orm"
 import * as DateTime from "effect/DateTime"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
@@ -60,6 +60,220 @@ const validateReportingCurrency = ({
 
 const make = Effect.gen(function* () {
   const db = yield* drizzle
+  type CalculationTransaction = Parameters<Parameters<typeof db.transaction>[0]>[0]
+  interface WriteContext {
+    readonly tx: CalculationTransaction
+    readonly params: PersistCalculationRunParams
+    readonly result: TaxAccountingResult
+    readonly now: Date
+  }
+
+  const claimRun = ({ tx, params, result, now }: WriteContext) =>
+    Effect.gen(function* () {
+      const claimedRuns = yield* tx
+        .insert(schema.calculationRuns)
+        .values({
+          id: params.id,
+          principalId: params.principalId,
+          jurisdiction: result.jurisdiction,
+          taxYear: result.taxYear,
+          reportingCurrency: params.reportingCurrency,
+          engineVersion: result.engineVersion,
+          ruleSetVersion: result.ruleSetVersion,
+          inputLedgerRevision: params.inputLedgerRevision,
+          valuationRevision: params.valuationRevision,
+          status: result.status,
+          accountingMethod: result.accountingMethod,
+          inventoryScope: result.inventoryScope,
+          appliedChoiceIds: result.appliedChoiceIds,
+          appliedRules: result.appliedRules,
+          processedEventIds: result.processedEventIds,
+          startedAt: now,
+          completedAt: now,
+          createdAt: now,
+          updatedAt: now,
+        })
+        .onConflictDoNothing({ target: schema.calculationRuns.id })
+        .returning({ id: schema.calculationRuns.id })
+
+      if (claimedRuns.length === 0) {
+        return yield* new CalculationRunAlreadyStoredError({ runId: params.id })
+      }
+
+      yield* validateReportingCurrency(params)
+    })
+
+  const snapshotCustodyMembership = ({ tx, params }: WriteContext) =>
+    Effect.gen(function* () {
+      const liveMembership = yield* tx
+        .select({
+          custodyUnitId: schema.custodyUnits.id,
+          principalId: schema.custodyUnits.principalId,
+          sourceId: schema.custodyUnitSources.sourceId,
+        })
+        .from(schema.custodyUnits)
+        .leftJoin(
+          schema.custodyUnitSources,
+          and(
+            eq(schema.custodyUnitSources.custodyUnitId, schema.custodyUnits.id),
+            eq(schema.custodyUnitSources.principalId, schema.custodyUnits.principalId)
+          )
+        )
+        .where(eq(schema.custodyUnits.principalId, params.principalId))
+        .orderBy(asc(schema.custodyUnits.id), asc(schema.custodyUnitSources.sourceId))
+
+      const custodyUnits = [
+        ...new Map(
+          liveMembership.map(({ custodyUnitId, principalId }) => [
+            custodyUnitId,
+            { runId: params.id, principalId, custodyUnitId },
+          ])
+        ).values(),
+      ]
+      const custodyUnitSources = liveMembership.flatMap(
+        ({ custodyUnitId, principalId, sourceId }) =>
+          sourceId === null ? [] : [{ runId: params.id, principalId, custodyUnitId, sourceId }]
+      )
+
+      if (custodyUnits.length > 0) {
+        yield* tx.insert(schema.calculationRunCustodyUnits).values(custodyUnits)
+      }
+
+      if (custodyUnitSources.length > 0) {
+        yield* tx.insert(schema.calculationRunCustodyUnitSources).values(custodyUnitSources)
+      }
+    })
+
+  const writeAllocations = ({ tx, params, result }: WriteContext) => {
+    const rows = result.allocations.map((allocation, sequence) => ({
+      runId: params.id,
+      principalId: params.principalId,
+      sequence,
+      acquisitionEventId: allocation.acquisitionEventId,
+      dispositionEventId: allocation.dispositionEventId,
+      assetId: allocation.assetId,
+      custodyUnitId: allocation.custodyUnitId,
+      acquiredAt: allocation.acquiredAt.toDate(),
+      disposedAt: allocation.disposedAt.toDate(),
+      quantity: formatQuantity(allocation.quantity),
+      costBasis: allocation.costBasis?.format() ?? null,
+    }))
+
+    return rows.length === 0
+      ? Effect.void
+      : tx.insert(schema.calculationRunAllocations).values(rows)
+  }
+
+  const writeRealizedResults = ({ tx, params, result }: WriteContext) => {
+    const rows = result.realizedResults.map((realized, sequence) => ({
+      runId: params.id,
+      sequence,
+      acquisitionEventId: realized.acquisitionEventId,
+      dispositionEventId: realized.dispositionEventId,
+      assetId: realized.assetId,
+      acquiredAt: realized.acquiredAt.toDate(),
+      disposedAt: realized.disposedAt.toDate(),
+      quantity: formatQuantity(realized.quantity),
+      costBasis: realized.costBasis.format(),
+      proceeds: realized.proceeds.format(),
+      gainLoss: realized.gainLoss.format(),
+      treatmentCodes: realized.treatmentCodes,
+    }))
+
+    return rows.length === 0
+      ? Effect.void
+      : tx.insert(schema.calculationRunRealizedResults).values(rows)
+  }
+
+  const writeIncomeResults = ({ tx, params, result }: WriteContext) => {
+    const rows = result.incomeResults.map((income, sequence) => ({
+      runId: params.id,
+      sequence,
+      eventId: income.eventId,
+      assetId: income.assetId,
+      occurredAt: income.occurredAt.toDate(),
+      quantity: formatQuantity(income.quantity),
+      value: income.value.format(),
+      treatmentCodes: income.treatmentCodes,
+    }))
+
+    return rows.length === 0
+      ? Effect.void
+      : tx.insert(schema.calculationRunIncomeResults).values(rows)
+  }
+
+  const writeDerivedLots = ({ tx, params, result }: WriteContext) => {
+    const rows = result.derivedLots.map((lot, sequence) => ({
+      runId: params.id,
+      principalId: params.principalId,
+      sequence,
+      acquisitionEventId: lot.acquisitionEventId,
+      assetId: lot.assetId,
+      custodyUnitId: lot.custodyUnitId,
+      acquiredAt: lot.acquiredAt.toDate(),
+      remainingQuantity: formatQuantity(lot.remainingQuantity),
+      costBasisPerUnit: lot.costBasisPerUnit?.format() ?? null,
+    }))
+
+    return rows.length === 0
+      ? Effect.void
+      : tx.insert(schema.calculationRunDerivedLots).values(rows)
+  }
+
+  const writeBlockers = ({ tx, params, result }: WriteContext) => {
+    const rows = result.blockers.map((blocker, sequence) => ({
+      runId: params.id,
+      principalId: params.principalId,
+      sequence,
+      code: blocker.code,
+      eventId: blocker.eventId,
+      assetId: blocker.assetId,
+      custodyUnitId: blocker.custodyUnitId,
+      missingQuantity:
+        blocker.missingQuantity === null ? null : formatQuantity(blocker.missingQuantity),
+    }))
+
+    return rows.length === 0 ? Effect.void : tx.insert(schema.calculationRunBlockers).values(rows)
+  }
+
+  const writeExplanations = ({ tx, params, result }: WriteContext) => {
+    const rows = result.explanationTrace.map((entry) => ({
+      runId: params.id,
+      sequence: entry.sequence,
+      eventId: entry.eventId,
+      code: entry.code,
+      valuationKind: entry.valuationKind,
+      matches: entry.matches.map((match) => ({
+        acquisitionEventId: match.acquisitionEventId,
+        quantity: formatQuantity(match.quantity),
+      })),
+    }))
+
+    return rows.length === 0
+      ? Effect.void
+      : tx.insert(schema.calculationRunExplanationEntries).values(rows)
+  }
+
+  const activateRun = ({ tx, params, result, now }: WriteContext) =>
+    tx
+      .insert(schema.activeCalculationRuns)
+      .values({
+        principalId: params.principalId,
+        jurisdiction: result.jurisdiction,
+        taxYear: result.taxYear,
+        reportingCurrency: params.reportingCurrency,
+        runId: params.id,
+        updatedAt: now,
+      })
+      .onConflictDoUpdate({
+        target: [
+          schema.activeCalculationRuns.principalId,
+          schema.activeCalculationRuns.jurisdiction,
+          schema.activeCalculationRuns.taxYear,
+          schema.activeCalculationRuns.reportingCurrency,
+        ],
+        set: { runId: params.id, updatedAt: now },
+      })
 
   const persist: CalculationRunRepositoryShape["persist"] = (params) =>
     db
@@ -67,201 +281,17 @@ const make = Effect.gen(function* () {
         Effect.gen(function* () {
           const now = yield* DateTime.nowAsDate
           const { result } = params
+          const context = { tx, params, result, now }
 
-          const claimedRuns = yield* tx
-            .insert(schema.calculationRuns)
-            .values({
-              id: params.id,
-              principalId: params.principalId,
-              jurisdiction: result.jurisdiction,
-              taxYear: result.taxYear,
-              reportingCurrency: params.reportingCurrency,
-              engineVersion: result.engineVersion,
-              ruleSetVersion: result.ruleSetVersion,
-              inputLedgerRevision: params.inputLedgerRevision,
-              valuationRevision: params.valuationRevision,
-              status: result.status,
-              accountingMethod: result.accountingMethod,
-              inventoryScope: result.inventoryScope,
-              appliedChoiceIds: result.appliedChoiceIds,
-              appliedRules: result.appliedRules,
-              processedEventIds: result.processedEventIds,
-              startedAt: now,
-              completedAt: now,
-              createdAt: now,
-              updatedAt: now,
-            })
-            .onConflictDoNothing({ target: schema.calculationRuns.id })
-            .returning({ id: schema.calculationRuns.id })
-
-          if (claimedRuns.length === 0) {
-            return yield* new CalculationRunAlreadyStoredError({ runId: params.id })
-          }
-
-          yield* validateReportingCurrency(params)
-
-          const custodyUnits = yield* tx
-            .select({
-              custodyUnitId: schema.custodyUnits.id,
-              principalId: schema.custodyUnits.principalId,
-            })
-            .from(schema.custodyUnits)
-            .where(eq(schema.custodyUnits.principalId, params.principalId))
-            .orderBy(asc(schema.custodyUnits.id))
-
-          const custodyUnitSources = yield* tx
-            .select({
-              custodyUnitId: schema.custodyUnitSources.custodyUnitId,
-              principalId: schema.custodyUnitSources.principalId,
-              sourceId: schema.custodyUnitSources.sourceId,
-            })
-            .from(schema.custodyUnitSources)
-            .where(eq(schema.custodyUnitSources.principalId, params.principalId))
-            .orderBy(
-              asc(schema.custodyUnitSources.custodyUnitId),
-              asc(schema.custodyUnitSources.sourceId)
-            )
-
-          if (custodyUnits.length > 0) {
-            yield* tx.insert(schema.calculationRunCustodyUnits).values(
-              custodyUnits.map(({ custodyUnitId, principalId }) => ({
-                runId: params.id,
-                principalId,
-                custodyUnitId,
-              }))
-            )
-          }
-
-          if (custodyUnitSources.length > 0) {
-            yield* tx.insert(schema.calculationRunCustodyUnitSources).values(
-              custodyUnitSources.map(({ custodyUnitId, principalId, sourceId }) => ({
-                runId: params.id,
-                principalId,
-                custodyUnitId,
-                sourceId,
-              }))
-            )
-          }
-
-          if (result.allocations.length > 0) {
-            yield* tx.insert(schema.calculationRunAllocations).values(
-              result.allocations.map((allocation, sequence) => ({
-                runId: params.id,
-                principalId: params.principalId,
-                sequence,
-                acquisitionEventId: allocation.acquisitionEventId,
-                dispositionEventId: allocation.dispositionEventId,
-                assetId: allocation.assetId,
-                custodyUnitId: allocation.custodyUnitId,
-                acquiredAt: allocation.acquiredAt.toDate(),
-                disposedAt: allocation.disposedAt.toDate(),
-                quantity: formatQuantity(allocation.quantity),
-                costBasis: allocation.costBasis?.format() ?? null,
-              }))
-            )
-          }
-
-          if (result.realizedResults.length > 0) {
-            yield* tx.insert(schema.calculationRunRealizedResults).values(
-              result.realizedResults.map((realized, sequence) => ({
-                runId: params.id,
-                sequence,
-                acquisitionEventId: realized.acquisitionEventId,
-                dispositionEventId: realized.dispositionEventId,
-                assetId: realized.assetId,
-                acquiredAt: realized.acquiredAt.toDate(),
-                disposedAt: realized.disposedAt.toDate(),
-                quantity: formatQuantity(realized.quantity),
-                costBasis: realized.costBasis.format(),
-                proceeds: realized.proceeds.format(),
-                gainLoss: realized.gainLoss.format(),
-                treatmentCodes: realized.treatmentCodes,
-              }))
-            )
-          }
-
-          if (result.incomeResults.length > 0) {
-            yield* tx.insert(schema.calculationRunIncomeResults).values(
-              result.incomeResults.map((income, sequence) => ({
-                runId: params.id,
-                sequence,
-                eventId: income.eventId,
-                assetId: income.assetId,
-                occurredAt: income.occurredAt.toDate(),
-                quantity: formatQuantity(income.quantity),
-                value: income.value.format(),
-                treatmentCodes: income.treatmentCodes,
-              }))
-            )
-          }
-
-          if (result.derivedLots.length > 0) {
-            yield* tx.insert(schema.calculationRunDerivedLots).values(
-              result.derivedLots.map((lot, sequence) => ({
-                runId: params.id,
-                principalId: params.principalId,
-                sequence,
-                acquisitionEventId: lot.acquisitionEventId,
-                assetId: lot.assetId,
-                custodyUnitId: lot.custodyUnitId,
-                acquiredAt: lot.acquiredAt.toDate(),
-                remainingQuantity: formatQuantity(lot.remainingQuantity),
-                costBasisPerUnit: lot.costBasisPerUnit?.format() ?? null,
-              }))
-            )
-          }
-
-          if (result.blockers.length > 0) {
-            yield* tx.insert(schema.calculationRunBlockers).values(
-              result.blockers.map((blocker, sequence) => ({
-                runId: params.id,
-                principalId: params.principalId,
-                sequence,
-                code: blocker.code,
-                eventId: blocker.eventId,
-                assetId: blocker.assetId,
-                custodyUnitId: blocker.custodyUnitId,
-                missingQuantity:
-                  blocker.missingQuantity === null ? null : formatQuantity(blocker.missingQuantity),
-              }))
-            )
-          }
-
-          if (result.explanationTrace.length > 0) {
-            yield* tx.insert(schema.calculationRunExplanationEntries).values(
-              result.explanationTrace.map((entry) => ({
-                runId: params.id,
-                sequence: entry.sequence,
-                eventId: entry.eventId,
-                code: entry.code,
-                valuationKind: entry.valuationKind,
-                matches: entry.matches.map((match) => ({
-                  acquisitionEventId: match.acquisitionEventId,
-                  quantity: formatQuantity(match.quantity),
-                })),
-              }))
-            )
-          }
-
-          yield* tx
-            .insert(schema.activeCalculationRuns)
-            .values({
-              principalId: params.principalId,
-              jurisdiction: result.jurisdiction,
-              taxYear: result.taxYear,
-              reportingCurrency: params.reportingCurrency,
-              runId: params.id,
-              updatedAt: now,
-            })
-            .onConflictDoUpdate({
-              target: [
-                schema.activeCalculationRuns.principalId,
-                schema.activeCalculationRuns.jurisdiction,
-                schema.activeCalculationRuns.taxYear,
-                schema.activeCalculationRuns.reportingCurrency,
-              ],
-              set: { runId: params.id, updatedAt: now },
-            })
+          yield* claimRun(context)
+          yield* snapshotCustodyMembership(context)
+          yield* writeAllocations(context)
+          yield* writeRealizedResults(context)
+          yield* writeIncomeResults(context)
+          yield* writeDerivedLots(context)
+          yield* writeBlockers(context)
+          yield* writeExplanations(context)
+          yield* activateRun(context)
         })
       )
       .pipe(
