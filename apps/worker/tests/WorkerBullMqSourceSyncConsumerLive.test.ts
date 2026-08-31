@@ -16,6 +16,8 @@ import {
 } from "../src/layers/WorkerSourceSyncStartupRepairLive.ts"
 import {
   SOURCE_SYNC_JOB_NAME,
+  CalculationRecomputeQueue,
+  CalculationRecomputeQueueError,
   SourceSyncJobExecutionNotFoundError,
   SourceSyncJobExecutor,
   SourceSyncQueuePayload,
@@ -112,6 +114,7 @@ const runWithConsumer = <A>({
   repair,
   dispatchFollowUp,
   dispatchPending,
+  enqueuePrincipalRecompute,
 }: {
   readonly effect: Effect.Effect<A>
   readonly executor: SourceSyncJobExecutorShape
@@ -133,6 +136,9 @@ const runWithConsumer = <A>({
     WorkerSourceSyncStartupRepairSummary,
     WorkerSourceSyncStartupRepairError
   >
+  readonly enqueuePrincipalRecompute?: (
+    principalId: string
+  ) => Effect.Effect<void, CalculationRecomputeQueueError>
 }) =>
   Effect.runPromise(
     Effect.scoped(
@@ -164,6 +170,9 @@ const runWithConsumer = <A>({
                       erroredJobs: 0,
                       stoppedAfterErrors: false,
                     }),
+                }),
+                Layer.succeed(CalculationRecomputeQueue, {
+                  enqueuePrincipalRecompute: enqueuePrincipalRecompute ?? (() => Effect.void),
                 })
               )
             )
@@ -265,6 +274,79 @@ describe("WorkerBullMqSourceSyncConsumerLive", () => {
         },
       })
       expect(syncExecution.retryPolicy?.nextRetryAt).toBeInstanceOf(Date)
+    })
+  )
+
+  it.effect("enqueues a principal recompute after completed sync and replay jobs", () =>
+    Effect.gen(function* () {
+      let processor: WorkerBullMqSourceSyncProcessor | null = null
+      const enqueuedPrincipalIds: Array<string> = []
+
+      yield* Effect.promise(() =>
+        runWithConsumer({
+          executor: {
+            execute: ({ jobId }) => Effect.succeed(summary({ jobId, status: "completed" })),
+          },
+          enqueuePrincipalRecompute: (principalId) =>
+            Effect.sync(() => {
+              enqueuedPrincipalIds.push(principalId)
+            }),
+          acquireWorker: (_config, acquiredProcessor) =>
+            Effect.sync(() => {
+              processor = acquiredProcessor
+              return { close: Effect.void }
+            }),
+          effect: Effect.gen(function* () {
+            if (processor === null) {
+              return yield* Effect.die(new Error("Processor was not acquired"))
+            }
+            const acquiredProcessor = processor
+
+            yield* Effect.promise(() => acquiredProcessor(makeJob({ data: syncPayload })))
+            yield* Effect.promise(() => acquiredProcessor(makeJob({ data: replayPayload })))
+          }),
+        })
+      )
+
+      expect(enqueuedPrincipalIds).toEqual(["principal-1", "principal-1"])
+    })
+  )
+
+  it.effect("keeps a completed source outcome when calculation enqueue fails", () =>
+    Effect.gen(function* () {
+      let processor: WorkerBullMqSourceSyncProcessor | null = null
+
+      yield* Effect.promise(() =>
+        runWithConsumer({
+          executor: {
+            execute: ({ jobId }) => Effect.succeed(summary({ jobId, status: "completed" })),
+          },
+          enqueuePrincipalRecompute: () =>
+            Effect.fail(
+              new CalculationRecomputeQueueError({
+                operation: "test.enqueue",
+                cause: "redis unavailable",
+              })
+            ),
+          acquireWorker: (_config, acquiredProcessor) =>
+            Effect.sync(() => {
+              processor = acquiredProcessor
+              return { close: Effect.void }
+            }),
+          effect: Effect.gen(function* () {
+            if (processor === null) {
+              return yield* Effect.die(new Error("Processor was not acquired"))
+            }
+            const acquiredProcessor = processor
+
+            const result = yield* Effect.promise(() =>
+              acquiredProcessor(makeJob({ data: syncPayload }))
+            )
+
+            expect(result.status).toBe("completed")
+          }),
+        })
+      )
     })
   )
 

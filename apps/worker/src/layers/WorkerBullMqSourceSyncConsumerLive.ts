@@ -18,6 +18,7 @@ import { randomUUID } from "node:crypto"
 import {
   SOURCE_SYNC_JOB_NAME,
   SOURCE_SYNC_QUEUE_NAME,
+  CalculationRecomputeQueue,
   SourceSyncJobExecutor,
   SourceSyncQueuePayload,
   type SourceSyncJobExecutorError,
@@ -329,6 +330,7 @@ export const makeWorkerBullMqSourceSyncConsumerLive = (
     Effect.gen(function* () {
       const config = yield* loadConfig
       const startupRepair = yield* WorkerSourceSyncStartupRepair
+      const calculationRecomputeQueue = yield* CalculationRecomputeQueue
       const context = yield* Effect.context<SourceSyncJobExecutor>()
       const runPromise = Effect.runPromiseWith(context)
       const acquireWorker = options.acquireWorker ?? acquireLiveWorker
@@ -359,22 +361,41 @@ export const makeWorkerBullMqSourceSyncConsumerLive = (
               )
             }
 
-            return runPromise(
-              startupRepair
-                .dispatchFollowUp({
-                  jobId: result.success.payload.jobId,
-                  sourceId: result.success.payload.sourceId,
-                  principalId: result.success.payload.principalId,
-                })
-                .pipe(
-                  Effect.catch((error) =>
-                    Effect.logWarning(
-                      { operation: error.operation, cause: error.cause },
-                      "source-sync-worker:follow-up-dispatch-failed"
-                    )
+            const dispatchFollowUp = startupRepair
+              .dispatchFollowUp({
+                jobId: result.success.payload.jobId,
+                sourceId: result.success.payload.sourceId,
+                principalId: result.success.payload.principalId,
+              })
+              .pipe(
+                Effect.catch((error) =>
+                  Effect.logWarning(
+                    { operation: error.operation, cause: error.cause },
+                    "source-sync-worker:follow-up-dispatch-failed"
                   )
                 )
-            ).then(() => result.success.summary)
+              )
+            const enqueueCalculation =
+              result.success.summary.status === "completed"
+                ? calculationRecomputeQueue
+                    .enqueuePrincipalRecompute(result.success.payload.principalId)
+                    .pipe(
+                      Effect.catch((error) =>
+                        Effect.logWarning(
+                          {
+                            principalId: result.success.payload.principalId,
+                            operation: error.operation,
+                            cause: error.cause,
+                          },
+                          "source-sync-worker:calculation-enqueue-failed"
+                        )
+                      )
+                    )
+                : Effect.void
+
+            return runPromise(dispatchFollowUp.pipe(Effect.andThen(enqueueCalculation))).then(
+              () => result.success.summary
+            )
           }
 
           const error = result.failure

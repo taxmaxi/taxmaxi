@@ -1,7 +1,13 @@
 import { NodeRuntime } from "@effect/platform-node"
 import { Effect, Layer } from "effect"
 import { LoggerLive } from "@my/observability"
-import { PgClientLive, RepositoriesLive } from "@my/persistence/layers"
+import {
+  CalculationRunRepositoryLive,
+  CalculationRunServiceLive,
+  FactualLedgerRepositoryLive,
+  PgClientLive,
+  RepositoriesLive,
+} from "@my/persistence/layers"
 import {
   AssetResolutionCoinGeckoClientLive,
   AssetResolutionJobExecutorLive,
@@ -20,6 +26,10 @@ import {
 } from "@my/sync-engine/providers/coinbase/layers"
 import { HeliusSolanaSourceSyncProviderLive } from "@my/sync-engine/providers/helius-solana/layers"
 import { WorkerBullMqAssetResolutionConsumerLive } from "./layers/WorkerBullMqAssetResolutionConsumerLive.ts"
+import {
+  WorkerBullMqCalculationConsumerLive,
+  WorkerCalculationRecomputeQueueLive,
+} from "./layers/WorkerBullMqCalculationConsumerLive.ts"
 import { WorkerBullMqSourceSyncConsumerLive } from "./layers/WorkerBullMqSourceSyncConsumerLive.ts"
 import { WorkerHealthServerLive } from "./layers/WorkerHealthServerLive.ts"
 import { WorkerSourceSyncStartupRepairLive } from "./layers/WorkerSourceSyncStartupRepairLive.ts"
@@ -62,7 +72,17 @@ const SourceSyncJobExecutorRuntimeLive = SourceSyncJobExecutorLive.pipe(
 const SourceSyncWorkerRuntimeLive = WorkerBullMqSourceSyncConsumerLive.pipe(
   Layer.provide(SourceSyncJobExecutorRuntimeLive),
   // Startup repair is a dependency of the consumer so reconciliation finishes before BullMQ claims work.
-  Layer.provide(WorkerSourceSyncStartupRepairLive.pipe(Layer.provide(RepositoriesLive)))
+  Layer.provide(WorkerSourceSyncStartupRepairLive.pipe(Layer.provide(RepositoriesLive))),
+  Layer.provide(WorkerCalculationRecomputeQueueLive)
+)
+
+const CalculationRunRuntimeLive = CalculationRunServiceLive.pipe(
+  Layer.provide(CalculationRunRepositoryLive),
+  Layer.provide(FactualLedgerRepositoryLive)
+)
+
+const CalculationWorkerRuntimeLive = WorkerBullMqCalculationConsumerLive.pipe(
+  Layer.provide(CalculationRunRuntimeLive)
 )
 
 const AssetResolutionJobExecutorRuntimeLive = AssetResolutionJobExecutorLive.pipe(
@@ -79,6 +99,7 @@ const AssetResolutionWorkerRuntimeLive = WorkerBullMqAssetResolutionConsumerLive
 const AppLive: Layer.Layer<never, unknown, never> = Layer.mergeAll(
   WorkerHealthServerLive,
   SourceSyncWorkerRuntimeLive,
+  CalculationWorkerRuntimeLive,
   AssetResolutionWorkerRuntimeLive
 ).pipe(Layer.provide(PgClientLive))
 
