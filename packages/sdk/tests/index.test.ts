@@ -135,6 +135,7 @@ const sourceResponse = {
 } as const
 
 const sourceOverviewResponseBody = JSON.stringify({
+  calculationRunId: null,
   source: sourceResponse,
   latestSync: {
     status: null,
@@ -168,7 +169,7 @@ const sourceOverviewResponseBody = JSON.stringify({
   },
 })
 
-const emptySourceAssetPnlResponseBody = JSON.stringify({ assets: [] })
+const emptySourceAssetPnlResponseBody = JSON.stringify({ calculationRunId: null, assets: [] })
 const emptyPortfolioSummary = {
   totalValue: "0",
   costBasis: "0",
@@ -373,16 +374,19 @@ const transactionListResponse = {
 } as const
 
 const emptySourceTaxEventsResponseBody = JSON.stringify({
+  calculationRunId: null,
   taxEvents: [],
   page: { nextCursor: null, hasMore: false },
 })
 
 const emptySourceFifoLotsResponseBody = JSON.stringify({
+  calculationRunId: null,
   fifoLots: [],
   page: { nextCursor: null, hasMore: false },
 })
 
 const sourceDisposalExplanationResponseBody = JSON.stringify({
+  calculationRunId: null,
   disposalLegId: "00000000-0000-4000-8000-000000000006",
   transactionId: "00000000-0000-4000-8000-000000000007",
   asset: {

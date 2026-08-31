@@ -502,6 +502,7 @@ export const SourcesApiLive = HttpApiBuilder.group(TaxMaxiApi, "sources", (handl
             .pipe(Effect.mapError(mapReportError("Failed to load source overview.")))
 
           return SourceOverviewResponse.make({
+            calculationRunId: overview.calculationRunId,
             source: overview.source,
             latestSync: SourceReportSyncStatus.make(overview.latestSync),
             totals: SourceReportTotals.make(overview.totals),
@@ -513,12 +514,13 @@ export const SourcesApiLive = HttpApiBuilder.group(TaxMaxiApi, "sources", (handl
         Effect.gen(function* () {
           const principal = yield* resolveCurrentUserPrincipal
           const scope = yield* reportScope({ principalId: principal.id, sourceId: path.sourceId })
-          const assets = yield* sourceReportRepository
+          const report = yield* sourceReportRepository
             .listAssetPnl(scope)
             .pipe(Effect.mapError(mapReportError("Failed to load source asset P&L.")))
 
           return SourceAssetPnlResponse.make({
-            assets: assets.map((row) =>
+            calculationRunId: report.calculationRunId,
+            assets: report.assets.map((row) =>
               SourceAssetPnlRow.make({
                 ...row,
                 asset: reportAsset(row.asset),
@@ -564,6 +566,7 @@ export const SourcesApiLive = HttpApiBuilder.group(TaxMaxiApi, "sources", (handl
             .pipe(Effect.mapError(mapReportError("Failed to load source tax events.")))
 
           return SourceTaxEventsResponse.make({
+            calculationRunId: page.calculationRunId,
             taxEvents: page.items.map((row) =>
               SourceTaxEventRow.make({
                 ...row,
@@ -586,6 +589,7 @@ export const SourcesApiLive = HttpApiBuilder.group(TaxMaxiApi, "sources", (handl
             .pipe(Effect.mapError(mapReportError("Failed to load source FIFO lots.")))
 
           return SourceFifoLotsResponse.make({
+            calculationRunId: page.calculationRunId,
             fifoLots: page.items.map((row) =>
               SourceFifoLotRow.make({
                 ...row,

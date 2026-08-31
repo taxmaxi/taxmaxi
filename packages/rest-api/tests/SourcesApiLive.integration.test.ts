@@ -573,6 +573,18 @@ const reportFixtureIds = {
   internalTransferFifoLotId: "00000000-0000-4000-8000-000000046303",
   custodyProviderTransferId: "00000000-0000-4000-8000-000000046401",
   custodyMovementId: "00000000-0000-4000-8000-000000046402",
+  activeCalculationRunId: "00000000-0000-4000-8000-000000046501",
+  unvaluedDisposalEventId: "00000000-0000-4000-8000-000000046502",
+  taxableLossEventId: "00000000-0000-4000-8000-000000046503",
+  taxFreeLossEventId: "00000000-0000-4000-8000-000000046504",
+  unknownTreatmentEventId: "00000000-0000-4000-8000-000000046505",
+  incomeEventId: "00000000-0000-4000-8000-000000046506",
+  otherSourceId: "00000000-0000-4000-8000-000000046507",
+  incomeTransactionId: "00000000-0000-4000-8000-000000046508",
+  otherAcquisitionEventId: "00000000-0000-4000-8000-000000046509",
+  unvaluedDisposalTransactionId: "00000000-0000-4000-8000-000000046510",
+  otherDisposalEventId: "00000000-0000-4000-8000-000000046511",
+  otherDisposalTransactionId: "00000000-0000-4000-8000-000000046512",
 } as const
 
 const seedSourceReportRows = ({
@@ -690,6 +702,171 @@ const seedSourceReportRows = ({
         gainLoss: "0",
       },
     ])
+  })
+
+const seedSourceReportActiveRun = ({
+  principalId,
+  sourceId,
+}: {
+  readonly principalId: string
+  readonly sourceId: string
+}) =>
+  Effect.gen(function* () {
+    const db = yield* drizzle
+    const completedAt = DateTime.toDateUtc(DateTime.makeUnsafe("2026-01-02T00:00:00.000Z"))
+
+    yield* db.insert(schema.calculationRuns).values({
+      id: reportFixtureIds.activeCalculationRunId,
+      principalId,
+      jurisdiction: "DE",
+      taxYear: 2025,
+      reportingCurrency: "EUR",
+      engineVersion: "test-engine-v1",
+      ruleSetVersion: "de-crypto-income-tax-v2025-03-06",
+      inputLedgerRevision: `v2:1:1.1.1:${"a".repeat(64)}`,
+      valuationRevision: `sha256:${"b".repeat(64)}`,
+      status: "complete",
+      accountingMethod: "fifo",
+      inventoryScope: "per_custody_unit",
+      appliedChoiceIds: [],
+      appliedRules: [],
+      processedEventIds: [reportFixtureIds.acquisitionLegId, reportFixtureIds.disposalLegId],
+      startedAt: completedAt,
+      completedAt,
+    })
+    yield* db.insert(schema.calculationRunCustodyUnits).values({
+      runId: reportFixtureIds.activeCalculationRunId,
+      principalId,
+      custodyUnitId: sourceId,
+    })
+    yield* db.insert(schema.calculationRunCustodyUnitSources).values({
+      runId: reportFixtureIds.activeCalculationRunId,
+      principalId,
+      custodyUnitId: sourceId,
+      sourceId,
+    })
+    yield* db.insert(schema.calculationRunAllocations).values([
+      {
+        runId: reportFixtureIds.activeCalculationRunId,
+        principalId,
+        sequence: 0,
+        acquisitionEventId: reportFixtureIds.acquisitionLegId,
+        dispositionEventId: reportFixtureIds.disposalLegId,
+        assetId: TEST_BTC_ASSET_ID,
+        custodyUnitId: sourceId,
+        acquiredAt: DateTime.toDateUtc(DateTime.makeUnsafe("2023-01-10T12:00:00.000Z")),
+        disposedAt: DateTime.toDateUtc(DateTime.makeUnsafe("2025-03-10T12:00:00.000Z")),
+        quantity: "0.2",
+        costBasis: "1000",
+      },
+      {
+        runId: reportFixtureIds.activeCalculationRunId,
+        principalId,
+        sequence: 1,
+        acquisitionEventId: reportFixtureIds.acquisitionLegId,
+        dispositionEventId: reportFixtureIds.disposalLegId,
+        assetId: TEST_BTC_ASSET_ID,
+        custodyUnitId: sourceId,
+        acquiredAt: DateTime.toDateUtc(DateTime.makeUnsafe("2025-01-10T12:00:00.000Z")),
+        disposedAt: DateTime.toDateUtc(DateTime.makeUnsafe("2025-03-10T12:00:00.000Z")),
+        quantity: "0.2",
+        costBasis: "3000",
+      },
+    ])
+    yield* db.insert(schema.calculationRunRealizedResults).values([
+      {
+        runId: reportFixtureIds.activeCalculationRunId,
+        sequence: 0,
+        sourceId,
+        allocationSequence: 0,
+        acquisitionEventId: reportFixtureIds.acquisitionLegId,
+        dispositionEventId: reportFixtureIds.disposalLegId,
+        assetId: TEST_BTC_ASSET_ID,
+        acquiredAt: DateTime.toDateUtc(DateTime.makeUnsafe("2023-01-10T12:00:00.000Z")),
+        disposedAt: DateTime.toDateUtc(DateTime.makeUnsafe("2025-03-10T12:00:00.000Z")),
+        quantity: "0.2",
+        costBasis: "1000",
+        proceeds: "1500",
+        gainLoss: "500",
+        treatmentCodes: ["de.tax_free_holding_period"],
+      },
+      {
+        runId: reportFixtureIds.activeCalculationRunId,
+        sequence: 1,
+        sourceId,
+        allocationSequence: 1,
+        acquisitionEventId: reportFixtureIds.acquisitionLegId,
+        dispositionEventId: reportFixtureIds.disposalLegId,
+        assetId: TEST_BTC_ASSET_ID,
+        acquiredAt: DateTime.toDateUtc(DateTime.makeUnsafe("2025-01-10T12:00:00.000Z")),
+        disposedAt: DateTime.toDateUtc(DateTime.makeUnsafe("2025-03-10T12:00:00.000Z")),
+        quantity: "0.2",
+        costBasis: "3000",
+        proceeds: "3500",
+        gainLoss: "500",
+        treatmentCodes: ["de.taxable_private_disposal"],
+      },
+    ])
+    yield* db.insert(schema.calculationRunDerivedLots).values({
+      runId: reportFixtureIds.activeCalculationRunId,
+      principalId,
+      sequence: 0,
+      acquisitionEventId: reportFixtureIds.acquisitionLegId,
+      assetId: TEST_BTC_ASSET_ID,
+      custodyUnitId: sourceId,
+      acquiredAt: DateTime.toDateUtc(DateTime.makeUnsafe("2025-01-10T12:00:00.000Z")),
+      remainingQuantity: "0.6",
+      costBasisPerUnit: "15000",
+    })
+    yield* db.insert(schema.activeCalculationRuns).values({
+      principalId,
+      jurisdiction: "DE",
+      taxYear: 2025,
+      reportingCurrency: "EUR",
+      runId: reportFixtureIds.activeCalculationRunId,
+      minimumActivationRevision: "0",
+    })
+  })
+
+const seedOtherReportSource = ({
+  principalId,
+  referenceSourceId,
+}: {
+  readonly principalId: string
+  readonly referenceSourceId: string
+}) =>
+  Effect.gen(function* () {
+    const db = yield* drizzle
+    const [existingAccount] = yield* db
+      .select({ cexId: schema.cexAccount.cexId })
+      .from(schema.sources)
+      .innerJoin(schema.cexAccount, eq(schema.sources.cexAccountId, schema.cexAccount.id))
+      .where(eq(schema.sources.id, referenceSourceId))
+      .limit(1)
+    if (existingAccount === undefined) {
+      return yield* Effect.die("Missing report fixture CEX account")
+    }
+
+    const [otherAccount] = yield* db
+      .insert(schema.cexAccount)
+      .values({
+        cexId: existingAccount.cexId,
+        principalId,
+        providerAccountId: reportFixtureIds.otherSourceId,
+      })
+      .returning({ id: schema.cexAccount.id })
+    if (otherAccount === undefined) {
+      return yield* Effect.die("Failed to create second report source account")
+    }
+
+    yield* db.insert(schema.sources).values({
+      id: reportFixtureIds.otherSourceId,
+      name: "Other Coinbase source",
+      providerKey: "coinbase",
+      sourceableType: "cex",
+      cexAccountId: otherAccount.id,
+      principalId,
+    })
   })
 
 const seedClaimCalculationResultRows = ({
@@ -1625,6 +1802,776 @@ describe("SourcesApiLive", () => {
     )
   )
 
+  it.effect("reads tax and report results from one named active calculation run", () =>
+    Effect.gen(function* () {
+      const fixture = yield* seedSyncEngineRepositoryFixture(REPORT_TEST_FIXTURE)
+      yield* seedSyncEngineAssets({
+        baseBlockchainId: fixture.baseBlockchainId,
+        bitcoinBlockchainId: fixture.bitcoinBlockchainId,
+      })
+      yield* seedSourceReportRows({
+        principalId: fixture.principalId,
+        sourceId: fixture.sourceId,
+      })
+      yield* seedSourceReportActiveRun({
+        principalId: fixture.principalId,
+        sourceId: fixture.sourceId,
+      })
+
+      const db = yield* drizzle
+      yield* db.insert(schema.calculationRunAllocations).values([
+        {
+          runId: reportFixtureIds.activeCalculationRunId,
+          principalId: fixture.principalId,
+          sequence: 2,
+          acquisitionEventId: reportFixtureIds.acquisitionLegId,
+          dispositionEventId: reportFixtureIds.taxableLossEventId,
+          assetId: TEST_BTC_ASSET_ID,
+          custodyUnitId: fixture.sourceId,
+          acquiredAt: DateTime.toDateUtc(DateTime.makeUnsafe("2025-01-10T12:00:00.000Z")),
+          disposedAt: DateTime.toDateUtc(DateTime.makeUnsafe("2025-05-10T12:00:00.000Z")),
+          quantity: "0.01",
+          costBasis: "300",
+        },
+        {
+          runId: reportFixtureIds.activeCalculationRunId,
+          principalId: fixture.principalId,
+          sequence: 3,
+          acquisitionEventId: reportFixtureIds.acquisitionLegId,
+          dispositionEventId: reportFixtureIds.taxFreeLossEventId,
+          assetId: TEST_BTC_ASSET_ID,
+          custodyUnitId: fixture.sourceId,
+          acquiredAt: DateTime.toDateUtc(DateTime.makeUnsafe("2023-01-10T12:00:00.000Z")),
+          disposedAt: DateTime.toDateUtc(DateTime.makeUnsafe("2025-05-10T12:00:00.000Z")),
+          quantity: "0.01",
+          costBasis: "400",
+        },
+        {
+          runId: reportFixtureIds.activeCalculationRunId,
+          principalId: fixture.principalId,
+          sequence: 4,
+          acquisitionEventId: reportFixtureIds.acquisitionLegId,
+          dispositionEventId: reportFixtureIds.unknownTreatmentEventId,
+          assetId: TEST_BTC_ASSET_ID,
+          custodyUnitId: fixture.sourceId,
+          acquiredAt: DateTime.toDateUtc(DateTime.makeUnsafe("2025-01-10T12:00:00.000Z")),
+          disposedAt: DateTime.toDateUtc(DateTime.makeUnsafe("2025-05-10T12:00:00.000Z")),
+          quantity: "0.01",
+          costBasis: "100",
+        },
+      ])
+      yield* db.insert(schema.calculationRunRealizedResults).values([
+        {
+          runId: reportFixtureIds.activeCalculationRunId,
+          sequence: 2,
+          sourceId: fixture.sourceId,
+          allocationSequence: 2,
+          acquisitionEventId: reportFixtureIds.acquisitionLegId,
+          dispositionEventId: reportFixtureIds.taxableLossEventId,
+          assetId: TEST_BTC_ASSET_ID,
+          acquiredAt: DateTime.toDateUtc(DateTime.makeUnsafe("2025-01-10T12:00:00.000Z")),
+          disposedAt: DateTime.toDateUtc(DateTime.makeUnsafe("2025-05-10T12:00:00.000Z")),
+          quantity: "0.01",
+          costBasis: "300",
+          proceeds: "100",
+          gainLoss: "-200",
+          treatmentCodes: ["de.taxable_private_disposal"],
+        },
+        {
+          runId: reportFixtureIds.activeCalculationRunId,
+          sequence: 3,
+          sourceId: fixture.sourceId,
+          allocationSequence: 3,
+          acquisitionEventId: reportFixtureIds.acquisitionLegId,
+          dispositionEventId: reportFixtureIds.taxFreeLossEventId,
+          assetId: TEST_BTC_ASSET_ID,
+          acquiredAt: DateTime.toDateUtc(DateTime.makeUnsafe("2023-01-10T12:00:00.000Z")),
+          disposedAt: DateTime.toDateUtc(DateTime.makeUnsafe("2025-05-10T12:00:00.000Z")),
+          quantity: "0.01",
+          costBasis: "400",
+          proceeds: "100",
+          gainLoss: "-300",
+          treatmentCodes: ["de.tax_free_holding_period"],
+        },
+        {
+          runId: reportFixtureIds.activeCalculationRunId,
+          sequence: 4,
+          sourceId: fixture.sourceId,
+          allocationSequence: 4,
+          acquisitionEventId: reportFixtureIds.acquisitionLegId,
+          dispositionEventId: reportFixtureIds.unknownTreatmentEventId,
+          assetId: TEST_BTC_ASSET_ID,
+          acquiredAt: DateTime.toDateUtc(DateTime.makeUnsafe("2025-01-10T12:00:00.000Z")),
+          disposedAt: DateTime.toDateUtc(DateTime.makeUnsafe("2025-05-10T12:00:00.000Z")),
+          quantity: "0.01",
+          costBasis: "100",
+          proceeds: "1000",
+          gainLoss: "900",
+          treatmentCodes: ["de.review_only"],
+        },
+      ])
+      yield* db.insert(schema.calculationRunIncomeResults).values({
+        runId: reportFixtureIds.activeCalculationRunId,
+        sequence: 0,
+        sourceId: fixture.sourceId,
+        eventId: reportFixtureIds.incomeEventId,
+        assetId: TEST_BTC_ASSET_ID,
+        occurredAt: DateTime.toDateUtc(DateTime.makeUnsafe("2025-06-10T12:00:00.000Z")),
+        quantity: "0.01",
+        value: "700",
+        treatmentCodes: ["de.taxable_income_section22_3_staking"],
+      })
+      yield* db
+        .update(schema.transactionLegs)
+        .set({ amount: "-0.4" })
+        .where(eq(schema.transactionLegs.id, reportFixtureIds.disposalLegId))
+
+      const client = yield* makeAuthenticatedClient({ userId: fixture.userId })
+      const tax = yield* client.sources.calculateTaxForSource({
+        params: { sourceId: fixture.sourceId },
+        payload: { year: 2025, jurisdiction: "germany" },
+      })
+      const taxEvents = yield* client.sources.listSourceTaxEvents({
+        params: { sourceId: fixture.sourceId },
+        query: { limit: 10 },
+      })
+      const explanation = yield* client.sources.explainSourceDisposal({
+        params: { sourceId: fixture.sourceId, legId: reportFixtureIds.disposalLegId },
+      })
+
+      expect(tax.calculationRunId).toBe(reportFixtureIds.activeCalculationRunId)
+      expect(tax).toMatchObject({
+        taxableGains: 500,
+        taxableLosses: 200,
+        taxFreeGains: 500,
+        incomeTotal: 700,
+      })
+      expect(taxEvents.calculationRunId).toBe(reportFixtureIds.activeCalculationRunId)
+      expect(taxEvents.taxEvents[0]).toMatchObject({
+        legId: reportFixtureIds.disposalLegId,
+        costBasis: "4000",
+        proceeds: "5000",
+        gainLoss: "1000",
+        taxableTreatment: "mixed",
+      })
+      expect(explanation).toMatchObject({
+        amount: "-0.4",
+        costBasis: "4000",
+        proceeds: "5000",
+        gainLoss: "1000",
+        taxableTreatment: "mixed",
+      })
+    }).pipe(Effect.provide(TaxCalculationHttpLive))
+  )
+
+  it.effect("keeps source-derived totals inside the run's recorded custody source", () =>
+    Effect.gen(function* () {
+      const fixture = yield* seedSyncEngineRepositoryFixture(REPORT_TEST_FIXTURE)
+      yield* seedSyncEngineAssets({
+        baseBlockchainId: fixture.baseBlockchainId,
+        bitcoinBlockchainId: fixture.bitcoinBlockchainId,
+      })
+      yield* seedSourceReportRows({
+        principalId: fixture.principalId,
+        sourceId: fixture.sourceId,
+      })
+      yield* seedSourceReportActiveRun({
+        principalId: fixture.principalId,
+        sourceId: fixture.sourceId,
+      })
+      yield* seedOtherReportSource({
+        principalId: fixture.principalId,
+        referenceSourceId: fixture.sourceId,
+      })
+
+      const db = yield* drizzle
+      yield* db.insert(schema.calculationRunCustodyUnits).values({
+        runId: reportFixtureIds.activeCalculationRunId,
+        principalId: fixture.principalId,
+        custodyUnitId: reportFixtureIds.otherSourceId,
+      })
+      yield* db.insert(schema.calculationRunCustodyUnitSources).values({
+        runId: reportFixtureIds.activeCalculationRunId,
+        principalId: fixture.principalId,
+        custodyUnitId: reportFixtureIds.otherSourceId,
+        sourceId: reportFixtureIds.otherSourceId,
+      })
+      yield* db.insert(schema.calculationRunAllocations).values({
+        runId: reportFixtureIds.activeCalculationRunId,
+        principalId: fixture.principalId,
+        sequence: 2,
+        acquisitionEventId: reportFixtureIds.acquisitionLegId,
+        dispositionEventId: reportFixtureIds.disposalLegId,
+        assetId: TEST_BTC_ASSET_ID,
+        custodyUnitId: reportFixtureIds.otherSourceId,
+        acquiredAt: DateTime.toDateUtc(DateTime.makeUnsafe("2025-01-01T00:00:00.000Z")),
+        disposedAt: DateTime.toDateUtc(DateTime.makeUnsafe("2025-02-01T00:00:00.000Z")),
+        quantity: "1",
+        costBasis: "1",
+      })
+      yield* db.insert(schema.calculationRunRealizedResults).values({
+        runId: reportFixtureIds.activeCalculationRunId,
+        sequence: 2,
+        sourceId: reportFixtureIds.otherSourceId,
+        allocationSequence: 2,
+        acquisitionEventId: reportFixtureIds.acquisitionLegId,
+        dispositionEventId: reportFixtureIds.disposalLegId,
+        assetId: TEST_BTC_ASSET_ID,
+        acquiredAt: DateTime.toDateUtc(DateTime.makeUnsafe("2025-01-01T00:00:00.000Z")),
+        disposedAt: DateTime.toDateUtc(DateTime.makeUnsafe("2025-02-01T00:00:00.000Z")),
+        quantity: "1",
+        costBasis: "1",
+        proceeds: "1000",
+        gainLoss: "999",
+        treatmentCodes: ["de.taxable_private_disposal"],
+      })
+      yield* db.insert(schema.calculationRunIncomeResults).values({
+        runId: reportFixtureIds.activeCalculationRunId,
+        sequence: 0,
+        sourceId: reportFixtureIds.otherSourceId,
+        eventId: reportFixtureIds.otherAcquisitionEventId,
+        assetId: TEST_BTC_ASSET_ID,
+        occurredAt: DateTime.toDateUtc(DateTime.makeUnsafe("2025-01-01T00:00:00.000Z")),
+        quantity: "1",
+        value: "777",
+        treatmentCodes: ["de.taxable_income_section22_3_staking"],
+      })
+
+      const client = yield* makeAuthenticatedClient({ userId: fixture.userId })
+      const tax = yield* client.sources.calculateTaxForSource({
+        params: { sourceId: fixture.sourceId },
+        payload: { year: 2025, jurisdiction: "germany" },
+      })
+      const overview = yield* client.sources.getSourceOverview({
+        params: { sourceId: fixture.sourceId },
+      })
+      const assetPnl = yield* client.sources.listSourceAssetPnl({
+        params: { sourceId: fixture.sourceId },
+      })
+      const fifoLots = yield* client.sources.listSourceFifoLots({
+        params: { sourceId: fixture.sourceId },
+        query: { limit: 10 },
+      })
+
+      expect(tax).toMatchObject({
+        taxableGains: 500,
+        taxFreeGains: 500,
+        incomeTotal: 0,
+      })
+      expect(overview.totals).toMatchObject({ realizedGainLoss: "1000", incomeTotal: "0" })
+      expect(assetPnl.assets[0]).toMatchObject({ proceeds: "5000", realizedGainLoss: "1000" })
+      expect(fifoLots.fifoLots[0]?.disposalMatches).toEqual([
+        {
+          disposalLegId: reportFixtureIds.disposalLegId,
+          matchedAmount: "0.4",
+          proceeds: "5000",
+          costBasis: "4000",
+          gainLoss: "1000",
+        },
+      ])
+    }).pipe(Effect.provide(TaxCalculationHttpLive))
+  )
+
+  it.effect("explains grouped-custody FIFO matches after the other source facts are replayed", () =>
+    Effect.gen(function* () {
+      const fixture = yield* seedSyncEngineRepositoryFixture(REPORT_TEST_FIXTURE)
+      yield* seedSyncEngineAssets({
+        baseBlockchainId: fixture.baseBlockchainId,
+        bitcoinBlockchainId: fixture.bitcoinBlockchainId,
+      })
+      yield* seedSourceReportRows({
+        principalId: fixture.principalId,
+        sourceId: fixture.sourceId,
+      })
+      yield* seedSourceReportActiveRun({
+        principalId: fixture.principalId,
+        sourceId: fixture.sourceId,
+      })
+      yield* seedOtherReportSource({
+        principalId: fixture.principalId,
+        referenceSourceId: fixture.sourceId,
+      })
+
+      const db = yield* drizzle
+      yield* db.insert(schema.calculationRunCustodyUnitSources).values({
+        runId: reportFixtureIds.activeCalculationRunId,
+        principalId: fixture.principalId,
+        custodyUnitId: fixture.sourceId,
+        sourceId: reportFixtureIds.otherSourceId,
+      })
+      yield* db.insert(schema.transactions).values({
+        id: reportFixtureIds.otherDisposalTransactionId,
+        sourceId: reportFixtureIds.otherSourceId,
+        principalId: fixture.principalId,
+        externalId: "report-other-source-disposal",
+        timestamp: DateTime.toDateUtc(DateTime.makeUnsafe("2025-04-15T12:00:00.000Z")),
+        transactionType: "sell_fiat",
+        providerTransactionType: "sell",
+        providerStatus: "completed",
+        providerDescription: "Grouped custody disposal",
+      })
+      yield* db.insert(schema.transactionLegs).values({
+        id: reportFixtureIds.otherDisposalEventId,
+        sourceId: reportFixtureIds.otherSourceId,
+        principalId: fixture.principalId,
+        externalId: "report-other-source-disposal:btc",
+        timestamp: DateTime.toDateUtc(DateTime.makeUnsafe("2025-04-15T12:00:00.000Z")),
+        assetId: TEST_BTC_ASSET_ID,
+        amount: "0.1",
+        kind: "disposal",
+        provenance: "deterministic",
+        derivationRule: "test_fixture_sell",
+        transactionId: reportFixtureIds.otherDisposalTransactionId,
+        fiatAmount: "1500",
+        fiatCurrency: "EUR",
+      })
+      yield* db.insert(schema.calculationRunAllocations).values({
+        runId: reportFixtureIds.activeCalculationRunId,
+        principalId: fixture.principalId,
+        sequence: 2,
+        acquisitionEventId: reportFixtureIds.acquisitionLegId,
+        dispositionEventId: reportFixtureIds.otherDisposalEventId,
+        assetId: TEST_BTC_ASSET_ID,
+        custodyUnitId: fixture.sourceId,
+        acquiredAt: DateTime.toDateUtc(DateTime.makeUnsafe("2025-01-10T12:00:00.000Z")),
+        disposedAt: DateTime.toDateUtc(DateTime.makeUnsafe("2025-04-15T12:00:00.000Z")),
+        quantity: "0.1",
+        costBasis: "1000",
+      })
+      yield* db.insert(schema.calculationRunRealizedResults).values({
+        runId: reportFixtureIds.activeCalculationRunId,
+        sequence: 2,
+        sourceId: reportFixtureIds.otherSourceId,
+        allocationSequence: 2,
+        acquisitionEventId: reportFixtureIds.acquisitionLegId,
+        dispositionEventId: reportFixtureIds.otherDisposalEventId,
+        assetId: TEST_BTC_ASSET_ID,
+        acquiredAt: DateTime.toDateUtc(DateTime.makeUnsafe("2025-01-10T12:00:00.000Z")),
+        disposedAt: DateTime.toDateUtc(DateTime.makeUnsafe("2025-04-15T12:00:00.000Z")),
+        quantity: "0.1",
+        costBasis: "1000",
+        proceeds: "1500",
+        gainLoss: "500",
+        treatmentCodes: ["de.taxable_private_disposal"],
+      })
+
+      const client = yield* makeAuthenticatedClient({ userId: fixture.userId })
+      const fifoLots = yield* client.sources.listSourceFifoLots({
+        params: { sourceId: fixture.sourceId },
+        query: { limit: 10 },
+      })
+      const groupedMatch = fifoLots.fifoLots
+        .flatMap((lot) => lot.disposalMatches)
+        .find((match) => match.disposalLegId === reportFixtureIds.otherDisposalEventId)
+      expect(groupedMatch).toMatchObject({
+        matchedAmount: "0.1",
+        proceeds: "1500",
+        costBasis: "1000",
+        gainLoss: "500",
+      })
+
+      const beforeReplay = yield* client.sources.explainSourceDisposal({
+        params: {
+          sourceId: fixture.sourceId,
+          legId: reportFixtureIds.otherDisposalEventId,
+        },
+      })
+      expect(beforeReplay).toMatchObject({
+        calculationRunId: reportFixtureIds.activeCalculationRunId,
+        disposalLegId: reportFixtureIds.otherDisposalEventId,
+        transactionId: reportFixtureIds.otherDisposalTransactionId,
+        amount: "0.1",
+        proceeds: "1500",
+        costBasis: "1000",
+        gainLoss: "500",
+        taxableTreatment: "taxable",
+      })
+
+      yield* db
+        .delete(schema.transactionLegs)
+        .where(eq(schema.transactionLegs.id, reportFixtureIds.otherDisposalEventId))
+      yield* db
+        .delete(schema.transactions)
+        .where(eq(schema.transactions.id, reportFixtureIds.otherDisposalTransactionId))
+
+      const afterReplay = yield* client.sources.explainSourceDisposal({
+        params: {
+          sourceId: fixture.sourceId,
+          legId: reportFixtureIds.otherDisposalEventId,
+        },
+      })
+      expect(afterReplay).toMatchObject({
+        calculationRunId: reportFixtureIds.activeCalculationRunId,
+        disposalLegId: reportFixtureIds.otherDisposalEventId,
+        transactionId: null,
+        amount: "0.1",
+        proceeds: "1500",
+        costBasis: "1000",
+        gainLoss: "500",
+        taxableTreatment: "taxable",
+      })
+      expect(afterReplay.matchedLots).toEqual(beforeReplay.matchedLots)
+    }).pipe(Effect.provide(TaxCalculationHttpLive))
+  )
+
+  it.effect("keeps a partial active run readable after live facts reset", () =>
+    Effect.gen(function* () {
+      const fixture = yield* seedSyncEngineRepositoryFixture(REPORT_TEST_FIXTURE)
+      yield* seedSyncEngineAssets({
+        baseBlockchainId: fixture.baseBlockchainId,
+        bitcoinBlockchainId: fixture.bitcoinBlockchainId,
+      })
+      yield* seedSourceReportRows({
+        principalId: fixture.principalId,
+        sourceId: fixture.sourceId,
+      })
+      yield* seedSourceReportActiveRun({
+        principalId: fixture.principalId,
+        sourceId: fixture.sourceId,
+      })
+
+      const db = yield* drizzle
+      yield* db
+        .update(schema.calculationRuns)
+        .set({ status: "partial" })
+        .where(eq(schema.calculationRuns.id, reportFixtureIds.activeCalculationRunId))
+      yield* db.insert(schema.calculationRunAllocations).values({
+        runId: reportFixtureIds.activeCalculationRunId,
+        principalId: fixture.principalId,
+        sequence: 2,
+        acquisitionEventId: reportFixtureIds.acquisitionLegId,
+        dispositionEventId: reportFixtureIds.unvaluedDisposalEventId,
+        assetId: TEST_BTC_ASSET_ID,
+        custodyUnitId: fixture.sourceId,
+        acquiredAt: DateTime.toDateUtc(DateTime.makeUnsafe("2025-01-10T12:00:00.000Z")),
+        disposedAt: DateTime.toDateUtc(DateTime.makeUnsafe("2025-04-10T12:00:00.000Z")),
+        quantity: "0.1",
+        costBasis: "1500",
+      })
+      yield* db
+        .update(schema.calculationRunDerivedLots)
+        .set({ remainingQuantity: "0.3" })
+        .where(eq(schema.calculationRunDerivedLots.runId, reportFixtureIds.activeCalculationRunId))
+      yield* db.insert(schema.calculationRunDerivedLots).values({
+        runId: reportFixtureIds.activeCalculationRunId,
+        principalId: fixture.principalId,
+        sequence: 1,
+        acquisitionEventId: reportFixtureIds.acquisitionLegId,
+        assetId: TEST_BTC_ASSET_ID,
+        custodyUnitId: fixture.sourceId,
+        acquiredAt: DateTime.toDateUtc(DateTime.makeUnsafe("2025-01-10T12:00:00.000Z")),
+        remainingQuantity: "0.2",
+        costBasisPerUnit: "15000",
+      })
+
+      const client = yield* makeAuthenticatedClient({ userId: fixture.userId })
+      const beforeReset = yield* client.sources.calculateTaxForSource({
+        params: { sourceId: fixture.sourceId },
+        payload: { year: 2025, jurisdiction: "germany" },
+      })
+
+      yield* db
+        .delete(schema.transactionLegs)
+        .where(eq(schema.transactionLegs.sourceId, fixture.sourceId))
+
+      const afterReset = yield* client.sources.calculateTaxForSource({
+        params: { sourceId: fixture.sourceId },
+        payload: { year: 2025, jurisdiction: "germany" },
+      })
+      const overview = yield* client.sources.getSourceOverview({
+        params: { sourceId: fixture.sourceId },
+      })
+      const fifoLots = yield* client.sources.listSourceFifoLots({
+        params: { sourceId: fixture.sourceId },
+        query: { limit: 1 },
+      })
+
+      expect(afterReset).toEqual(beforeReset)
+      expect(afterReset.calculationRunId).toBe(reportFixtureIds.activeCalculationRunId)
+      expect(overview.totals.fifoLotCount).toBe(1)
+      expect(fifoLots.calculationRunId).toBe(reportFixtureIds.activeCalculationRunId)
+      expect(fifoLots.fifoLots).toHaveLength(1)
+      expect(fifoLots.page).toMatchObject({ hasMore: false, nextCursor: null })
+      expect(fifoLots.fifoLots[0]).toMatchObject({
+        lotId: reportFixtureIds.acquisitionLegId,
+        originalAmount: "1",
+        remainingAmount: "0.5",
+      })
+      expect(fifoLots.fifoLots[0]?.disposalMatches).toContainEqual({
+        disposalLegId: reportFixtureIds.unvaluedDisposalEventId,
+        matchedAmount: "0.1",
+        proceeds: null,
+        costBasis: "1500",
+        gainLoss: null,
+      })
+    }).pipe(Effect.provide(TaxCalculationHttpLive))
+  )
+
+  it.effect("keeps omitted run values unavailable while factual income counts stay live", () =>
+    Effect.gen(function* () {
+      const fixture = yield* seedSyncEngineRepositoryFixture(REPORT_TEST_FIXTURE)
+      yield* seedSyncEngineAssets({
+        baseBlockchainId: fixture.baseBlockchainId,
+        bitcoinBlockchainId: fixture.bitcoinBlockchainId,
+      })
+      yield* seedSourceReportRows({
+        principalId: fixture.principalId,
+        sourceId: fixture.sourceId,
+      })
+      yield* seedSourceReportActiveRun({
+        principalId: fixture.principalId,
+        sourceId: fixture.sourceId,
+      })
+
+      const db = yield* drizzle
+      yield* db
+        .update(schema.calculationRuns)
+        .set({ status: "partial" })
+        .where(eq(schema.calculationRuns.id, reportFixtureIds.activeCalculationRunId))
+      yield* db
+        .delete(schema.calculationRunRealizedResults)
+        .where(
+          and(
+            eq(schema.calculationRunRealizedResults.runId, reportFixtureIds.activeCalculationRunId),
+            eq(schema.calculationRunRealizedResults.sequence, 1)
+          )
+        )
+      yield* db.insert(schema.transactions).values([
+        {
+          id: reportFixtureIds.incomeTransactionId,
+          sourceId: fixture.sourceId,
+          principalId: fixture.principalId,
+          externalId: "report-income-unvalued",
+          timestamp: DateTime.toDateUtc(DateTime.makeUnsafe("2025-04-09T12:00:00.000Z")),
+          transactionType: "staking_reward",
+          providerTransactionType: "reward",
+          providerStatus: "completed",
+          providerDescription: "Unvalued staking income",
+        },
+        {
+          id: reportFixtureIds.unvaluedDisposalTransactionId,
+          sourceId: fixture.sourceId,
+          principalId: fixture.principalId,
+          externalId: "report-disposal-unvalued",
+          timestamp: DateTime.toDateUtc(DateTime.makeUnsafe("2025-04-10T12:00:00.000Z")),
+          transactionType: "sell_fiat",
+          providerTransactionType: "sell",
+          providerStatus: "completed",
+          providerDescription: "Unvalued disposal",
+        },
+      ])
+      yield* db.insert(schema.transactionLegs).values([
+        {
+          id: reportFixtureIds.incomeEventId,
+          sourceId: fixture.sourceId,
+          principalId: fixture.principalId,
+          externalId: "report-income-unvalued:btc",
+          timestamp: DateTime.toDateUtc(DateTime.makeUnsafe("2025-04-09T12:00:00.000Z")),
+          assetId: TEST_BTC_ASSET_ID,
+          amount: "0.01",
+          kind: "income",
+          provenance: "deterministic",
+          derivationRule: "test_fixture_income",
+          transactionId: reportFixtureIds.incomeTransactionId,
+          fiatAmount: "777",
+          fiatCurrency: "EUR",
+        },
+        {
+          id: reportFixtureIds.unvaluedDisposalEventId,
+          sourceId: fixture.sourceId,
+          principalId: fixture.principalId,
+          externalId: "report-disposal-unvalued:btc",
+          timestamp: DateTime.toDateUtc(DateTime.makeUnsafe("2025-04-10T12:00:00.000Z")),
+          assetId: TEST_BTC_ASSET_ID,
+          amount: "0.2",
+          kind: "disposal",
+          provenance: "deterministic",
+          derivationRule: "test_fixture_sell",
+          transactionId: reportFixtureIds.unvaluedDisposalTransactionId,
+          fiatAmount: "2000",
+          fiatCurrency: "EUR",
+        },
+      ])
+      yield* db.insert(schema.calculationRunAllocations).values({
+        runId: reportFixtureIds.activeCalculationRunId,
+        principalId: fixture.principalId,
+        sequence: 2,
+        acquisitionEventId: reportFixtureIds.acquisitionLegId,
+        dispositionEventId: reportFixtureIds.unvaluedDisposalEventId,
+        assetId: TEST_BTC_ASSET_ID,
+        custodyUnitId: fixture.sourceId,
+        acquiredAt: DateTime.toDateUtc(DateTime.makeUnsafe("2025-01-10T12:00:00.000Z")),
+        disposedAt: DateTime.toDateUtc(DateTime.makeUnsafe("2025-04-10T12:00:00.000Z")),
+        quantity: "0.1",
+        costBasis: "1500",
+      })
+      yield* db.insert(schema.calculationRunBlockers).values({
+        runId: reportFixtureIds.activeCalculationRunId,
+        principalId: fixture.principalId,
+        sequence: 0,
+        code: "inventory_shortage",
+        eventId: reportFixtureIds.unvaluedDisposalEventId,
+        assetId: TEST_BTC_ASSET_ID,
+        custodyUnitId: fixture.sourceId,
+        missingQuantity: "0.1",
+      })
+
+      const client = yield* makeAuthenticatedClient({ userId: fixture.userId })
+      const beforeReplay = yield* client.sources.listSourceTaxEvents({
+        params: { sourceId: fixture.sourceId },
+        query: { limit: 10 },
+      })
+      const overview = yield* client.sources.getSourceOverview({
+        params: { sourceId: fixture.sourceId },
+      })
+      const explanation = yield* client.sources.explainSourceDisposal({
+        params: {
+          sourceId: fixture.sourceId,
+          legId: reportFixtureIds.unvaluedDisposalEventId,
+        },
+      })
+      const partialExplanation = yield* client.sources.explainSourceDisposal({
+        params: { sourceId: fixture.sourceId, legId: reportFixtureIds.disposalLegId },
+      })
+
+      expect
+        .soft(
+          beforeReplay.taxEvents.find((event) => event.legId === reportFixtureIds.incomeEventId)
+        )
+        .toMatchObject({
+          fiatAmount: null,
+          fiatCurrency: null,
+          taxableTreatment: "unknown",
+        })
+      expect.soft(overview.totals).toMatchObject({ incomeCount: 1, incomeTotal: "0" })
+      expect
+        .soft(
+          beforeReplay.taxEvents.find((event) => event.legId === reportFixtureIds.disposalLegId)
+        )
+        .toMatchObject({
+          costBasis: null,
+          proceeds: null,
+          gainLoss: null,
+          taxableTreatment: "unknown",
+        })
+      expect.soft(explanation).toMatchObject({
+        calculationRunId: reportFixtureIds.activeCalculationRunId,
+        disposalLegId: reportFixtureIds.unvaluedDisposalEventId,
+        amount: "0.2",
+        proceeds: null,
+        costBasis: null,
+        gainLoss: null,
+        matchedLots: [],
+      })
+      expect.soft(partialExplanation).toMatchObject({
+        amount: "0.4",
+        proceeds: null,
+        costBasis: null,
+        gainLoss: null,
+        taxableTreatment: "unknown",
+      })
+      expect(partialExplanation.matchedLots).toHaveLength(1)
+
+      yield* db
+        .update(schema.transactionLegs)
+        .set({ fiatAmount: "999", fiatCurrency: "USD" })
+        .where(eq(schema.transactionLegs.id, reportFixtureIds.incomeEventId))
+      yield* db
+        .delete(schema.transactionLegs)
+        .where(eq(schema.transactionLegs.id, reportFixtureIds.unvaluedDisposalEventId))
+
+      const afterReplay = yield* client.sources.listSourceTaxEvents({
+        params: { sourceId: fixture.sourceId },
+        query: { limit: 10 },
+      })
+      const replayedExplanation = yield* client.sources.explainSourceDisposal({
+        params: {
+          sourceId: fixture.sourceId,
+          legId: reportFixtureIds.unvaluedDisposalEventId,
+        },
+      })
+
+      expect(
+        afterReplay.taxEvents.find((event) => event.legId === reportFixtureIds.incomeEventId)
+      ).toMatchObject({ fiatAmount: null, fiatCurrency: null })
+      expect(replayedExplanation).toMatchObject({
+        calculationRunId: reportFixtureIds.activeCalculationRunId,
+        disposalLegId: reportFixtureIds.unvaluedDisposalEventId,
+        amount: "0.2",
+        proceeds: null,
+        costBasis: null,
+        gainLoss: null,
+      })
+    }).pipe(Effect.provide(TaxCalculationHttpLive))
+  )
+
+  it.effect("selects tax runs by jurisdiction, year, and frozen source membership", () =>
+    Effect.gen(function* () {
+      const fixture = yield* seedSyncEngineRepositoryFixture(REPORT_TEST_FIXTURE)
+      yield* seedSyncEngineAssets({
+        baseBlockchainId: fixture.baseBlockchainId,
+        bitcoinBlockchainId: fixture.bitcoinBlockchainId,
+      })
+      yield* seedSourceReportRows({
+        principalId: fixture.principalId,
+        sourceId: fixture.sourceId,
+      })
+      yield* seedSourceReportActiveRun({
+        principalId: fixture.principalId,
+        sourceId: fixture.sourceId,
+      })
+
+      const client = yield* makeAuthenticatedClient({ userId: fixture.userId })
+      const unsupported = yield* client.sources
+        .calculateTaxForSource({
+          params: { sourceId: fixture.sourceId },
+          payload: { year: 2025, jurisdiction: "united-states" },
+        })
+        .pipe(Effect.result)
+      const wrongYear = yield* client.sources
+        .calculateTaxForSource({
+          params: { sourceId: fixture.sourceId },
+          payload: { year: 2024, jurisdiction: "germany" },
+        })
+        .pipe(Effect.result)
+      const unknownSource = yield* client.sources
+        .calculateTaxForSource({
+          params: { sourceId: "00000000-0000-4000-8000-000000049999" },
+          payload: { year: 2025, jurisdiction: "germany" },
+        })
+        .pipe(Effect.result)
+
+      const db = yield* drizzle
+      yield* db
+        .delete(schema.calculationRunCustodyUnitSources)
+        .where(
+          eq(schema.calculationRunCustodyUnitSources.runId, reportFixtureIds.activeCalculationRunId)
+        )
+      const missingMembership = yield* client.sources
+        .calculateTaxForSource({
+          params: { sourceId: fixture.sourceId },
+          payload: { year: 2025, jurisdiction: "germany" },
+        })
+        .pipe(Effect.result)
+
+      expect(unsupported._tag).toBe("Failure")
+      expect(wrongYear._tag).toBe("Failure")
+      expect(unknownSource._tag).toBe("Failure")
+      expect(missingMembership._tag).toBe("Failure")
+      if (
+        unsupported._tag === "Failure" &&
+        wrongYear._tag === "Failure" &&
+        unknownSource._tag === "Failure" &&
+        missingMembership._tag === "Failure"
+      ) {
+        expect(unsupported.failure._tag).toBe("SourceBadRequestError")
+        expect(wrongYear.failure._tag).toBe("SourceBadRequestError")
+        expect(unknownSource.failure._tag).toBe("SourceNotFoundError")
+        expect(missingMembership.failure._tag).toBe("SourceBadRequestError")
+      }
+    }).pipe(Effect.provide(TaxCalculationHttpLive))
+  )
+
   it.effect("returns source-generic report read projections for a populated source", () =>
     Effect.gen(function* () {
       const fixture = yield* seedSyncEngineRepositoryFixture(REPORT_TEST_FIXTURE)
@@ -1633,6 +2580,10 @@ describe("SourcesApiLive", () => {
         bitcoinBlockchainId: fixture.bitcoinBlockchainId,
       })
       yield* seedSourceReportRows({
+        principalId: fixture.principalId,
+        sourceId: fixture.sourceId,
+      })
+      yield* seedSourceReportActiveRun({
         principalId: fixture.principalId,
         sourceId: fixture.sourceId,
       })
@@ -1682,19 +2633,21 @@ describe("SourcesApiLive", () => {
       expect(overview.source.providerKey).toBe("coinbase")
       expect(overview.totals.transactionCount).toBe(2)
       expect(overview.totals.disposalCount).toBe(1)
-      expect(overview.totals.realizedGainLoss).toBe("2000")
+      expect(overview.calculationRunId).toBe(reportFixtureIds.activeCalculationRunId)
+      expect(overview.totals.realizedGainLoss).toBe("1000")
 
       const assetPnl = yield* client.sources.listSourceAssetPnl({
         params: { sourceId: fixture.sourceId },
       })
+      expect(assetPnl.calculationRunId).toBe(reportFixtureIds.activeCalculationRunId)
       expect(assetPnl.assets).toHaveLength(1)
       expect(assetPnl.assets[0]).toMatchObject({
         acquiredAmount: "1",
-        disposedAmount: "0.5",
-        openAmount: "0.5",
-        costBasis: "7500",
-        proceeds: "6000",
-        realizedGainLoss: "2000",
+        disposedAmount: "0.4",
+        openAmount: "0.6",
+        costBasis: "9000",
+        proceeds: "5000",
+        realizedGainLoss: "1000",
         currency: "EUR",
       })
 
@@ -1716,8 +2669,8 @@ describe("SourcesApiLive", () => {
       expect(taxEvents.taxEvents[0]).toMatchObject({
         legId: reportFixtureIds.disposalLegId,
         costBasis: "4000",
-        proceeds: "6000",
-        gainLoss: "2000",
+        proceeds: "5000",
+        gainLoss: "1000",
         taxableTreatment: "mixed",
       })
 
@@ -1725,27 +2678,32 @@ describe("SourcesApiLive", () => {
         params: { sourceId: fixture.sourceId },
         query: { limit: 10 },
       })
-      expect(fifoLots.fifoLots).toHaveLength(2)
+      expect(fifoLots.calculationRunId).toBe(reportFixtureIds.activeCalculationRunId)
+      expect(fifoLots.fifoLots).toHaveLength(1)
       expect(fifoLots.fifoLots[0]).toMatchObject({
-        lotId: reportFixtureIds.taxFreeFifoLotId,
-        originalAmount: "0.2",
-        remainingAmount: "0",
+        lotId: reportFixtureIds.acquisitionLegId,
+        originalAmount: "1",
+        remainingAmount: "0.6",
         costBasisStatus: "known",
       })
       expect(fifoLots.fifoLots[0]?.disposalMatches[0]).toMatchObject({
         disposalLegId: reportFixtureIds.disposalLegId,
-        matchedAmount: "0.2",
+        matchedAmount: "0.4",
+        proceeds: "5000",
+        costBasis: "4000",
+        gainLoss: "1000",
       })
 
       const explanation = yield* client.sources.explainSourceDisposal({
         params: { sourceId: fixture.sourceId, legId: reportFixtureIds.disposalLegId },
       })
+      expect(explanation.calculationRunId).toBe(reportFixtureIds.activeCalculationRunId)
       expect(explanation).toMatchObject({
         disposalLegId: reportFixtureIds.disposalLegId,
         amount: "0.4",
-        proceeds: "6000",
+        proceeds: "5000",
         costBasis: "4000",
-        gainLoss: "2000",
+        gainLoss: "1000",
         taxableTreatment: "mixed",
       })
       expect(explanation.matchedLots).toHaveLength(2)
@@ -1841,12 +2799,14 @@ describe("SourcesApiLive", () => {
       const overview = yield* client.sources.getSourceOverview({
         params: { sourceId: fixture.sourceId },
       })
+      expect(overview.calculationRunId).toBeNull()
       expect(overview.totals.transactionCount).toBe(0)
       expect(overview.totals.assetCount).toBe(0)
 
       const assetPnl = yield* client.sources.listSourceAssetPnl({
         params: { sourceId: fixture.sourceId },
       })
+      expect(assetPnl.calculationRunId).toBeNull()
       expect(assetPnl.assets).toEqual([])
 
       const transactions = yield* client.sources.listSourceTransactions({
@@ -1860,17 +2820,19 @@ describe("SourcesApiLive", () => {
         params: { sourceId: fixture.sourceId },
         query: { limit: 10 },
       })
+      expect(taxEvents.calculationRunId).toBeNull()
       expect(taxEvents.taxEvents).toEqual([])
 
       const fifoLots = yield* client.sources.listSourceFifoLots({
         params: { sourceId: fixture.sourceId },
         query: { limit: 10 },
       })
+      expect(fifoLots.calculationRunId).toBeNull()
       expect(fifoLots.fifoLots).toEqual([])
     }).pipe(Effect.provide(HttpLive))
   )
 
-  it.effect("counts provider-origin FIFO lot assets in the source overview", () =>
+  it.effect("does not fall back to provider-origin live FIFO lots without an active run", () =>
     Effect.gen(function* () {
       const fixture = yield* seedSyncEngineRepositoryFixture(REPORT_TEST_FIXTURE)
       yield* seedSyncEngineAssets({
@@ -1922,87 +2884,269 @@ describe("SourcesApiLive", () => {
       expect(overview.totals).toMatchObject({
         transactionCount: 1,
         legCount: 0,
-        assetCount: 1,
-        fifoLotCount: 1,
+        assetCount: 0,
+        fifoLotCount: 0,
       })
     }).pipe(Effect.provide(HttpLive))
   )
 
-  it.effect(
-    "labels deductible fees and internal transfer disposals without taxable treatment",
-    () =>
-      Effect.gen(function* () {
-        const fixture = yield* seedSyncEngineRepositoryFixture(REPORT_TEST_FIXTURE)
-        yield* seedSyncEngineAssets({
-          baseBlockchainId: fixture.baseBlockchainId,
-          bitcoinBlockchainId: fixture.bitcoinBlockchainId,
-        })
-        yield* seedSourceReportRows({
-          principalId: fixture.principalId,
-          sourceId: fixture.sourceId,
-        })
-        yield* seedSourceReportTaxTreatmentRows({
-          principalId: fixture.principalId,
-          sourceId: fixture.sourceId,
-        })
+  it.effect("marks open basis pending when the selected run has no asset evidence", () =>
+    Effect.gen(function* () {
+      const fixture = yield* seedSyncEngineRepositoryFixture(REPORT_TEST_FIXTURE)
+      yield* seedSyncEngineAssets({
+        baseBlockchainId: fixture.baseBlockchainId,
+        bitcoinBlockchainId: fixture.bitcoinBlockchainId,
+      })
+      yield* seedSourceReportRows({
+        principalId: fixture.principalId,
+        sourceId: fixture.sourceId,
+      })
 
-        const client = yield* makeAuthenticatedClient({ userId: fixture.userId })
-        const overview = yield* client.sources.getSourceOverview({
-          params: { sourceId: fixture.sourceId },
-        })
-        const taxEvents = yield* client.sources.listSourceTaxEvents({
-          params: { sourceId: fixture.sourceId },
-          query: { limit: 10 },
-        })
-        const feeEvent = taxEvents.taxEvents.find(
-          (event) => event.legId === reportFixtureIds.feeLegId
-        )
-        const internalTransferEvent = taxEvents.taxEvents.find(
-          (event) => event.legId === reportFixtureIds.internalTransferLegId
-        )
-        const internalTransferInEvent = taxEvents.taxEvents.find(
-          (event) => event.legId === reportFixtureIds.internalTransferInLegId
-        )
-
-        expect(feeEvent).toMatchObject({
-          kind: "fee",
-          taxableTreatment: "deductible",
-        })
-        expect(internalTransferEvent).toMatchObject({
-          kind: "disposal",
-          derivationRule: "internal_transfer_out",
-          taxableTreatment: "non_taxable",
-        })
-        expect(internalTransferInEvent).toMatchObject({
-          kind: "acquisition",
-          derivationRule: "internal_transfer_in",
-          taxableTreatment: "non_taxable",
-        })
-        expect(overview.totals.disposalCount).toBe(1)
-        const assetPnl = yield* client.sources.listSourceAssetPnl({
-          params: { sourceId: fixture.sourceId },
-        })
-        expect(assetPnl.assets[0]).toMatchObject({
-          acquiredAmount: "1",
-          disposedAmount: "0.4",
-          openAmount: "0.6",
-          costBasis: "9000",
-          proceeds: "6000",
-          realizedGainLoss: "2000",
-        })
-
-        const explanation = yield* client.sources.explainSourceDisposal({
-          params: {
-            sourceId: fixture.sourceId,
-            legId: reportFixtureIds.internalTransferLegId,
+      const client = yield* makeAuthenticatedClient({ userId: fixture.userId })
+      const withoutRun = yield* client.sources.listSourceAssetPnl({
+        params: { sourceId: fixture.sourceId },
+      })
+      expect(withoutRun).toMatchObject({
+        calculationRunId: null,
+        assets: [
+          {
+            openAmount: "0",
+            costBasis: null,
+            costBasisStatus: "pending_review",
           },
-        })
-        expect(explanation).toMatchObject({
-          disposalLegId: reportFixtureIds.internalTransferLegId,
-          taxableTreatment: "non_taxable",
-        })
-        expect(explanation.matchedLots.map((lot) => lot.taxableTreatment)).toEqual(["non_taxable"])
-      }).pipe(Effect.provide(HttpLive))
+        ],
+      })
+
+      yield* seedSourceReportActiveRun({
+        principalId: fixture.principalId,
+        sourceId: fixture.sourceId,
+      })
+      const db = yield* drizzle
+      yield* db
+        .update(schema.calculationRuns)
+        .set({ status: "partial" })
+        .where(eq(schema.calculationRuns.id, reportFixtureIds.activeCalculationRunId))
+      yield* db
+        .delete(schema.calculationRunDerivedLots)
+        .where(eq(schema.calculationRunDerivedLots.runId, reportFixtureIds.activeCalculationRunId))
+      yield* db
+        .delete(schema.calculationRunRealizedResults)
+        .where(
+          eq(schema.calculationRunRealizedResults.runId, reportFixtureIds.activeCalculationRunId)
+        )
+
+      const omittedFromPartialRun = yield* client.sources.listSourceAssetPnl({
+        params: { sourceId: fixture.sourceId },
+      })
+      expect(omittedFromPartialRun).toMatchObject({
+        calculationRunId: reportFixtureIds.activeCalculationRunId,
+        assets: [
+          {
+            openAmount: "0",
+            costBasis: null,
+            costBasisStatus: "pending_review",
+          },
+        ],
+      })
+    }).pipe(Effect.provide(HttpLive))
+  )
+
+  it.effect("keeps run-proven fully disposed open basis at known zero", () =>
+    Effect.gen(function* () {
+      const fixture = yield* seedSyncEngineRepositoryFixture(REPORT_TEST_FIXTURE)
+      yield* seedSyncEngineAssets({
+        baseBlockchainId: fixture.baseBlockchainId,
+        bitcoinBlockchainId: fixture.bitcoinBlockchainId,
+      })
+      yield* seedSourceReportRows({
+        principalId: fixture.principalId,
+        sourceId: fixture.sourceId,
+      })
+      yield* seedSourceReportActiveRun({
+        principalId: fixture.principalId,
+        sourceId: fixture.sourceId,
+      })
+
+      const db = yield* drizzle
+      yield* db
+        .update(schema.transactionLegs)
+        .set({ amount: "0.4" })
+        .where(eq(schema.transactionLegs.id, reportFixtureIds.acquisitionLegId))
+      yield* db
+        .delete(schema.calculationRunDerivedLots)
+        .where(eq(schema.calculationRunDerivedLots.runId, reportFixtureIds.activeCalculationRunId))
+
+      const client = yield* makeAuthenticatedClient({ userId: fixture.userId })
+      const assetPnl = yield* client.sources.listSourceAssetPnl({
+        params: { sourceId: fixture.sourceId },
+      })
+      expect(assetPnl).toMatchObject({
+        calculationRunId: reportFixtureIds.activeCalculationRunId,
+        assets: [
+          {
+            acquiredAmount: "0.4",
+            disposedAmount: "0.4",
+            openAmount: "0",
+            costBasis: "0",
+            costBasisStatus: "known",
+          },
+        ],
+      })
+    }).pipe(Effect.provide(HttpLive))
+  )
+
+  it.effect("uses grouped run evidence without leaking the disposing source totals", () =>
+    Effect.gen(function* () {
+      const fixture = yield* seedSyncEngineRepositoryFixture(REPORT_TEST_FIXTURE)
+      yield* seedSyncEngineAssets({
+        baseBlockchainId: fixture.baseBlockchainId,
+        bitcoinBlockchainId: fixture.bitcoinBlockchainId,
+      })
+      yield* seedSourceReportRows({
+        principalId: fixture.principalId,
+        sourceId: fixture.sourceId,
+      })
+      yield* seedSourceReportActiveRun({
+        principalId: fixture.principalId,
+        sourceId: fixture.sourceId,
+      })
+      yield* seedOtherReportSource({
+        principalId: fixture.principalId,
+        referenceSourceId: fixture.sourceId,
+      })
+
+      const db = yield* drizzle
+      yield* db.insert(schema.calculationRunCustodyUnitSources).values({
+        runId: reportFixtureIds.activeCalculationRunId,
+        principalId: fixture.principalId,
+        custodyUnitId: fixture.sourceId,
+        sourceId: reportFixtureIds.otherSourceId,
+      })
+      yield* db
+        .update(schema.transactionLegs)
+        .set({ amount: "0.4" })
+        .where(eq(schema.transactionLegs.id, reportFixtureIds.acquisitionLegId))
+      yield* db
+        .update(schema.transactions)
+        .set({ sourceId: reportFixtureIds.otherSourceId })
+        .where(eq(schema.transactions.id, reportFixtureIds.sellTransactionId))
+      yield* db
+        .update(schema.transactionLegs)
+        .set({ sourceId: reportFixtureIds.otherSourceId })
+        .where(eq(schema.transactionLegs.id, reportFixtureIds.disposalLegId))
+      yield* db
+        .update(schema.calculationRunRealizedResults)
+        .set({ sourceId: reportFixtureIds.otherSourceId })
+        .where(
+          eq(schema.calculationRunRealizedResults.runId, reportFixtureIds.activeCalculationRunId)
+        )
+      yield* db
+        .delete(schema.calculationRunDerivedLots)
+        .where(eq(schema.calculationRunDerivedLots.runId, reportFixtureIds.activeCalculationRunId))
+
+      const client = yield* makeAuthenticatedClient({ userId: fixture.userId })
+      const acquisitionSourcePnl = yield* client.sources.listSourceAssetPnl({
+        params: { sourceId: fixture.sourceId },
+      })
+      expect(acquisitionSourcePnl.assets[0]).toMatchObject({
+        acquiredAmount: "0.4",
+        disposedAmount: "0",
+        openAmount: "0",
+        costBasis: "0",
+        costBasisStatus: "known",
+        proceeds: "0",
+        realizedGainLoss: "0",
+      })
+
+      const dispositionSourcePnl = yield* client.sources.listSourceAssetPnl({
+        params: { sourceId: reportFixtureIds.otherSourceId },
+      })
+      expect(dispositionSourcePnl.assets[0]).toMatchObject({
+        acquiredAmount: "0",
+        disposedAmount: "0.4",
+        openAmount: "0",
+        costBasis: "0",
+        costBasisStatus: "known",
+        proceeds: "5000",
+        realizedGainLoss: "1000",
+      })
+    }).pipe(Effect.provide(HttpLive))
+  )
+
+  it.effect("does not infer fee or transfer treatments outside engine results", () =>
+    Effect.gen(function* () {
+      const fixture = yield* seedSyncEngineRepositoryFixture(REPORT_TEST_FIXTURE)
+      yield* seedSyncEngineAssets({
+        baseBlockchainId: fixture.baseBlockchainId,
+        bitcoinBlockchainId: fixture.bitcoinBlockchainId,
+      })
+      yield* seedSourceReportRows({
+        principalId: fixture.principalId,
+        sourceId: fixture.sourceId,
+      })
+      yield* seedSourceReportTaxTreatmentRows({
+        principalId: fixture.principalId,
+        sourceId: fixture.sourceId,
+      })
+
+      const client = yield* makeAuthenticatedClient({ userId: fixture.userId })
+      const overview = yield* client.sources.getSourceOverview({
+        params: { sourceId: fixture.sourceId },
+      })
+      const taxEvents = yield* client.sources.listSourceTaxEvents({
+        params: { sourceId: fixture.sourceId },
+        query: { limit: 10 },
+      })
+      const feeEvent = taxEvents.taxEvents.find(
+        (event) => event.legId === reportFixtureIds.feeLegId
+      )
+      const internalTransferEvent = taxEvents.taxEvents.find(
+        (event) => event.legId === reportFixtureIds.internalTransferLegId
+      )
+      const internalTransferInEvent = taxEvents.taxEvents.find(
+        (event) => event.legId === reportFixtureIds.internalTransferInLegId
+      )
+
+      expect(feeEvent).toMatchObject({
+        kind: "fee",
+        taxableTreatment: "unknown",
+      })
+      expect(internalTransferEvent).toMatchObject({
+        kind: "disposal",
+        derivationRule: "internal_transfer_out",
+        taxableTreatment: "unknown",
+      })
+      expect(internalTransferInEvent).toMatchObject({
+        kind: "acquisition",
+        derivationRule: "internal_transfer_in",
+        taxableTreatment: "unknown",
+      })
+      expect(overview.totals.disposalCount).toBe(1)
+      const assetPnl = yield* client.sources.listSourceAssetPnl({
+        params: { sourceId: fixture.sourceId },
+      })
+      expect(assetPnl.assets[0]).toMatchObject({
+        acquiredAmount: "1",
+        disposedAmount: "0.4",
+        openAmount: "0",
+        costBasis: null,
+        costBasisStatus: "pending_review",
+        proceeds: "0",
+        realizedGainLoss: "0",
+      })
+
+      const explanation = yield* client.sources.explainSourceDisposal({
+        params: {
+          sourceId: fixture.sourceId,
+          legId: reportFixtureIds.internalTransferLegId,
+        },
+      })
+      expect(explanation).toMatchObject({
+        disposalLegId: reportFixtureIds.internalTransferLegId,
+        taxableTreatment: "unknown",
+      })
+      expect(explanation.matchedLots).toEqual([])
+    }).pipe(Effect.provide(HttpLive))
   )
 
   it.effect("creates an authenticated Solana source without starting sync", () =>
@@ -4101,54 +5245,47 @@ describe("SourcesApiLive", () => {
     }).pipe(Effect.provide(HttpLive), Effect.scoped)
   )
 
-  it.effect(
-    "returns a 422 naming blocking observations when a source has unresolved provider asset observations",
-    () =>
-      Effect.gen(function* () {
-        const userId = nextTestUuid()
-        const principalId = nextTestUuid()
-        const sourceId = nextTestUuid()
-        yield* seedCoinbaseSource({ userId, principalId, sourceId })
+  it.effect("reports that tax is not ready when no active run exists", () =>
+    Effect.gen(function* () {
+      const userId = nextTestUuid()
+      const principalId = nextTestUuid()
+      const sourceId = nextTestUuid()
+      yield* seedCoinbaseSource({ userId, principalId, sourceId })
 
-        const db = yield* drizzle
-        const [providerAsset] = yield* db
-          .insert(schema.providerAssets)
-          .values({
-            provider: "coinbase",
-            naturalKey: `unresolved-${sourceId}`,
-            currencyCode: "XYZ",
-            retrievedAt: DateTime.toDateUtc(DateTime.makeUnsafe("2025-01-01T00:00:00.000Z")),
-          })
-          .returning({ id: schema.providerAssets.id })
-
-        if (providerAsset === undefined) {
-          return yield* Effect.die("Failed to create unresolved provider asset fixture")
-        }
-
-        yield* db.insert(schema.providerAssetSourceUses).values({
-          providerAssetRowId: providerAsset.id,
-          sourceId,
+      const db = yield* drizzle
+      const [providerAsset] = yield* db
+        .insert(schema.providerAssets)
+        .values({
+          provider: "coinbase",
+          naturalKey: `unresolved-${sourceId}`,
+          currencyCode: "XYZ",
+          retrievedAt: DateTime.toDateUtc(DateTime.makeUnsafe("2025-01-01T00:00:00.000Z")),
         })
+        .returning({ id: schema.providerAssets.id })
 
-        const client = yield* makeAuthenticatedClient({ userId })
-        const result = yield* client.sources
-          .calculateTaxForSource({
-            params: { sourceId },
-            payload: { year: 2025, jurisdiction: "germany" },
-          })
-          .pipe(Effect.result)
+      if (providerAsset === undefined) {
+        return yield* Effect.die("Failed to create unresolved provider asset fixture")
+      }
 
-        expect(result._tag).toBe("Failure")
-        if (result._tag === "Failure") {
-          const failure = result.failure
-          expect(failure._tag).toBe("SourceTaxCalculationPendingError")
-          if (failure._tag === "SourceTaxCalculationPendingError") {
-            expect(failure.blockingObservations).toEqual([
-              { provider: "coinbase", currencyCode: "XYZ" },
-            ])
-          }
-        }
-      }).pipe(Effect.provide(TaxCalculationHttpLive), Effect.scoped)
+      yield* db.insert(schema.providerAssetSourceUses).values({
+        providerAssetRowId: providerAsset.id,
+        sourceId,
+      })
+
+      const client = yield* makeAuthenticatedClient({ userId })
+      const result = yield* client.sources
+        .calculateTaxForSource({
+          params: { sourceId },
+          payload: { year: 2025, jurisdiction: "germany" },
+        })
+        .pipe(Effect.result)
+
+      expect(result._tag).toBe("Failure")
+      if (result._tag === "Failure") {
+        const failure = result.failure
+        expect(failure._tag).toBe("SourceBadRequestError")
+      }
+    }).pipe(Effect.provide(TaxCalculationHttpLive), Effect.scoped)
   )
 
   it.effect("resolves a cached wallet name through the resolve-name endpoint", () =>

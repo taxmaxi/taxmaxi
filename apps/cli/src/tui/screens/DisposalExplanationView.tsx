@@ -117,13 +117,20 @@ export function DisposalExplanationView(props: {
                 </Show>
                 <Field
                   label="proceeds"
-                  value={data.proceeds === null ? "unknown" : formatFiat(data.proceeds, null)}
+                  value={
+                    data.proceeds === null ? "Pending review" : formatFiat(data.proceeds, null)
+                  }
                 />
-                <Field label="cost basis" value={formatFiat(data.costBasis, null)} />
+                <Field
+                  label="cost basis"
+                  value={
+                    data.costBasis === null ? "Pending review" : formatFiat(data.costBasis, null)
+                  }
+                />
                 <Field
                   label="gain/loss"
-                  value={formatSigned(data.gainLoss)}
-                  color={gainLossColor(data.gainLoss)}
+                  value={data.gainLoss === null ? "Pending review" : formatSigned(data.gainLoss)}
+                  color={data.gainLoss === null ? theme.textMuted : gainLossColor(data.gainLoss)}
                 />
                 <Field
                   label="treatment"

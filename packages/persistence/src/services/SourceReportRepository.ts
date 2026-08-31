@@ -68,6 +68,10 @@ export interface SourceReportPage<T> {
   readonly hasMore: boolean
 }
 
+export interface SourceRunReportPage<T> extends SourceReportPage<T> {
+  readonly calculationRunId: string | null
+}
+
 export interface SourceReportSyncStatus {
   readonly status: "pending" | "processing" | "completed" | "failed" | "credit_required" | null
   readonly mode: "sync" | "replay" | null
@@ -109,10 +113,16 @@ export interface SourceReportTotals {
 }
 
 export interface SourceOverviewReport {
+  readonly calculationRunId: string | null
   readonly source: Source
   readonly latestSync: SourceReportSyncStatus
   readonly totals: SourceReportTotals
   readonly review: SourceReportReviewSummary
+}
+
+export interface SourceAssetPnlReport {
+  readonly calculationRunId: string | null
+  readonly assets: ReadonlyArray<SourceAssetPnlRow>
 }
 
 export interface SourceReportAsset {
@@ -177,9 +187,9 @@ export interface SourceTaxEventRow {
 export interface SourceFifoLotDisposalSummary {
   readonly disposalLegId: string
   readonly matchedAmount: string
-  readonly proceeds: string
-  readonly costBasis: string
-  readonly gainLoss: string
+  readonly proceeds: string | null
+  readonly costBasis: string | null
+  readonly gainLoss: string | null
 }
 
 export interface SourceFifoLotRow {
@@ -208,13 +218,14 @@ export interface SourceDisposalMatchedLot {
 }
 
 export interface SourceDisposalExplanation {
+  readonly calculationRunId: string | null
   readonly disposalLegId: string
   readonly transactionId: string | null
   readonly asset: SourceReportAsset
   readonly amount: string
   readonly proceeds: string | null
-  readonly costBasis: string
-  readonly gainLoss: string
+  readonly costBasis: string | null
+  readonly gainLoss: string | null
   readonly acquiredAt: string | null
   readonly disposedAt: string
   readonly taxableTreatment: SourceReportTaxableTreatment
@@ -232,16 +243,16 @@ export interface SourceReportRepositoryService {
   ) => Effect.Effect<SourceOverviewReport, SourceReportRepositoryError>
   readonly listAssetPnl: (
     params: SourceReportScope
-  ) => Effect.Effect<ReadonlyArray<SourceAssetPnlRow>, SourceReportRepositoryError>
+  ) => Effect.Effect<SourceAssetPnlReport, SourceReportRepositoryError>
   readonly listTransactions: (
     params: SourceReportPageParams
   ) => Effect.Effect<SourceReportPage<SourceTransactionRow>, SourceReportRepositoryError>
   readonly listTaxEvents: (
     params: SourceReportPageParams
-  ) => Effect.Effect<SourceReportPage<SourceTaxEventRow>, SourceReportRepositoryError>
+  ) => Effect.Effect<SourceRunReportPage<SourceTaxEventRow>, SourceReportRepositoryError>
   readonly listFifoLots: (
     params: SourceReportPageParams
-  ) => Effect.Effect<SourceReportPage<SourceFifoLotRow>, SourceReportRepositoryError>
+  ) => Effect.Effect<SourceRunReportPage<SourceFifoLotRow>, SourceReportRepositoryError>
   readonly explainDisposal: (
     params: SourceReportScope & { readonly legId: string }
   ) => Effect.Effect<SourceDisposalExplanation, SourceReportRepositoryError>

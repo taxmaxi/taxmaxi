@@ -334,13 +334,23 @@ export function SourceFifoLotsScreen(props: {
                                   {`matched ${formatAmount(match.matchedAmount)}`}
                                 </ListItemText>
                                 <ListItemText selected={isSelected()} color={theme.accent}>
-                                  {`proceeds ${formatFiat(match.proceeds, row.costBasisCurrency)}`}
+                                  {`proceeds ${
+                                    match.proceeds === null
+                                      ? "pending review"
+                                      : formatFiat(match.proceeds, row.costBasisCurrency)
+                                  }`}
                                 </ListItemText>
                                 <ListItemText
                                   selected={isSelected()}
-                                  color={gainLossColor(match.gainLoss)}
+                                  color={
+                                    match.gainLoss === null
+                                      ? theme.textMuted
+                                      : gainLossColor(match.gainLoss)
+                                  }
                                 >
-                                  {formatSigned(match.gainLoss)}
+                                  {match.gainLoss === null
+                                    ? "gain/loss pending review"
+                                    : formatSigned(match.gainLoss)}
                                 </ListItemText>
                               </ListItem>
                             )
