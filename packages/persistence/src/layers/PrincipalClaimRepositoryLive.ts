@@ -176,6 +176,18 @@ const wrapClaimTransferSqlError =
 
 const make = Effect.gen(function* () {
   const db = yield* drizzle
+  type ClaimTransaction = Parameters<Parameters<typeof db.transaction>[0]>[0]
+
+  const deleteAnonymousCalculationRuns = ({
+    executor,
+    principalId,
+  }: {
+    readonly executor: ClaimTransaction
+    readonly principalId: PrincipalId
+  }) =>
+    executor
+      .delete(schema.calculationRuns)
+      .where(eq(schema.calculationRuns.principalId, principalId))
 
   const create: PrincipalClaimRepositoryService["create"] = (params) =>
     Effect.gen(function* () {
@@ -592,6 +604,11 @@ const make = Effect.gen(function* () {
               })
             }
 
+            yield* deleteAnonymousCalculationRuns({
+              executor: tx,
+              principalId: params.anonymousPrincipalId,
+            })
+
             const movedSources = yield* tx
               .update(schema.sources)
               .set({ principalId: params.userPrincipalId, updatedAt: now })
@@ -824,6 +841,11 @@ const make = Effect.gen(function* () {
                 message: "Target principal already owns the claimed wallet address.",
               })
             }
+
+            yield* deleteAnonymousCalculationRuns({
+              executor: tx,
+              principalId: params.anonymousPrincipalId,
+            })
 
             const movedSources = yield* tx
               .update(schema.sources)

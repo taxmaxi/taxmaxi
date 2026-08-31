@@ -9,9 +9,11 @@ import {
   PasswordHasher,
   type AuthServiceShape,
 } from "@my/core/authentication"
-import { and, eq } from "@my/persistence/query"
+import { and, eq, sql } from "@my/persistence/query"
 import * as ConfigProvider from "effect/ConfigProvider"
 import {
+  CalculationRecomputeQueue,
+  CalculationRecomputeQueueError,
   SOURCE_SYNC_QUEUE_NAME,
   SourceSyncJobRepository,
   SourceSyncQueue,
@@ -34,7 +36,10 @@ import { drizzle } from "../../persistence/src/layers/PgClientLive.ts"
 import { RepositoriesLive } from "../../persistence/src/layers/RepositoriesLive.ts"
 import { TaxCalculationServiceLive } from "../../persistence/src/layers/TaxCalculationServiceLive.ts"
 import { schema } from "../../persistence/src/schema/index.ts"
-import { TaxCalculationService } from "../../persistence/src/services/index.ts"
+import {
+  CalculationRunRepository,
+  TaxCalculationService,
+} from "../../persistence/src/services/index.ts"
 import { makeIntegrationTestDatabaseContext } from "../../persistence/tests/support/integration-test-kit.ts"
 import {
   seedSyncEngineAssets,
@@ -64,6 +69,7 @@ const TestPgClientLive = context.TestPgClientLive
 
 const queuedAt = DateTime.toDateUtc(DateTime.makeUnsafe("2026-01-01T00:00:00.000Z"))
 const queueEvents: Array<SourceSyncQueuePayload> = []
+const calculationQueueEvents: Array<string> = []
 const settlementEvents: Array<string> = []
 const validX402PaymentHeader = "valid-test-x402-payment"
 const REPORT_TEST_USER_ID = "00000000-0000-4000-8000-000000000181"
@@ -137,6 +143,23 @@ const SourceSyncQueueFailureTestLive = Layer.succeed(SourceSyncQueue, {
     ),
 })
 
+const CalculationRecomputeQueueTestLive = Layer.succeed(CalculationRecomputeQueue, {
+  enqueuePrincipalRecompute: (principalId) =>
+    Effect.sync(() => {
+      calculationQueueEvents.push(principalId)
+    }),
+})
+
+const CalculationRecomputeQueueFailureTestLive = Layer.succeed(CalculationRecomputeQueue, {
+  enqueuePrincipalRecompute: () =>
+    Effect.fail(
+      new CalculationRecomputeQueueError({
+        operation: "test.enqueuePrincipalRecompute",
+        cause: "queue unavailable",
+      })
+    ),
+})
+
 const SourceSyncRunServiceTestLive = Layer.succeed(SourceSyncRunService, {
   startSyncRun: () => Effect.die("SourceSyncRunService test stub: startSyncRun not implemented"),
   getSyncRun: () => Effect.die("SourceSyncRunService test stub: getSyncRun not implemented"),
@@ -192,13 +215,15 @@ const makePersistenceLayer = <R = never>(
     TaxCalculationService,
     never,
     R
-  > = TaxCalculationServiceTestLive
+  > = TaxCalculationServiceTestLive,
+  calculationRecomputeQueueLayer: Layer.Layer<CalculationRecomputeQueue> = CalculationRecomputeQueueTestLive
 ) =>
   Layer.mergeAll(
     RepositoriesLive,
     makeSourceSyncServiceWithDepsTestLive(sourceSyncQueueLayer),
     SourceSyncRunServiceTestLive,
     taxCalculationServiceLayer,
+    calculationRecomputeQueueLayer,
     TransferReconciliationServiceTestLive,
     AuthServiceTestLive,
     PasswordHasherTestLive
@@ -211,7 +236,8 @@ const makeHttpLive = <R = never>(
     TaxCalculationService,
     never,
     R
-  > = TaxCalculationServiceTestLive
+  > = TaxCalculationServiceTestLive,
+  calculationRecomputeQueueLayer: Layer.Layer<CalculationRecomputeQueue> = CalculationRecomputeQueueTestLive
 ) =>
   HttpRouter.serve(
     TaxMaxiApiLive.pipe(
@@ -221,7 +247,13 @@ const makeHttpLive = <R = never>(
       Layer.provide(SimpleTokenValidatorLive)
     )
   ).pipe(
-    Layer.provideMerge(makePersistenceLayer(sourceSyncQueueLayer, taxCalculationServiceLayer)),
+    Layer.provideMerge(
+      makePersistenceLayer(
+        sourceSyncQueueLayer,
+        taxCalculationServiceLayer,
+        calculationRecomputeQueueLayer
+      )
+    ),
     Layer.provideMerge(NodeHttpServer.layerTest),
     Layer.provide(ConfigProvider.layer(ClaimTokenConfigProvider))
   )
@@ -239,6 +271,12 @@ const NoPayerIdentityHttpLive = makeHttpLive(
 const PaidQueueFailureHttpLive = makeHttpLive(
   SourceSyncQueueFailureTestLive,
   X402PaymentValidatorTrackingTestLive
+)
+const CalculationQueueFailureHttpLive = makeHttpLive(
+  SourceSyncQueueTestLive,
+  X402PaymentValidatorTestLive,
+  TaxCalculationServiceTestLive,
+  CalculationRecomputeQueueFailureTestLive
 )
 const TaxCalculationHttpLive = makeHttpLive(
   SourceSyncQueueTestLive,
@@ -645,6 +683,397 @@ const seedSourceReportRows = ({
     ])
   })
 
+const seedClaimCalculationResultRows = ({
+  runId,
+  principalId,
+  sourceId,
+  assetId,
+  acquisitionEventId,
+  dispositionEventId,
+  occurredAt,
+}: {
+  readonly runId: string
+  readonly principalId: string
+  readonly sourceId: string
+  readonly assetId: string
+  readonly acquisitionEventId: string
+  readonly dispositionEventId: string
+  readonly occurredAt: Date
+}) =>
+  Effect.gen(function* () {
+    const db = yield* drizzle
+
+    yield* db.insert(schema.calculationRunCustodyUnits).values({
+      runId,
+      principalId,
+      custodyUnitId: sourceId,
+    })
+    yield* db.insert(schema.calculationRunCustodyUnitSources).values({
+      runId,
+      principalId,
+      custodyUnitId: sourceId,
+      sourceId,
+    })
+    yield* db.insert(schema.calculationRunAllocations).values({
+      runId,
+      principalId,
+      sequence: 0,
+      acquisitionEventId,
+      dispositionEventId,
+      assetId,
+      custodyUnitId: sourceId,
+      acquiredAt: occurredAt,
+      disposedAt: occurredAt,
+      quantity: "0.25",
+      costBasis: "25",
+    })
+    yield* db.insert(schema.calculationRunRealizedResults).values({
+      runId,
+      sequence: 0,
+      acquisitionEventId,
+      dispositionEventId,
+      assetId,
+      acquiredAt: occurredAt,
+      disposedAt: occurredAt,
+      quantity: "0.25",
+      costBasis: "25",
+      proceeds: "30",
+      gainLoss: "5",
+      treatmentCodes: ["de.taxable_private_disposal"],
+    })
+    yield* db.insert(schema.calculationRunIncomeResults).values({
+      runId,
+      sequence: 0,
+      eventId: acquisitionEventId,
+      assetId,
+      occurredAt,
+      quantity: "1",
+      value: "100",
+      treatmentCodes: ["de.taxable_income_section22_3_staking"],
+    })
+    yield* db.insert(schema.calculationRunDerivedLots).values({
+      runId,
+      principalId,
+      sequence: 0,
+      acquisitionEventId,
+      assetId,
+      custodyUnitId: sourceId,
+      acquiredAt: occurredAt,
+      remainingQuantity: "0.75",
+      costBasisPerUnit: "100",
+    })
+    yield* db.insert(schema.calculationRunBlockers).values({
+      runId,
+      principalId,
+      sequence: 0,
+      code: "missing_valuation",
+      eventId: acquisitionEventId,
+      assetId,
+      custodyUnitId: sourceId,
+      missingQuantity: null,
+    })
+    yield* db.insert(schema.calculationRunExplanationEntries).values({
+      runId,
+      sequence: 0,
+      eventId: acquisitionEventId,
+      code: "valuation_selected",
+      valuationKind: "observed_consideration",
+      matches: [],
+    })
+  })
+
+const seedClaimCalculationGraph = ({
+  anonymousPrincipalId,
+  sourceId,
+  targetPrincipalId,
+}: {
+  readonly anonymousPrincipalId: string
+  readonly sourceId: string
+  readonly targetPrincipalId: string
+}) =>
+  Effect.gen(function* () {
+    const db = yield* drizzle
+    const anonymousRunIds = [nextTestUuid(), nextTestUuid()]
+    const targetRunIds = [nextTestUuid(), nextTestUuid()]
+    const [firstAnonymousRunId, secondAnonymousRunId] = anonymousRunIds
+    const [, secondTargetRunId] = targetRunIds
+    if (
+      firstAnonymousRunId === undefined ||
+      secondAnonymousRunId === undefined ||
+      secondTargetRunId === undefined
+    ) {
+      return yield* Effect.die("Claim graph fixture requires two anonymous and target runs")
+    }
+    const assetId = nextTestUuid()
+    const transactionId = nextTestUuid()
+    const acquisitionEventId = nextTestUuid()
+    const dispositionEventId = nextTestUuid()
+    const occurredAt = DateTime.toDateUtc(DateTime.makeUnsafe("2025-04-01T12:00:00.000Z"))
+    const completedAt = DateTime.toDateUtc(DateTime.makeUnsafe("2026-01-01T00:10:00.000Z"))
+
+    yield* db.insert(schema.assets).values({
+      id: assetId,
+      name: "Claim graph asset",
+      symbol: "CGA",
+    })
+
+    yield* db.insert(schema.transactions).values({
+      id: transactionId,
+      sourceId,
+      principalId: anonymousPrincipalId,
+      externalId: `claim-graph-${transactionId}`,
+      timestamp: occurredAt,
+      transactionType: "buy_fiat",
+    })
+    yield* db.insert(schema.transactionLegs).values({
+      id: acquisitionEventId,
+      sourceId,
+      principalId: anonymousPrincipalId,
+      transactionId,
+      externalId: `claim-graph-leg-${acquisitionEventId}`,
+      timestamp: occurredAt,
+      assetId,
+      amount: "1",
+      kind: "acquisition",
+      provenance: "deterministic",
+    })
+
+    yield* db.insert(schema.calculationRuns).values([
+      {
+        id: firstAnonymousRunId,
+        principalId: anonymousPrincipalId,
+        jurisdiction: "DE",
+        taxYear: 2025,
+        reportingCurrency: "EUR",
+        engineVersion: "test-engine-v1",
+        ruleSetVersion: "test-rules-v1",
+        inputLedgerRevision: `v2:1:1.0.:${"a".repeat(64)}`,
+        valuationRevision: `sha256:${"b".repeat(64)}`,
+        status: "complete" as const,
+        accountingMethod: "fifo",
+        inventoryScope: "per_custody_unit" as const,
+        appliedChoiceIds: [],
+        appliedRules: [],
+        processedEventIds: [],
+        startedAt: completedAt,
+        completedAt,
+      },
+      {
+        id: secondAnonymousRunId,
+        principalId: anonymousPrincipalId,
+        jurisdiction: "DE",
+        taxYear: 2025,
+        reportingCurrency: "EUR",
+        engineVersion: "test-engine-v1",
+        ruleSetVersion: "test-rules-v1",
+        inputLedgerRevision: `v2:2:1.0.:${"c".repeat(64)}`,
+        valuationRevision: `sha256:${"d".repeat(64)}`,
+        status: "partial" as const,
+        accountingMethod: "fifo",
+        inventoryScope: "per_custody_unit" as const,
+        appliedChoiceIds: [],
+        appliedRules: [],
+        processedEventIds: [acquisitionEventId],
+        startedAt: completedAt,
+        completedAt,
+      },
+      ...targetRunIds.map((id, index) => ({
+        id,
+        principalId: targetPrincipalId,
+        jurisdiction: "DE",
+        taxYear: 2025,
+        reportingCurrency: "EUR",
+        engineVersion: "test-engine-v1",
+        ruleSetVersion: "test-rules-v1",
+        inputLedgerRevision: `sha256:${index}:${"e".repeat(64)}`,
+        valuationRevision: `sha256:${"f".repeat(64)}`,
+        status: "complete" as const,
+        accountingMethod: "fifo",
+        inventoryScope: "per_custody_unit" as const,
+        appliedChoiceIds: [],
+        appliedRules: [],
+        processedEventIds: [],
+        startedAt: completedAt,
+        completedAt,
+      })),
+    ])
+
+    yield* db.insert(schema.activeCalculationRuns).values([
+      {
+        principalId: anonymousPrincipalId,
+        jurisdiction: "DE",
+        taxYear: 2025,
+        reportingCurrency: "EUR",
+        runId: secondAnonymousRunId,
+      },
+      {
+        principalId: targetPrincipalId,
+        jurisdiction: "DE",
+        taxYear: 2025,
+        reportingCurrency: "EUR",
+        runId: secondTargetRunId,
+      },
+    ])
+
+    yield* seedClaimCalculationResultRows({
+      runId: secondAnonymousRunId,
+      principalId: anonymousPrincipalId,
+      sourceId,
+      assetId,
+      acquisitionEventId,
+      dispositionEventId,
+      occurredAt,
+    })
+
+    return {
+      anonymousRunIds,
+      targetRunIds,
+      transactionId,
+      acquisitionEventId,
+    }
+  })
+
+const assertClaimCalculationGraphDeleted = ({
+  anonymousRunIds,
+  targetRunIds,
+  targetPrincipalId,
+  transactionId,
+  acquisitionEventId,
+}: {
+  readonly anonymousRunIds: ReadonlyArray<string>
+  readonly targetRunIds: ReadonlyArray<string>
+  readonly targetPrincipalId: string
+  readonly transactionId: string
+  readonly acquisitionEventId: string
+}) =>
+  Effect.gen(function* () {
+    const db = yield* drizzle
+    const [firstAnonymousRunId, secondAnonymousRunId] = anonymousRunIds
+    const [firstTargetRunId, secondTargetRunId] = targetRunIds
+    if (
+      firstAnonymousRunId === undefined ||
+      secondAnonymousRunId === undefined ||
+      firstTargetRunId === undefined ||
+      secondTargetRunId === undefined
+    ) {
+      return yield* Effect.die("Claim graph fixture requires two anonymous and target runs")
+    }
+    type RunIdColumn =
+      | typeof schema.calculationRuns.id
+      | typeof schema.activeCalculationRuns.runId
+      | typeof schema.calculationRunCustodyUnits.runId
+      | typeof schema.calculationRunCustodyUnitSources.runId
+      | typeof schema.calculationRunAllocations.runId
+      | typeof schema.calculationRunRealizedResults.runId
+      | typeof schema.calculationRunIncomeResults.runId
+      | typeof schema.calculationRunDerivedLots.runId
+      | typeof schema.calculationRunBlockers.runId
+      | typeof schema.calculationRunExplanationEntries.runId
+    const isAnonymousRun = (column: RunIdColumn) =>
+      sql`${column} = ${firstAnonymousRunId} or ${column} = ${secondAnonymousRunId}`
+
+    const [
+      anonymousRuns,
+      anonymousPointers,
+      anonymousCustodyUnits,
+      anonymousCustodySources,
+      anonymousAllocations,
+      anonymousRealized,
+      anonymousIncome,
+      anonymousLots,
+      anonymousBlockers,
+      anonymousExplanations,
+    ] = yield* Effect.all([
+      db
+        .select({ runId: schema.calculationRuns.id })
+        .from(schema.calculationRuns)
+        .where(isAnonymousRun(schema.calculationRuns.id)),
+      db
+        .select({ runId: schema.activeCalculationRuns.runId })
+        .from(schema.activeCalculationRuns)
+        .where(isAnonymousRun(schema.activeCalculationRuns.runId)),
+      db
+        .select({ runId: schema.calculationRunCustodyUnits.runId })
+        .from(schema.calculationRunCustodyUnits)
+        .where(isAnonymousRun(schema.calculationRunCustodyUnits.runId)),
+      db
+        .select({ runId: schema.calculationRunCustodyUnitSources.runId })
+        .from(schema.calculationRunCustodyUnitSources)
+        .where(isAnonymousRun(schema.calculationRunCustodyUnitSources.runId)),
+      db
+        .select({ runId: schema.calculationRunAllocations.runId })
+        .from(schema.calculationRunAllocations)
+        .where(isAnonymousRun(schema.calculationRunAllocations.runId)),
+      db
+        .select({ runId: schema.calculationRunRealizedResults.runId })
+        .from(schema.calculationRunRealizedResults)
+        .where(isAnonymousRun(schema.calculationRunRealizedResults.runId)),
+      db
+        .select({ runId: schema.calculationRunIncomeResults.runId })
+        .from(schema.calculationRunIncomeResults)
+        .where(isAnonymousRun(schema.calculationRunIncomeResults.runId)),
+      db
+        .select({ runId: schema.calculationRunDerivedLots.runId })
+        .from(schema.calculationRunDerivedLots)
+        .where(isAnonymousRun(schema.calculationRunDerivedLots.runId)),
+      db
+        .select({ runId: schema.calculationRunBlockers.runId })
+        .from(schema.calculationRunBlockers)
+        .where(isAnonymousRun(schema.calculationRunBlockers.runId)),
+      db
+        .select({ runId: schema.calculationRunExplanationEntries.runId })
+        .from(schema.calculationRunExplanationEntries)
+        .where(isAnonymousRun(schema.calculationRunExplanationEntries.runId)),
+    ])
+
+    for (const rows of [
+      anonymousRuns,
+      anonymousPointers,
+      anonymousCustodyUnits,
+      anonymousCustodySources,
+      anonymousAllocations,
+      anonymousRealized,
+      anonymousIncome,
+      anonymousLots,
+      anonymousBlockers,
+      anonymousExplanations,
+    ]) {
+      expect(rows).toEqual([])
+    }
+
+    const targetRuns = yield* db
+      .select({ id: schema.calculationRuns.id, principalId: schema.calculationRuns.principalId })
+      .from(schema.calculationRuns)
+      .where(
+        sql`${schema.calculationRuns.id} = ${firstTargetRunId} or ${schema.calculationRuns.id} = ${secondTargetRunId}`
+      )
+    const [targetPointer] = yield* db
+      .select({ runId: schema.activeCalculationRuns.runId })
+      .from(schema.activeCalculationRuns)
+      .where(eq(schema.activeCalculationRuns.principalId, targetPrincipalId))
+    const [claimedTransaction] = yield* db
+      .select({ principalId: schema.transactions.principalId })
+      .from(schema.transactions)
+      .where(eq(schema.transactions.id, transactionId))
+    const [claimedLeg] = yield* db
+      .select({ principalId: schema.transactionLegs.principalId })
+      .from(schema.transactionLegs)
+      .where(eq(schema.transactionLegs.id, acquisitionEventId))
+
+    expect(targetRuns).toEqual(
+      expect.arrayContaining(
+        targetRunIds.map((id) => ({
+          id,
+          principalId: targetPrincipalId,
+        }))
+      )
+    )
+    expect(targetRuns).toHaveLength(targetRunIds.length)
+    expect(targetPointer).toEqual({ runId: secondTargetRunId })
+    expect(claimedTransaction).toEqual({ principalId: targetPrincipalId })
+    expect(claimedLeg).toEqual({ principalId: targetPrincipalId })
+  })
+
 const seedSourceReportTaxTreatmentRows = ({
   principalId,
   sourceId,
@@ -770,6 +1199,7 @@ describe("SourcesApiLive", () => {
     Effect.runPromise(
       Effect.gen(function* () {
         queueEvents.length = 0
+        calculationQueueEvents.length = 0
         settlementEvents.length = 0
         yield* context.recreateTestDatabase()
       })
@@ -1409,6 +1839,11 @@ describe("SourcesApiLive", () => {
       const userId = nextTestUuid()
       const principalId = nextTestUuid()
       yield* seedPrincipalUser({ userId, principalId })
+      const calculationGraph = yield* seedClaimCalculationGraph({
+        anonymousPrincipalId: created.source.principalId,
+        sourceId: created.source.id,
+        targetPrincipalId: principalId,
+      })
 
       const authenticatedClient = yield* makeAuthenticatedClient({ userId })
       const claimResponse = yield* authenticatedClient.principals.claimPrincipal({
@@ -1454,7 +1889,70 @@ describe("SourcesApiLive", () => {
         .where(eq(schema.principalClaims.requestId, created.claim.requestId))
       expect(claims).toHaveLength(2)
       expect(claims.every((claim) => claim.consumedAt instanceof Date)).toBe(true)
+      yield* assertClaimCalculationGraphDeleted({
+        ...calculationGraph,
+        targetPrincipalId: principalId,
+      })
+      expect(calculationQueueEvents).toEqual([principalId])
     }).pipe(Effect.provide(HttpLive), Effect.scoped)
+  )
+
+  it.effect("keeps a committed claim successful when recompute enqueue fails", () =>
+    Effect.gen(function* () {
+      const anonymousClient = yield* makeUnauthenticatedClientWithPayment()
+      const created = yield* anonymousClient.sources.createSource({
+        payload: {
+          type: "onchain",
+          walletAddress: "So11111111111111111111111111111111111111112",
+          name: "Claim survives calculation queue failure",
+          year: 2025,
+          jurisdiction: "germany",
+        },
+      })
+
+      if (created.claim === null || created.syncJob === null) {
+        return yield* Effect.die("Anonymous source creation did not return claim metadata")
+      }
+
+      const userId = nextTestUuid()
+      const principalId = nextTestUuid()
+      yield* seedPrincipalUser({ userId, principalId })
+      const calculationGraph = yield* seedClaimCalculationGraph({
+        anonymousPrincipalId: created.source.principalId,
+        sourceId: created.source.id,
+        targetPrincipalId: principalId,
+      })
+
+      const authenticatedClient = yield* makeAuthenticatedClient({ userId })
+      const claimResponse = yield* authenticatedClient.principals.claimPrincipal({
+        payload: {
+          requestId: created.claim.requestId,
+          claimToken: created.claim.claimToken,
+          siwxProof: null,
+        },
+      })
+
+      expect(claimResponse.sourceId).toBe(created.source.id)
+      yield* assertClaimCalculationGraphDeleted({
+        ...calculationGraph,
+        targetPrincipalId: principalId,
+      })
+
+      const db = yield* drizzle
+      const completedAt = DateTime.toDateUtc(DateTime.makeUnsafe("2026-01-01T00:20:00.000Z"))
+      yield* db
+        .update(schema.processingJobs)
+        .set({ status: "completed", completedAt, updatedAt: completedAt })
+        .where(eq(schema.processingJobs.id, created.syncJob.jobId))
+
+      const calculationRunRepository = yield* CalculationRunRepository
+      const maintenance = yield* calculationRunRepository.settleStaleAndFindRecomputePrincipals({
+        staleBefore: completedAt,
+        limit: 10,
+      })
+
+      expect(maintenance.principalIds).toContain(principalId)
+    }).pipe(Effect.provide(CalculationQueueFailureHttpLive), Effect.scoped)
   )
 
   it.effect("lists anonymous paid source handles by payer-wallet SIWX", () =>
@@ -1808,6 +2306,11 @@ describe("SourcesApiLive", () => {
       const userId = nextTestUuid()
       const principalId = nextTestUuid()
       yield* seedPrincipalUser({ userId, principalId })
+      const calculationGraph = yield* seedClaimCalculationGraph({
+        anonymousPrincipalId: created.source.principalId,
+        sourceId: created.source.id,
+        targetPrincipalId: principalId,
+      })
 
       const authenticatedClient = yield* makeAuthenticatedClient({ userId })
       const claimResponse = yield* authenticatedClient.principals.claimPrincipal({
@@ -1838,6 +2341,11 @@ describe("SourcesApiLive", () => {
         sourcePrincipalId: principalId,
         addressPrincipalId: principalId,
       })
+      yield* assertClaimCalculationGraphDeleted({
+        ...calculationGraph,
+        targetPrincipalId: principalId,
+      })
+      expect(calculationQueueEvents).toEqual([principalId])
     }).pipe(Effect.provide(HttpLive), Effect.scoped)
   )
 

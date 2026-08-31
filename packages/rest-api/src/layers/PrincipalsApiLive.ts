@@ -12,6 +12,10 @@ import {
   isPrincipalClaimTransferConflictError,
   isPrincipalClaimTransferStaleError,
 } from "@my/persistence/services"
+import {
+  CalculationRecomputeQueue,
+  type CalculationRecomputeQueueShape,
+} from "@my/sync-engine/services"
 import * as Effect from "effect/Effect"
 import * as Option from "effect/Option"
 import * as Redacted from "effect/Redacted"
@@ -64,14 +68,49 @@ const loadClaimTokenPepper = Effect.gen(function* () {
 const mapSiwxVerificationError = (error: SIWXProofVerificationError) =>
   new PrincipalClaimBadRequestError({ message: error.message })
 
+const enqueueClaimRecompute = ({
+  queue,
+  principalId,
+  sourceId,
+}: {
+  readonly queue: CalculationRecomputeQueueShape
+  readonly principalId: string
+  readonly sourceId: string
+}) =>
+  queue.enqueuePrincipalRecompute(principalId).pipe(
+    Effect.catch((error) =>
+      Effect.logError(
+        {
+          principalId,
+          sourceId,
+          operation: error.operation,
+          cause: error.cause,
+        },
+        "principal-claim:calculation-recompute-enqueue-failed"
+      )
+    )
+  )
+
 /**
  * PrincipalsApiLive - Group implementation for principal endpoints.
  */
 export const PrincipalsApiLive = HttpApiBuilder.group(TaxMaxiApi, "principals", (handlers) =>
   Effect.gen(function* () {
     const principalClaimRepository = yield* PrincipalClaimRepository
+    const maybeCalculationRecomputeQueue = yield* Effect.serviceOption(CalculationRecomputeQueue)
     const principalResolutionService = yield* PrincipalResolutionService
     const siwxProofVerifier = yield* SIWXProofVerifier
+    const enqueueRecomputeAfterClaim = ({
+      principalId,
+      sourceId,
+    }: {
+      readonly principalId: string
+      readonly sourceId: string
+    }) =>
+      Option.match(maybeCalculationRecomputeQueue, {
+        onNone: () => Effect.die("CalculationRecomputeQueue is not configured"),
+        onSome: (queue) => enqueueClaimRecompute({ queue, principalId, sourceId }),
+      })
 
     return handlers.handle("claimPrincipal", ({ payload }) =>
       Effect.gen(function* () {
@@ -128,6 +167,11 @@ export const PrincipalsApiLive = HttpApiBuilder.group(TaxMaxiApi, "principals", 
             })
             .pipe(Effect.mapError(mapClaimTransferError))
 
+          yield* enqueueRecomputeAfterClaim({
+            principalId: currentUserPrincipal.principal.id,
+            sourceId: claimedSourceId,
+          })
+
           return PrincipalClaimResponse.make({
             sourceId: claimedSourceId,
           })
@@ -172,6 +216,11 @@ export const PrincipalsApiLive = HttpApiBuilder.group(TaxMaxiApi, "principals", 
             sourceId: maybeClaim.value.sourceId,
           })
           .pipe(Effect.mapError(mapClaimTransferError))
+
+        yield* enqueueRecomputeAfterClaim({
+          principalId: currentUserPrincipal.principal.id,
+          sourceId: claimedSourceId,
+        })
 
         return PrincipalClaimResponse.make({
           sourceId: claimedSourceId,
