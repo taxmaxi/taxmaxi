@@ -7,7 +7,7 @@
 import type { TaxAccountingResult } from "@my/accounting"
 import { format as formatQuantity } from "@my/core/accounting"
 import type { CurrencyCode } from "@my/core/currency"
-import { and, asc, eq } from "drizzle-orm"
+import { and, asc, eq, sql } from "drizzle-orm"
 import * as DateTime from "effect/DateTime"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
@@ -310,7 +310,36 @@ const make = Effect.gen(function* () {
           schema.activeCalculationRuns.reportingCurrency,
         ],
         set: { runId: params.id, updatedAt: completedAt },
+        setWhere: sql`
+          split_part(${params.inputLedgerRevision}, ':', 2)::numeric > (
+            select split_part(${schema.calculationRuns.inputLedgerRevision}, ':', 2)::numeric
+            from ${schema.calculationRuns}
+            where ${schema.calculationRuns.id} = ${schema.activeCalculationRuns.runId}
+          )
+        `,
       })
+      .returning({ runId: schema.activeCalculationRuns.runId })
+
+  const persistWithTransaction = (context: WriteContext) =>
+    Effect.gen(function* () {
+      yield* claimRun(context)
+      yield* snapshotCustodyMembership(context)
+      yield* writeAllocations(context)
+      yield* writeRealizedResults(context)
+      yield* writeIncomeResults(context)
+      yield* writeDerivedLots(context)
+      yield* writeBlockers(context)
+      yield* writeExplanations(context)
+      const completedAt = yield* finalizeRun(context)
+      const activatedRows = yield* activateRun({ ...context, completedAt })
+
+      return {
+        activated: activatedRows.length === 1,
+        inputLedgerRevision: context.params.inputLedgerRevision,
+        valuationRevision: context.params.valuationRevision,
+        status: context.result.status,
+      }
+    })
 
   const persist: CalculationRunRepositoryShape["persist"] = (params) =>
     db
@@ -320,16 +349,7 @@ const make = Effect.gen(function* () {
           const { result } = params
           const context = { tx, params, result, startedAt }
 
-          yield* claimRun(context)
-          yield* snapshotCustodyMembership(context)
-          yield* writeAllocations(context)
-          yield* writeRealizedResults(context)
-          yield* writeIncomeResults(context)
-          yield* writeDerivedLots(context)
-          yield* writeBlockers(context)
-          yield* writeExplanations(context)
-          const completedAt = yield* finalizeRun(context)
-          yield* activateRun({ ...context, completedAt })
+          return yield* persistWithTransaction(context)
         })
       )
       .pipe(

@@ -6,6 +6,7 @@
 
 import {
   AcquisitionEvent,
+  CustodyUnitId,
   CustodyMovementEvent,
   DispositionEvent,
   MarketQuoteFact,
@@ -16,6 +17,7 @@ import {
   type ValuationFact,
 } from "@my/core/accounting"
 import { CURRENCIES_BY_CODE, type CurrencyCode } from "@my/core/currency"
+import { SourceId } from "@my/core/source"
 import { aliasedTable, and, asc, eq, gte, inArray, lt, or } from "drizzle-orm"
 import * as BigDecimal from "effect/BigDecimal"
 import * as DateTime from "effect/DateTime"
@@ -601,6 +603,18 @@ const make = Effect.gen(function* () {
   const load: FactualLedgerRepositoryShape["load"] = ({ principalId, reportingCurrency }) =>
     Effect.gen(function* () {
       const supportedReportingCurrency = yield* validateReportingCurrency(reportingCurrency)
+      const membershipRows = yield* db
+        .select({
+          custodyUnitId: schema.custodyUnitSources.custodyUnitId,
+          sourceId: schema.custodyUnitSources.sourceId,
+        })
+        .from(schema.custodyUnitSources)
+        .where(eq(schema.custodyUnitSources.principalId, principalId))
+        .orderBy(
+          asc(schema.custodyUnitSources.custodyUnitId),
+          asc(schema.custodyUnitSources.sourceId)
+        )
+        .pipe(wrapSqlError("factualLedgerRepository.load.custodyUnitMembership"))
       const legEvents = yield* loadLegEvents({ principalId })
       const custodyMovementEvents = yield* loadCustodyMovementEvents({ principalId })
       const events = [...legEvents.events, ...custodyMovementEvents].sort(compareEvents)
@@ -622,7 +636,12 @@ const make = Effect.gen(function* () {
         compareValuationFacts
       )
 
-      return { events, valuationFacts }
+      const custodyUnitMembership = membershipRows.map(({ custodyUnitId, sourceId }) => ({
+        custodyUnitId: CustodyUnitId.make(custodyUnitId),
+        sourceId: SourceId.make(sourceId),
+      }))
+
+      return { events, valuationFacts, custodyUnitMembership }
     })
 
   return FactualLedgerRepository.of({ load })

@@ -20,16 +20,20 @@ export const CalculationRunId = Schema.String.check(Schema.isUUID()).pipe(
 /** Stable, caller-assigned identity of one immutable calculation run. */
 export type CalculationRunId = typeof CalculationRunId.Type
 
-const Revision = Schema.Trimmed.check(Schema.isNonEmpty())
-
 /** Revision of the factual ledger used as calculation input. */
-export const InputLedgerRevision = Revision.pipe(Schema.brand("InputLedgerRevision"))
+export const InputLedgerRevision = Schema.Trimmed.pipe(
+  Schema.check(Schema.isPattern(/^v1:\d+:[0-9a-f]{64}$/)),
+  Schema.brand("InputLedgerRevision")
+)
 
 /** Revision of the factual ledger used as calculation input. */
 export type InputLedgerRevision = typeof InputLedgerRevision.Type
 
 /** Revision of the valuation facts used as calculation input. */
-export const ValuationRevision = Revision.pipe(Schema.brand("ValuationRevision"))
+export const ValuationRevision = Schema.Trimmed.pipe(
+  Schema.check(Schema.isPattern(/^sha256:[0-9a-f]{64}$/)),
+  Schema.brand("ValuationRevision")
+)
 
 /** Revision of the valuation facts used as calculation input. */
 export type ValuationRevision = typeof ValuationRevision.Type
@@ -50,7 +54,7 @@ export class CalculationRunCurrencyMismatchError extends Schema.TaggedError<Calc
   }
 ) {}
 
-/** Input required to write and activate one terminal calculation run. */
+/** Input required to write one terminal calculation run and compare it for activation. */
 export interface PersistCalculationRunParams {
   readonly id: CalculationRunId
   readonly principalId: PrincipalId
@@ -58,6 +62,14 @@ export interface PersistCalculationRunParams {
   readonly inputLedgerRevision: InputLedgerRevision
   readonly valuationRevision: ValuationRevision
   readonly result: TaxAccountingResult
+}
+
+/** Outcome of a durable run write and monotonic active-pointer comparison. */
+export interface CalculationRunWriteResult {
+  readonly activated: boolean
+  readonly inputLedgerRevision: InputLedgerRevision
+  readonly valuationRevision: ValuationRevision
+  readonly status: "complete" | "partial"
 }
 
 /** Expected failures while writing a calculation run. */
@@ -69,14 +81,15 @@ export type CalculationRunWriteError =
 /** Persistence contract for atomic, write-once calculation results. */
 export interface CalculationRunRepositoryShape {
   /**
-   * Persist every row of a complete or partial engine result, then activate it.
+   * Persist every row of a complete or partial engine result, then activate it
+   * only when its factual snapshot is newer than the current active run.
    *
    * Custody membership is snapshotted from live data at persistence time. A run
    * ID is single-use, including for an otherwise identical retry.
    */
   readonly persist: (
     params: PersistCalculationRunParams
-  ) => Effect.Effect<void, CalculationRunWriteError>
+  ) => Effect.Effect<CalculationRunWriteResult, CalculationRunWriteError>
 }
 
 /** Context tag for calculation-run writes. */
