@@ -504,6 +504,8 @@ const make = Effect.gen(function* () {
     const rows = result.realizedResults.map((realized, sequence) => ({
       runId: params.id,
       sequence,
+      sourceId: realized.custodySourceId,
+      allocationSequence: realized.allocationSequence,
       acquisitionEventId: realized.acquisitionEventId,
       dispositionEventId: realized.dispositionEventId,
       assetId: realized.assetId,
@@ -525,6 +527,7 @@ const make = Effect.gen(function* () {
     const rows = result.incomeResults.map((income, sequence) => ({
       runId: params.id,
       sequence,
+      sourceId: income.custodySourceId,
       eventId: income.eventId,
       assetId: income.assetId,
       occurredAt: income.occurredAt.toDate(),

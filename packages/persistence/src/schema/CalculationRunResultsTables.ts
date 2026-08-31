@@ -114,6 +114,8 @@ export const calculationRunRealizedResults = pgTable(
       .notNull()
       .references(() => calculationRuns.id, { onDelete: "cascade" }),
     sequence: integer("sequence").notNull(),
+    sourceId: uuid("source_id").notNull(),
+    allocationSequence: integer("allocation_sequence").notNull(),
     acquisitionEventId: uuid("acquisition_event_id").notNull(),
     dispositionEventId: uuid("disposition_event_id").notNull(),
     assetId: uuid("asset_id")
@@ -129,6 +131,19 @@ export const calculationRunRealizedResults = pgTable(
   },
   (table) => [
     primaryKey({ columns: [table.runId, table.sequence] }),
+    foreignKey({
+      columns: [table.runId, table.sourceId],
+      foreignColumns: [
+        calculationRunCustodyUnitSources.runId,
+        calculationRunCustodyUnitSources.sourceId,
+      ],
+      name: "calculation_run_realized_results_run_source_fk",
+    }).onDelete("cascade"),
+    foreignKey({
+      columns: [table.runId, table.allocationSequence],
+      foreignColumns: [calculationRunAllocations.runId, calculationRunAllocations.sequence],
+      name: "calculation_run_realized_results_run_allocation_fk",
+    }).onDelete("cascade"),
     index("idx_calculation_run_realized_disposition").on(table.runId, table.dispositionEventId),
     check("calculation_run_realized_sequence_non_negative", sql`${table.sequence} >= 0`),
     check("calculation_run_realized_quantity_positive", sql`${table.quantity} > 0`),
@@ -143,6 +158,7 @@ export const calculationRunIncomeResults = pgTable(
       .notNull()
       .references(() => calculationRuns.id, { onDelete: "cascade" }),
     sequence: integer("sequence").notNull(),
+    sourceId: uuid("source_id").notNull(),
     eventId: uuid("event_id").notNull(),
     assetId: uuid("asset_id")
       .notNull()
@@ -154,6 +170,14 @@ export const calculationRunIncomeResults = pgTable(
   },
   (table) => [
     primaryKey({ columns: [table.runId, table.sequence] }),
+    foreignKey({
+      columns: [table.runId, table.sourceId],
+      foreignColumns: [
+        calculationRunCustodyUnitSources.runId,
+        calculationRunCustodyUnitSources.sourceId,
+      ],
+      name: "calculation_run_income_results_run_source_fk",
+    }).onDelete("cascade"),
     index("idx_calculation_run_income_event").on(table.runId, table.eventId),
     check("calculation_run_income_sequence_non_negative", sql`${table.sequence} >= 0`),
     check("calculation_run_income_quantity_positive", sql`${table.quantity} > 0`),

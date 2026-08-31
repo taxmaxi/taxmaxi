@@ -91,6 +91,8 @@ export interface FactualFifoAllocation {
 export interface RealizedResult {
   readonly acquisitionEventId: AccountingEventId
   readonly dispositionEventId: AccountingEventId
+  readonly custodySourceId: DispositionEvent["custodySourceId"]
+  readonly allocationSequence: number
   readonly assetId: string
   readonly acquiredAt: Timestamp
   readonly disposedAt: Timestamp
@@ -133,6 +135,7 @@ export interface TaxAccountingBlocker {
 /** Jurisdiction-neutral income result shape populated by a jurisdiction module. */
 export interface IncomeResult {
   readonly eventId: AccountingEventId
+  readonly custodySourceId: AcquisitionEvent["custodySourceId"]
   readonly assetId: string
   readonly occurredAt: Timestamp
   readonly quantity: AccountingQuantity
@@ -612,6 +615,7 @@ const processAcquisition = ({
     if (incomeTreatmentCode !== null && valuation !== null) {
       state.incomeResults.push({
         eventId: event.id,
+        custodySourceId: event.custodySourceId,
         assetId: event.assetId,
         occurredAt: event.occurredAt,
         quantity: event.quantity,
@@ -701,6 +705,7 @@ const processDisposition = ({
 
     for (const matchAllocation of match.allocations) {
       const lot = matchAllocation.lot
+      const allocationSequence = state.allocations.length
       const costBasis =
         lot.costBasisPerUnit === null
           ? null
@@ -760,6 +765,8 @@ const processDisposition = ({
       state.realizedResults.push({
         acquisitionEventId: lot.acquisitionEventId,
         dispositionEventId: event.id,
+        custodySourceId: event.custodySourceId,
+        allocationSequence,
         assetId: event.assetId,
         acquiredAt: lot.acquiredAt,
         disposedAt: event.occurredAt,
@@ -920,6 +927,13 @@ export const calculate = ({
       })
     }
 
+    const allocationEntries = state.allocations
+      .map((allocation, originalSequence) => ({ allocation, originalSequence }))
+      .filter(({ allocation }) => targetDispositionIds.has(allocation.dispositionEventId))
+    const allocationSequenceByOriginal = new Map(
+      allocationEntries.map(({ originalSequence }, sequence) => [originalSequence, sequence])
+    )
+
     return {
       status: state.blockers.length === 0 ? "complete" : "partial",
       jurisdiction,
@@ -938,12 +952,14 @@ export const calculate = ({
         ...GERMAN_APPLIED_RULES,
       ],
       processedEventIds: orderedLedger.map((event) => event.id),
-      allocations: state.allocations.filter((allocation) =>
-        targetDispositionIds.has(allocation.dispositionEventId)
-      ),
+      allocations: allocationEntries.map(({ allocation }) => allocation),
       realizedResults: state.realizedResults
         .filter((result) => targetDispositionIds.has(result.dispositionEventId))
-        .map((result) => {
+        .flatMap((result) => {
+          const allocationSequence = allocationSequenceByOriginal.get(result.allocationSequence)
+
+          if (allocationSequence === undefined) return []
+
           const disposition = dispositionById.get(result.dispositionEventId)
           const acquisition = acquisitionById.get(result.acquisitionEventId)
           const treatment =
@@ -956,7 +972,13 @@ export const calculate = ({
                   cause: disposition.cause,
                 })
 
-          return treatment === null ? result : { ...result, treatmentCodes: [treatment] }
+          return [
+            {
+              ...result,
+              allocationSequence,
+              treatmentCodes: treatment === null ? result.treatmentCodes : [treatment],
+            },
+          ]
         }),
       incomeResults: state.incomeResults.filter(
         (result) => germanTaxYearOf(result.occurredAt) === taxYear
