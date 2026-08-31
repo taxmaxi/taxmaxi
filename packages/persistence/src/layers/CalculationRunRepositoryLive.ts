@@ -634,10 +634,15 @@ const make = Effect.gen(function* () {
         ],
         set: { runId: params.id, updatedAt: completedAt },
         setWhere: sql`
-          split_part(${params.inputLedgerRevision}, ':', 2)::numeric > (
-            select split_part(${schema.calculationRuns.inputLedgerRevision}, ':', 2)::numeric
-            from ${schema.calculationRuns}
-            where ${schema.calculationRuns.id} = ${schema.activeCalculationRuns.runId}
+          split_part(${params.inputLedgerRevision}, ':', 2)::numeric >=
+            ${schema.activeCalculationRuns.minimumActivationRevision}
+          and (
+            ${schema.activeCalculationRuns.runId} is null
+            or split_part(${params.inputLedgerRevision}, ':', 2)::numeric > (
+              select split_part(${schema.calculationRuns.inputLedgerRevision}, ':', 2)::numeric
+              from ${schema.calculationRuns}
+              where ${schema.calculationRuns.id} = ${schema.activeCalculationRuns.runId}
+            )
           )
         `,
       })

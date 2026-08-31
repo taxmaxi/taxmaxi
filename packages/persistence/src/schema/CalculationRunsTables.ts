@@ -5,6 +5,7 @@ import {
   index,
   integer,
   jsonb,
+  numeric,
   pgEnum,
   pgTable,
   primaryKey,
@@ -99,7 +100,13 @@ export const activeCalculationRuns = pgTable(
     jurisdiction: text("jurisdiction").notNull(),
     taxYear: integer("tax_year").notNull(),
     reportingCurrency: text("reporting_currency").notNull(),
-    runId: uuid("run_id").notNull(),
+    runId: uuid("run_id").references(() => calculationRuns.id, { onDelete: "set null" }),
+    minimumActivationRevision: numeric("minimum_activation_revision", {
+      precision: 20,
+      scale: 0,
+    })
+      .notNull()
+      .default("0"),
     updatedAt: timestamp("updated_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
   },
   (table) => [
@@ -122,7 +129,7 @@ export const activeCalculationRuns = pgTable(
         calculationRuns.reportingCurrency,
       ],
       name: "active_calculation_runs_matching_scope_fk",
-    }).onDelete("cascade"),
+    }),
     unique("active_calculation_runs_run_unique").on(table.runId),
   ]
 )
