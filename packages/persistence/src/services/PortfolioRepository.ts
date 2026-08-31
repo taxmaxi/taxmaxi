@@ -7,7 +7,12 @@
 import * as Context from "effect/Context"
 import type * as Effect from "effect/Effect"
 import * as Schema from "effect/Schema"
+import type { JurisdictionCode, TaxYear } from "@my/core/accounting"
+import type { CurrencyCode } from "@my/core/currency"
+import type { PrincipalId } from "@my/core/ownership"
+import type { SourceId } from "@my/core/source"
 import type { PersistenceError } from "../errors/RepositoryError.ts"
+import type { CalculationRunId } from "./CalculationRunRepository.ts"
 
 /** A requested source is absent or does not belong to the principal. */
 export class PortfolioSourceNotFoundError extends Schema.TaggedError<PortfolioSourceNotFoundError>()(
@@ -18,6 +23,21 @@ export class PortfolioSourceNotFoundError extends Schema.TaggedError<PortfolioSo
 export interface PortfolioAssetScope {
   readonly principalId: string
   readonly sourceId: string | null
+}
+
+/** Active calculation scope and optional source view requested by the portfolio reader. */
+export interface ActiveRunPortfolioScope {
+  readonly principalId: PrincipalId
+  readonly sourceId: SourceId | null
+  readonly jurisdiction: JurisdictionCode
+  readonly taxYear: TaxYear
+  readonly reportingCurrency: CurrencyCode
+}
+
+/** Successful run whose immutable lots back one portfolio response. */
+export interface PortfolioActiveRun {
+  readonly runId: CalculationRunId
+  readonly status: "complete" | "partial"
 }
 
 /** Open asset position before current market valuation. */
@@ -33,7 +53,18 @@ export interface PortfolioAssetPosition {
   readonly costBasisStatus: "known" | "pending_review"
 }
 
+/** Run identity and open positions read from one active result snapshot. */
+export interface ActiveRunPortfolio {
+  readonly activeRun: PortfolioActiveRun | null
+  readonly positions: ReadonlyArray<PortfolioAssetPosition>
+}
+
 export interface PortfolioRepositoryShape {
+  /** Read positions from the active immutable calculation run for one scope. */
+  readonly getActiveRunPortfolio: (
+    scope: ActiveRunPortfolioScope
+  ) => Effect.Effect<ActiveRunPortfolio, PortfolioSourceNotFoundError | PersistenceError>
+
   /** List open positions across all owned sources or one owned source. */
   readonly listAssetPositions: (
     scope: PortfolioAssetScope
