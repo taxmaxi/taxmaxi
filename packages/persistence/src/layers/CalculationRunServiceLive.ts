@@ -82,15 +82,17 @@ const sha256 = (domain: string, value: unknown): string =>
 
 const makeLedgerRevision = ({
   snapshotTransactionId,
+  snapshotVisibility,
   events,
   custodyUnitMembership,
 }: {
   readonly snapshotTransactionId: string
+  readonly snapshotVisibility: string
   readonly events: ReadonlyArray<AccountingEvent>
   readonly custodyUnitMembership: ReadonlyArray<CustodyUnitMembership>
 }): InputLedgerRevision =>
   InputLedgerRevision.make(
-    `v1:${snapshotTransactionId}:${sha256("taxmaxi:factual-ledger:v1", {
+    `v2:${snapshotTransactionId}:${snapshotVisibility}:${sha256("taxmaxi:factual-ledger:v1", {
       events: events.map(canonicalEvent),
       custodyUnitMembership: custodyUnitMembership.map(({ sourceId, custodyUnitId }) => [
         sourceId,
@@ -115,13 +117,17 @@ const make = Effect.gen(function* () {
         Effect.gen(function* () {
           yield* tx.execute(sql`set transaction isolation level repeatable read`)
           const snapshotTransactionRows = yield* tx
-            .select({ transactionId: sql<string>`pg_current_xact_id()::text` })
+            .select({
+              transactionId: sql<string>`pg_current_xact_id()::text`,
+              visibility: sql<string>`replace(pg_current_snapshot()::text, ':', '.')`,
+            })
             .from(schema.principals)
             .where(eq(schema.principals.id, params.principalId))
             .limit(1)
           const snapshotTransactionId = snapshotTransactionRows[0]?.transactionId
+          const snapshotVisibility = snapshotTransactionRows[0]?.visibility
 
-          if (snapshotTransactionId === undefined) {
+          if (snapshotTransactionId === undefined || snapshotVisibility === undefined) {
             return yield* new PersistenceError({
               operation: "calculationRunService.recompute.revision",
               cause: "PostgreSQL did not return a transaction sequence",
@@ -134,6 +140,7 @@ const make = Effect.gen(function* () {
           })
           const inputLedgerRevision = makeLedgerRevision({
             snapshotTransactionId,
+            snapshotVisibility,
             events: factualLedger.events,
             custodyUnitMembership: factualLedger.custodyUnitMembership,
           })

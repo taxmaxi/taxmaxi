@@ -7,11 +7,25 @@
 import type { TaxAccountingResult } from "@my/accounting"
 import { format as formatQuantity } from "@my/core/accounting"
 import type { CurrencyCode } from "@my/core/currency"
-import { and, asc, desc, eq, ne, sql } from "drizzle-orm"
+import {
+  aliasedTable,
+  and,
+  asc,
+  desc,
+  eq,
+  gte,
+  inArray,
+  isNotNull,
+  lt,
+  ne,
+  notExists,
+  sql,
+} from "drizzle-orm"
 import * as DateTime from "effect/DateTime"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import * as Schema from "effect/Schema"
+import { PrincipalId } from "@my/core/ownership"
 import { PersistenceError } from "../errors/RepositoryError.ts"
 import { schema } from "../schema/index.ts"
 import {
@@ -22,12 +36,14 @@ import {
   type CalculationRunRepositoryShape,
   type ExposedCalculationRunStatus,
   type FailCalculationRunParams,
+  type MaintainCalculationRunsParams,
   type PersistCalculationRunParams,
   type StartCalculationRunParams,
 } from "../services/CalculationRunRepository.ts"
 import { drizzle } from "./PgClientLive.ts"
 
 const INSERT_BATCH_ROW_COUNT = 500
+const CALCULATION_STALE_RECOMPUTED_CODE = "calculation_stale_recomputed"
 
 const writeBatches = <Row, Error, Requirements>(
   rows: ReadonlyArray<Row>,
@@ -153,6 +169,197 @@ const make = Effect.gen(function* () {
             })
         )
       )
+
+  const failStaleRuns = ({
+    tx,
+    staleBefore,
+    limit,
+    completedAt,
+  }: MaintainCalculationRunsParams & {
+    readonly tx: CalculationTransaction
+    readonly completedAt: Date
+  }) =>
+    Effect.gen(function* () {
+      const staleRuns = yield* tx
+        .select({ id: schema.calculationRuns.id })
+        .from(schema.calculationRuns)
+        .where(
+          and(
+            eq(schema.calculationRuns.status, "running"),
+            lt(schema.calculationRuns.startedAt, staleBefore)
+          )
+        )
+        .orderBy(asc(schema.calculationRuns.startedAt), asc(schema.calculationRuns.id))
+        .limit(limit)
+
+      if (staleRuns.length === 0) return []
+
+      return yield* tx
+        .update(schema.calculationRuns)
+        .set({
+          status: "failed",
+          failureCode: CALCULATION_STALE_RECOMPUTED_CODE,
+          failureMessage: null,
+          completedAt,
+          updatedAt: completedAt,
+        })
+        .where(
+          and(
+            inArray(
+              schema.calculationRuns.id,
+              staleRuns.map(({ id }) => id)
+            ),
+            eq(schema.calculationRuns.status, "running")
+          )
+        )
+        .returning({ principalId: schema.calculationRuns.principalId })
+    })
+
+  const findRecomputePrincipals = ({
+    tx,
+    limit,
+  }: {
+    readonly tx: CalculationTransaction
+    readonly limit: number
+  }) => {
+    // A run covers source work only when every completed job tuple currently
+    // stored for the principal was visible to that run's repeatable-read
+    // snapshot. Times and raw transaction-ID ordering cannot prove visibility.
+    const principalsWithCompletedJobs = tx.$with("principals_with_completed_jobs").as(
+      tx
+        .selectDistinctOn([schema.processingJobs.principalId], {
+          principalId: schema.processingJobs.principalId,
+        })
+        .from(schema.processingJobs)
+        .where(
+          and(
+            eq(schema.processingJobs.status, "completed"),
+            isNotNull(schema.processingJobs.completedAt)
+          )
+        )
+        .orderBy(asc(schema.processingJobs.principalId))
+    )
+
+    return tx
+      .with(principalsWithCompletedJobs)
+      .select({ principalId: principalsWithCompletedJobs.principalId })
+      .from(principalsWithCompletedJobs)
+      .where(
+        notExists(
+          tx
+            .select({ id: schema.calculationRuns.id })
+            .from(schema.calculationRuns)
+            .where(
+              and(
+                eq(schema.calculationRuns.principalId, principalsWithCompletedJobs.principalId),
+                ne(schema.calculationRuns.status, "failed"),
+                sql`split_part(${schema.calculationRuns.inputLedgerRevision}, ':', 1) = 'v2'`,
+                notExists(
+                  tx
+                    .select({ id: schema.processingJobs.id })
+                    .from(schema.processingJobs)
+                    .where(
+                      and(
+                        eq(
+                          schema.processingJobs.principalId,
+                          principalsWithCompletedJobs.principalId
+                        ),
+                        eq(schema.processingJobs.status, "completed"),
+                        isNotNull(schema.processingJobs.completedAt),
+                        sql`not pg_visible_in_snapshot(
+                          ${schema.processingJobs}.xmin::text::xid8,
+                          replace(
+                            split_part(${schema.calculationRuns.inputLedgerRevision}, ':', 3),
+                            '.',
+                            ':'
+                          )::pg_snapshot
+                        )`
+                      )
+                    )
+                )
+              )
+            )
+        )
+      )
+      .orderBy(asc(principalsWithCompletedJobs.principalId))
+      .limit(limit)
+  }
+
+  const findPendingStaleRecomputePrincipals = ({
+    tx,
+    limit,
+  }: {
+    readonly tx: CalculationTransaction
+    readonly limit: number
+  }) => {
+    const staleRun = aliasedTable(schema.calculationRuns, "stale_calculation_run")
+    const replacementRun = aliasedTable(schema.calculationRuns, "replacement_calculation_run")
+
+    return tx
+      .selectDistinctOn([staleRun.principalId], { principalId: staleRun.principalId })
+      .from(staleRun)
+      .where(
+        and(
+          eq(staleRun.status, "failed"),
+          eq(staleRun.failureCode, CALCULATION_STALE_RECOMPUTED_CODE),
+          isNotNull(staleRun.completedAt),
+          notExists(
+            tx
+              .select({ id: replacementRun.id })
+              .from(replacementRun)
+              .where(
+                and(
+                  eq(replacementRun.principalId, staleRun.principalId),
+                  ne(replacementRun.status, "failed"),
+                  gte(replacementRun.startedAt, staleRun.completedAt)
+                )
+              )
+          )
+        )
+      )
+      .orderBy(asc(staleRun.principalId))
+      .limit(limit)
+  }
+
+  const settleStaleAndFindRecomputePrincipals: CalculationRunRepositoryShape["settleStaleAndFindRecomputePrincipals"] =
+    (params: MaintainCalculationRunsParams) =>
+      db
+        .transaction((tx) =>
+          Effect.gen(function* () {
+            const completedAt = yield* DateTime.nowAsDate
+            const failedRuns = yield* failStaleRuns({ tx, completedAt, ...params })
+            const pendingStalePrincipals = yield* findPendingStaleRecomputePrincipals({
+              tx,
+              limit: params.limit,
+            })
+            const uncoveredPrincipals = yield* findRecomputePrincipals({
+              tx,
+              limit: params.limit,
+            })
+
+            const principalIds = [
+              ...new Set([
+                ...failedRuns.map(({ principalId }) => principalId),
+                ...pendingStalePrincipals.map(({ principalId }) => principalId),
+                ...uncoveredPrincipals.map(({ principalId }) => principalId),
+              ]),
+            ]
+              .sort()
+              .slice(0, params.limit)
+              .map((principalId) => PrincipalId.make(principalId))
+
+            return { failedStaleRuns: failedRuns.length, principalIds }
+          })
+        )
+        .pipe(
+          Effect.mapError(
+            (cause) =>
+              new PersistenceError({
+                operation: "calculationRunRepository.settleStaleAndFindRecomputePrincipals",
+                cause,
+              })
+          )
+        )
 
   const claimRun = ({ tx, params, result, startedAt }: WriteContext) =>
     Effect.gen(function* () {
@@ -572,7 +779,13 @@ const make = Effect.gen(function* () {
       )
     )
 
-  return CalculationRunRepository.of({ fail, getLatestStatus, persist, start })
+  return CalculationRunRepository.of({
+    fail,
+    getLatestStatus,
+    persist,
+    settleStaleAndFindRecomputePrincipals,
+    start,
+  })
 })
 
 /** Live calculation-run repository backed by PostgreSQL. */

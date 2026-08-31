@@ -179,6 +179,8 @@ const CalculationRunStatusFailureTestLive = Layer.succeed(
           cause: "forced calculation status read failure",
         })
       ),
+    settleStaleAndFindRecomputePrincipals: () =>
+      Effect.die("CalculationRunRepository test stub: maintenance"),
     persist: () => Effect.die("CalculationRunRepository test stub: persist"),
     start: () => Effect.die("CalculationRunRepository test stub: start"),
   })
@@ -462,6 +464,7 @@ describe("SyncRunsApiLive", () => {
           CalculationRunRepository.of({
             fail: repository.fail,
             getLatestStatus: repository.getLatestStatus,
+            settleStaleAndFindRecomputePrincipals: repository.settleStaleAndFindRecomputePrincipals,
             persist: (params) =>
               Effect.gen(function* () {
                 yield* Deferred.succeed(terminalWriteReached, undefined)

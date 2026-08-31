@@ -56,6 +56,7 @@ const FIFTH_RUN_ID = CalculationRunId.make("00000000-0000-4000-8000-000000000813
 const SIXTH_RUN_ID = CalculationRunId.make("00000000-0000-4000-8000-000000000814")
 const RECOMPUTE_RUN_ID = CalculationRunId.make("00000000-0000-4000-8000-000000000815")
 const PARTIAL_RECOMPUTE_RUN_ID = CalculationRunId.make("00000000-0000-4000-8000-000000000816")
+const OTHER_MAINTENANCE_RUN_ID = CalculationRunId.make("00000000-0000-4000-8000-000000000817")
 const ACQUISITION_EVENT_ID = AccountingEventId.make("00000000-0000-4000-8000-000000000802")
 const DISPOSITION_EVENT_ID = AccountingEventId.make("00000000-0000-4000-8000-000000000803")
 const TEST_PRINCIPAL_ID = PrincipalId.make("00000000-0000-4000-8000-000000000183")
@@ -95,6 +96,7 @@ const calculationRunServiceWithPersist = (
       CalculationRunRepository.of({
         fail: repository.fail,
         getLatestStatus: repository.getLatestStatus,
+        settleStaleAndFindRecomputePrincipals: repository.settleStaleAndFindRecomputePrincipals,
         persist: makePersist(repository),
         start: repository.start,
       })
@@ -113,6 +115,64 @@ const runCalculationService = <A, E>(effect: Effect.Effect<A, E, CalculationRunS
   context.runWithLayer({ effect, layer: CalculationRunServiceTestLive })
 
 const quantity = (value: string) => AccountingQuantity.make(BigDecimal.fromStringUnsafe(value))
+const date = (value: string) => DateTime.toDateUtc(DateTime.makeUnsafe(value))
+
+const captureInputLedgerRevision = () =>
+  runPgEffect(
+    Effect.gen(function* () {
+      const db = yield* drizzle
+      return yield* db.transaction((tx) =>
+        Effect.gen(function* () {
+          yield* tx.execute(sql`set transaction isolation level repeatable read`)
+          const [snapshot] = yield* tx
+            .select({
+              transactionId: sql<string>`pg_current_xact_id()::text`,
+              visibility: sql<string>`replace(pg_current_snapshot()::text, ':', '.')`,
+            })
+            .from(schema.principals)
+            .where(eq(schema.principals.id, TEST_PRINCIPAL_ID))
+            .limit(1)
+
+          if (snapshot === undefined) return yield* Effect.die("Failed to capture test snapshot")
+
+          return InputLedgerRevision.make(
+            `v2:${snapshot.transactionId}:${snapshot.visibility}:${"a".repeat(64)}`
+          )
+        })
+      )
+    })
+  )
+
+const runningMaintenanceRun = ({
+  id,
+  principalId,
+  inputLedgerRevision,
+  startedAt,
+}: {
+  readonly id: CalculationRunId
+  readonly principalId: PrincipalId
+  readonly inputLedgerRevision: InputLedgerRevision
+  readonly startedAt: Date
+}) => ({
+  id,
+  principalId,
+  jurisdiction: "DE",
+  taxYear: 2026,
+  reportingCurrency: "EUR",
+  engineVersion: "1",
+  ruleSetVersion: "de-crypto-income-tax-v2025-03-06",
+  inputLedgerRevision,
+  valuationRevision: `sha256:${"b".repeat(64)}`,
+  status: "running" as const,
+  accountingMethod: null,
+  inventoryScope: null,
+  appliedChoiceIds: [],
+  appliedRules: [],
+  processedEventIds: [],
+  startedAt,
+  createdAt: startedAt,
+  updatedAt: startedAt,
+})
 
 const acquiredAt = Timestamp.make({ epochMillis: Date.parse("2024-01-01T10:00:00.000Z") })
 const disposedAt = Timestamp.make({ epochMillis: Date.parse("2025-01-02T10:00:00.000Z") })
@@ -216,7 +276,7 @@ const persistResult = ({
       id,
       principalId,
       reportingCurrency,
-      inputLedgerRevision: InputLedgerRevision.make(`v1:${sequence}:${"a".repeat(64)}`),
+      inputLedgerRevision: InputLedgerRevision.make(`v2:${sequence}:1.2.:${"a".repeat(64)}`),
       valuationRevision: ValuationRevision.make(`sha256:${"b".repeat(64)}`),
       result,
     })
@@ -455,6 +515,312 @@ beforeEach(() =>
 )
 
 describe("CalculationRunRepositoryLive", () => {
+  it.effect("fails stale runs once and leaves fresh runs running", () =>
+    Effect.gen(function* () {
+      yield* runPgEffect(seedCalculationRunFixture({ includeOtherPrincipal: true }))
+      const oldCompletion = date("2026-01-01T00:00:00.000Z")
+      const staleStartedAt = date("2026-01-01T00:01:00.000Z")
+      const freshStartedAt = date("2026-01-01T00:09:00.000Z")
+
+      yield* runPgEffect(
+        Effect.gen(function* () {
+          const db = yield* drizzle
+          yield* db.insert(schema.processingJobs).values([
+            {
+              sourceId: TEST_SOURCE_ID,
+              principalId: TEST_PRINCIPAL_ID,
+              status: "completed",
+              completedAt: oldCompletion,
+            },
+            {
+              sourceId: OTHER_SOURCE_ID,
+              principalId: OTHER_PRINCIPAL_ID,
+              status: "completed",
+              completedAt: oldCompletion,
+            },
+          ])
+        })
+      )
+      const coveredRevision = yield* captureInputLedgerRevision()
+      yield* runRepository(
+        Effect.flatMap(CalculationRunRepository, (repository) =>
+          Effect.gen(function* () {
+            yield* repository.start({
+              id: RECOMPUTE_RUN_ID,
+              principalId: TEST_PRINCIPAL_ID,
+              jurisdiction: JurisdictionCode.make("DE"),
+              taxYear: TaxYear.make(2026),
+              reportingCurrency: EUR,
+              engineVersion: "1",
+              ruleSetVersion: "de-crypto-income-tax-v2025-03-06",
+              inputLedgerRevision: coveredRevision,
+              valuationRevision: ValuationRevision.make(`sha256:${"b".repeat(64)}`),
+              custodyUnitMembership: [
+                {
+                  sourceId: SourceId.make(TEST_SOURCE_ID),
+                  custodyUnitId: TEST_CUSTODY_UNIT_ID,
+                },
+              ],
+            })
+            yield* repository.start({
+              id: OTHER_MAINTENANCE_RUN_ID,
+              principalId: OTHER_PRINCIPAL_ID,
+              jurisdiction: JurisdictionCode.make("DE"),
+              taxYear: TaxYear.make(2026),
+              reportingCurrency: EUR,
+              engineVersion: "1",
+              ruleSetVersion: "de-crypto-income-tax-v2025-03-06",
+              inputLedgerRevision: coveredRevision,
+              valuationRevision: ValuationRevision.make(`sha256:${"b".repeat(64)}`),
+              custodyUnitMembership: [
+                {
+                  sourceId: SourceId.make(OTHER_SOURCE_ID),
+                  custodyUnitId: OTHER_CUSTODY_UNIT_ID,
+                },
+              ],
+            })
+          })
+        )
+      )
+      yield* runPgEffect(
+        Effect.gen(function* () {
+          const db = yield* drizzle
+          yield* db
+            .update(schema.calculationRuns)
+            .set({ startedAt: staleStartedAt, updatedAt: staleStartedAt })
+            .where(eq(schema.calculationRuns.id, RECOMPUTE_RUN_ID))
+          yield* db
+            .update(schema.calculationRuns)
+            .set({ startedAt: freshStartedAt, updatedAt: freshStartedAt })
+            .where(eq(schema.calculationRuns.id, OTHER_MAINTENANCE_RUN_ID))
+        })
+      )
+
+      const maintenance = yield* runRepository(
+        Effect.flatMap(CalculationRunRepository, (repository) =>
+          repository.settleStaleAndFindRecomputePrincipals({
+            staleBefore: date("2026-01-01T00:05:00.000Z"),
+            limit: 100,
+          })
+        )
+      )
+      const retryAfterSettlement = yield* runRepository(
+        Effect.flatMap(CalculationRunRepository, (repository) =>
+          repository.settleStaleAndFindRecomputePrincipals({
+            staleBefore: date("2026-01-01T00:05:00.000Z"),
+            limit: 100,
+          })
+        )
+      )
+      yield* runRepository(
+        Effect.flatMap(CalculationRunRepository, (repository) =>
+          repository.start({
+            id: FIFTH_RUN_ID,
+            principalId: TEST_PRINCIPAL_ID,
+            jurisdiction: JurisdictionCode.make("DE"),
+            taxYear: TaxYear.make(2026),
+            reportingCurrency: EUR,
+            engineVersion: "1",
+            ruleSetVersion: "de-crypto-income-tax-v2025-03-06",
+            inputLedgerRevision: coveredRevision,
+            valuationRevision: ValuationRevision.make(`sha256:${"b".repeat(64)}`),
+            custodyUnitMembership: [
+              {
+                sourceId: SourceId.make(TEST_SOURCE_ID),
+                custodyUnitId: TEST_CUSTODY_UNIT_ID,
+              },
+            ],
+          })
+        )
+      )
+      yield* runPgEffect(
+        Effect.gen(function* () {
+          const db = yield* drizzle
+          yield* db
+            .update(schema.calculationRuns)
+            .set({ startedAt: freshStartedAt, updatedAt: freshStartedAt })
+            .where(eq(schema.calculationRuns.id, FIFTH_RUN_ID))
+        })
+      )
+      const settledAfterReplacement = yield* runRepository(
+        Effect.flatMap(CalculationRunRepository, (repository) =>
+          repository.settleStaleAndFindRecomputePrincipals({
+            staleBefore: date("2026-01-01T00:05:00.000Z"),
+            limit: 100,
+          })
+        )
+      )
+      const runs = yield* runPgEffect(
+        Effect.gen(function* () {
+          const db = yield* drizzle
+          return yield* db
+            .select({
+              id: schema.calculationRuns.id,
+              status: schema.calculationRuns.status,
+              failureCode: schema.calculationRuns.failureCode,
+            })
+            .from(schema.calculationRuns)
+            .orderBy(asc(schema.calculationRuns.id))
+        })
+      )
+
+      expect(maintenance).toEqual({
+        failedStaleRuns: 1,
+        principalIds: [TEST_PRINCIPAL_ID],
+      })
+      expect(retryAfterSettlement).toEqual({
+        failedStaleRuns: 0,
+        principalIds: [TEST_PRINCIPAL_ID],
+      })
+      expect(settledAfterReplacement).toEqual({ failedStaleRuns: 0, principalIds: [] })
+      expect(runs).toEqual([
+        {
+          id: FIFTH_RUN_ID,
+          status: "running",
+          failureCode: null,
+        },
+        {
+          id: RECOMPUTE_RUN_ID,
+          status: "failed",
+          failureCode: "calculation_stale_recomputed",
+        },
+        {
+          id: OTHER_MAINTENANCE_RUN_ID,
+          status: "running",
+          failureCode: null,
+        },
+      ])
+    })
+  )
+
+  it.effect("retries when any completed source job was absent from the run snapshot", () =>
+    Effect.gen(function* () {
+      yield* runPgEffect(seedCalculationRunFixture({ includeOtherPrincipal: true }))
+      const sourceCompletedAt = date("2026-01-01T00:00:00.000Z")
+      yield* runPgEffect(
+        Effect.gen(function* () {
+          const db = yield* drizzle
+          yield* db.insert(schema.processingJobs).values([
+            {
+              sourceId: TEST_SOURCE_ID,
+              principalId: TEST_PRINCIPAL_ID,
+              status: "completed",
+              completedAt: date("2026-01-01T00:02:00.000Z"),
+            },
+            {
+              sourceId: OTHER_SOURCE_ID,
+              principalId: OTHER_PRINCIPAL_ID,
+              status: "completed",
+              completedAt: sourceCompletedAt,
+            },
+          ])
+        })
+      )
+      const coveredRevision = yield* captureInputLedgerRevision()
+      yield* runPgEffect(
+        Effect.gen(function* () {
+          const db = yield* drizzle
+          yield* db.insert(schema.processingJobs).values({
+            sourceId: TEST_SOURCE_ID,
+            principalId: TEST_PRINCIPAL_ID,
+            status: "completed",
+            completedAt: date("2026-01-01T00:01:00.000Z"),
+          })
+        })
+      )
+      yield* runPgEffect(
+        Effect.gen(function* () {
+          const db = yield* drizzle
+          const startedAt = date("2026-01-01T00:03:00.000Z")
+          yield* db.insert(schema.calculationRuns).values([
+            runningMaintenanceRun({
+              id: RECOMPUTE_RUN_ID,
+              principalId: TEST_PRINCIPAL_ID,
+              inputLedgerRevision: coveredRevision,
+              startedAt,
+            }),
+            runningMaintenanceRun({
+              id: OTHER_MAINTENANCE_RUN_ID,
+              principalId: OTHER_PRINCIPAL_ID,
+              inputLedgerRevision: coveredRevision,
+              startedAt,
+            }),
+          ])
+        })
+      )
+      const maintain = runRepository(
+        Effect.flatMap(CalculationRunRepository, (repository) =>
+          repository.settleStaleAndFindRecomputePrincipals({
+            staleBefore: date("2025-12-31T23:59:00.000Z"),
+            limit: 100,
+          })
+        )
+      )
+
+      const first = yield* maintain
+      const retry = yield* maintain
+
+      expect(first).toEqual({ failedStaleRuns: 0, principalIds: [TEST_PRINCIPAL_ID] })
+      expect(retry).toEqual(first)
+    })
+  )
+
+  it.effect("rolls back stale settlement when its database update fails", () =>
+    Effect.gen(function* () {
+      yield* runPgEffect(seedCalculationRunFixture())
+      const revision = yield* captureInputLedgerRevision()
+      const staleStartedAt = date("2026-01-01T00:00:00.000Z")
+      yield* runPgEffect(
+        Effect.gen(function* () {
+          const db = yield* drizzle
+          yield* db.insert(schema.calculationRuns).values(
+            runningMaintenanceRun({
+              id: RECOMPUTE_RUN_ID,
+              principalId: TEST_PRINCIPAL_ID,
+              inputLedgerRevision: revision,
+              startedAt: staleStartedAt,
+            })
+          )
+          yield* db.execute(
+            sql.raw(`
+              create function reject_test_stale_calculation() returns trigger as $$
+              begin
+                if new.failure_code = 'calculation_stale_recomputed' then
+                  raise exception 'forced stale settlement failure';
+                end if;
+                return new;
+              end;
+              $$ language plpgsql
+            `)
+          )
+          yield* db.execute(
+            sql.raw(`
+              create trigger reject_test_stale_calculation
+              before update on calculation_runs
+              for each row execute function reject_test_stale_calculation()
+            `)
+          )
+        })
+      )
+
+      const error = yield* runRepository(
+        Effect.flip(
+          Effect.flatMap(CalculationRunRepository, (repository) =>
+            repository.settleStaleAndFindRecomputePrincipals({
+              staleBefore: date("2026-01-01T00:05:00.000Z"),
+              limit: 100,
+            })
+          )
+        )
+      )
+      const settlement = yield* readRunSettlement(RECOMPUTE_RUN_ID)
+
+      expect(error).toBeInstanceOf(PersistenceError)
+      expect(settlement.run).toEqual({ status: "running", failureCode: null })
+      expect(settlement.active).toBeUndefined()
+    })
+  )
+
   it.effect("starts a visible run and settles it as failed without activation", () =>
     Effect.gen(function* () {
       yield* runPgEffect(seedCalculationRunFixture())
@@ -470,7 +836,7 @@ describe("CalculationRunRepositoryLive", () => {
               reportingCurrency: EUR,
               engineVersion: "1",
               ruleSetVersion: "de-crypto-income-tax-v2025-03-06",
-              inputLedgerRevision: InputLedgerRevision.make(`v1:815:${"a".repeat(64)}`),
+              inputLedgerRevision: InputLedgerRevision.make(`v2:815:1.2.:${"a".repeat(64)}`),
               valuationRevision: ValuationRevision.make(`sha256:${"b".repeat(64)}`),
               custodyUnitMembership: [
                 {
@@ -575,7 +941,9 @@ describe("CalculationRunRepositoryLive", () => {
 
       expect(complete).toMatchObject({ activated: true, status: "complete" })
       expect(partial).toMatchObject({ activated: true, status: "partial" })
-      expect(complete.inputLedgerRevision).toMatch(/^v1:\d+:[0-9a-f]{64}$/)
+      expect(complete.inputLedgerRevision).toMatch(
+        /^v2:\d+:\d+\.\d+\.(?:\d+(?:,\d+)*)?:[0-9a-f]{64}$/
+      )
       expect(complete.valuationRevision).toMatch(/^sha256:[0-9a-f]{64}$/)
       expect(partial.inputLedgerRevision).not.toBe(complete.inputLedgerRevision)
       expect(stored.runs).toEqual([
@@ -1347,7 +1715,7 @@ describe("CalculationRunRepositoryLive", () => {
                 id: RUN_ID,
                 principalId: TEST_PRINCIPAL_ID,
                 reportingCurrency: EUR,
-                inputLedgerRevision: InputLedgerRevision.make(`v1:801:${"a".repeat(64)}`),
+                inputLedgerRevision: InputLedgerRevision.make(`v2:801:1.2.:${"a".repeat(64)}`),
                 valuationRevision: ValuationRevision.make(`sha256:${"b".repeat(64)}`),
                 result: completeResult(),
               }),
