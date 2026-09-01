@@ -27,6 +27,15 @@ const jsonResponse = (url: URL, body: unknown, status = 200) =>
     })
   )
 
+const rawJsonResponse = (url: URL, body: string, status = 200) =>
+  HttpClientResponse.fromWeb(
+    HttpClientRequest.get(url.toString()),
+    new Response(body, {
+      status,
+      headers: { "content-type": "application/json" },
+    })
+  )
+
 const runFetch = ({
   handler,
   configProvider = testConfigProvider,
@@ -97,6 +106,60 @@ describe("CoinGeckoHistoricalPriceClientLive", () => {
       expect(result._tag).toBe("Success")
       if (result._tag === "Success") {
         expect(Option.getOrNull(result.success)).toBe("1e-18")
+      }
+    })
+  )
+
+  it.effect("rounds the exact provider numeric literal without JavaScript number loss", () =>
+    Effect.gen(function* () {
+      const result = yield* Effect.promise(() =>
+        runFetch({
+          handler: (url) =>
+            Effect.succeed(
+              rawJsonResponse(
+                url,
+                '{"market_data":{"current_price":{"eur":123.1234567890123456789}}}'
+              )
+            ),
+        })
+      )
+
+      expect(result._tag).toBe("Success")
+      if (result._tag === "Success") {
+        expect(Option.getOrNull(result.success)).toBe("1.23123456789012345679e+2")
+      }
+    })
+  )
+
+  it.effect("rejects a string in place of the provider numeric literal", () =>
+    Effect.gen(function* () {
+      const result = yield* Effect.promise(() =>
+        runFetch({
+          handler: (url) =>
+            Effect.succeed(
+              rawJsonResponse(url, '{"market_data":{"current_price":{"eur":"128.375"}}}')
+            ),
+        })
+      )
+
+      expect(result._tag).toBe("Failure")
+      if (result._tag === "Failure") {
+        expect(result.failure).toBeInstanceOf(CoinGeckoHistoricalPriceError)
+      }
+    })
+  )
+
+  it.effect("reports malformed provider JSON through the typed client error", () =>
+    Effect.gen(function* () {
+      const result = yield* Effect.promise(() =>
+        runFetch({
+          handler: (url) => Effect.succeed(rawJsonResponse(url, '{"market_data":')),
+        })
+      )
+
+      expect(result._tag).toBe("Failure")
+      if (result._tag === "Failure") {
+        expect(result.failure).toBeInstanceOf(CoinGeckoHistoricalPriceError)
       }
     })
   )

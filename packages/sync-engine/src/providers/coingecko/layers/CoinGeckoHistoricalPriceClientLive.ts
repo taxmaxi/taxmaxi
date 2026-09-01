@@ -35,19 +35,43 @@ const PRO_MIN_REQUEST_INTERVAL_MS = 120
 const STORED_PRICE_SCALE = 18
 const STORED_PRICE_UPPER_BOUND = BigDecimal.fromStringUnsafe("1000000000000000000")
 
+class JsonNumberLiteral {
+  constructor(readonly source: string) {}
+}
+
+interface JsonParseContext {
+  readonly source: string
+}
+
+// Node 26 exposes the original primitive text to JSON revivers. TypeScript's
+// current JSON declaration does not yet include that third callback argument.
+declare global {
+  interface JSON {
+    parse(
+      text: string,
+      reviver: (this: unknown, key: string, value: unknown, context: JsonParseContext) => unknown
+    ): unknown
+  }
+}
+
 const CoinGeckoHistoricalPriceResponse = Schema.Struct({
   market_data: Schema.optional(
     Schema.Struct({
       current_price: Schema.optional(
         Schema.Struct({
-          eur: Schema.optional(Schema.Finite),
+          eur: Schema.optional(Schema.instanceOf(JsonNumberLiteral)),
         })
       ),
     })
   ),
 })
 
-const decodeHistoricalPriceResponse = Schema.decodeUnknownEffect(CoinGeckoHistoricalPriceResponse)
+const decodeHistoricalPriceResponse = Schema.decodeUnknownEffect(
+  Schema.fromJsonString(CoinGeckoHistoricalPriceResponse, {
+    reviver: (_key, value, context) =>
+      typeof value === "number" ? new JsonNumberLiteral(context.source) : value,
+  })
+)
 
 const isRetryableStatus = (status: number): boolean => status === 408 || status >= 500
 
@@ -56,8 +80,8 @@ const toCoinGeckoDate = (snapshotAt: Date): string => {
   return `${day}-${month}-${year}`
 }
 
-const toStoredPrice = (eur: number): Option.Option<string> => {
-  const decoded = BigDecimal.fromNumber(eur)
+const toStoredPrice = (eur: JsonNumberLiteral): Option.Option<string> => {
+  const decoded = BigDecimal.fromString(eur.source)
   if (Option.isNone(decoded)) return Option.none()
 
   const rounded = BigDecimal.round(decoded.value, {
@@ -153,7 +177,7 @@ const make = Effect.gen(function* () {
           )
         }
 
-        return response.json.pipe(
+        return response.text.pipe(
           Effect.mapError(
             (cause) =>
               new CoinGeckoHistoricalPriceError({
