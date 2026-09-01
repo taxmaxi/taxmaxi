@@ -64,6 +64,7 @@ import { SourceSyncJobRepositoryLive } from "./SourceSyncJobRepositoryLive.ts"
 import { SourceSyncRunRepositoryLive } from "./SourceSyncRunRepositoryLive.ts"
 import { SourceSyncStateRepositoryLive } from "./SourceSyncStateRepositoryLive.ts"
 import { CalculationRunRepositoryLive } from "./CalculationRunRepositoryLive.ts"
+import { PrincipalAssetOverrideRepositoryLive } from "./PrincipalAssetOverrideRepositoryLive.ts"
 import { SyncEngineSourceRepositoryLive } from "./SyncEngineSourceRepositoryLive.ts"
 import { TransferReconciliationRepositoryLive } from "./TransferReconciliationRepositoryLive.ts"
 import { SyncEngineTransactionLive } from "./SyncEngineTransactionLive.ts"
@@ -138,6 +139,7 @@ export const RepositoriesLive = Layer.mergeAll(
   SourceSyncRunRepositoryLive,
   SourceSyncStateRepositoryLive,
   CalculationRunRepositoryLive,
+  PrincipalAssetOverrideRepositoryLive,
   SyncEngineSourceRepositoryLive,
   SyncEngineTransactionLive,
   TransferReconciliationRepositoryLive
