@@ -12,8 +12,10 @@ import type {
   PrincipalAssetTechnicalBlocker,
   ResolvedPrincipalAssetIdentity,
 } from "@my/core/assets"
+import type { AuthUserId } from "@my/core/authentication"
 import type { PrincipalId } from "@my/core/ownership"
 import * as Context from "effect/Context"
+import * as Data from "effect/Data"
 import type * as Effect from "effect/Effect"
 import type * as Option from "effect/Option"
 import * as Schema from "effect/Schema"
@@ -119,7 +121,58 @@ export type PrincipalAssetOverrideReadError =
   | PrincipalAssetOverrideInvalidTargetError
   | PersistenceError
 
-/** Read-only persistence contract for principal asset overrides. */
+/** The current override stream or TaxMaxi conclusion changed before a mutation. */
+export class PrincipalAssetOverrideConflictError extends Data.TaggedError(
+  "PrincipalAssetOverrideConflictError"
+)<{
+  readonly conflictKinds: ReadonlyArray<"active_override" | "system_revision">
+  readonly currentProjection: PrincipalAssetOverrideProjection
+  readonly currentActiveOverrideId: string | null
+  readonly currentSystemRevision: string
+  readonly expectedActiveOverrideId: string
+  readonly expectedSystemRevision: string
+}> {}
+
+/** An identity replacement does not select a compatible existing economic asset. */
+export class PrincipalAssetOverrideReplacementValidationError extends Data.TaggedError(
+  "PrincipalAssetOverrideReplacementValidationError"
+)<{
+  readonly validation: Exclude<PrincipalAssetIdentityOverrideValidation, { readonly _tag: "ready" }>
+  readonly currentProjection: PrincipalAssetOverrideProjection
+}> {}
+
+/** Replacement value for one active override stream. */
+export type PrincipalAssetOverrideReplacement =
+  | { readonly _tag: "identity"; readonly assetId: string }
+  | { readonly _tag: "inclusion"; readonly inclusion: PrincipalAssetInclusion }
+
+/** Shared compare-and-set fields for replacing or withdrawing an active override. */
+export interface PrincipalAssetOverrideMutationParams {
+  readonly actorUserId: AuthUserId
+  readonly expectedActiveOverrideId: string
+  readonly expectedSystemRevision: string
+  readonly principalId: PrincipalId
+  readonly reason: string
+  readonly target: PrincipalAssetOverrideTarget
+}
+
+/** Data required to append a replacement record. */
+export interface ReplacePrincipalAssetOverrideParams extends PrincipalAssetOverrideMutationParams {
+  readonly replacement: PrincipalAssetOverrideReplacement
+}
+
+/** Data required to append a withdrawal record. */
+export interface WithdrawPrincipalAssetOverrideParams extends PrincipalAssetOverrideMutationParams {
+  readonly kind: "identity" | "inclusion"
+}
+
+/** Expected failures while replacing or withdrawing an override. */
+export type PrincipalAssetOverrideMutationError =
+  | PrincipalAssetOverrideConflictError
+  | PrincipalAssetOverrideReplacementValidationError
+  | PrincipalAssetOverrideReadError
+
+/** Principal-scoped persistence contract for asset override reads and mutations. */
 export interface PrincipalAssetOverrideRepositoryShape {
   /**
    * Read the current effective projection and full history for one owned target.
@@ -144,6 +197,30 @@ export interface PrincipalAssetOverrideRepositoryShape {
   }) => Effect.Effect<
     Option.Option<PrincipalAssetIdentityOverrideValidation>,
     PrincipalAssetOverrideReadError
+  >
+
+  /**
+   * Append a replacement after atomically checking the inspected TaxMaxi
+   * revision and expected active override ID. Missing and unowned targets are
+   * indistinguishable.
+   */
+  readonly replace: (
+    params: ReplacePrincipalAssetOverrideParams
+  ) => Effect.Effect<
+    Option.Option<PrincipalAssetOverrideProjection>,
+    PrincipalAssetOverrideMutationError
+  >
+
+  /**
+   * Append a withdrawal after atomically checking the inspected TaxMaxi
+   * revision and expected active override ID. Missing and unowned targets are
+   * indistinguishable.
+   */
+  readonly withdraw: (
+    params: WithdrawPrincipalAssetOverrideParams
+  ) => Effect.Effect<
+    Option.Option<PrincipalAssetOverrideProjection>,
+    PrincipalAssetOverrideMutationError
   >
 }
 

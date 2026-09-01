@@ -10,15 +10,20 @@ import {
   type PrincipalAssetOverrideTarget,
   type PrincipalAssetTechnicalBlocker,
 } from "@my/core/assets"
+import type { AuthUserId } from "@my/core/authentication"
+import type { PrincipalId } from "@my/core/ownership"
 import { and, asc, eq, isNull, or, sql, type SQLWrapper } from "drizzle-orm"
 import { alias } from "drizzle-orm/pg-core"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import * as Option from "effect/Option"
-import { wrapSqlError } from "../errors/RepositoryError.ts"
+import { databaseErrorMetadata } from "../errors/DatabaseErrorMetadata.ts"
+import { isPersistenceError, PersistenceError, wrapSqlError } from "../errors/RepositoryError.ts"
 import { schema } from "../schema/index.ts"
 import {
   PrincipalAssetOverrideInvalidTargetError,
+  PrincipalAssetOverrideConflictError,
+  PrincipalAssetOverrideReplacementValidationError,
   PrincipalAssetOverrideRepository,
   type PrincipalAssetOverrideHistoryRecord,
   type PrincipalAssetOverrideProjection,
@@ -44,6 +49,15 @@ const CHECKED_TECHNICAL_BLOCKER_KINDS = [
   "missing_decimals",
   "unsupported_asset_type",
 ] as const satisfies ReadonlyArray<PrincipalAssetTechnicalBlocker>
+const SUPERSEDES_UNIQUE_CONSTRAINT = "principal_asset_overrides_supersedes_unique"
+
+const isSerializationFailure = (cause: unknown): boolean =>
+  databaseErrorMetadata(cause)?.code === "40001"
+
+const isSupersessionRace = (cause: unknown): boolean => {
+  const metadata = databaseErrorMetadata(cause)
+  return metadata?.code === "23505" && metadata.constraint === SUPERSEDES_UNIQUE_CONSTRAINT
+}
 
 type CanonicalRepresentationTarget = Extract<
   PrincipalAssetOverrideTarget,
@@ -407,6 +421,7 @@ const makeWarnings = ({
 
 const make = Effect.gen(function* () {
   const db = yield* drizzle
+  type PrincipalAssetOverrideExecutor = Pick<typeof db, "insert" | "select" | "selectDistinct">
 
   const canonicalizeTarget = (
     target: PrincipalAssetOverrideTarget
@@ -537,12 +552,13 @@ const make = Effect.gen(function* () {
   }
 
   const loadProviderAssetState = (
-    providerAssetRowId: string
+    providerAssetRowId: string,
+    executor: PrincipalAssetOverrideExecutor = db
   ): Effect.Effect<
     LoadedTargetState | null,
     import("../errors/RepositoryError.ts").PersistenceError
   > =>
-    db
+    executor
       .select({
         providerAssetRowId: schema.providerAssets.id,
         name: schema.providerAssets.name,
@@ -596,8 +612,11 @@ const make = Effect.gen(function* () {
         wrapSqlError("principalAssetOverrideRepository.loadProviderAssetState")
       )
 
-  const loadGlobalRepresentation = (target: CanonicalRepresentationTarget) =>
-    db
+  const loadGlobalRepresentation = (
+    target: CanonicalRepresentationTarget,
+    executor: PrincipalAssetOverrideExecutor = db
+  ) =>
+    executor
       .select({
         assetId: schema.assetRepresentations.assetId,
         isSpam: schema.assetRepresentations.isSpam,
@@ -627,13 +646,15 @@ const make = Effect.gen(function* () {
       )
 
   const loadOwnedRepresentationObservations = ({
+    executor = db,
     principalId,
     target,
   }: {
+    readonly executor?: PrincipalAssetOverrideExecutor
     readonly principalId: string
     readonly target: CanonicalRepresentationTarget
   }) =>
-    db
+    executor
       .selectDistinct({
         decimals: schema.providerTransfers.observedDecimals,
         providerAssetName: schema.providerAssets.name,
@@ -695,13 +716,18 @@ const make = Effect.gen(function* () {
       )
       .pipe(wrapSqlError("principalAssetOverrideRepository.loadOwnedRepresentationObservations"))
 
-  const loadRepresentationState = (
-    target: CanonicalRepresentationTarget,
-    principalId: string
-  ): Effect.Effect<LoadedTargetState, import("../errors/RepositoryError.ts").PersistenceError> =>
+  const loadRepresentationState = ({
+    executor = db,
+    principalId,
+    target,
+  }: {
+    readonly executor?: PrincipalAssetOverrideExecutor
+    readonly principalId: string
+    readonly target: CanonicalRepresentationTarget
+  }): Effect.Effect<LoadedTargetState, import("../errors/RepositoryError.ts").PersistenceError> =>
     Effect.all({
-      representation: loadGlobalRepresentation(target),
-      observations: loadOwnedRepresentationObservations({ principalId, target }),
+      representation: loadGlobalRepresentation(target, executor),
+      observations: loadOwnedRepresentationObservations({ executor, principalId, target }),
     }).pipe(
       Effect.map(({ observations, representation }) =>
         representationState({ target, representation, observations })
@@ -709,9 +735,13 @@ const make = Effect.gen(function* () {
     )
 
   const findStoredTargetId = ({
+    executor = db,
+    lock = false,
     principalId,
     target,
   }: {
+    readonly executor?: PrincipalAssetOverrideExecutor
+    readonly lock?: boolean
     readonly principalId: string
     readonly target: CanonicalTarget
   }) => {
@@ -734,23 +764,26 @@ const make = Effect.gen(function* () {
             })
           )
 
-    return db
+    const query = executor
       .select({ id: schema.principalAssetOverrideTargets.id })
       .from(schema.principalAssetOverrideTargets)
       .where(
         and(eq(schema.principalAssetOverrideTargets.principalId, principalId), targetCondition)
       )
       .limit(1)
-      .pipe(
-        Effect.map((rows) => rows[0]?.id ?? null),
-        wrapSqlError("principalAssetOverrideRepository.findStoredTargetId")
-      )
+
+    return (lock ? query.for("update") : query).pipe(
+      Effect.map((rows) => rows[0]?.id ?? null),
+      wrapSqlError("principalAssetOverrideRepository.findStoredTargetId")
+    )
   }
 
   const loadHistory = ({
+    executor = db,
     principalId,
     targetId,
   }: {
+    readonly executor?: PrincipalAssetOverrideExecutor
     readonly principalId: string
     readonly targetId: string | null
   }): Effect.Effect<
@@ -759,7 +792,7 @@ const make = Effect.gen(function* () {
   > =>
     targetId === null
       ? Effect.succeed([])
-      : db
+      : executor
           .select({
             id: schema.principalAssetOverrides.id,
             kind: schema.principalAssetOverrides.kind,
@@ -835,10 +868,12 @@ const make = Effect.gen(function* () {
   }
 
   const loadProjection = ({
+    executor = db,
     principalId,
     target,
     targetId,
   }: {
+    readonly executor?: PrincipalAssetOverrideExecutor
     readonly principalId: string
     readonly target: CanonicalTarget
     readonly targetId: string | null
@@ -846,11 +881,11 @@ const make = Effect.gen(function* () {
     Effect.gen(function* () {
       const state =
         target._tag === "provider_asset"
-          ? yield* loadProviderAssetState(target.providerAssetRowId)
-          : yield* loadRepresentationState(target, principalId)
+          ? yield* loadProviderAssetState(target.providerAssetRowId, executor)
+          : yield* loadRepresentationState({ executor, principalId, target })
       if (state === null) return null
 
-      const history = yield* loadHistory({ principalId, targetId })
+      const history = yield* loadHistory({ executor, principalId, targetId })
       const activeIdentityOverride = activeOverride({ history, kind: "identity" })
       const activeInclusionOverride = activeOverride({ history, kind: "inclusion" })
       const effectiveDecision = decidePrincipalAssetOverride({
@@ -905,24 +940,30 @@ const make = Effect.gen(function* () {
   const findProjection: PrincipalAssetOverrideRepositoryShape["findProjection"] = (params) =>
     findOwnedProjection(params).pipe(Effect.map(Option.map(({ projection }) => projection)))
 
+  const loadSelectedAsset = (assetId: string, executor: PrincipalAssetOverrideExecutor = db) =>
+    executor
+      .select({
+        id: schema.assets.id,
+        type: schema.assets.type,
+        name: schema.assets.name,
+        symbol: schema.assets.symbol,
+        coingeckoCoinId: schema.assets.coingeckoCoinId,
+      })
+      .from(schema.assets)
+      .where(eq(schema.assets.id, assetId))
+      .limit(1)
+      .pipe(
+        Effect.map((rows) => rows[0]),
+        wrapSqlError("principalAssetOverrideRepository.loadSelectedAsset")
+      )
+
   const validateIdentityReplacement: PrincipalAssetOverrideRepositoryShape["validateIdentityReplacement"] =
     ({ assetId, principalId, target }) =>
       Effect.gen(function* () {
         const owned = yield* findOwnedProjection({ principalId, target })
         if (Option.isNone(owned)) return Option.none()
 
-        const [assetRow] = yield* db
-          .select({
-            id: schema.assets.id,
-            type: schema.assets.type,
-            name: schema.assets.name,
-            symbol: schema.assets.symbol,
-            coingeckoCoinId: schema.assets.coingeckoCoinId,
-          })
-          .from(schema.assets)
-          .where(eq(schema.assets.id, assetId))
-          .limit(1)
-          .pipe(wrapSqlError("principalAssetOverrideRepository.validateIdentityReplacement.asset"))
+        const assetRow = yield* loadSelectedAsset(assetId)
         if (assetRow === undefined) {
           return Option.some({
             _tag: "asset_not_found" as const,
@@ -959,9 +1000,235 @@ const make = Effect.gen(function* () {
         })
       })
 
+  const mutationConflict = ({
+    expectedActiveOverrideId,
+    expectedSystemRevision,
+    kind,
+    projection,
+  }: {
+    readonly expectedActiveOverrideId: string
+    readonly expectedSystemRevision: string
+    readonly kind: "identity" | "inclusion"
+    readonly projection: PrincipalAssetOverrideProjection
+  }): PrincipalAssetOverrideConflictError | null => {
+    const activeOverride =
+      kind === "identity" ? projection.activeIdentityOverride : projection.activeInclusionOverride
+    const currentSystemRevision =
+      kind === "identity" ? projection.system.identityRevision : projection.system.inclusionRevision
+    const conflictKinds = [
+      ...(activeOverride?.id === expectedActiveOverrideId ? [] : (["active_override"] as const)),
+      ...(currentSystemRevision === expectedSystemRevision ? [] : (["system_revision"] as const)),
+    ]
+
+    return conflictKinds.length === 0
+      ? null
+      : new PrincipalAssetOverrideConflictError({
+          conflictKinds,
+          currentProjection: projection,
+          currentActiveOverrideId: activeOverride?.id ?? null,
+          currentSystemRevision,
+          expectedActiveOverrideId,
+          expectedSystemRevision,
+        })
+  }
+
+  type MutationTransaction = Parameters<Parameters<typeof db.transaction>[0]>[0]
+  type MutationReplacement =
+    | { readonly _tag: "identity"; readonly assetId: string }
+    | { readonly _tag: "inclusion"; readonly inclusion: "included" | "excluded" }
+    | { readonly _tag: "withdraw_identity" }
+    | { readonly _tag: "withdraw_inclusion" }
+  interface MutationRequest {
+    readonly actorUserId: AuthUserId
+    readonly expectedActiveOverrideId: string
+    readonly expectedSystemRevision: string
+    readonly operation: "replace" | "withdraw"
+    readonly principalId: PrincipalId
+    readonly reason: string
+    readonly replacement: MutationReplacement
+    readonly target: PrincipalAssetOverrideTarget
+  }
+
+  const mutationKind = (replacement: MutationReplacement): "identity" | "inclusion" =>
+    replacement._tag === "identity" || replacement._tag === "withdraw_identity"
+      ? "identity"
+      : "inclusion"
+
+  const runMutationTransaction = ({
+    canonicalTarget,
+    request,
+    tx,
+  }: {
+    readonly canonicalTarget: CanonicalTarget
+    readonly request: MutationRequest
+    readonly tx: MutationTransaction
+  }) =>
+    Effect.gen(function* () {
+      const targetId = yield* findStoredTargetId({
+        executor: tx,
+        lock: true,
+        principalId: request.principalId,
+        target: canonicalTarget,
+      })
+      if (targetId === null) return Option.none<PrincipalAssetOverrideProjection>()
+
+      const loaded = yield* loadProjection({
+        executor: tx,
+        principalId: request.principalId,
+        target: canonicalTarget,
+        targetId,
+      })
+      if (loaded === null) return Option.none<PrincipalAssetOverrideProjection>()
+
+      const kind = mutationKind(request.replacement)
+      const conflict = mutationConflict({
+        expectedActiveOverrideId: request.expectedActiveOverrideId,
+        expectedSystemRevision: request.expectedSystemRevision,
+        kind,
+        projection: loaded.projection,
+      })
+      if (conflict !== null) return yield* conflict
+
+      if (request.replacement._tag === "identity") {
+        const assetRow = yield* loadSelectedAsset(request.replacement.assetId, tx)
+        if (assetRow === undefined) {
+          return yield* new PrincipalAssetOverrideReplacementValidationError({
+            validation: {
+              _tag: "asset_not_found",
+              assetId: request.replacement.assetId,
+              checkedTechnicalBlockerKinds: loaded.state.checkedTechnicalBlockerKinds,
+              technicalBlockers: loaded.state.technicalBlockers,
+            },
+            currentProjection: loaded.projection,
+          })
+        }
+        const asset = selectedAsset(assetRow)
+        if (loaded.state.targetAssetType !== null && loaded.state.targetAssetType !== asset.type) {
+          return yield* new PrincipalAssetOverrideReplacementValidationError({
+            validation: {
+              _tag: "incompatible_asset_type",
+              asset,
+              targetAssetType: loaded.state.targetAssetType,
+              checkedTechnicalBlockerKinds: loaded.state.checkedTechnicalBlockerKinds,
+              technicalBlockers: loaded.state.technicalBlockers,
+            },
+            currentProjection: loaded.projection,
+          })
+        }
+      }
+
+      const inspectedIdentity = loaded.projection.system.identity
+      const currentSystemRevision =
+        kind === "identity"
+          ? loaded.projection.system.identityRevision
+          : loaded.projection.system.inclusionRevision
+      yield* tx
+        .insert(schema.principalAssetOverrides)
+        .values({
+          principalId: request.principalId,
+          targetId,
+          kind,
+          operation: request.operation,
+          inspectedSystemRevision: currentSystemRevision,
+          inspectedSystemIdentity: kind === "identity" ? inspectedIdentity._tag : null,
+          inspectedSystemAssetId:
+            kind === "identity" && inspectedIdentity._tag === "resolved"
+              ? inspectedIdentity.assetId
+              : null,
+          inspectedSystemInclusion:
+            kind === "inclusion" ? loaded.projection.system.inclusion : null,
+          replacementAssetId:
+            request.replacement._tag === "identity" ? request.replacement.assetId : null,
+          replacementInclusion:
+            request.replacement._tag === "inclusion" ? request.replacement.inclusion : null,
+          actorUserId: request.actorUserId,
+          reason: request.reason,
+          supersedesOverrideId: request.expectedActiveOverrideId,
+        })
+        .pipe(wrapSqlError("principalAssetOverrideRepository.mutate.insert"))
+
+      const updated = yield* loadProjection({
+        executor: tx,
+        principalId: request.principalId,
+        target: canonicalTarget,
+        targetId,
+      })
+      if (updated === null) {
+        return yield* new PersistenceError({
+          operation: "principalAssetOverrideRepository.mutate.reload",
+          cause: "The target stopped producing a projection inside the mutation transaction.",
+        })
+      }
+      return Option.some(updated.projection)
+    })
+
+  const recoverSupersessionRace = (request: MutationRequest) =>
+    findOwnedProjection({ principalId: request.principalId, target: request.target }).pipe(
+      Effect.flatMap(
+        Option.match({
+          onNone: () =>
+            Effect.fail(
+              new PersistenceError({
+                operation: "principalAssetOverrideRepository.mutate.race",
+                cause: "The raced target no longer has a projection.",
+              })
+            ),
+          onSome: ({ projection }) =>
+            Effect.fail(
+              mutationConflict({
+                expectedActiveOverrideId: request.expectedActiveOverrideId,
+                expectedSystemRevision: request.expectedSystemRevision,
+                kind: mutationKind(request.replacement),
+                projection,
+              }) ??
+                new PersistenceError({
+                  operation: "principalAssetOverrideRepository.mutate.race",
+                  cause: "A supersession conflict occurred without a changed CAS value.",
+                })
+            ),
+        })
+      )
+    )
+
+  const mutate = (request: MutationRequest) =>
+    Effect.gen(function* () {
+      const canonicalTarget = yield* canonicalizeTarget(request.target)
+      return yield* db
+        .transaction((tx) => runMutationTransaction({ canonicalTarget, request, tx }), {
+          isolationLevel: "serializable",
+        })
+        .pipe(
+          Effect.retry({ times: 2, while: isSerializationFailure }),
+          Effect.catchIf(isSupersessionRace, () => recoverSupersessionRace(request)),
+          Effect.mapError((cause) =>
+            cause instanceof PrincipalAssetOverrideConflictError ||
+            cause instanceof PrincipalAssetOverrideReplacementValidationError ||
+            isPersistenceError(cause)
+              ? cause
+              : new PersistenceError({
+                  operation: "principalAssetOverrideRepository.mutate.transaction",
+                  cause,
+                })
+          )
+        )
+    })
+
+  const replace: PrincipalAssetOverrideRepositoryShape["replace"] = (params) =>
+    mutate({ ...params, operation: "replace" })
+
+  const withdraw: PrincipalAssetOverrideRepositoryShape["withdraw"] = ({ kind, ...params }) =>
+    mutate({
+      ...params,
+      operation: "withdraw",
+      replacement:
+        kind === "identity" ? { _tag: "withdraw_identity" } : { _tag: "withdraw_inclusion" },
+    })
+
   return PrincipalAssetOverrideRepository.of({
     findProjection,
+    replace,
     validateIdentityReplacement,
+    withdraw,
   } satisfies PrincipalAssetOverrideRepositoryShape)
 })
 
