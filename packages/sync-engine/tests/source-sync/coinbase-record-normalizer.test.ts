@@ -80,13 +80,15 @@ const normalizeProviderFiat = (payload: unknown) =>
     }
   }).pipe(Effect.provide(CoinbaseRecordNormalizerLive))
 
-it.effect("converts only a proven advanced-trade SELL debit to observed magnitude", () =>
+it.effect("converts only proven advanced-trade SELL and sell debits to observed magnitude", () =>
   Effect.gen(function* () {
     const results = yield* Effect.all([
       normalizeProviderFiat(advancedTradeFill()),
-      normalizeProviderFiat(advancedTradeFill({ type: "sell" })),
       normalizeProviderFiat(advancedTradeFill({ side: "sell" })),
+      normalizeProviderFiat(advancedTradeFill({ type: "sell" })),
+      normalizeProviderFiat(advancedTradeFill({ side: "Sell" })),
       normalizeProviderFiat(advancedTradeFill({ side: "BUY" })),
+      normalizeProviderFiat(advancedTradeFill({ side: "buy" })),
       normalizeProviderFiat(advancedTradeFill({ productId: "ETH-EUR" })),
       normalizeProviderFiat(advancedTradeFill({ productId: "BTC-USD" })),
       normalizeProviderFiat(advancedTradeFill({ amount: "0.4" })),
@@ -97,6 +99,8 @@ it.effect("converts only a proven advanced-trade SELL debit to observed magnitud
 
     expect(results).toEqual([
       { amount: "6000", currency: "EUR" },
+      { amount: "6000", currency: "EUR" },
+      { amount: "-6000", currency: "EUR" },
       { amount: "-6000", currency: "EUR" },
       { amount: "-6000", currency: "EUR" },
       { amount: "-6000", currency: "EUR" },

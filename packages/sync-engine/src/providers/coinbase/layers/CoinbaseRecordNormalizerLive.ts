@@ -106,13 +106,15 @@ const isNegativeZeroAmount = (amount: string): boolean =>
 
 /**
  * Coinbase documents negative amount and native_amount as debit signs for an
- * advanced-trade SELL. Convert only when the raw side and product currencies
- * prove that exact case; every unclear negative value remains signed.
+ * advanced-trade sell. Convert only for the two proven raw side tokens and
+ * aligned product currencies; every unclear negative value remains signed.
  */
 const advancedTradeSellNativeMagnitude = (transaction: CoinbaseTransaction): string | undefined => {
+  const advancedTradeFill = transaction.advanced_trade_fill
   if (
     transaction.type !== "advanced_trade_fill" ||
-    transaction.advanced_trade_fill?.order_side !== "SELL" ||
+    advancedTradeFill === undefined ||
+    (advancedTradeFill.order_side !== "SELL" && advancedTradeFill.order_side !== "sell") ||
     !NEGATIVE_DECIMAL_AMOUNT_PATTERN.test(transaction.amount.amount) ||
     !NEGATIVE_DECIMAL_AMOUNT_PATTERN.test(transaction.native_amount.amount) ||
     isZeroAmount(transaction.amount.amount) ||
@@ -121,7 +123,7 @@ const advancedTradeSellNativeMagnitude = (transaction: CoinbaseTransaction): str
     return undefined
   }
 
-  const productCurrencies = transaction.advanced_trade_fill.product_id?.split("-")
+  const productCurrencies = advancedTradeFill.product_id?.split("-")
   if (productCurrencies?.length !== 2) return undefined
 
   const [baseCurrency, quoteCurrency] = productCurrencies
