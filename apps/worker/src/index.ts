@@ -5,12 +5,14 @@ import {
   CalculationRunRepositoryLive,
   CalculationRunServiceLive,
   FactualLedgerRepositoryLive,
+  HistoricalAssetPriceRepositoryLive,
   PgClientLive,
   RepositoriesLive,
 } from "@my/persistence/layers"
 import {
   AssetResolutionCoinGeckoClientLive,
   AssetResolutionJobExecutorLive,
+  CoinGeckoHistoricalPriceClientLive,
   SourceSyncJobExecutorLive,
   SourceProviderRegistryLive,
   TransferReconciliationServiceLive,
@@ -83,7 +85,9 @@ const CalculationRunRuntimeLive = CalculationRunServiceLive.pipe(
 )
 
 const CalculationWorkerRuntimeLive = WorkerBullMqCalculationConsumerLive.pipe(
-  Layer.provide(CalculationRunRuntimeLive)
+  Layer.provide(CalculationRunRuntimeLive),
+  Layer.provide(HistoricalAssetPriceRepositoryLive),
+  Layer.provide(CoinGeckoHistoricalPriceClientLive)
 )
 
 const CalculationMaintenanceRuntimeLive = WorkerCalculationMaintenanceLive.pipe(

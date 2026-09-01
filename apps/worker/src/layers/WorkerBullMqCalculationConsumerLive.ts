@@ -12,7 +12,7 @@ import {
   type JobsOptions,
   type Processor,
 } from "bullmq"
-import { Config, DateTime, Effect, Exit, Layer, Result, Schema } from "effect"
+import { Config, DateTime, Effect, Exit, Layer, Option, Result, Schema } from "effect"
 import { Redis } from "ioredis"
 import { randomUUID } from "node:crypto"
 import { JurisdictionCode, TaxYear } from "@my/core/accounting"
@@ -20,6 +20,7 @@ import { EUR } from "@my/core/currency"
 import {
   CalculationRunId,
   CalculationRunService,
+  HistoricalAssetPriceRepository,
   type CalculationRunWriteResult,
 } from "@my/persistence/services"
 import {
@@ -28,6 +29,7 @@ import {
   CalculationRecomputeQueue,
   CalculationRecomputeQueueError,
   CalculationRecomputeQueuePayload,
+  CoinGeckoHistoricalPriceClient,
 } from "@my/sync-engine/services"
 import { positiveIntConfig } from "@my/sync-engine/shared"
 
@@ -150,6 +152,65 @@ const currentGermanTaxYear = DateTime.now.pipe(
   Effect.map(({ year }) => TaxYear.make(year))
 )
 
+/** Store every available CoinGecko daily EUR quote needed by one principal. */
+const hydrateCoinGeckoDailyEurPrices = (
+  principalId: CalculationRecomputeQueuePayload["principalId"]
+) =>
+  Effect.gen(function* () {
+    const repository = yield* HistoricalAssetPriceRepository
+    const client = yield* CoinGeckoHistoricalPriceClient
+    const needs = yield* repository.listMissingCoinGeckoDailyEurPriceNeeds({ principalId })
+    const outcomes = yield* Effect.forEach(
+      needs,
+      (need) =>
+        client
+          .fetchDailyEurPrice({
+            coinId: need.coingeckoCoinId,
+            snapshotAt: need.snapshotAt,
+          })
+          .pipe(
+            Effect.result,
+            Effect.flatMap((result) => {
+              if (Result.isFailure(result)) {
+                return Effect.logError(
+                  {
+                    principalId,
+                    assetId: need.assetId,
+                    coinId: need.coingeckoCoinId,
+                    snapshotAt: need.snapshotAt,
+                    status: result.failure.status,
+                    cause: result.failure.cause,
+                  },
+                  "calculation-worker:historical-price-fetch-failed"
+                ).pipe(Effect.as("fetch_failed" as const))
+              }
+
+              if (Option.isNone(result.success)) {
+                return Effect.succeed("unavailable" as const)
+              }
+
+              return repository
+                .upsertCoinGeckoDailyEurPrice({
+                  assetId: need.assetId,
+                  snapshotAt: need.snapshotAt,
+                  price: result.success.value,
+                })
+                .pipe(Effect.as("stored" as const))
+            })
+          ),
+      { concurrency: 1 }
+    )
+    const summary = outcomes.reduce(
+      (counts, outcome) => ({ ...counts, [outcome]: counts[outcome] + 1 }),
+      { stored: 0, unavailable: 0, fetch_failed: 0 }
+    )
+
+    yield* Effect.logInfo(
+      { principalId, requested: needs.length, ...summary },
+      "calculation-worker:historical-price-hydration-completed"
+    )
+  })
+
 const processJob = Effect.fn("worker.calculation.process", {
   attributes: { queueName: CALCULATION_RECOMPUTE_QUEUE_NAME },
   kind: "consumer",
@@ -171,7 +232,6 @@ const processJob = Effect.fn("worker.calculation.process", {
     )
   )
   const runId = CalculationRunId.make(randomUUID())
-  const taxYear = yield* currentGermanTaxYear
 
   yield* Effect.logInfo(
     {
@@ -183,6 +243,9 @@ const processJob = Effect.fn("worker.calculation.process", {
     },
     "calculation-worker:job-started"
   )
+
+  yield* hydrateCoinGeckoDailyEurPrices(payload.principalId)
+  const taxYear = yield* currentGermanTaxYear
 
   const result = yield* calculationRunService.recompute({
     id: runId,
@@ -373,7 +436,9 @@ export const makeWorkerBullMqCalculationConsumerLive = (
   Layer.effectDiscard(
     Effect.gen(function* () {
       const config = yield* loadConfig
-      const context = yield* Effect.context<CalculationRunService>()
+      const context = yield* Effect.context<
+        CalculationRunService | HistoricalAssetPriceRepository | CoinGeckoHistoricalPriceClient
+      >()
       const runPromise = Effect.runPromiseWith(context)
       const acquireWorker = options.acquireWorker ?? acquireLiveWorker
       const processor: WorkerBullMqCalculationProcessor = (job) =>
