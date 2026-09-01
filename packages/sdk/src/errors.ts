@@ -1,4 +1,9 @@
 import {
+  AssetOverrideCanonicalTargetError,
+  AssetOverrideMutationConflictError,
+  AssetOverrideReadonlyError,
+  AssetOverrideReplacementValidationError,
+  AssetOverrideTargetNotFoundError,
   AssetDecisionConflictError,
   AssetDecisionValidationError,
   AssetLookupNotFoundError,
@@ -14,6 +19,7 @@ import * as Schema from "effect/Schema"
 import type * as SchemaAST from "effect/SchemaAST"
 import { resolveAt } from "effect/SchemaAST"
 import { HttpClientError } from "effect/unstable/http"
+import type { TaxMaxiAssetOverrideError } from "./asset-overrides/index.ts"
 
 const TaxMaxiFieldError = Schema.Struct({
   field: Schema.optional(Schema.String),
@@ -163,6 +169,28 @@ export type TaxMaxiAssetLookupErrorCode = "invalid_lookup" | "observation_not_fo
 const decodeAssetLookupError = Schema.decodeUnknownExit(
   Schema.Union([AssetLookupValidationError, AssetLookupNotFoundError])
 )
+
+const AssetOverrideError = Schema.Union([
+  AssetOverrideCanonicalTargetError,
+  AssetOverrideTargetNotFoundError,
+  AssetOverrideReadonlyError,
+  AssetOverrideMutationConflictError,
+  AssetOverrideReplacementValidationError,
+])
+
+const isAssetOverrideError = Schema.is(AssetOverrideError)
+const decodeAssetOverrideError = Schema.decodeUnknownExit(AssetOverrideError)
+
+/** Extract structured principal asset override details from an SDK or Effect error. */
+export const getTaxMaxiAssetOverrideError = (error: unknown): TaxMaxiAssetOverrideError | null => {
+  const candidate = isTaxMaxiError(error) ? error.cause : error
+  if (isAssetOverrideError(candidate)) return candidate
+
+  return Exit.match(decodeAssetOverrideError(candidate), {
+    onFailure: () => null,
+    onSuccess: (details) => details,
+  })
+}
 
 /** Extract the machine-readable code from an asset observation lookup failure. */
 export const getTaxMaxiAssetLookupErrorCode = (
