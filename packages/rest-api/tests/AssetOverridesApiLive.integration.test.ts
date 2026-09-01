@@ -132,6 +132,7 @@ const ids = {
   targetId: "00000000-0000-4000-8000-000000000810",
   overrideId: "00000000-0000-4000-8000-000000000811",
   providerAssetId: "00000000-0000-4000-8000-000000000812",
+  inclusionOverrideId: "00000000-0000-4000-8000-000000000813",
 } as const
 
 const checksumAddress = "0xAbCd000000000000000000000000000000000096"
@@ -146,6 +147,26 @@ const get = ({ path, userId = ids.userId }: { readonly path: string; readonly us
   Effect.gen(function* () {
     const response = yield* HttpClientRequest.get(path).pipe(
       HttpClientRequest.bearerToken(`user_${userId}_admin`),
+      HttpClient.execute
+    )
+    return { status: response.status, body: yield* response.json }
+  })
+
+const post = ({
+  path,
+  payload,
+  role = "user",
+  userId = ids.userId,
+}: {
+  readonly path: string
+  readonly payload: unknown
+  readonly role?: "admin" | "readonly" | "user"
+  readonly userId?: string
+}) =>
+  Effect.gen(function* () {
+    const response = yield* HttpClientRequest.post(path).pipe(
+      HttpClientRequest.bodyJsonUnsafe(payload),
+      HttpClientRequest.bearerToken(`user_${userId}_${role}`),
       HttpClient.execute
     )
     return { status: response.status, body: yield* response.json }
@@ -223,10 +244,14 @@ const seedOwnedRepresentation = Effect.gen(function* () {
   return fixture
 })
 
-const insertOverrideAndChangeSystem = ({
+const insertIdentityOverride = ({
+  changeSystem = false,
   identityRevision,
+  recordedAt = "2026-09-01T07:00:00.000Z",
 }: {
+  readonly changeSystem?: boolean
   readonly identityRevision: string
+  readonly recordedAt?: string
 }) =>
   Effect.gen(function* () {
     const db = yield* drizzle
@@ -262,13 +287,92 @@ const insertOverrideAndChangeSystem = ({
       actorUserId: ids.userId,
       reason: "Use TaxMaxi's existing BTC economic asset for this representation.",
       supersedesOverrideId: null,
-      recordedAt: date("2026-09-01T07:00:00.000Z"),
+      recordedAt: date(recordedAt),
     })
-    yield* db
-      .update(schema.assetRepresentations)
-      .set({ assetId: ids.changedSystemAssetId })
-      .where(eq(schema.assetRepresentations.id, ids.representationId))
+    if (changeSystem) {
+      yield* db
+        .update(schema.assetRepresentations)
+        .set({ assetId: ids.changedSystemAssetId })
+        .where(eq(schema.assetRepresentations.id, ids.representationId))
+    }
   })
+
+const seedActiveIdentityOverride = Effect.gen(function* () {
+  yield* seedOwnedRepresentation.pipe(Effect.provide(TestPgClientLive), Effect.scoped)
+  const initial = yield* get({
+    path: `/v1/asset-overrides/current?${representationQuery()}`,
+  }).pipe(Effect.provide(HttpLive), Effect.scoped)
+  const projection = yield* Schema.decodeUnknownEffect(AssetOverrideCurrentResponse)(initial.body)
+  yield* insertIdentityOverride({
+    identityRevision: projection.system.identityRevision,
+    recordedAt: "2026-08-01T07:00:00.000Z",
+  }).pipe(Effect.provide(TestPgClientLive), Effect.scoped)
+  return projection
+})
+
+const seedActiveInclusionOverride = Effect.gen(function* () {
+  const projection = yield* seedActiveIdentityOverride
+  yield* Effect.gen(function* () {
+    const db = yield* drizzle
+    yield* db.insert(schema.principalAssetOverrides).values({
+      id: ids.inclusionOverrideId,
+      principalId: ids.principalId,
+      targetId: ids.targetId,
+      kind: "inclusion",
+      operation: "create",
+      inspectedSystemRevision: projection.system.inclusionRevision,
+      inspectedSystemIdentity: null,
+      inspectedSystemAssetId: null,
+      inspectedSystemInclusion: "included",
+      replacementAssetId: null,
+      replacementInclusion: "excluded",
+      actorUserId: ids.userId,
+      reason: "Exclude this asset from my calculation.",
+      supersedesOverrideId: null,
+      recordedAt: date("2026-08-01T07:01:00.000Z"),
+    })
+  }).pipe(Effect.provide(TestPgClientLive), Effect.scoped)
+  return projection
+})
+
+const identityReplacementPayload = ({
+  activeOverrideId = ids.overrideId,
+  assetId = ids.systemAssetId,
+  systemRevision,
+}: {
+  readonly activeOverrideId?: string
+  readonly assetId?: string
+  readonly systemRevision: string
+}) => ({
+  _tag: "identity",
+  assetId,
+  expectedActiveOverrideId: activeOverrideId,
+  expectedSystemRevision: systemRevision,
+  reason: "Use a different existing economic asset.",
+})
+
+const withdrawalPayload = ({
+  activeOverrideId = ids.overrideId,
+  kind = "identity",
+  systemRevision,
+}: {
+  readonly activeOverrideId?: string
+  readonly kind?: "identity" | "inclusion"
+  readonly systemRevision: string
+}) => ({
+  kind,
+  expectedActiveOverrideId: activeOverrideId,
+  expectedSystemRevision: systemRevision,
+  reason: "Return to TaxMaxi's current conclusion.",
+})
+
+const inclusionReplacementPayload = ({ systemRevision }: { readonly systemRevision: string }) => ({
+  _tag: "inclusion",
+  inclusion: "included",
+  expectedActiveOverrideId: ids.inclusionOverrideId,
+  expectedSystemRevision: systemRevision,
+  reason: "Include this asset in my calculation.",
+})
 
 await Effect.runPromise(context.recreateTestDatabase())
 
@@ -302,7 +406,8 @@ describe("AssetOverridesApiLive", () => {
       const initialBody = yield* Schema.decodeUnknownEffect(AssetOverrideCurrentResponse)(
         initial.body
       )
-      yield* insertOverrideAndChangeSystem({
+      yield* insertIdentityOverride({
+        changeSystem: true,
         identityRevision: initialBody.system.identityRevision,
       }).pipe(Effect.provide(TestPgClientLive), Effect.scoped)
 
@@ -449,6 +554,299 @@ describe("AssetOverridesApiLive", () => {
           _tag: "AssetOverrideCanonicalTargetError",
           code: "invalid_canonical_target",
           reason: "invalid_target_shape",
+        },
+      })
+    })
+  )
+
+  it.effect("replaces an active override and returns its current recomputation state", () =>
+    Effect.gen(function* () {
+      const initial = yield* seedActiveIdentityOverride
+      const response = yield* post({
+        path: `/v1/asset-overrides/replace?${representationQuery()}`,
+        payload: identityReplacementPayload({
+          systemRevision: initial.system.identityRevision,
+        }),
+      }).pipe(Effect.provide(HttpLive), Effect.scoped)
+
+      expect(response).toMatchObject({
+        status: 200,
+        body: {
+          activeIdentityOverride: {
+            kind: "identity",
+            operation: "replace",
+            actorUserId: ids.userId,
+            replacementIdentity: { _tag: "resolved", assetId: ids.systemAssetId },
+            supersedesOverrideId: ids.overrideId,
+          },
+          history: [{ id: ids.overrideId, operation: "create" }, { operation: "replace" }],
+          recomputation: { status: "not_scheduled" },
+        },
+      })
+    })
+  )
+
+  it.effect("withdraws an active override without deleting its history", () =>
+    Effect.gen(function* () {
+      const initial = yield* seedActiveIdentityOverride
+      const response = yield* post({
+        path: `/v1/asset-overrides/withdraw?${representationQuery()}`,
+        payload: withdrawalPayload({ systemRevision: initial.system.identityRevision }),
+      }).pipe(Effect.provide(HttpLive), Effect.scoped)
+
+      expect(response).toMatchObject({
+        status: 200,
+        body: {
+          activeIdentityOverride: null,
+          effectiveDecision: { _tag: "included", assetId: ids.systemAssetId },
+          history: [{ id: ids.overrideId, operation: "create" }, { operation: "withdraw" }],
+          recomputation: { status: "not_scheduled" },
+        },
+      })
+    })
+  )
+
+  it.effect("replaces and withdraws inclusion independently from identity", () =>
+    Effect.gen(function* () {
+      const initial = yield* seedActiveInclusionOverride
+      const replaced = yield* post({
+        path: `/v1/asset-overrides/replace?${representationQuery()}`,
+        payload: inclusionReplacementPayload({
+          systemRevision: initial.system.inclusionRevision,
+        }),
+      }).pipe(Effect.provide(HttpLive), Effect.scoped)
+
+      expect(replaced).toMatchObject({
+        status: 200,
+        body: {
+          activeIdentityOverride: { id: ids.overrideId },
+          activeInclusionOverride: {
+            kind: "inclusion",
+            operation: "replace",
+            replacementInclusion: "included",
+            supersedesOverrideId: ids.inclusionOverrideId,
+          },
+          effectiveDecision: { _tag: "included", assetId: TEST_BTC_ASSET_ID },
+          recomputation: { status: "not_scheduled" },
+        },
+      })
+
+      const replacedProjection = yield* Schema.decodeUnknownEffect(AssetOverrideCurrentResponse)(
+        replaced.body
+      )
+      if (replacedProjection.activeInclusionOverride === null) {
+        return yield* Effect.die("The inclusion replacement was not active.")
+      }
+
+      const withdrawn = yield* post({
+        path: `/v1/asset-overrides/withdraw?${representationQuery()}`,
+        payload: withdrawalPayload({
+          activeOverrideId: replacedProjection.activeInclusionOverride.id,
+          kind: "inclusion",
+          systemRevision: replacedProjection.system.inclusionRevision,
+        }),
+      }).pipe(Effect.provide(HttpLive), Effect.scoped)
+
+      expect(withdrawn).toMatchObject({
+        status: 200,
+        body: {
+          activeIdentityOverride: { id: ids.overrideId },
+          activeInclusionOverride: null,
+          effectiveDecision: { _tag: "included", assetId: TEST_BTC_ASSET_ID },
+          recomputation: { status: "not_scheduled" },
+        },
+      })
+      const withdrawnProjection = yield* Schema.decodeUnknownEffect(AssetOverrideCurrentResponse)(
+        withdrawn.body
+      )
+      expect(
+        withdrawnProjection.history
+          .filter(({ kind }) => kind === "inclusion")
+          .map(({ kind, operation }) => ({ kind, operation }))
+      ).toEqual([
+        { kind: "inclusion", operation: "create" },
+        { kind: "inclusion", operation: "replace" },
+        { kind: "inclusion", operation: "withdraw" },
+      ])
+    })
+  )
+
+  it.effect("rejects readonly mutation callers without writing", () =>
+    Effect.gen(function* () {
+      const initial = yield* seedActiveIdentityOverride
+      const denied = yield* post({
+        path: `/v1/asset-overrides/replace?${representationQuery()}`,
+        payload: identityReplacementPayload({
+          systemRevision: initial.system.identityRevision,
+        }),
+        role: "readonly",
+      }).pipe(Effect.provide(HttpLive), Effect.scoped)
+      const current = yield* get({
+        path: `/v1/asset-overrides/current?${representationQuery()}`,
+      }).pipe(Effect.provide(HttpLive), Effect.scoped)
+
+      expect(denied).toMatchObject({
+        status: 403,
+        body: {
+          _tag: "AssetOverrideReadonlyError",
+          code: "readonly_user",
+        },
+      })
+      expect(current).toMatchObject({
+        status: 200,
+        body: { history: [{ id: ids.overrideId }] },
+      })
+    })
+  )
+
+  it.effect("makes absent and unowned mutation targets indistinguishable", () =>
+    Effect.gen(function* () {
+      const initial = yield* seedActiveIdentityOverride
+      const payload = identityReplacementPayload({
+        systemRevision: initial.system.identityRevision,
+      })
+      const absent = yield* post({
+        path: `/v1/asset-overrides/replace?${representationQuery(absentAddress)}`,
+        payload,
+      }).pipe(Effect.provide(HttpLive), Effect.scoped)
+      const unowned = yield* post({
+        path: `/v1/asset-overrides/replace?${representationQuery()}`,
+        payload,
+        userId: ids.otherUserId,
+      }).pipe(Effect.provide(HttpLive), Effect.scoped)
+
+      expect(absent).toEqual(unowned)
+      expect(absent).toEqual({
+        status: 404,
+        body: { _tag: "AssetOverrideTargetNotFoundError", code: "target_not_found" },
+      })
+    })
+  )
+
+  it.effect("returns canonical-target errors before mutation", () =>
+    Effect.gen(function* () {
+      const initial = yield* seedActiveIdentityOverride
+      const response = yield* post({
+        path: `/v1/asset-overrides/withdraw?${representationQuery("not-an-address")}`,
+        payload: withdrawalPayload({ systemRevision: initial.system.identityRevision }),
+      }).pipe(Effect.provide(HttpLive), Effect.scoped)
+
+      expect(response).toEqual({
+        status: 400,
+        body: {
+          _tag: "AssetOverrideCanonicalTargetError",
+          code: "invalid_canonical_target",
+          reason: "invalid_evm_address",
+        },
+      })
+    })
+  )
+
+  it.effect("returns typed identity replacement failures with blocker coverage", () =>
+    Effect.gen(function* () {
+      const initial = yield* seedActiveIdentityOverride
+      const missingAssetId = "00000000-0000-4000-8000-000000000899"
+      const response = yield* post({
+        path: `/v1/asset-overrides/replace?${representationQuery()}`,
+        payload: identityReplacementPayload({
+          assetId: missingAssetId,
+          systemRevision: initial.system.identityRevision,
+        }),
+      }).pipe(Effect.provide(HttpLive), Effect.scoped)
+
+      expect(response).toMatchObject({
+        status: 422,
+        body: {
+          _tag: "AssetOverrideReplacementValidationError",
+          code: "invalid_replacement",
+          validation: {
+            _tag: "asset_not_found",
+            assetId: missingAssetId,
+            checkedTechnicalBlockerKinds: ["missing_decimals", "unsupported_asset_type"],
+            technicalBlockers: [],
+            recomputation: { status: "not_scheduled" },
+          },
+          currentProjection: {
+            activeIdentityOverride: { id: ids.overrideId },
+            recomputation: { status: "not_scheduled" },
+          },
+        },
+      })
+    })
+  )
+
+  it.effect("returns typed conflicts for stale system and active override revisions", () =>
+    Effect.gen(function* () {
+      const initial = yield* seedActiveIdentityOverride
+      const staleSystem = yield* post({
+        path: `/v1/asset-overrides/replace?${representationQuery()}`,
+        payload: identityReplacementPayload({
+          systemRevision: `${initial.system.identityRevision}:stale`,
+        }),
+      }).pipe(Effect.provide(HttpLive), Effect.scoped)
+      const staleActiveId = "00000000-0000-4000-8000-000000000898"
+      const staleActive = yield* post({
+        path: `/v1/asset-overrides/withdraw?${representationQuery()}`,
+        payload: withdrawalPayload({
+          activeOverrideId: staleActiveId,
+          systemRevision: initial.system.identityRevision,
+        }),
+      }).pipe(Effect.provide(HttpLive), Effect.scoped)
+      const current = yield* get({
+        path: `/v1/asset-overrides/current?${representationQuery()}`,
+      }).pipe(Effect.provide(HttpLive), Effect.scoped)
+
+      expect(staleSystem).toMatchObject({
+        status: 409,
+        body: {
+          _tag: "AssetOverrideMutationConflictError",
+          code: "override_conflict",
+          conflictKinds: ["system_revision"],
+          currentActiveOverrideId: ids.overrideId,
+          currentProjection: {
+            activeIdentityOverride: { id: ids.overrideId },
+            recomputation: { status: "not_scheduled" },
+          },
+        },
+      })
+      expect(staleActive).toMatchObject({
+        status: 409,
+        body: {
+          _tag: "AssetOverrideMutationConflictError",
+          code: "override_conflict",
+          conflictKinds: ["active_override"],
+          currentActiveOverrideId: ids.overrideId,
+          expectedActiveOverrideId: staleActiveId,
+        },
+      })
+      expect(current).toMatchObject({ status: 200, body: { history: [{ id: ids.overrideId }] } })
+    })
+  )
+
+  it.effect("serializes racing REST replacements so only one appends", () =>
+    Effect.gen(function* () {
+      const initial = yield* seedActiveIdentityOverride
+      const request = {
+        path: `/v1/asset-overrides/replace?${representationQuery()}`,
+        payload: identityReplacementPayload({
+          systemRevision: initial.system.identityRevision,
+        }),
+      }
+      const attempts = yield* Effect.all([post(request), post(request)], {
+        concurrency: "unbounded",
+      }).pipe(Effect.provide(HttpLive), Effect.scoped)
+
+      expect(attempts.map(({ status }) => status).sort((left, right) => left - right)).toEqual([
+        200, 409,
+      ])
+      const conflict = attempts.find(({ status }) => status === 409)
+      expect(conflict?.body).toMatchObject({
+        _tag: "AssetOverrideMutationConflictError",
+        code: "override_conflict",
+        conflictKinds: ["active_override"],
+        currentProjection: {
+          history: [{ id: ids.overrideId, operation: "create" }, { operation: "replace" }],
+          recomputation: { status: "not_scheduled" },
         },
       })
     })

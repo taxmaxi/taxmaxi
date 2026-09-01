@@ -1,5 +1,5 @@
 /**
- * AssetOverridesApiLive - Principal-scoped asset override read handlers.
+ * AssetOverridesApiLive - Principal-scoped asset override REST handlers.
  *
  * @module AssetOverridesApiLive
  */
@@ -9,6 +9,7 @@ import {
   PrincipalAssetOverrideRepository,
   type PrincipalAssetOverrideHistoryRecord,
   type PrincipalAssetOverrideProjection,
+  type PrincipalAssetOverrideMutationError,
   type PrincipalAssetOverrideReadError,
   type PrincipalAssetIdentityOverrideValidation,
 } from "@my/persistence/services"
@@ -26,9 +27,12 @@ import {
   AssetOverrideIncompatibleAssetTypeValidationResponse,
   AssetOverrideReadyValidationResponse,
   AssetOverrideRecomputationResponse,
+  AssetOverrideReadonlyError,
   AssetOverrideSelectedAssetResponse,
   AssetOverrideSystemResponse,
   AssetOverrideTargetNotFoundError,
+  AssetOverrideMutationConflictError,
+  AssetOverrideReplacementValidationError,
   AssetOverrideValidationWarningResponse,
   type AssetOverrideTargetQuery,
 } from "../definitions/AssetOverridesApi.ts"
@@ -50,6 +54,8 @@ const canonicalTargetError = (
   })
 
 const targetNotFound = () => new AssetOverrideTargetNotFoundError({ code: "target_not_found" })
+
+const readonlyForbidden = () => new AssetOverrideReadonlyError({ code: "readonly_user" })
 
 const decodeTarget = (
   query: typeof AssetOverrideTargetQuery.Type
@@ -126,6 +132,25 @@ const toCurrentResponse = (
   })
 
 const toValidationResponse = (validation: PrincipalAssetIdentityOverrideValidation) => {
+  if (validation._tag !== "ready") {
+    return toRejectedValidationResponse(validation)
+  }
+
+  return AssetOverrideReadyValidationResponse.make({
+    asset: toSelectedAsset(validation.asset),
+    projection: toCurrentResponse(validation.projection),
+    checkedTechnicalBlockerKinds: validation.checkedTechnicalBlockerKinds,
+    technicalBlockers: validation.technicalBlockers,
+    warnings: validation.warnings.map((warning) =>
+      AssetOverrideValidationWarningResponse.make(warning)
+    ),
+    recomputation,
+  })
+}
+
+const toRejectedValidationResponse = (
+  validation: Exclude<PrincipalAssetIdentityOverrideValidation, { readonly _tag: "ready" }>
+) => {
   switch (validation._tag) {
     case "asset_not_found":
       return AssetOverrideAssetNotFoundValidationResponse.make({
@@ -142,21 +167,64 @@ const toValidationResponse = (validation: PrincipalAssetIdentityOverrideValidati
         technicalBlockers: validation.technicalBlockers,
         recomputation,
       })
-    case "ready":
-      return AssetOverrideReadyValidationResponse.make({
-        asset: toSelectedAsset(validation.asset),
-        projection: toCurrentResponse(validation.projection),
-        checkedTechnicalBlockerKinds: validation.checkedTechnicalBlockerKinds,
-        technicalBlockers: validation.technicalBlockers,
-        warnings: validation.warnings.map((warning) =>
-          AssetOverrideValidationWarningResponse.make(warning)
-        ),
-        recomputation,
-      })
   }
 }
 
-/** Live authenticated current, history, and validation handlers. */
+const toMutationConflictError = (
+  error: Extract<
+    PrincipalAssetOverrideMutationError,
+    { readonly _tag: "PrincipalAssetOverrideConflictError" }
+  >
+) =>
+  new AssetOverrideMutationConflictError({
+    code: "override_conflict",
+    conflictKinds: [...error.conflictKinds],
+    currentProjection: toCurrentResponse(error.currentProjection),
+    currentActiveOverrideId: error.currentActiveOverrideId,
+    currentSystemRevision: error.currentSystemRevision,
+    expectedActiveOverrideId: error.expectedActiveOverrideId,
+    expectedSystemRevision: error.expectedSystemRevision,
+  })
+
+const mapMutationError = (
+  error: PrincipalAssetOverrideMutationError
+):
+  | AssetOverrideCanonicalTargetError
+  | AssetOverrideMutationConflictError
+  | AssetOverrideReplacementValidationError
+  | InternalServerError => {
+  switch (error._tag) {
+    case "PrincipalAssetOverrideInvalidTargetError":
+      return canonicalTargetError(error.reason)
+    case "PrincipalAssetOverrideConflictError":
+      return toMutationConflictError(error)
+    case "PrincipalAssetOverrideReplacementValidationError":
+      return new AssetOverrideReplacementValidationError({
+        code: "invalid_replacement",
+        validation: toRejectedValidationResponse(error.validation),
+        currentProjection: toCurrentResponse(error.currentProjection),
+      })
+    case "PersistenceError":
+      return internalError("Failed to change the principal asset override.")
+  }
+}
+
+const mapWithdrawMutationError = (
+  error: PrincipalAssetOverrideMutationError
+): AssetOverrideCanonicalTargetError | AssetOverrideMutationConflictError | InternalServerError => {
+  switch (error._tag) {
+    case "PrincipalAssetOverrideInvalidTargetError":
+      return canonicalTargetError(error.reason)
+    case "PrincipalAssetOverrideConflictError":
+      return toMutationConflictError(error)
+    case "PrincipalAssetOverrideReplacementValidationError":
+      return internalError("The withdrawal produced an unexpected validation error.")
+    case "PersistenceError":
+      return internalError("Failed to withdraw the principal asset override.")
+  }
+}
+
+/** Live authenticated read, validation, replacement, and withdrawal handlers. */
 export const AssetOverridesApiLive = HttpApiBuilder.group(
   TaxMaxiApi,
   "assetOverrides",
@@ -168,6 +236,15 @@ export const AssetOverridesApiLive = HttpApiBuilder.group(
       const resolvePrincipalId = principalResolution.resolveCurrentUserPrincipal.pipe(
         Effect.map(({ principal }) => principal.id),
         Effect.mapError(() => internalError("Failed to resolve the current user."))
+      )
+
+      const resolveMutationActor = principalResolution.resolveCurrentUserPrincipal.pipe(
+        Effect.mapError(() => internalError("Failed to resolve the current user.")),
+        Effect.flatMap(({ currentUser, principal }) =>
+          currentUser.role === "readonly"
+            ? Effect.fail(readonlyForbidden())
+            : Effect.succeed({ actorUserId: currentUser.userId, principalId: principal.id })
+        )
       )
 
       const findOwnedProjection = (query: typeof AssetOverrideTargetQuery.Type) =>
@@ -216,6 +293,49 @@ export const AssetOverridesApiLive = HttpApiBuilder.group(
             if (Option.isNone(validation)) return yield* targetNotFound()
 
             return toValidationResponse(validation.value)
+          })
+        )
+        .handle("replaceAssetOverride", ({ payload, query }) =>
+          Effect.gen(function* () {
+            const target = yield* decodeTarget(query)
+            const actor = yield* resolveMutationActor
+            const projection = yield* repository
+              .replace({
+                ...actor,
+                expectedActiveOverrideId: payload.expectedActiveOverrideId,
+                expectedSystemRevision: payload.expectedSystemRevision,
+                reason: payload.reason,
+                replacement:
+                  payload._tag === "identity"
+                    ? { _tag: "identity", assetId: payload.assetId }
+                    : { _tag: "inclusion", inclusion: payload.inclusion },
+                target,
+              })
+              .pipe(Effect.mapError(mapMutationError))
+
+            if (Option.isNone(projection)) return yield* targetNotFound()
+
+            return toCurrentResponse(projection.value)
+          })
+        )
+        .handle("withdrawAssetOverride", ({ payload, query }) =>
+          Effect.gen(function* () {
+            const target = yield* decodeTarget(query)
+            const actor = yield* resolveMutationActor
+            const projection = yield* repository
+              .withdraw({
+                ...actor,
+                expectedActiveOverrideId: payload.expectedActiveOverrideId,
+                expectedSystemRevision: payload.expectedSystemRevision,
+                kind: payload.kind,
+                reason: payload.reason,
+                target,
+              })
+              .pipe(Effect.mapError(mapWithdrawMutationError))
+
+            if (Option.isNone(projection)) return yield* targetNotFound()
+
+            return toCurrentResponse(projection.value)
           })
         )
     })

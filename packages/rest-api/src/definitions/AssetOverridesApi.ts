@@ -1,5 +1,5 @@
 /**
- * AssetOverridesApi - Principal-scoped asset override read endpoints.
+ * AssetOverridesApi - Principal-scoped asset override REST endpoints.
  *
  * @module AssetOverridesApi
  */
@@ -19,6 +19,7 @@ import { InternalServerError } from "./ApiErrors.ts"
 import { AuthMiddleware } from "./AuthMiddleware.ts"
 
 const Uuid = Schema.String.check(Schema.isUUID())
+const Reason = Schema.Trimmed.check(Schema.isNonEmpty())
 
 const TargetQueryFields = {
   targetKind: Schema.Literals(["representation", "provider_asset"]),
@@ -60,6 +61,13 @@ export class AssetOverrideTargetNotFoundError extends Schema.TaggedError<AssetOv
   "AssetOverrideTargetNotFoundError",
   { code: Schema.Literal("target_not_found") },
   { httpApiStatus: 404 }
+) {}
+
+/** Readonly callers cannot append principal asset override history. */
+export class AssetOverrideReadonlyError extends Schema.TaggedError<AssetOverrideReadonlyError>()(
+  "AssetOverrideReadonlyError",
+  { code: Schema.Literal("readonly_user") },
+  { httpApiStatus: 403 }
 ) {}
 
 /** One append-only identity or inclusion override record. */
@@ -187,6 +195,73 @@ export const AssetOverrideIdentityValidationResponse = Schema.Union([
   AssetOverrideReadyValidationResponse,
 ])
 
+const MutationCompareAndSetFields = {
+  expectedActiveOverrideId: Uuid,
+  expectedSystemRevision: Schema.String,
+  reason: Reason,
+}
+
+/** Replace an active identity override with another existing economic asset. */
+export class AssetOverrideIdentityReplaceRequest extends Schema.TaggedClass<AssetOverrideIdentityReplaceRequest>()(
+  "identity",
+  {
+    ...MutationCompareAndSetFields,
+    assetId: Uuid,
+  }
+) {}
+
+/** Replace an active inclusion override. */
+export class AssetOverrideInclusionReplaceRequest extends Schema.TaggedClass<AssetOverrideInclusionReplaceRequest>()(
+  "inclusion",
+  {
+    ...MutationCompareAndSetFields,
+    inclusion: PrincipalAssetInclusion,
+  }
+) {}
+
+/** Typed replacement payload for one active override stream. */
+export const AssetOverrideReplaceRequest = Schema.Union([
+  AssetOverrideIdentityReplaceRequest,
+  AssetOverrideInclusionReplaceRequest,
+])
+
+/** Withdraw one active override and return to TaxMaxi's current conclusion. */
+export class AssetOverrideWithdrawRequest extends Schema.Class<AssetOverrideWithdrawRequest>(
+  "AssetOverrideWithdrawRequest"
+)({
+  ...MutationCompareAndSetFields,
+  kind: Schema.Literals(["identity", "inclusion"]),
+}) {}
+
+/** A compare-and-set value changed before the mutation acquired its lock. */
+export class AssetOverrideMutationConflictError extends Schema.TaggedError<AssetOverrideMutationConflictError>()(
+  "AssetOverrideMutationConflictError",
+  {
+    code: Schema.Literal("override_conflict"),
+    conflictKinds: Schema.Array(Schema.Literals(["active_override", "system_revision"])),
+    currentProjection: AssetOverrideCurrentResponse,
+    currentActiveOverrideId: Schema.NullOr(Uuid),
+    currentSystemRevision: Schema.String,
+    expectedActiveOverrideId: Uuid,
+    expectedSystemRevision: Schema.String,
+  },
+  { httpApiStatus: 409 }
+) {}
+
+/** An identity replacement does not select a compatible existing asset. */
+export class AssetOverrideReplacementValidationError extends Schema.TaggedError<AssetOverrideReplacementValidationError>()(
+  "AssetOverrideReplacementValidationError",
+  {
+    code: Schema.Literal("invalid_replacement"),
+    validation: Schema.Union([
+      AssetOverrideAssetNotFoundValidationResponse,
+      AssetOverrideIncompatibleAssetTypeValidationResponse,
+    ]),
+    currentProjection: AssetOverrideCurrentResponse,
+  },
+  { httpApiStatus: 422 }
+) {}
+
 const ReadErrors = [
   AssetOverrideCanonicalTargetError,
   AssetOverrideTargetNotFoundError,
@@ -228,16 +303,60 @@ const validateIdentity = HttpApiEndpoint.get("validateAssetOverrideIdentity", "/
   })
 )
 
-/** Authenticated principal asset override read API. */
+const MutationErrors = [
+  AssetOverrideCanonicalTargetError,
+  AssetOverrideTargetNotFoundError,
+  AssetOverrideMutationConflictError,
+  AssetOverrideReadonlyError,
+  InternalServerError,
+] as const
+
+const replace = HttpApiEndpoint.post("replaceAssetOverride", "/replace", {
+  query: AssetOverrideTargetQuery,
+  payload: AssetOverrideReplaceRequest,
+  success: AssetOverrideCurrentResponse,
+  error: [
+    AssetOverrideCanonicalTargetError,
+    AssetOverrideTargetNotFoundError,
+    AssetOverrideMutationConflictError,
+    AssetOverrideReplacementValidationError,
+    AssetOverrideReadonlyError,
+    InternalServerError,
+  ],
+}).annotateMerge(
+  OpenApi.annotations({
+    summary: "Replace a principal asset override",
+    description:
+      "Appends a replacement after checking the expected active override and TaxMaxi revision. Returns the current projection on conflict.",
+  })
+)
+
+const withdraw = HttpApiEndpoint.post("withdrawAssetOverride", "/withdraw", {
+  query: AssetOverrideTargetQuery,
+  payload: AssetOverrideWithdrawRequest,
+  success: AssetOverrideCurrentResponse,
+  error: MutationErrors,
+}).annotateMerge(
+  OpenApi.annotations({
+    summary: "Withdraw a principal asset override",
+    description:
+      "Appends a withdrawal after checking the expected active override and TaxMaxi revision. Returns to TaxMaxi's current conclusion.",
+  })
+)
+
+/** Authenticated principal asset override REST API. */
 export class AssetOverridesApi extends HttpApiGroup.make("assetOverrides")
   .add(getCurrent)
   .add(getHistory)
   .add(validateIdentity)
+  .add(replace)
+  .add(withdraw)
   .middleware(AuthMiddleware)
   .prefix("/v1/asset-overrides")
   .annotateMerge(
     OpenApi.annotations({
       title: "Principal Asset Overrides",
-      description: "Principal-scoped current, history, and validation reads.",
+      description:
+        "Principal-scoped current, history, validation, replacement, and withdrawal operations.",
     })
   ) {}
