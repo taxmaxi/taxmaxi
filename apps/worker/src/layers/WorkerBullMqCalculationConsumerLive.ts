@@ -172,7 +172,7 @@ const hydrateCoinGeckoDailyEurPrices = (
             Effect.result,
             Effect.flatMap((result) => {
               if (Result.isFailure(result)) {
-                return Effect.logWarning(
+                return Effect.logError(
                   {
                     principalId,
                     assetId: need.assetId,
@@ -232,7 +232,6 @@ const processJob = Effect.fn("worker.calculation.process", {
     )
   )
   const runId = CalculationRunId.make(randomUUID())
-  const taxYear = yield* currentGermanTaxYear
 
   yield* Effect.logInfo(
     {
@@ -246,6 +245,7 @@ const processJob = Effect.fn("worker.calculation.process", {
   )
 
   yield* hydrateCoinGeckoDailyEurPrices(payload.principalId)
+  const taxYear = yield* currentGermanTaxYear
 
   const result = yield* calculationRunService.recompute({
     id: runId,

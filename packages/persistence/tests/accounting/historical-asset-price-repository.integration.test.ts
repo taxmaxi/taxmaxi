@@ -139,7 +139,7 @@ describe("HistoricalAssetPriceRepositoryLive", () => {
               timestamp: utcDate("2025-03-05T00:00:00.000Z"),
               price: "81000",
               currency: "EUR",
-              source: "coingecko",
+              source: "manual",
             })
           })
         )
@@ -206,6 +206,51 @@ describe("HistoricalAssetPriceRepositoryLive", () => {
           source: "coingecko",
         },
       ])
+    })
+  )
+
+  it.effect("does not replace an existing canonical EUR quote from another source", () =>
+    Effect.gen(function* () {
+      const snapshotAt = utcDate("2025-03-04T00:00:00.000Z")
+
+      yield* Effect.promise(() =>
+        runPg(
+          Effect.flatMap(drizzle, (db) =>
+            db.insert(schema.assetPrices).values({
+              assetId: TEST_BTC_ASSET_ID,
+              timestamp: snapshotAt,
+              price: "81000.125",
+              currency: "EUR",
+              source: "manual",
+            })
+          )
+        )
+      )
+
+      yield* Effect.promise(() =>
+        runRepository(
+          Effect.flatMap(HistoricalAssetPriceRepository, (repository) =>
+            repository.upsertCoinGeckoDailyEurPrice({
+              assetId: TEST_BTC_ASSET_ID,
+              snapshotAt,
+              price: "82000.25",
+            })
+          )
+        )
+      )
+
+      const rows = yield* Effect.promise(() =>
+        runPg(
+          Effect.flatMap(drizzle, (db) =>
+            db
+              .select({ price: schema.assetPrices.price, source: schema.assetPrices.source })
+              .from(schema.assetPrices)
+              .where(eq(schema.assetPrices.assetId, TEST_BTC_ASSET_ID))
+          )
+        )
+      )
+
+      expect(rows).toEqual([{ price: "81000.125000000000000000", source: "manual" }])
     })
   )
 })

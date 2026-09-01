@@ -5,6 +5,7 @@
  */
 
 import { FetchHttpClient, HttpClient } from "effect/unstable/http"
+import { RateLimiter } from "effect/unstable/persistence"
 import * as BigDecimal from "effect/BigDecimal"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
@@ -16,12 +17,21 @@ import {
   CoinGeckoHistoricalPriceError,
   type CoinGeckoHistoricalPriceClientShape,
 } from "../../../services/CoinGeckoHistoricalPriceClient.ts"
-import { makeCoinGeckoRequest } from "../../../shared/CoinGeckoRequest.ts"
+import {
+  COINGECKO_PRO_API_BASE_URL,
+  makeCoinGeckoRequest,
+} from "../../../shared/CoinGeckoRequest.ts"
 import { positiveIntConfig } from "../../../shared/PositiveIntConfig.ts"
 
 const DEFAULT_REQUEST_TIMEOUT_MS = 10_000
 const DEFAULT_RETRY_ATTEMPTS = 2
 const DEFAULT_RETRY_BASE_DELAY_MS = 1_000
+// CoinGecko documents 5-15 requests/minute for the keyless public host and
+// 500-1,000 requests/minute for the paid host. Use each documented floor;
+// unknown/custom hosts use the safer public floor. A deployment may override
+// the interval only when its configured plan limit is known.
+const PUBLIC_MIN_REQUEST_INTERVAL_MS = 12_000
+const PRO_MIN_REQUEST_INTERVAL_MS = 120
 const STORED_PRICE_SCALE = 18
 const STORED_PRICE_UPPER_BOUND = BigDecimal.fromStringUnsafe("1000000000000000000")
 
@@ -39,10 +49,12 @@ const CoinGeckoHistoricalPriceResponse = Schema.Struct({
 
 const decodeHistoricalPriceResponse = Schema.decodeUnknownEffect(CoinGeckoHistoricalPriceResponse)
 
-const isRetryableStatus = (status: number): boolean =>
-  status === 408 || status === 429 || status >= 500
+const isRetryableStatus = (status: number): boolean => status === 408 || status >= 500
 
-const toUtcDate = (snapshotAt: Date): string => snapshotAt.toISOString().slice(0, 10)
+const toCoinGeckoDate = (snapshotAt: Date): string => {
+  const [year, month, day] = snapshotAt.toISOString().slice(0, 10).split("-")
+  return `${day}-${month}-${year}`
+}
 
 const toStoredPrice = (eur: number): Option.Option<string> => {
   const decoded = BigDecimal.fromNumber(eur)
@@ -60,6 +72,7 @@ const toStoredPrice = (eur: number): Option.Option<string> => {
 
 const make = Effect.gen(function* () {
   const httpClient = yield* HttpClient.HttpClient
+  const limiter = yield* RateLimiter.RateLimiter
   const coinGeckoRequest = yield* makeCoinGeckoRequest
   const requestTimeoutMs = yield* positiveIntConfig({
     name: "COINGECKO_REQUEST_TIMEOUT_MS",
@@ -73,17 +86,35 @@ const make = Effect.gen(function* () {
     name: "COINGECKO_RETRY_BASE_DELAY_MS",
     defaultValue: DEFAULT_RETRY_BASE_DELAY_MS,
   })
+  const rateLimitKey = coinGeckoRequest.getRequest("/ping").url
+  const usesProHost = rateLimitKey.startsWith(`${COINGECKO_PRO_API_BASE_URL}/`)
+  const minRequestIntervalMs = yield* positiveIntConfig({
+    name: "COINGECKO_HISTORICAL_MIN_INTERVAL_MS",
+    defaultValue: usesProHost ? PRO_MIN_REQUEST_INTERVAL_MS : PUBLIC_MIN_REQUEST_INTERVAL_MS,
+  })
+  const timedHttpClient = httpClient.pipe(
+    HttpClient.transformResponse(Effect.timeout(requestTimeoutMs))
+  )
+  const rateLimitedHttpClient = timedHttpClient.pipe(
+    HttpClient.withRateLimiter({
+      limiter,
+      key: `coingecko-history:${rateLimitKey}`,
+      limit: 1,
+      window: minRequestIntervalMs,
+      algorithm: "token-bucket",
+      times: retryAttempts,
+    })
+  )
 
   const fetchDailyEurPrice: CoinGeckoHistoricalPriceClientShape["fetchDailyEurPrice"] = ({
     coinId,
     snapshotAt,
   }) => {
-    const date = toUtcDate(snapshotAt)
+    const date = toCoinGeckoDate(snapshotAt)
     const request = coinGeckoRequest.getRequest(
       `/coins/${encodeURIComponent(coinId)}/history?date=${encodeURIComponent(date)}&localization=false`
     )
-    const requestAttempt = httpClient.execute(request).pipe(
-      Effect.timeout(requestTimeoutMs),
+    const requestAttempt = rateLimitedHttpClient.execute(request).pipe(
       Effect.mapError(
         (cause) => new CoinGeckoHistoricalPriceError({ coinId, date, status: null, cause })
       ),
@@ -161,7 +192,7 @@ const make = Effect.gen(function* () {
 export const CoinGeckoHistoricalPriceClientLayer = Layer.effect(
   CoinGeckoHistoricalPriceClient,
   make
-)
+).pipe(Layer.provide(RateLimiter.layer.pipe(Layer.provide(RateLimiter.layerStoreMemory))))
 
 /** Live CoinGecko historical client backed by the configured HTTP endpoint. */
 export const CoinGeckoHistoricalPriceClientLive = CoinGeckoHistoricalPriceClientLayer.pipe(

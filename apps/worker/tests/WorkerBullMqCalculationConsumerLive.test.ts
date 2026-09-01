@@ -83,7 +83,7 @@ const unavailableHistoricalPriceClient = CoinGeckoHistoricalPriceClient.of({
   fetchDailyEurPrice: () => Effect.succeed(Option.none()),
 })
 
-const runWithCalculationConsumer = <A>({
+const withCalculationConsumer = <A>({
   effect,
   service,
   acquireWorker,
@@ -98,30 +98,28 @@ const runWithCalculationConsumer = <A>({
     processor: WorkerBullMqCalculationProcessor
   ) => Effect.Effect<BullMqCalculationRecomputeWorker>
 }) =>
-  Effect.runPromise(
-    Effect.scoped(
-      effect.pipe(
-        Effect.provide(
-          makeWorkerBullMqCalculationConsumerLive({
-            acquireWorker: (_config, processor) => acquireWorker(processor),
-          }).pipe(
-            Layer.provide(
-              Layer.mergeAll(
-                Layer.succeed(CalculationRunService, CalculationRunService.of(service)),
-                Layer.succeed(
-                  HistoricalAssetPriceRepository,
-                  HistoricalAssetPriceRepository.of(historicalPriceRepository)
-                ),
-                Layer.succeed(
-                  CoinGeckoHistoricalPriceClient,
-                  CoinGeckoHistoricalPriceClient.of(historicalPriceClient)
-                )
+  Effect.scoped(
+    effect.pipe(
+      Effect.provide(
+        makeWorkerBullMqCalculationConsumerLive({
+          acquireWorker: (_config, processor) => acquireWorker(processor),
+        }).pipe(
+          Layer.provide(
+            Layer.mergeAll(
+              Layer.succeed(CalculationRunService, CalculationRunService.of(service)),
+              Layer.succeed(
+                HistoricalAssetPriceRepository,
+                HistoricalAssetPriceRepository.of(historicalPriceRepository)
+              ),
+              Layer.succeed(
+                CoinGeckoHistoricalPriceClient,
+                CoinGeckoHistoricalPriceClient.of(historicalPriceClient)
               )
             )
           )
-        ),
-        provideConfig
-      )
+        )
+      ),
+      provideConfig
     )
   )
 
@@ -328,27 +326,25 @@ describe("WorkerBullMqCalculationConsumerLive", () => {
           }),
       })
 
-      yield* Effect.promise(() =>
-        runWithCalculationConsumer({
-          service,
-          historicalPriceRepository,
-          historicalPriceClient,
-          acquireWorker: (acquiredProcessor) =>
-            Effect.sync(() => {
-              processor = acquiredProcessor
-              return { close: Effect.void }
-            }),
-          effect: Effect.gen(function* () {
-            if (processor === null) {
-              return yield* Effect.die(new Error("Processor was not acquired"))
-            }
-            const acquiredProcessor = processor
-            yield* Effect.promise(() =>
-              acquiredProcessor(makeJob(CalculationRecomputeQueuePayload.make({ principalId })))
-            )
+      yield* withCalculationConsumer({
+        service,
+        historicalPriceRepository,
+        historicalPriceClient,
+        acquireWorker: (acquiredProcessor) =>
+          Effect.sync(() => {
+            processor = acquiredProcessor
+            return { close: Effect.void }
           }),
-        })
-      )
+        effect: Effect.gen(function* () {
+          if (processor === null) {
+            return yield* Effect.die(new Error("Processor was not acquired"))
+          }
+          const acquiredProcessor = processor
+          yield* Effect.promise(() =>
+            acquiredProcessor(makeJob(CalculationRecomputeQueuePayload.make({ principalId })))
+          )
+        }),
+      })
 
       expect(steps).toEqual([
         "list",
@@ -362,6 +358,7 @@ describe("WorkerBullMqCalculationConsumerLive", () => {
 
   it.effect("recomputes the principal for the current German scope", () =>
     Effect.gen(function* () {
+      yield* TestClock.setTime(Date.parse("2026-09-01T12:00:00.000Z"))
       let processor: WorkerBullMqCalculationProcessor | null = null
       const recomputes: Array<Parameters<CalculationRunServiceShape["recompute"]>[0]> = []
       const service = CalculationRunService.of({
@@ -372,25 +369,23 @@ describe("WorkerBullMqCalculationConsumerLive", () => {
           }),
       })
 
-      yield* Effect.promise(() =>
-        runWithCalculationConsumer({
-          service,
-          acquireWorker: (acquiredProcessor) =>
-            Effect.sync(() => {
-              processor = acquiredProcessor
-              return { close: Effect.void }
-            }),
-          effect: Effect.gen(function* () {
-            if (processor === null) {
-              return yield* Effect.die(new Error("Processor was not acquired"))
-            }
-            const acquiredProcessor = processor
-            yield* Effect.promise(() =>
-              acquiredProcessor(makeJob(CalculationRecomputeQueuePayload.make({ principalId })))
-            )
+      yield* withCalculationConsumer({
+        service,
+        acquireWorker: (acquiredProcessor) =>
+          Effect.sync(() => {
+            processor = acquiredProcessor
+            return { close: Effect.void }
           }),
-        })
-      )
+        effect: Effect.gen(function* () {
+          if (processor === null) {
+            return yield* Effect.die(new Error("Processor was not acquired"))
+          }
+          const acquiredProcessor = processor
+          yield* Effect.promise(() =>
+            acquiredProcessor(makeJob(CalculationRecomputeQueuePayload.make({ principalId })))
+          )
+        }),
+      })
 
       expect(recomputes).toHaveLength(1)
       expect(recomputes[0]).toMatchObject({
@@ -400,10 +395,7 @@ describe("WorkerBullMqCalculationConsumerLive", () => {
         accountingChoices: [],
       })
       expect(CalculationRunId.make(recomputes[0]?.id ?? "")).toBe(recomputes[0]?.id)
-      const expectedYear = DateTime.toParts(
-        DateTime.setZoneNamedUnsafe(DateTime.nowUnsafe(), "Europe/Berlin")
-      ).year
-      expect(recomputes[0]?.taxYear).toBe(TaxYear.make(expectedYear))
+      expect(recomputes[0]?.taxYear).toBe(TaxYear.make(2026))
     })
   )
 
@@ -419,33 +411,79 @@ describe("WorkerBullMqCalculationConsumerLive", () => {
           }),
       })
 
-      yield* Effect.promise(() =>
-        runWithCalculationConsumer({
-          service,
-          acquireWorker: (acquiredProcessor) =>
-            Effect.sync(() => {
-              processor = acquiredProcessor
-              return { close: Effect.void }
-            }),
-          effect: Effect.gen(function* () {
-            if (processor === null) {
-              return yield* Effect.die(new Error("Processor was not acquired"))
-            }
-            const acquiredProcessor = processor
-            const result = yield* Effect.tryPromise({
-              try: () => acquiredProcessor(makeJob({ principalId: "not-a-uuid" })),
-              catch: (cause) => new WorkerTestPromiseRejectionError({ cause }),
-            }).pipe(Effect.result)
-
-            expect(Result.isFailure(result)).toBe(true)
-            if (Result.isFailure(result)) {
-              expect(result.failure.cause).toBeInstanceOf(UnrecoverableError)
-            }
+      yield* withCalculationConsumer({
+        service,
+        acquireWorker: (acquiredProcessor) =>
+          Effect.sync(() => {
+            processor = acquiredProcessor
+            return { close: Effect.void }
           }),
-        })
-      )
+        effect: Effect.gen(function* () {
+          if (processor === null) {
+            return yield* Effect.die(new Error("Processor was not acquired"))
+          }
+          const acquiredProcessor = processor
+          const result = yield* Effect.tryPromise({
+            try: () => acquiredProcessor(makeJob({ principalId: "not-a-uuid" })),
+            catch: (cause) => new WorkerTestPromiseRejectionError({ cause }),
+          }).pipe(Effect.result)
+
+          expect(Result.isFailure(result)).toBe(true)
+          if (Result.isFailure(result)) {
+            expect(result.failure.cause).toBeInstanceOf(UnrecoverableError)
+          }
+        }),
+      })
 
       expect(recomputeCount).toBe(0)
+    })
+  )
+
+  it.effect("reads the German tax year after hydration crosses New Year", () =>
+    Effect.gen(function* () {
+      let processor: WorkerBullMqCalculationProcessor | null = null
+      const steps: Array<string> = []
+      const taxYears: Array<TaxYear> = []
+      const historicalPriceRepository = HistoricalAssetPriceRepository.of({
+        listMissingCoinGeckoDailyEurPriceNeeds: () =>
+          Effect.gen(function* () {
+            steps.push("hydrate")
+            yield* TestClock.setTime(Date.parse("2025-12-31T23:00:00.000Z"))
+            return []
+          }),
+        upsertCoinGeckoDailyEurPrice: () => Effect.die("unused price upsert"),
+      })
+      const service = CalculationRunService.of({
+        recompute: ({ taxYear }) =>
+          Effect.sync(() => {
+            steps.push("recompute")
+            taxYears.push(taxYear)
+            return writeResult
+          }),
+      })
+
+      yield* TestClock.setTime(Date.parse("2025-12-31T22:59:59.000Z"))
+      yield* withCalculationConsumer({
+        service,
+        historicalPriceRepository,
+        acquireWorker: (acquiredProcessor) =>
+          Effect.sync(() => {
+            processor = acquiredProcessor
+            return { close: Effect.void }
+          }),
+        effect: Effect.gen(function* () {
+          if (processor === null) {
+            return yield* Effect.die(new Error("Processor was not acquired"))
+          }
+          const acquiredProcessor = processor
+          yield* Effect.promise(() =>
+            acquiredProcessor(makeJob(CalculationRecomputeQueuePayload.make({ principalId })))
+          )
+        }),
+      })
+
+      expect(steps).toEqual(["hydrate", "recompute"])
+      expect(taxYears).toEqual([TaxYear.make(2026)])
     })
   )
 
@@ -457,32 +495,30 @@ describe("WorkerBullMqCalculationConsumerLive", () => {
         recompute: () => Effect.fail(new CalculationRunAlreadyStoredError({ runId })),
       })
 
-      yield* Effect.promise(() =>
-        runWithCalculationConsumer({
-          service,
-          acquireWorker: (acquiredProcessor) =>
-            Effect.sync(() => {
-              processor = acquiredProcessor
-              return { close: Effect.void }
-            }),
-          effect: Effect.gen(function* () {
-            if (processor === null) {
-              return yield* Effect.die(new Error("Processor was not acquired"))
-            }
-            const acquiredProcessor = processor
-            const result = yield* Effect.tryPromise({
-              try: () =>
-                acquiredProcessor(makeJob(CalculationRecomputeQueuePayload.make({ principalId }))),
-              catch: (cause) => new WorkerTestPromiseRejectionError({ cause }),
-            }).pipe(Effect.result)
-
-            expect(Result.isFailure(result)).toBe(true)
-            if (Result.isFailure(result)) {
-              expect(result.failure.cause).toBeInstanceOf(CalculationRunAlreadyStoredError)
-            }
+      yield* withCalculationConsumer({
+        service,
+        acquireWorker: (acquiredProcessor) =>
+          Effect.sync(() => {
+            processor = acquiredProcessor
+            return { close: Effect.void }
           }),
-        })
-      )
+        effect: Effect.gen(function* () {
+          if (processor === null) {
+            return yield* Effect.die(new Error("Processor was not acquired"))
+          }
+          const acquiredProcessor = processor
+          const result = yield* Effect.tryPromise({
+            try: () =>
+              acquiredProcessor(makeJob(CalculationRecomputeQueuePayload.make({ principalId }))),
+            catch: (cause) => new WorkerTestPromiseRejectionError({ cause }),
+          }).pipe(Effect.result)
+
+          expect(Result.isFailure(result)).toBe(true)
+          if (Result.isFailure(result)) {
+            expect(result.failure.cause).toBeInstanceOf(CalculationRunAlreadyStoredError)
+          }
+        }),
+      })
     })
   )
 })

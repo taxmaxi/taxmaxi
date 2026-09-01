@@ -41,8 +41,7 @@ const make = Effect.gen(function* () {
           and(
             eq(schema.assetPrices.assetId, schema.transactionLegs.assetId),
             eq(schema.assetPrices.timestamp, snapshotAt),
-            eq(schema.assetPrices.currency, EUR_CURRENCY),
-            eq(schema.assetPrices.source, COINGECKO_SOURCE)
+            eq(schema.assetPrices.currency, EUR_CURRENCY)
           )
         )
         .where(
@@ -101,6 +100,7 @@ const make = Effect.gen(function* () {
               source: COINGECKO_SOURCE,
               updatedAt: now,
             },
+            setWhere: eq(schema.assetPrices.source, COINGECKO_SOURCE),
           })
           .pipe(
             Effect.mapError(
