@@ -32,15 +32,17 @@ const runPg = context.runPg
 const runRepository = <A, E>(effect: Effect.Effect<A, E, FactualLedgerRepository>) =>
   Effect.runPromise(context.runWithLayer({ effect, layer: FactualLedgerRepositoryLive }))
 
-const loadFactualLedger = () =>
+const loadFactualLedgerInCurrency = (reportingCurrency: CurrencyCode) =>
   runRepository(
     Effect.flatMap(FactualLedgerRepository, (repository) =>
       repository.load({
         principalId: TEST_PRINCIPAL_ID,
-        reportingCurrency: CurrencyCode.make("EUR"),
+        reportingCurrency,
       })
     )
   )
+
+const loadFactualLedger = () => loadFactualLedgerInCurrency(CurrencyCode.make("EUR"))
 
 const loadFactualLedgerError = (reportingCurrency = CurrencyCode.make("EUR")) =>
   runRepository(
@@ -737,12 +739,12 @@ describe("FactualLedgerRepositoryLive", () => {
     })
   )
 
-  it.effect("keeps provider consideration separate from same-day market quotes", () =>
+  it.effect("keeps provider consideration separate from the exact daily market quote", () =>
     Effect.gen(function* () {
       const occurredAt = DateTime.toDateUtc(DateTime.makeUnsafe("2025-02-03T10:00:00.000Z"))
       const historicalQuoteAt = DateTime.toDateUtc(DateTime.makeUnsafe("2020-01-01T09:00:00.000Z"))
-      const earlierQuoteAt = DateTime.toDateUtc(DateTime.makeUnsafe("2025-02-03T09:00:00.000Z"))
-      const latestValidQuoteAt = DateTime.toDateUtc(DateTime.makeUnsafe("2025-02-03T09:40:00.000Z"))
+      const dailyQuoteAt = DateTime.toDateUtc(DateTime.makeUnsafe("2025-02-03T00:00:00.000Z"))
+      const intradayQuoteAt = DateTime.toDateUtc(DateTime.makeUnsafe("2025-02-03T09:40:00.000Z"))
       const invalidQuoteAt = DateTime.toDateUtc(DateTime.makeUnsafe("2025-02-03T09:50:00.000Z"))
       const negativeQuoteAt = DateTime.toDateUtc(DateTime.makeUnsafe("2025-02-03T09:55:00.000Z"))
       const laterQuoteAt = DateTime.toDateUtc(DateTime.makeUnsafe("2025-02-03T11:00:00.000Z"))
@@ -794,17 +796,24 @@ describe("FactualLedgerRepositoryLive", () => {
               },
               {
                 assetId: TEST_BTC_ASSET_ID,
-                timestamp: earlierQuoteAt,
+                timestamp: dailyQuoteAt,
                 price: "600.25",
                 currency: "EUR",
-                source: "market-feed",
+                source: "coingecko",
               },
               {
                 assetId: TEST_BTC_ASSET_ID,
-                timestamp: latestValidQuoteAt,
+                timestamp: dailyQuoteAt,
+                price: "700.25",
+                currency: "USD",
+                source: "coingecko",
+              },
+              {
+                assetId: TEST_BTC_ASSET_ID,
+                timestamp: intradayQuoteAt,
                 price: "650.75",
                 currency: "EUR",
-                source: "  market-feed-latest  ",
+                source: "intraday-feed",
               },
               {
                 assetId: TEST_BTC_ASSET_ID,
@@ -863,15 +872,21 @@ describe("FactualLedgerRepositoryLive", () => {
         {
           type: "market_quote",
           eventId: "10000000-0000-4000-8000-000000000010",
-          unitPrice: "650.75",
-          quotedAt: "2025-02-03T09:40:00.000Z",
-          source: "market-feed-latest",
+          unitPrice: "600.25",
+          quotedAt: "2025-02-03T00:00:00.000Z",
+          source: "coingecko",
         },
       ])
+
+      const usdResult = yield* Effect.promise(() =>
+        loadFactualLedgerInCurrency(CurrencyCode.make("USD"))
+      )
+
+      expect(usdResult.valuationFacts).toEqual([])
     })
   )
 
-  it.effect("omits provider money that is negative or ambiguous across events", () =>
+  it.effect("omits unusable provider money and exact daily quotes", () =>
     Effect.gen(function* () {
       const negativeAt = DateTime.toDateUtc(DateTime.makeUnsafe("2025-04-01T10:00:00.000Z"))
       const ambiguousAt = DateTime.toDateUtc(DateTime.makeUnsafe("2025-04-02T10:00:00.000Z"))
@@ -972,6 +987,29 @@ describe("FactualLedgerRepositoryLive", () => {
                 transactionId: invalidTransaction.id,
               },
             ])
+            yield* db.insert(schema.assetPrices).values([
+              {
+                assetId: TEST_BTC_ASSET_ID,
+                timestamp: DateTime.toDateUtc(DateTime.makeUnsafe("2025-04-01T00:00:00.000Z")),
+                price: "-1",
+                currency: "EUR",
+                source: "coingecko",
+              },
+              {
+                assetId: TEST_BTC_ASSET_ID,
+                timestamp: DateTime.toDateUtc(DateTime.makeUnsafe("2025-04-02T00:00:00.000Z")),
+                price: "0",
+                currency: "EUR",
+                source: "coingecko",
+              },
+              {
+                assetId: TEST_BTC_ASSET_ID,
+                timestamp: DateTime.toDateUtc(DateTime.makeUnsafe("2025-04-03T00:00:00.000Z")),
+                price: "NaN",
+                currency: "EUR",
+                source: "coingecko",
+              },
+            ])
           })
         )
       )
@@ -979,9 +1017,7 @@ describe("FactualLedgerRepositoryLive", () => {
       const result = yield* Effect.promise(loadFactualLedger)
 
       expect(result.events).toHaveLength(4)
-      expect(result.valuationFacts.filter(({ _tag }) => _tag === "observed_consideration")).toEqual(
-        []
-      )
+      expect(result.valuationFacts).toEqual([])
     })
   )
 
@@ -1119,6 +1155,13 @@ describe("FactualLedgerRepositoryLive", () => {
                 transactionId: finalized.canonicalTransactionId,
               },
             ])
+            yield* db.insert(schema.assetPrices).values({
+              assetId: TEST_BTC_ASSET_ID,
+              timestamp: DateTime.toDateUtc(DateTime.makeUnsafe("2025-03-04T00:00:00.000Z")),
+              price: "50000",
+              currency: "EUR",
+              source: "coingecko",
+            })
           })
         )
       )
@@ -1150,6 +1193,7 @@ describe("FactualLedgerRepositoryLive", () => {
         transactionReference: "custody-inbound-canonical-transaction",
       })
       expect(result.events[1]?.occurredAt.toISOString()).toBe("2025-03-04T11:02:00.000Z")
+      expect(result.valuationFacts).toEqual([])
     })
   )
 })

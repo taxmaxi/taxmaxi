@@ -99,15 +99,59 @@ const extractCoinbaseTransaction = (payload: CoinbasePayload): CoinbaseTransacti
 const toNullable = (value: string | undefined): string | null => value ?? null
 
 const PROVIDER_FIAT_AMOUNT_PATTERN = /^-?[0-9]+(\.[0-9]+)?$/
+const NEGATIVE_DECIMAL_AMOUNT_PATTERN = /^-[0-9]+(\.[0-9]+)?$/
+
+const isNegativeZeroAmount = (amount: string): boolean =>
+  amount.startsWith("-") && isZeroAmount(amount)
 
 /**
- * Coinbase reports every transaction's value in the account's native fiat
- * currency. Keep only well-formed decimal amounts so the typed columns never
- * carry values the database cannot aggregate.
+ * Coinbase documents negative amount and native_amount as debit signs for an
+ * advanced-trade SELL. Convert only when the raw side and product currencies
+ * prove that exact case; every unclear negative value remains signed.
  */
-const toProviderFiat = (money: CoinbaseMoney): { amount: string; currency: string } | null =>
-  PROVIDER_FIAT_AMOUNT_PATTERN.test(money.amount)
-    ? { amount: money.amount, currency: money.currency.toUpperCase() }
+const advancedTradeSellNativeMagnitude = (transaction: CoinbaseTransaction): string | undefined => {
+  if (
+    transaction.type !== "advanced_trade_fill" ||
+    transaction.advanced_trade_fill?.order_side !== "SELL" ||
+    !NEGATIVE_DECIMAL_AMOUNT_PATTERN.test(transaction.amount.amount) ||
+    !NEGATIVE_DECIMAL_AMOUNT_PATTERN.test(transaction.native_amount.amount) ||
+    isZeroAmount(transaction.amount.amount) ||
+    isZeroAmount(transaction.native_amount.amount)
+  ) {
+    return undefined
+  }
+
+  const productCurrencies = transaction.advanced_trade_fill.product_id?.split("-")
+  if (productCurrencies?.length !== 2) return undefined
+
+  const [baseCurrency, quoteCurrency] = productCurrencies
+  if (
+    baseCurrency === undefined ||
+    quoteCurrency === undefined ||
+    baseCurrency === "" ||
+    quoteCurrency === "" ||
+    baseCurrency.toUpperCase() !== transaction.amount.currency.toUpperCase() ||
+    quoteCurrency.toUpperCase() !== transaction.native_amount.currency.toUpperCase()
+  ) {
+    return undefined
+  }
+
+  return transaction.native_amount.amount.slice(1)
+}
+
+/**
+ * Keep only well-formed provider-native decimals. The one documented SELL
+ * debit convention is converted above; no other negative value is changed.
+ */
+const toProviderFiat = (
+  transaction: CoinbaseTransaction
+): { amount: string; currency: string } | null =>
+  PROVIDER_FIAT_AMOUNT_PATTERN.test(transaction.native_amount.amount) &&
+  !isNegativeZeroAmount(transaction.native_amount.amount)
+    ? {
+        amount: advancedTradeSellNativeMagnitude(transaction) ?? transaction.native_amount.amount,
+        currency: transaction.native_amount.currency.toUpperCase(),
+      }
     : null
 
 /**
@@ -545,7 +589,7 @@ const normalizeCoinbaseRecord = (params: NormalizeCoinbaseRecordParams) =>
       )
     )
 
-    const providerFiat = toProviderFiat(transactionPayload.native_amount)
+    const providerFiat = toProviderFiat(transactionPayload)
 
     const result: CoinbaseRecordNormalizationResult = {
       transaction: {
