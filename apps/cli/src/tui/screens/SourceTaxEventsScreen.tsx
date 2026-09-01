@@ -10,10 +10,10 @@ import {
   formatDate,
   formatDateTime,
   formatFiat,
-  formatLabel,
+  formatTreatmentCodes,
   formatSigned,
   gainLossColor,
-  treatmentColor,
+  treatmentCodesColor,
 } from "../format.ts"
 import { createListViewport, createPagedList } from "../paging.ts"
 import { theme } from "../theme.ts"
@@ -69,8 +69,8 @@ function TaxEventLine(props: {
           </ListItemText>
         )}
       </Show>
-      <ListItemText selected={props.selected} color={treatmentColor(props.row.taxableTreatment)}>
-        {formatLabel(props.row.taxableTreatment)}
+      <ListItemText selected={props.selected} color={treatmentCodesColor(props.row.treatmentCodes)}>
+        {formatTreatmentCodes(props.row.treatmentCodes)}
       </ListItemText>
     </ListItem>
   )

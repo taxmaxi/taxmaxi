@@ -259,14 +259,7 @@ export class TaxCalculationResponse extends Schema.Class<TaxCalculationResponse>
 
 const SourceReportCursor = Schema.NullOr(Schema.String)
 const SourceReportAmount = Schema.String
-const SourceReportTaxableTreatment = Schema.Literals([
-  "taxable",
-  "tax_free",
-  "deductible",
-  "non_taxable",
-  "unknown",
-  "mixed",
-])
+const SourceReportTreatmentCodes = Schema.Array(Schema.String)
 
 /**
  * SourceReportPageParams - Stable cursor pagination parameters for report lists.
@@ -447,7 +440,7 @@ export class SourceTaxEventRow extends Schema.Class<SourceTaxEventRow>("SourceTa
   costBasis: Schema.NullOr(SourceReportAmount),
   proceeds: Schema.NullOr(SourceReportAmount),
   gainLoss: Schema.NullOr(SourceReportAmount),
-  taxableTreatment: SourceReportTaxableTreatment,
+  treatmentCodes: SourceReportTreatmentCodes,
   provenance: Schema.Literals(["deterministic", "rule", "ai", "manual"]),
   derivationRule: Schema.NullOr(Schema.String),
 }) {}
@@ -502,7 +495,7 @@ export class SourceDisposalMatchedLot extends Schema.Class<SourceDisposalMatched
   costBasis: SourceReportAmount,
   proceeds: SourceReportAmount,
   gainLoss: SourceReportAmount,
-  taxableTreatment: SourceReportTaxableTreatment,
+  treatmentCodes: SourceReportTreatmentCodes,
 }) {}
 
 export class SourceDisposalExplanationResponse extends Schema.Class<SourceDisposalExplanationResponse>(
@@ -518,7 +511,7 @@ export class SourceDisposalExplanationResponse extends Schema.Class<SourceDispos
   gainLoss: Schema.NullOr(SourceReportAmount),
   acquiredAt: Schema.NullOr(Schema.String),
   disposedAt: Schema.String,
-  taxableTreatment: SourceReportTaxableTreatment,
+  treatmentCodes: SourceReportTreatmentCodes,
   provenance: Schema.Literals(["deterministic", "rule", "ai", "manual"]),
   derivationRule: Schema.NullOr(Schema.String),
   matchedLots: Schema.Array(SourceDisposalMatchedLot),

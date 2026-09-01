@@ -1938,6 +1938,12 @@ describe("SourcesApiLive", () => {
       const explanation = yield* client.sources.explainSourceDisposal({
         params: { sourceId: fixture.sourceId, legId: reportFixtureIds.disposalLegId },
       })
+      const unknownTreatmentExplanation = yield* client.sources.explainSourceDisposal({
+        params: {
+          sourceId: fixture.sourceId,
+          legId: reportFixtureIds.unknownTreatmentEventId,
+        },
+      })
 
       expect(tax.calculationRunId).toBe(reportFixtureIds.activeCalculationRunId)
       expect(tax).toMatchObject({
@@ -1952,14 +1958,16 @@ describe("SourcesApiLive", () => {
         costBasis: "4000",
         proceeds: "5000",
         gainLoss: "1000",
-        taxableTreatment: "mixed",
+        treatmentCodes: ["de.tax_free_holding_period", "de.taxable_private_disposal"],
       })
+      expect(taxEvents.taxEvents[0]).not.toHaveProperty("taxableTreatment")
+      expect(unknownTreatmentExplanation).toMatchObject({ treatmentCodes: ["de.review_only"] })
       expect(explanation).toMatchObject({
         amount: "-0.4",
         costBasis: "4000",
         proceeds: "5000",
         gainLoss: "1000",
-        taxableTreatment: "mixed",
+        treatmentCodes: ["de.tax_free_holding_period", "de.taxable_private_disposal"],
       })
     }).pipe(Effect.provide(TaxCalculationHttpLive))
   )
@@ -2184,7 +2192,7 @@ describe("SourcesApiLive", () => {
         proceeds: "1500",
         costBasis: "1000",
         gainLoss: "500",
-        taxableTreatment: "taxable",
+        treatmentCodes: ["de.taxable_private_disposal"],
       })
 
       yield* db
@@ -2208,7 +2216,7 @@ describe("SourcesApiLive", () => {
         proceeds: "1500",
         costBasis: "1000",
         gainLoss: "500",
-        taxableTreatment: "taxable",
+        treatmentCodes: ["de.taxable_private_disposal"],
       })
       expect(afterReplay.matchedLots).toEqual(beforeReplay.matchedLots)
     }).pipe(Effect.provide(TaxCalculationHttpLive))
@@ -2441,7 +2449,7 @@ describe("SourcesApiLive", () => {
         .toMatchObject({
           fiatAmount: null,
           fiatCurrency: null,
-          taxableTreatment: "unknown",
+          treatmentCodes: [],
         })
       expect.soft(overview.totals).toMatchObject({ incomeCount: 1, incomeTotal: "0" })
       expect
@@ -2452,7 +2460,7 @@ describe("SourcesApiLive", () => {
           costBasis: null,
           proceeds: null,
           gainLoss: null,
-          taxableTreatment: "unknown",
+          treatmentCodes: ["de.tax_free_holding_period"],
         })
       expect.soft(explanation).toMatchObject({
         calculationRunId: reportFixtureIds.activeCalculationRunId,
@@ -2468,7 +2476,7 @@ describe("SourcesApiLive", () => {
         proceeds: null,
         costBasis: null,
         gainLoss: null,
-        taxableTreatment: "unknown",
+        treatmentCodes: ["de.tax_free_holding_period"],
       })
       expect(partialExplanation.matchedLots).toHaveLength(1)
 
@@ -2671,7 +2679,7 @@ describe("SourcesApiLive", () => {
         costBasis: "4000",
         proceeds: "5000",
         gainLoss: "1000",
-        taxableTreatment: "mixed",
+        treatmentCodes: ["de.tax_free_holding_period", "de.taxable_private_disposal"],
       })
 
       const fifoLots = yield* client.sources.listSourceFifoLots({
@@ -2704,12 +2712,12 @@ describe("SourcesApiLive", () => {
         proceeds: "5000",
         costBasis: "4000",
         gainLoss: "1000",
-        taxableTreatment: "mixed",
+        treatmentCodes: ["de.tax_free_holding_period", "de.taxable_private_disposal"],
       })
       expect(explanation.matchedLots).toHaveLength(2)
-      expect(explanation.matchedLots.map((lot) => lot.taxableTreatment)).toEqual([
-        "tax_free",
-        "taxable",
+      expect(explanation.matchedLots.map((lot) => lot.treatmentCodes)).toEqual([
+        ["de.tax_free_holding_period"],
+        ["de.taxable_private_disposal"],
       ])
     }).pipe(Effect.provide(HttpLive))
   )
@@ -3109,17 +3117,17 @@ describe("SourcesApiLive", () => {
 
       expect(feeEvent).toMatchObject({
         kind: "fee",
-        taxableTreatment: "unknown",
+        treatmentCodes: [],
       })
       expect(internalTransferEvent).toMatchObject({
         kind: "disposal",
         derivationRule: "internal_transfer_out",
-        taxableTreatment: "unknown",
+        treatmentCodes: [],
       })
       expect(internalTransferInEvent).toMatchObject({
         kind: "acquisition",
         derivationRule: "internal_transfer_in",
-        taxableTreatment: "unknown",
+        treatmentCodes: [],
       })
       expect(overview.totals.disposalCount).toBe(1)
       const assetPnl = yield* client.sources.listSourceAssetPnl({
@@ -3143,7 +3151,7 @@ describe("SourcesApiLive", () => {
       })
       expect(explanation).toMatchObject({
         disposalLegId: reportFixtureIds.internalTransferLegId,
-        taxableTreatment: "unknown",
+        treatmentCodes: [],
       })
       expect(explanation.matchedLots).toEqual([])
     }).pipe(Effect.provide(HttpLive))

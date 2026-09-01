@@ -58,23 +58,39 @@ export const formatDateTime = (iso: string): string =>
 export const truncateText = (value: string, maxLength: number): string =>
   value.length <= maxLength ? value : `${value.slice(0, Math.max(0, maxLength - 1))}…`
 
-/**
- * Turns enum-ish API values into words, for example "tax_free" -> "tax free".
- */
 export const formatLabel = (value: string): string => value.replaceAll("_", " ")
 
 /**
- * Picks the display color for a taxable treatment value.
+ * Maps treatment codes to CLI display copy while keeping unknown future codes readable.
  */
-export const treatmentColor = (treatment: string): string => {
-  if (treatment === "tax_free" || treatment === "non_taxable") {
-    return theme.success
+export const formatTreatmentCodes = (treatmentCodes: ReadonlyArray<string>): string => {
+  if (treatmentCodes.length === 0) {
+    return "No treatment"
   }
-  if (treatment === "taxable" || treatment === "mixed") {
+
+  return treatmentCodes
+    .map((code) => {
+      switch (code) {
+        case "de.tax_free_holding_period":
+          return "Tax free after holding period"
+        case "de.taxable_private_disposal":
+          return "Taxable private disposal"
+        case "de.taxable_income_section22_3_staking":
+          return "Taxable staking income"
+        default:
+          return code
+      }
+    })
+    .join(", ")
+}
+
+/** Picks the display color for treatment codes without interpreting unknown codes. */
+export const treatmentCodesColor = (treatmentCodes: ReadonlyArray<string>): string => {
+  if (treatmentCodes.some((code) => code.startsWith("de.taxable_"))) {
     return theme.warning
   }
-  if (treatment === "deductible") {
-    return theme.accent
+  if (treatmentCodes.includes("de.tax_free_holding_period")) {
+    return theme.success
   }
   return theme.textMuted
 }

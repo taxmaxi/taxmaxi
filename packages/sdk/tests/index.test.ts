@@ -400,7 +400,7 @@ const sourceDisposalExplanationResponseBody = JSON.stringify({
   gainLoss: "0",
   acquiredAt: "2025-01-01T00:00:00.000Z",
   disposedAt: "2025-02-01T00:00:00.000Z",
-  taxableTreatment: "non_taxable",
+  treatmentCodes: [],
   provenance: "deterministic",
   derivationRule: "internal_transfer_out",
   matchedLots: [],
