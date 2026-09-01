@@ -505,7 +505,15 @@ const make = Effect.gen(function* () {
 
     for (const row of priceRows) {
       const value = decodeValuationDecimal(row.price)
-      if (value === undefined || !BigDecimal.isPositive(value)) continue
+      if (
+        value === undefined ||
+        !BigDecimal.isPositive(value) ||
+        row.source === null ||
+        row.source === "" ||
+        row.source !== row.source.trim()
+      ) {
+        continue
+      }
 
       quotes.set(priceRowKey(row), row)
     }
@@ -542,7 +550,7 @@ const make = Effect.gen(function* () {
                 currency: reportingCurrency,
               },
               quotedAt: { epochMillis: quote.timestamp.getTime() },
-              source: trimmedNonEmpty(quote.source) ?? "asset_prices",
+              source: quote.source,
             },
             operation: "factualLedgerRepository.load.marketQuote",
           })

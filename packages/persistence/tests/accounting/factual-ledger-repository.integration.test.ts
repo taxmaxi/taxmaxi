@@ -886,6 +886,88 @@ describe("FactualLedgerRepositoryLive", () => {
     })
   )
 
+  it.effect("preserves valid quote sources exactly and omits unusable sources", () =>
+    Effect.gen(function* () {
+      const quoteFixtures = [
+        {
+          id: "10000000-0000-4000-8000-000000000050",
+          day: "2025-05-01",
+          source: null,
+        },
+        {
+          id: "10000000-0000-4000-8000-000000000051",
+          day: "2025-05-02",
+          source: "",
+        },
+        {
+          id: "10000000-0000-4000-8000-000000000052",
+          day: "2025-05-03",
+          source: " padded-source ",
+        },
+        {
+          id: "10000000-0000-4000-8000-000000000053",
+          day: "2025-05-04",
+          source: "exact-source",
+        },
+      ] as const
+
+      yield* Effect.promise(() =>
+        runPg(
+          Effect.gen(function* () {
+            const db = yield* drizzle
+            const [transaction] = yield* db
+              .insert(schema.transactions)
+              .values({
+                sourceId: TEST_CUSTODY_SOURCE_ID,
+                externalId: "quote-source-validation",
+                timestamp: DateTime.toDateUtc(DateTime.makeUnsafe("2025-05-01T10:00:00.000Z")),
+                transactionType: "buy_fiat",
+                principalId: TEST_PRINCIPAL_ID,
+              })
+              .returning({ id: schema.transactions.id })
+
+            if (transaction === undefined) {
+              return yield* Effect.die("Failed to create quote-source transaction")
+            }
+
+            yield* db.insert(schema.transactionLegs).values(
+              quoteFixtures.map(({ day, id }) => ({
+                id,
+                sourceId: TEST_CUSTODY_SOURCE_ID,
+                externalId: `quote-source-leg-${day}`,
+                timestamp: DateTime.toDateUtc(DateTime.makeUnsafe(`${day}T10:00:00.000Z`)),
+                principalId: TEST_PRINCIPAL_ID,
+                assetId: TEST_BTC_ASSET_ID,
+                amount: "1",
+                kind: "acquisition" as const,
+                provenance: "deterministic" as const,
+                transactionId: transaction.id,
+              }))
+            )
+            yield* db.insert(schema.assetPrices).values(
+              quoteFixtures.map(({ day, source }) => ({
+                assetId: TEST_BTC_ASSET_ID,
+                timestamp: DateTime.toDateUtc(DateTime.makeUnsafe(`${day}T00:00:00.000Z`)),
+                price: "100",
+                currency: "EUR",
+                source,
+              }))
+            )
+          })
+        )
+      )
+
+      const result = yield* Effect.promise(loadFactualLedger)
+
+      expect(result.valuationFacts).toHaveLength(1)
+      expect(result.valuationFacts[0]).toMatchObject({
+        _tag: "market_quote",
+        eventId: "10000000-0000-4000-8000-000000000053",
+        source: "exact-source",
+      })
+    })
+  )
+
   it.effect("omits unusable provider money and exact daily quotes", () =>
     Effect.gen(function* () {
       const negativeAt = DateTime.toDateUtc(DateTime.makeUnsafe("2025-04-01T10:00:00.000Z"))
