@@ -11,7 +11,7 @@ import {
   PasswordHasher,
   type AuthServiceShape,
 } from "@my/core/authentication"
-import { CurrencyCode } from "@my/core/currency"
+import { CurrencyCode, EUR } from "@my/core/currency"
 import { PrincipalId } from "@my/core/ownership"
 import { SourceId } from "@my/core/source"
 import { and, eq, sql } from "@my/persistence/query"
@@ -38,6 +38,11 @@ import * as Option from "effect/Option"
 import * as EffectSchema from "effect/Schema"
 import { TestClock } from "effect/testing"
 import { SourceSyncServiceLive } from "@my/sync-engine/layers"
+import {
+  CalculationRunRepositoryLive,
+  CalculationRunServiceLive,
+  FactualLedgerRepositoryLive,
+} from "../../persistence/src/layers/index.ts"
 import { drizzle } from "../../persistence/src/layers/PgClientLive.ts"
 import { RepositoriesLive } from "../../persistence/src/layers/RepositoriesLive.ts"
 import { TaxCalculationServiceLive } from "../../persistence/src/layers/TaxCalculationServiceLive.ts"
@@ -45,6 +50,7 @@ import { schema } from "../../persistence/src/schema/index.ts"
 import {
   CalculationRunId,
   CalculationRunRepository,
+  CalculationRunService,
   InputLedgerRevision,
   TaxCalculationService,
   ValuationRevision,
@@ -291,6 +297,11 @@ const TaxCalculationHttpLive = makeHttpLive(
   SourceSyncQueueTestLive,
   X402PaymentValidatorTestLive,
   TaxCalculationServiceLive
+)
+
+const CalculationRunServiceTestLive = CalculationRunServiceLive.pipe(
+  Layer.provide(Layer.merge(CalculationRunRepositoryLive, FactualLedgerRepositoryLive)),
+  Layer.provide(TestPgClientLive)
 )
 
 const makeAuthenticatedClient = ({ userId }: { readonly userId: string }) =>
@@ -1788,6 +1799,100 @@ const seedSourceReportTaxTreatmentRows = ({
     })
   })
 
+const seedDailyQuoteMonetaryRows = ({
+  principalId,
+  sourceId,
+}: {
+  readonly principalId: string
+  readonly sourceId: string
+}) =>
+  Effect.gen(function* () {
+    const db = yield* drizzle
+    const acquisitionAt = DateTime.toDateUtc(DateTime.makeUnsafe("2025-01-10T10:00:00.000Z"))
+    const dispositionAt = DateTime.toDateUtc(DateTime.makeUnsafe("2025-02-10T10:00:00.000Z"))
+    const acquisitionTransactionId = nextTestUuid()
+    const dispositionTransactionId = nextTestUuid()
+    const acquisitionEventId = nextTestUuid()
+    const dispositionEventId = nextTestUuid()
+
+    yield* db.insert(schema.transactions).values([
+      {
+        id: acquisitionTransactionId,
+        sourceId,
+        principalId,
+        externalId: "daily-quote-acquisition",
+        timestamp: acquisitionAt,
+        transactionType: "buy_fiat",
+      },
+      {
+        id: dispositionTransactionId,
+        sourceId,
+        principalId,
+        externalId: "daily-quote-disposition",
+        timestamp: dispositionAt,
+        transactionType: "sell_fiat",
+      },
+    ])
+    yield* db.insert(schema.transactionLegs).values([
+      {
+        id: acquisitionEventId,
+        sourceId,
+        principalId,
+        transactionId: acquisitionTransactionId,
+        externalId: "daily-quote-acquisition-leg",
+        timestamp: acquisitionAt,
+        assetId: TEST_BTC_ASSET_ID,
+        amount: "1",
+        kind: "acquisition",
+        provenance: "deterministic",
+      },
+      {
+        id: dispositionEventId,
+        sourceId,
+        principalId,
+        transactionId: dispositionTransactionId,
+        externalId: "daily-quote-disposition-leg",
+        timestamp: dispositionAt,
+        assetId: TEST_BTC_ASSET_ID,
+        amount: "0.4",
+        kind: "disposal",
+        provenance: "deterministic",
+      },
+    ])
+    yield* db.insert(schema.assetPrices).values([
+      {
+        assetId: TEST_BTC_ASSET_ID,
+        timestamp: DateTime.toDateUtc(DateTime.makeUnsafe("2025-01-10T00:00:00.000Z")),
+        price: "100",
+        currency: "EUR",
+        source: "coingecko",
+      },
+      {
+        assetId: TEST_BTC_ASSET_ID,
+        timestamp: DateTime.toDateUtc(DateTime.makeUnsafe("2025-01-10T09:00:00.000Z")),
+        price: "1000",
+        currency: "EUR",
+        source: "intraday-feed",
+      },
+      {
+        assetId: TEST_BTC_ASSET_ID,
+        timestamp: DateTime.toDateUtc(DateTime.makeUnsafe("2025-02-10T00:00:00.000Z")),
+        price: "200",
+        currency: "EUR",
+        source: "coingecko",
+      },
+      {
+        assetId: TEST_BTC_ASSET_ID,
+        timestamp: DateTime.toDateUtc(DateTime.makeUnsafe("2025-02-10T09:00:00.000Z")),
+        price: "2000",
+        currency: "EUR",
+        source: "intraday-feed",
+      },
+    ])
+
+    return dispositionEventId
+  })
+
 await Effect.runPromise(context.recreateTestDatabase())
 
 describe("SourcesApiLive", () => {
@@ -1800,6 +1905,54 @@ describe("SourcesApiLive", () => {
         yield* context.recreateTestDatabase()
       })
     )
+  )
+
+  it.effect("serves monetary results from exact stored daily EUR quotes", () =>
+    Effect.gen(function* () {
+      const fixture = yield* seedSyncEngineRepositoryFixture({
+        userId: nextTestUuid(),
+        principalId: nextTestUuid(),
+        sourceId: nextTestUuid(),
+      })
+      yield* seedSyncEngineAssets({
+        baseBlockchainId: fixture.baseBlockchainId,
+        bitcoinBlockchainId: fixture.bitcoinBlockchainId,
+      })
+      const dispositionEventId = yield* seedDailyQuoteMonetaryRows({
+        principalId: fixture.principalId,
+        sourceId: fixture.sourceId,
+      })
+
+      yield* Effect.flatMap(CalculationRunService, (service) =>
+        service.recompute({
+          id: CalculationRunId.make(nextTestUuid()),
+          principalId: PrincipalId.make(fixture.principalId),
+          jurisdiction: JurisdictionCode.make("DE"),
+          taxYear: TaxYear.make(2025),
+          reportingCurrency: EUR,
+          accountingChoices: [],
+        })
+      ).pipe(Effect.provide(CalculationRunServiceTestLive))
+
+      const client = yield* makeAuthenticatedClient({ userId: fixture.userId })
+      const tax = yield* client.sources.calculateTaxForSource({
+        params: { sourceId: fixture.sourceId },
+        payload: { year: 2025, jurisdiction: "germany" },
+      })
+      const taxEvents = yield* client.sources.listSourceTaxEvents({
+        params: { sourceId: fixture.sourceId },
+        query: { limit: 10 },
+      })
+
+      expect(tax).toMatchObject({ taxableGains: 40, taxableLosses: 0, incomeTotal: 0 })
+      expect(taxEvents.taxEvents.find(({ legId }) => legId === dispositionEventId)).toMatchObject({
+        legId: dispositionEventId,
+        costBasis: "40",
+        proceeds: "80",
+        gainLoss: "40",
+        treatmentCodes: ["de.taxable_private_disposal"],
+      })
+    }).pipe(Effect.provide(TaxCalculationHttpLive), Effect.scoped)
   )
 
   it.effect("reads tax and report results from one named active calculation run", () =>
