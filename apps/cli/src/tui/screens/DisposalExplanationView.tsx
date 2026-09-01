@@ -8,10 +8,10 @@ import {
   formatAmount,
   formatDateTime,
   formatFiat,
-  formatLabel,
+  formatTreatmentCodes,
   formatSigned,
   gainLossColor,
-  treatmentColor,
+  treatmentCodesColor,
 } from "../format.ts"
 import { theme } from "../theme.ts"
 import { Field } from "../ui/Field.tsx"
@@ -134,8 +134,8 @@ export function DisposalExplanationView(props: {
                 />
                 <Field
                   label="treatment"
-                  value={formatLabel(data.taxableTreatment)}
-                  color={treatmentColor(data.taxableTreatment)}
+                  value={formatTreatmentCodes(data.treatmentCodes)}
+                  color={treatmentCodesColor(data.treatmentCodes)}
                 />
                 <Field
                   label="provenance"
@@ -168,8 +168,8 @@ export function DisposalExplanationView(props: {
                         fg={theme.textSecondary}
                       >{`basis ${formatFiat(lot.costBasis, null)}`}</text>
                       <text fg={gainLossColor(lot.gainLoss)}>{formatSigned(lot.gainLoss)}</text>
-                      <text fg={treatmentColor(lot.taxableTreatment)}>
-                        {formatLabel(lot.taxableTreatment)}
+                      <text fg={treatmentCodesColor(lot.treatmentCodes)}>
+                        {formatTreatmentCodes(lot.treatmentCodes)}
                       </text>
                     </box>
                   )}

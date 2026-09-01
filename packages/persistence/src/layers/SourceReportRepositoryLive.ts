@@ -41,7 +41,6 @@ import {
   type SourceReportReviewSummary,
   type SourceReportScope,
   type SourceReportSyncStatus,
-  type SourceReportTaxableTreatment,
   type SourceReportTotals,
   type SourceTaxEventRow,
   type SourceTransactionMovement,
@@ -93,38 +92,13 @@ interface ActiveSourceReportRun {
 
 const RUN_JURISDICTION = "DE"
 const RUN_REPORTING_CURRENCY = "EUR"
-const TAXABLE_TREATMENT = "de.taxable_private_disposal"
-const TAX_FREE_TREATMENT = "de.tax_free_holding_period"
-
 const zeroDecimal = (): BigDecimal.BigDecimal => BigDecimal.fromBigInt(0n)
 const formatDecimal = (value: BigDecimal.BigDecimal): string => BigDecimal.format(value)
 const isoOrNull = (value: Date | null): string | null =>
   value === null ? null : value.toISOString()
-const taxableTreatmentForCodes = (
-  treatmentCodes: ReadonlyArray<string>
-): SourceReportTaxableTreatment => {
-  if (treatmentCodes.includes(TAX_FREE_TREATMENT)) return "tax_free"
-  if (
-    treatmentCodes.includes(TAXABLE_TREATMENT) ||
-    treatmentCodes.some((code) => code.startsWith("de.taxable_income_"))
-  ) {
-    return "taxable"
-  }
-  return "unknown"
-}
-
-const combineTaxableTreatments = (
-  treatments: ReadonlyArray<SourceReportTaxableTreatment>
-): SourceReportTaxableTreatment => {
-  const unique = new Set(treatments)
-  if (unique.size === 0) {
-    return "unknown"
-  }
-  if (unique.size === 1) {
-    return treatments[0] ?? "unknown"
-  }
-  return "mixed"
-}
+const uniqueTreatmentCodes = (
+  codeGroups: ReadonlyArray<ReadonlyArray<string>>
+): ReadonlyArray<string> => Array.from(new Set(codeGroups.flat()))
 
 const pluralize = (count: number, singular: string, plural: string): string =>
   count === 1 ? singular : plural
@@ -202,10 +176,6 @@ const summarizeReviewRows = (
     issues,
   }
 }
-
-const disposalTaxableTreatment = (
-  treatments: ReadonlyArray<SourceReportTaxableTreatment>
-): SourceReportTaxableTreatment => combineTaxableTreatments(treatments)
 
 const makeCursor = ({ timestamp, id }: CursorParts): string => `${timestamp.toISOString()}|${id}`
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
@@ -981,6 +951,7 @@ const make = Effect.gen(function* () {
                   inArray(schema.calculationRunRealizedResults.dispositionEventId, legIds)
                 )
               )
+              .orderBy(asc(schema.calculationRunRealizedResults.sequence))
               .pipe(wrapSqlError("sourceReportRepository.listTaxEvents.realized"))
       const incomeRows =
         legIds.length === 0 || activeRun === null
@@ -1008,7 +979,7 @@ const make = Effect.gen(function* () {
           let gainLoss = zeroDecimal()
           let realizedQuantity = zeroDecimal()
 
-          const treatments: Array<SourceReportTaxableTreatment> = []
+          const treatmentCodeGroups: Array<ReadonlyArray<string>> = []
           const matches = matchRows.filter((match) => match.disposalLegId === row.legId)
 
           for (const match of matches) {
@@ -1032,7 +1003,7 @@ const make = Effect.gen(function* () {
             proceeds = BigDecimal.sum(proceeds, matchProceeds)
             gainLoss = BigDecimal.sum(gainLoss, matchGainLoss)
             realizedQuantity = BigDecimal.sum(realizedQuantity, matchQuantity)
-            treatments.push(taxableTreatmentForCodes(match.treatmentCodes))
+            treatmentCodeGroups.push(match.treatmentCodes)
           }
 
           const eventAmount = yield* decodeDecimal({
@@ -1077,14 +1048,12 @@ const make = Effect.gen(function* () {
             costBasis: hasCompleteRealizedResult ? formatDecimal(costBasis) : null,
             proceeds: hasCompleteRealizedResult ? formatDecimal(proceeds) : null,
             gainLoss: hasCompleteRealizedResult ? formatDecimal(gainLoss) : null,
-            taxableTreatment:
+            treatmentCodes:
               row.kind === "disposal"
-                ? hasCompleteRealizedResult
-                  ? disposalTaxableTreatment(treatments)
-                  : "unknown"
+                ? uniqueTreatmentCodes(treatmentCodeGroups)
                 : income === undefined
-                  ? "unknown"
-                  : taxableTreatmentForCodes(income.treatmentCodes),
+                  ? []
+                  : income.treatmentCodes,
             provenance: row.provenance,
             derivationRule: row.derivationRule,
           } satisfies SourceTaxEventRow
@@ -1559,7 +1528,7 @@ const make = Effect.gen(function* () {
           costBasis: formatDecimal(rowCostBasis),
           proceeds: formatDecimal(rowProceeds),
           gainLoss: formatDecimal(rowGainLoss),
-          taxableTreatment: taxableTreatmentForCodes(row.treatmentCodes),
+          treatmentCodes: row.treatmentCodes,
         })
       }
 
@@ -1594,9 +1563,7 @@ const make = Effect.gen(function* () {
         gainLoss: fullyValued ? formatDecimal(gainLoss) : null,
         acquiredAt: isoOrNull(firstAcquiredAt),
         disposedAt: disposedAt.toISOString(),
-        taxableTreatment: fullyValued
-          ? disposalTaxableTreatment(matchedLots.map((lot) => lot.taxableTreatment))
-          : "unknown",
+        treatmentCodes: uniqueTreatmentCodes(matchedLots.map((lot) => lot.treatmentCodes)),
         provenance: liveLeg?.provenance ?? "deterministic",
         derivationRule: liveLeg?.derivationRule ?? null,
         matchedLots,
