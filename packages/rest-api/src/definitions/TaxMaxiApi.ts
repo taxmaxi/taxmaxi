@@ -20,6 +20,7 @@ import { PortfolioApi } from "./PortfolioApi.ts"
 import { SourcesApi } from "./SourcesApi.ts"
 import { SyncRunsApi } from "./SyncRunsApi.ts"
 import { TransactionsApi } from "./TransactionsApi.ts"
+import { AssetOverridesApi } from "./AssetOverridesApi.ts"
 
 // =============================================================================
 // Health Check Types
@@ -94,6 +95,7 @@ export class TaxMaxiApi extends HttpApi.make("TaxMaxiApi")
   .add(SourcesApi)
   .add(SyncRunsApi)
   .add(TransactionsApi)
+  .add(AssetOverridesApi)
   .annotateMerge(
     OpenApi.annotations({
       title: "TaxMaxi API",
