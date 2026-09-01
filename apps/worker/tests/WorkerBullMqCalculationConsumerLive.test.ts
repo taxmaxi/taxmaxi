@@ -1,4 +1,4 @@
-import { ConfigProvider, DateTime, Effect, Layer, Result, Schema } from "effect"
+import { ConfigProvider, DateTime, Effect, Layer, Option, Result, Schema } from "effect"
 import { TestClock } from "effect/testing"
 import { UnrecoverableError, type JobsOptions } from "bullmq"
 import { describe, expect, it } from "@effect/vitest"
@@ -10,10 +10,12 @@ import {
   CalculationRunAlreadyStoredError,
   CalculationRunRepository,
   CalculationRunService,
+  HistoricalAssetPriceRepository,
   InputLedgerRevision,
   ValuationRevision,
   type CalculationRunRepositoryShape,
   type CalculationRunServiceShape,
+  type HistoricalAssetPriceRepositoryShape,
 } from "@my/persistence/services"
 import {
   makeWorkerBullMqCalculationConsumerLive,
@@ -32,6 +34,9 @@ import {
   CalculationRecomputeQueue,
   CalculationRecomputeQueueError,
   CalculationRecomputeQueuePayload,
+  CoinGeckoHistoricalPriceClient,
+  CoinGeckoHistoricalPriceError,
+  type CoinGeckoHistoricalPriceClientShape,
 } from "@my/sync-engine/services"
 
 class WorkerTestPromiseRejectionError extends Schema.TaggedError<WorkerTestPromiseRejectionError>()(
@@ -69,13 +74,26 @@ const writeResult = {
   status: "complete",
 } as const
 
+const emptyHistoricalPriceRepository = HistoricalAssetPriceRepository.of({
+  listMissingCoinGeckoDailyEurPriceNeeds: () => Effect.succeed([]),
+  upsertCoinGeckoDailyEurPrice: () => Effect.die("unused price upsert"),
+})
+
+const unavailableHistoricalPriceClient = CoinGeckoHistoricalPriceClient.of({
+  fetchDailyEurPrice: () => Effect.succeed(Option.none()),
+})
+
 const runWithCalculationConsumer = <A>({
   effect,
   service,
   acquireWorker,
+  historicalPriceRepository = emptyHistoricalPriceRepository,
+  historicalPriceClient = unavailableHistoricalPriceClient,
 }: {
   readonly effect: Effect.Effect<A>
   readonly service: CalculationRunServiceShape
+  readonly historicalPriceRepository?: HistoricalAssetPriceRepositoryShape
+  readonly historicalPriceClient?: CoinGeckoHistoricalPriceClientShape
   readonly acquireWorker: (
     processor: WorkerBullMqCalculationProcessor
   ) => Effect.Effect<BullMqCalculationRecomputeWorker>
@@ -87,7 +105,19 @@ const runWithCalculationConsumer = <A>({
           makeWorkerBullMqCalculationConsumerLive({
             acquireWorker: (_config, processor) => acquireWorker(processor),
           }).pipe(
-            Layer.provide(Layer.succeed(CalculationRunService, CalculationRunService.of(service)))
+            Layer.provide(
+              Layer.mergeAll(
+                Layer.succeed(CalculationRunService, CalculationRunService.of(service)),
+                Layer.succeed(
+                  HistoricalAssetPriceRepository,
+                  HistoricalAssetPriceRepository.of(historicalPriceRepository)
+                ),
+                Layer.succeed(
+                  CoinGeckoHistoricalPriceClient,
+                  CoinGeckoHistoricalPriceClient.of(historicalPriceClient)
+                )
+              )
+            )
           )
         ),
         provideConfig
@@ -243,6 +273,93 @@ describe("WorkerCalculationMaintenanceLive", () => {
 })
 
 describe("WorkerBullMqCalculationConsumerLive", () => {
+  it.effect("stores available daily prices before recomputing and tolerates fetch failure", () =>
+    Effect.gen(function* () {
+      let processor: WorkerBullMqCalculationProcessor | null = null
+      const steps: Array<string> = []
+      const firstSnapshot = DateTime.toDateUtc(DateTime.makeUnsafe("2025-03-04T00:00:00.000Z"))
+      const secondSnapshot = DateTime.toDateUtc(DateTime.makeUnsafe("2025-03-05T00:00:00.000Z"))
+      const historicalPriceRepository = HistoricalAssetPriceRepository.of({
+        listMissingCoinGeckoDailyEurPriceNeeds: () =>
+          Effect.sync(() => {
+            steps.push("list")
+            return [
+              {
+                assetId: "asset-sol",
+                coingeckoCoinId: "solana",
+                snapshotAt: firstSnapshot,
+              },
+              {
+                assetId: "asset-missing",
+                coingeckoCoinId: "missing-coin",
+                snapshotAt: secondSnapshot,
+              },
+            ]
+          }),
+        upsertCoinGeckoDailyEurPrice: ({ assetId, price }) =>
+          Effect.sync(() => {
+            steps.push(`store:${assetId}:${price}`)
+          }),
+      })
+      const historicalPriceClient = CoinGeckoHistoricalPriceClient.of({
+        fetchDailyEurPrice: ({ coinId }) =>
+          Effect.sync(() => {
+            steps.push(`fetch:${coinId}`)
+          }).pipe(
+            Effect.flatMap(() =>
+              coinId === "solana"
+                ? Effect.succeed(Option.some("128.375"))
+                : Effect.fail(
+                    new CoinGeckoHistoricalPriceError({
+                      coinId,
+                      date: "2025-03-05",
+                      status: 503,
+                      cause: "forced upstream failure",
+                    })
+                  )
+            )
+          ),
+      })
+      const service = CalculationRunService.of({
+        recompute: () =>
+          Effect.sync(() => {
+            steps.push("recompute")
+            return writeResult
+          }),
+      })
+
+      yield* Effect.promise(() =>
+        runWithCalculationConsumer({
+          service,
+          historicalPriceRepository,
+          historicalPriceClient,
+          acquireWorker: (acquiredProcessor) =>
+            Effect.sync(() => {
+              processor = acquiredProcessor
+              return { close: Effect.void }
+            }),
+          effect: Effect.gen(function* () {
+            if (processor === null) {
+              return yield* Effect.die(new Error("Processor was not acquired"))
+            }
+            const acquiredProcessor = processor
+            yield* Effect.promise(() =>
+              acquiredProcessor(makeJob(CalculationRecomputeQueuePayload.make({ principalId })))
+            )
+          }),
+        })
+      )
+
+      expect(steps).toEqual([
+        "list",
+        "fetch:solana",
+        "store:asset-sol:128.375",
+        "fetch:missing-coin",
+        "recompute",
+      ])
+    })
+  )
+
   it.effect("recomputes the principal for the current German scope", () =>
     Effect.gen(function* () {
       let processor: WorkerBullMqCalculationProcessor | null = null

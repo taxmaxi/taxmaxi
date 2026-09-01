@@ -1,5 +1,6 @@
 export * from "./ActivityClassificationServiceLive.ts"
 export * from "./AssetResolutionCoinGeckoClientLive.ts"
+export * from "../providers/coingecko/layers/CoinGeckoHistoricalPriceClientLive.ts"
 export * from "./AssetResolutionJobExecutorLive.ts"
 export * from "./SourceSyncServiceLive.ts"
 export * from "./SourceSyncJobExecutorLive.ts"
