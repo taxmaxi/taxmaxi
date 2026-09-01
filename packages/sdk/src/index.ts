@@ -35,6 +35,12 @@ import {
   type AssetsEffectResource,
   type AssetsPromiseResource,
 } from "./assets/index.ts"
+import {
+  makeAssetOverridesEffectResource,
+  makeAssetOverridesPromiseResource,
+  type AssetOverridesEffectResource,
+  type AssetOverridesPromiseResource,
+} from "./asset-overrides/index.ts"
 import { toTaxMaxiError } from "./errors.ts"
 import {
   makeBillingEffectResource,
@@ -109,6 +115,25 @@ export type {
   TaxMaxiAssetType,
 } from "./assets/index.ts"
 export type {
+  AssetOverrideCurrent,
+  AssetOverrideCurrentError,
+  AssetOverrideHistory,
+  AssetOverrideHistoryError,
+  AssetOverrideIdentityValidation,
+  AssetOverrideIdentityValidationError,
+  AssetOverrideIdentityValidationInput,
+  AssetOverrideReplaceError,
+  AssetOverrideReplaceInput,
+  AssetOverrideReplacement,
+  AssetOverridesEffectResource,
+  AssetOverridesPromiseResource,
+  AssetOverrideTarget,
+  AssetOverrideWithdrawError,
+  AssetOverrideWithdrawInput,
+  AssetOverrideWithdrawal,
+  TaxMaxiAssetOverrideError,
+} from "./asset-overrides/index.ts"
+export type {
   Account,
   AuthAuthorizeRedirectResponse,
   AuthEffectResource,
@@ -118,6 +143,7 @@ export type {
 } from "./auth/index.ts"
 export {
   TaxMaxiError,
+  getTaxMaxiAssetOverrideError,
   getTaxMaxiAssetDecisionConflict,
   getTaxMaxiAssetDecisionErrorCode,
   getTaxMaxiAssetLookupErrorCode,
@@ -191,6 +217,7 @@ export type {
 export type TaxMaxiEffectResources = {
   readonly adminProtocolReview: AdminProtocolReviewEffectResource
   readonly anon: AnonEffectResource
+  readonly assetOverrides: AssetOverridesEffectResource
   readonly assets: AssetsEffectResource
   readonly auth: AuthEffectResource
   readonly billing: BillingEffectResource
@@ -202,6 +229,7 @@ export type TaxMaxiEffectResources = {
 export type TaxMaxiPromiseResources = {
   readonly adminProtocolReview: AdminProtocolReviewPromiseResource
   readonly anon: AnonPromiseResource
+  readonly assetOverrides: AssetOverridesPromiseResource
   readonly assets: AssetsPromiseResource
   readonly auth: AuthPromiseResource
   readonly billing: BillingPromiseResource
@@ -215,6 +243,7 @@ const makeTaxMaxiEffectResources = (
 ): TaxMaxiEffectResources => ({
   adminProtocolReview: makeAdminProtocolReviewEffectResource(client),
   anon: makeAnonEffectResource(client),
+  assetOverrides: makeAssetOverridesEffectResource(client),
   assets: makeAssetsEffectResource(client),
   auth: makeAuthEffectResource(client),
   billing: makeBillingEffectResource(client),
@@ -236,6 +265,7 @@ const mergeHeaders =
 export class TaxMaxi implements TaxMaxiPromiseResources {
   readonly adminProtocolReview: AdminProtocolReviewPromiseResource
   readonly anon: AnonPromiseResource
+  readonly assetOverrides: AssetOverridesPromiseResource
   readonly assets: AssetsPromiseResource
   readonly auth: AuthPromiseResource
   readonly billing: BillingPromiseResource
@@ -254,6 +284,7 @@ export class TaxMaxi implements TaxMaxiPromiseResources {
       this.run
     )
     this.anon = makeAnonPromiseResource(this.effect.anon, this.run)
+    this.assetOverrides = makeAssetOverridesPromiseResource(this.effect.assetOverrides, this.run)
     this.assets = makeAssetsPromiseResource(this.effect.assets, this.run)
     this.auth = makeAuthPromiseResource(this.effect.auth, this.run)
     this.billing = makeBillingPromiseResource(this.effect.billing, this.run)

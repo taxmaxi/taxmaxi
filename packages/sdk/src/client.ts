@@ -72,6 +72,7 @@ type TaxMaxiApiFullClient = HttpApiClient.ForApi<typeof TaxMaxiApi>
 type TaxMaxiPublicGroup =
   | "adminProtocolReview"
   | "anon"
+  | "assetOverrides"
   | "assets"
   | "auth"
   | "authSession"
@@ -91,6 +92,7 @@ export type TaxMaxiEffectClient = Pick<
 const toTaxMaxiEffectClient = (client: TaxMaxiApiFullClient): TaxMaxiEffectClient => ({
   adminProtocolReview: client.adminProtocolReview,
   anon: client.anon,
+  assetOverrides: client.assetOverrides,
   assets: client.assets,
   auth: client.auth,
   authSession: client.authSession,
