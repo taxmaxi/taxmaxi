@@ -73,6 +73,7 @@ class ReconciliationSourceSetChanged extends Schema.TaggedError<ReconciliationSo
 const make = Effect.gen(function* () {
   const db = yield* drizzle
   type TransferReconciliationExecutor = Pick<typeof db, "select">
+  type ReconciliationMutationExecutor = Pick<typeof db, "delete" | "select" | "update">
   const providerTransactionTable = aliasedTable(schema.transactions, "provider_transaction")
   const canonicalTransactionTable = aliasedTable(schema.transactions, "canonical_transaction")
   const onchainProviderTransferTable = aliasedTable(
@@ -590,6 +591,217 @@ const make = Effect.gen(function* () {
     readonly forceAppliedRollback?: boolean
   }
 
+  const deleteLegacyReconciliationLegs = ({
+    executor,
+    providerTransferId,
+  }: {
+    readonly executor: ReconciliationMutationExecutor
+    readonly providerTransferId: string
+  }) =>
+    Effect.gen(function* () {
+      const internalLegs = yield* executor
+        .select({
+          id: schema.transactionLegs.id,
+          transactionId: schema.transactionLegs.transactionId,
+          custodyProviderTransferId: sql<string | null>`
+            ${schema.transactionLegs.metadata}->'reconciliation'->>'custodyProviderTransferId'
+          `,
+        })
+        .from(schema.transactionLegs)
+        .where(
+          and(
+            inArray(schema.transactionLegs.derivationRule, [
+              "internal_transfer_out",
+              "internal_transfer_in",
+            ]),
+            eq(
+              sql<string>`${schema.transactionLegs.metadata}->'reconciliation'->>'providerTransferId'`,
+              providerTransferId
+            )
+          )
+        )
+      if (internalLegs.length > 0) {
+        yield* executor.delete(schema.transactionLegs).where(
+          inArray(
+            schema.transactionLegs.id,
+            internalLegs.map(({ id }) => id)
+          )
+        )
+      }
+
+      return internalLegs
+    })
+
+  const unmatchReconciliationMovements = ({
+    executor,
+    principalId,
+    providerTransferId,
+    canonicalTransferId,
+    canonicalTransactionId,
+    providerDirection,
+    legacyCustodyProviderTransferIds,
+  }: {
+    readonly executor: ReconciliationMutationExecutor
+    readonly principalId: string
+    readonly providerTransferId: string
+    readonly canonicalTransferId: string
+    readonly canonicalTransactionId: string
+    readonly providerDirection: "inbound" | "outbound"
+    readonly legacyCustodyProviderTransferIds: readonly (string | null)[]
+  }) =>
+    Effect.gen(function* () {
+      const [canonicalTransfer] = yield* executor
+        .select({ externalId: schema.transfers.externalId })
+        .from(schema.transfers)
+        .where(eq(schema.transfers.id, canonicalTransferId))
+        .limit(1)
+      let custodyProviderTransferId: string | null = null
+      if (providerDirection === "inbound" && canonicalTransfer !== undefined) {
+        const [custodyMovement] = yield* executor
+          .select({ providerTransferId: schema.inventoryMovements.providerTransferId })
+          .from(schema.inventoryMovements)
+          .innerJoin(
+            schema.providerTransfers,
+            eq(schema.providerTransfers.id, schema.inventoryMovements.providerTransferId)
+          )
+          .where(
+            and(
+              eq(schema.inventoryMovements.principalId, principalId),
+              eq(schema.inventoryMovements.transactionId, canonicalTransactionId),
+              sql`${schema.providerTransfers.metadata}->>'canonicalTransferExternalId' = ${canonicalTransfer.externalId}`,
+              sql`${schema.inventoryMovements.providerTransferId} is not null`
+            )
+          )
+          .limit(1)
+        custodyProviderTransferId = custodyMovement?.providerTransferId ?? null
+      }
+
+      const movementProviderTransferIds = [
+        ...new Set([
+          providerTransferId,
+          ...(custodyProviderTransferId === null ? [] : [custodyProviderTransferId]),
+          ...legacyCustodyProviderTransferIds.flatMap((custodyProviderTransferId) =>
+            custodyProviderTransferId === null ? [] : [custodyProviderTransferId]
+          ),
+        ]),
+      ]
+      yield* executor
+        .update(schema.inventoryMovements)
+        .set({ reconciliationStatus: "unmatched", updatedAt: nowDate() })
+        .where(inArray(schema.inventoryMovements.providerTransferId, movementProviderTransferIds))
+    })
+
+  const removeLegacyReconciliationReviewState = ({
+    executor,
+    transactionIds,
+  }: {
+    readonly executor: ReconciliationMutationExecutor
+    readonly transactionIds: readonly string[]
+  }) =>
+    Effect.gen(function* () {
+      const reviews = yield* executor
+        .select({
+          transactionId: schema.transactionReviews.transactionId,
+          reviewStatus: schema.transactionReviews.reviewStatus,
+          categorizationReason: schema.transactionReviews.categorizationReason,
+          matchedLayer: schema.transactionReviews.matchedLayer,
+        })
+        .from(schema.transactionReviews)
+        .where(inArray(schema.transactionReviews.transactionId, transactionIds))
+
+      for (const review of reviews) {
+        if (review.reviewStatus === "approved" || review.reviewStatus === "changed") continue
+
+        const existingLayers = (review.matchedLayer ?? "")
+          .split(",")
+          .map((layer) => layer.trim())
+          .filter((layer) => layer !== "")
+        if (!existingLayers.includes("transfer_reconciliation")) continue
+
+        const remainingLayers = existingLayers.filter(
+          (layer) => layer !== "transfer_reconciliation"
+        )
+        if (remainingLayers.length === 0) {
+          yield* executor
+            .update(schema.transactions)
+            .set({ transactionType: null, updatedAt: nowDate() })
+            .where(
+              and(
+                eq(schema.transactions.id, review.transactionId),
+                eq(schema.transactions.transactionType, "internal_transfer")
+              )
+            )
+          yield* executor
+            .delete(schema.transactionReviews)
+            .where(eq(schema.transactionReviews.transactionId, review.transactionId))
+          continue
+        }
+
+        const remainingReasons = (review.categorizationReason ?? "")
+          .split("\n")
+          .map((reason) => reason.trim())
+          .filter((reason) => reason !== "" && reason !== INTERNAL_TRANSFER_REASON)
+        yield* executor
+          .update(schema.transactionReviews)
+          .set({
+            reviewStatus: "needs_review",
+            categorizationReason:
+              remainingReasons.length === 0 ? null : remainingReasons.join("\n"),
+            matchedLayer: remainingLayers.join(","),
+            needsReview: true,
+            updatedAt: nowDate(),
+          })
+          .where(eq(schema.transactionReviews.transactionId, review.transactionId))
+      }
+    })
+
+  const rollbackAppliedReconciliation = ({
+    executor,
+    principalId,
+    providerTransferId,
+    canonicalTransferId,
+    canonicalTransactionId,
+    providerTransactionId,
+    providerDirection,
+  }: {
+    readonly executor: ReconciliationMutationExecutor
+    readonly principalId: string
+    readonly providerTransferId: string
+    readonly canonicalTransferId: string
+    readonly canonicalTransactionId: string
+    readonly providerTransactionId: string
+    readonly providerDirection: "inbound" | "outbound"
+  }) =>
+    Effect.gen(function* () {
+      const internalLegs = yield* deleteLegacyReconciliationLegs({
+        executor,
+        providerTransferId,
+      })
+      yield* unmatchReconciliationMovements({
+        executor,
+        principalId,
+        providerTransferId,
+        canonicalTransferId,
+        canonicalTransactionId,
+        providerDirection,
+        legacyCustodyProviderTransferIds: internalLegs.map(
+          ({ custodyProviderTransferId }) => custodyProviderTransferId
+        ),
+      })
+      yield* removeLegacyReconciliationReviewState({
+        executor,
+        transactionIds: [
+          ...new Set([
+            providerTransactionId,
+            canonicalTransactionId,
+            ...internalLegs.flatMap(({ transactionId }) =>
+              transactionId === null ? [] : [transactionId]
+            ),
+          ]),
+        ],
+      })
+    })
+
   const upsertTransferReconciliation: (
     params: TransferReconciliationUpsertInput
   ) => ReturnType<TransferReconciliationRepositoryShape["upsertTransferReconciliation"]> = ({
@@ -896,133 +1108,15 @@ const make = Effect.gen(function* () {
             existing.canonicalTransferId !== null &&
             existing.canonicalTransactionId !== null
           ) {
-            const internalLegs = yield* tx
-              .select({
-                id: schema.transactionLegs.id,
-                transactionId: schema.transactionLegs.transactionId,
-                custodyProviderTransferId: sql<string | null>`
-                  ${schema.transactionLegs.metadata}->'reconciliation'->>'custodyProviderTransferId'
-                `,
-              })
-              .from(schema.transactionLegs)
-              .where(
-                and(
-                  inArray(schema.transactionLegs.derivationRule, [
-                    "internal_transfer_out",
-                    "internal_transfer_in",
-                  ]),
-                  eq(
-                    sql<string>`${schema.transactionLegs.metadata}->'reconciliation'->>'providerTransferId'`,
-                    providerTransferId
-                  )
-                )
-              )
-
-            if (internalLegs.length > 0) {
-              yield* tx.delete(schema.transactionLegs).where(
-                inArray(
-                  schema.transactionLegs.id,
-                  internalLegs.map(({ id }) => id)
-                )
-              )
-            }
-
-            const [canonicalTransfer] = yield* tx
-              .select({ externalId: schema.transfers.externalId })
-              .from(schema.transfers)
-              .where(eq(schema.transfers.id, existing.canonicalTransferId))
-              .limit(1)
-            let custodyProviderTransferId: string | null = null
-            if (existing.providerDirection === "inbound" && canonicalTransfer !== undefined) {
-              const [custodyMovement] = yield* tx
-                .select({ providerTransferId: schema.inventoryMovements.providerTransferId })
-                .from(schema.inventoryMovements)
-                .innerJoin(
-                  schema.providerTransfers,
-                  eq(schema.providerTransfers.id, schema.inventoryMovements.providerTransferId)
-                )
-                .where(
-                  and(
-                    eq(schema.inventoryMovements.principalId, principalId),
-                    eq(schema.inventoryMovements.transactionId, existing.canonicalTransactionId),
-                    sql`${schema.providerTransfers.metadata}->>'canonicalTransferExternalId' = ${canonicalTransfer.externalId}`,
-                    sql`${schema.inventoryMovements.providerTransferId} is not null`
-                  )
-                )
-                .limit(1)
-              custodyProviderTransferId = custodyMovement?.providerTransferId ?? null
-            }
-
-            const movementProviderTransferIds = [
-              ...new Set([
-                providerTransferId,
-                ...(custodyProviderTransferId === null ? [] : [custodyProviderTransferId]),
-                ...internalLegs.flatMap(({ custodyProviderTransferId }) =>
-                  custodyProviderTransferId === null ? [] : [custodyProviderTransferId]
-                ),
-              ]),
-            ]
-            yield* tx
-              .update(schema.inventoryMovements)
-              .set({
-                reconciliationStatus: "unmatched",
-                updatedAt: nowDate(),
-              })
-              .where(
-                inArray(schema.inventoryMovements.providerTransferId, movementProviderTransferIds)
-              )
-
-            const transactionIds = [
-              ...new Set([
-                existing.providerTransactionId,
-                existing.canonicalTransactionId,
-                ...internalLegs.flatMap(({ transactionId }) =>
-                  transactionId === null ? [] : [transactionId]
-                ),
-              ]),
-            ]
-            if (transactionIds.length > 0) {
-              const reviews = yield* tx
-                .select({
-                  transactionId: schema.transactionReviews.transactionId,
-                  reviewStatus: schema.transactionReviews.reviewStatus,
-                  categorizationReason: schema.transactionReviews.categorizationReason,
-                  matchedLayer: schema.transactionReviews.matchedLayer,
-                })
-                .from(schema.transactionReviews)
-                .where(inArray(schema.transactionReviews.transactionId, transactionIds))
-
-              for (const review of reviews) {
-                if (review.reviewStatus === "approved" || review.reviewStatus === "changed") {
-                  continue
-                }
-                const layers = (review.matchedLayer ?? "")
-                  .split(",")
-                  .map((layer) => layer.trim())
-                  .filter((layer) => layer !== "" && layer !== "transfer_reconciliation")
-                const reasons = (review.categorizationReason ?? "")
-                  .split("\\n")
-                  .map((reason) => reason.trim())
-                  .filter((reason) => reason !== "" && reason !== INTERNAL_TRANSFER_REASON)
-
-                if (layers.length === 0) {
-                  yield* tx
-                    .delete(schema.transactionReviews)
-                    .where(eq(schema.transactionReviews.transactionId, review.transactionId))
-                } else {
-                  yield* tx
-                    .update(schema.transactionReviews)
-                    .set({
-                      reviewStatus: "needs_review",
-                      categorizationReason: reasons.length === 0 ? null : reasons.join("\\n"),
-                      matchedLayer: layers.join(","),
-                      needsReview: true,
-                      updatedAt: nowDate(),
-                    })
-                    .where(eq(schema.transactionReviews.transactionId, review.transactionId))
-                }
-              }
-            }
+            yield* rollbackAppliedReconciliation({
+              executor: tx,
+              principalId,
+              providerTransferId,
+              canonicalTransferId: existing.canonicalTransferId,
+              canonicalTransactionId: existing.canonicalTransactionId,
+              providerTransactionId: existing.providerTransactionId,
+              providerDirection: existing.providerDirection,
+            })
           }
           const now = nowDate()
           yield* tx
@@ -1442,6 +1536,15 @@ const make = Effect.gen(function* () {
       if (row.canonicalTransactionId === null || row.canonicalTransferId === null) return false
 
       if (!(yield* stillHasOneExactMovementCandidate({ executor, principalId, row }))) {
+        yield* rollbackAppliedReconciliation({
+          executor,
+          principalId,
+          providerTransferId: row.providerTransferId,
+          canonicalTransferId: row.canonicalTransferId,
+          canonicalTransactionId: row.canonicalTransactionId,
+          providerTransactionId: row.providerTransactionId,
+          providerDirection: row.providerDirection,
+        })
         yield* executor
           .update(schema.transferReconciliations)
           .set({
@@ -1540,21 +1643,39 @@ const make = Effect.gen(function* () {
                 ])
               ),
             ].sort()
-            if (sourceIds.length > 0) {
-              yield* tx
-                .select({ id: schema.sources.id })
-                .from(schema.sources)
-                .where(
-                  and(
-                    eq(schema.sources.principalId, principalId),
-                    inArray(schema.sources.id, sourceIds)
-                  )
-                )
-                .orderBy(asc(schema.sources.id))
-                .for("update")
+            const lockedSources =
+              sourceIds.length === 0
+                ? []
+                : yield* tx
+                    .select({ id: schema.sources.id })
+                    .from(schema.sources)
+                    .where(
+                      and(
+                        eq(schema.sources.principalId, principalId),
+                        inArray(schema.sources.id, sourceIds)
+                      )
+                    )
+                    .orderBy(asc(schema.sources.id))
+                    .for("update")
+            if (lockedSources.length !== sourceIds.length) {
+              return yield* new SyncEngineStorageError({
+                operation:
+                  "transferReconciliationRepository.applyDeterministicInternalTransferCanonicalization.lockSourceInventory",
+                cause: "Internal transfer sources are not owned by the reconciliation principal",
+              })
             }
 
             const reconciliations = yield* loadEligible()
+            const lockedSourceIds = new Set(lockedSources.map(({ id }) => id))
+            if (
+              reconciliations.some(
+                (row) =>
+                  !lockedSourceIds.has(row.providerTransactionSourceId) ||
+                  !lockedSourceIds.has(row.canonicalTransactionSourceId)
+              )
+            ) {
+              return yield* new ReconciliationSourceSetChanged()
+            }
             let canonicalizedPairs = 0
             for (const row of reconciliations) {
               if (yield* applyEligibleReconciliation({ executor: tx, principalId, row })) {
@@ -1568,6 +1689,10 @@ const make = Effect.gen(function* () {
           })
         )
         .pipe(
+          Effect.retry({
+            times: 2,
+            while: (error) => Schema.is(ReconciliationSourceSetChanged)(error),
+          }),
           wrapSyncEngineSqlError(
             "transferReconciliationRepository.applyDeterministicInternalTransferCanonicalization"
           )

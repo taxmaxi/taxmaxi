@@ -223,6 +223,7 @@ const seedCustodyReconciliation = ({
     return {
       providerTransactionId: providerTransaction.id,
       canonicalTransactionId: canonicalTransaction.id,
+      canonicalTransferId: canonicalTransfer.id,
     }
   })
 
@@ -1209,6 +1210,23 @@ describe("FactualLedgerRepositoryLive", () => {
               status: "approved",
               deterministic: false,
             })
+            const [unrelatedTransfer] = yield* db
+              .insert(schema.transfers)
+              .values({
+                sourceId: TEST_DESTINATION_SOURCE_ID,
+                principalId: TEST_PRINCIPAL_ID,
+                externalId: "custody-unrelated-canonical-transfer",
+                timestamp: canonicalTimestamp,
+                type: "cex",
+                fromAccountRef: "external:origin",
+                toAccountRef: "own:destination",
+                assetId: TEST_BTC_ASSET_ID,
+                amount: "0.125",
+              })
+              .returning({ id: schema.transfers.id })
+            if (unrelatedTransfer === undefined) {
+              return yield* Effect.die("Failed to create unrelated canonical transfer")
+            }
             yield* db.insert(schema.transactionLegs).values([
               {
                 id: "10000000-0000-4000-8000-000000000017",
@@ -1233,6 +1251,7 @@ describe("FactualLedgerRepositoryLive", () => {
                 kind: "acquisition",
                 provenance: "deterministic",
                 transactionId: finalized.canonicalTransactionId,
+                sourceTransferId: finalized.canonicalTransferId,
               },
               {
                 id: "10000000-0000-4000-8000-000000000019",
@@ -1257,6 +1276,20 @@ describe("FactualLedgerRepositoryLive", () => {
                 kind: "disposal",
                 provenance: "deterministic",
                 transactionId: finalizedInbound.canonicalTransactionId,
+                sourceTransferId: finalizedInbound.canonicalTransferId,
+              },
+              {
+                id: "10000000-0000-4000-8000-000000000015",
+                sourceId: TEST_DESTINATION_SOURCE_ID,
+                externalId: "custody-unrelated-canonical-leg",
+                timestamp: canonicalTimestamp,
+                principalId: TEST_PRINCIPAL_ID,
+                assetId: TEST_BTC_ASSET_ID,
+                amount: "0.125",
+                kind: "acquisition",
+                provenance: "deterministic",
+                transactionId: finalized.canonicalTransactionId,
+                sourceTransferId: unrelatedTransfer.id,
               },
               {
                 id: "10000000-0000-4000-8000-000000000021",
@@ -1298,8 +1331,12 @@ describe("FactualLedgerRepositoryLive", () => {
 
       const result = yield* Effect.promise(loadFactualLedger)
 
-      expect(result.events).toHaveLength(2)
+      expect(result.events).toHaveLength(3)
       expect(result.events[0]).toMatchObject({
+        _tag: "acquisition",
+        id: "10000000-0000-4000-8000-000000000015",
+      })
+      expect(result.events[1]).toMatchObject({
         _tag: "custody_movement",
         id: "10000000-0000-4000-8000-000000000020",
         assetId: TEST_BTC_ASSET_ID,
@@ -1307,14 +1344,14 @@ describe("FactualLedgerRepositoryLive", () => {
         toCustodySourceId: TEST_DESTINATION_SOURCE_ID,
         transactionReference: "custody-canonical-transaction",
       })
-      expect(result.events[0]?.occurredAt.toISOString()).toBe("2025-03-04T10:02:00.000Z")
+      expect(result.events[1]?.occurredAt.toISOString()).toBe("2025-03-04T10:02:00.000Z")
       expect(
         BigDecimal.equals(
-          result.events[0]?.quantity ?? BigDecimal.fromBigInt(0n),
+          result.events[1]?.quantity ?? BigDecimal.fromBigInt(0n),
           BigDecimal.fromStringUnsafe("0.75")
         )
       ).toBe(true)
-      expect(result.events[1]).toMatchObject({
+      expect(result.events[2]).toMatchObject({
         _tag: "custody_movement",
         id: "10000000-0000-4000-8000-000000000023",
         assetId: TEST_BTC_ASSET_ID,
@@ -1322,8 +1359,12 @@ describe("FactualLedgerRepositoryLive", () => {
         toCustodySourceId: TEST_DESTINATION_SOURCE_ID,
         transactionReference: "custody-inbound-canonical-transaction",
       })
-      expect(result.events[1]?.occurredAt.toISOString()).toBe("2025-03-04T11:02:00.000Z")
-      expect(result.valuationFacts).toEqual([])
+      expect(result.events[2]?.occurredAt.toISOString()).toBe("2025-03-04T11:02:00.000Z")
+      expect(result.valuationFacts).toHaveLength(1)
+      expect(result.valuationFacts[0]).toMatchObject({
+        _tag: "market_quote",
+        eventId: "10000000-0000-4000-8000-000000000015",
+      })
     })
   )
 })

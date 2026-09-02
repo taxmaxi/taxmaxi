@@ -153,9 +153,11 @@ const make = Effect.gen(function* () {
 
   const loadLegEvents = ({
     principalId,
-    reconciledTransactionIds,
+    reconciledCanonicalTransferIds,
+    reconciledProviderTransactionIds,
   }: Pick<LoadParams, "principalId"> & {
-    readonly reconciledTransactionIds: ReadonlySet<string>
+    readonly reconciledCanonicalTransferIds: ReadonlySet<string>
+    readonly reconciledProviderTransactionIds: ReadonlySet<string>
   }) =>
     Effect.gen(function* () {
       const rows = yield* db
@@ -167,6 +169,7 @@ const make = Effect.gen(function* () {
           amount: schema.transactionLegs.amount,
           kind: schema.transactionLegs.kind,
           derivationRule: schema.transactionLegs.derivationRule,
+          sourceTransferId: schema.transactionLegs.sourceTransferId,
           transactionId: schema.transactions.id,
           externalId: schema.transactions.externalId,
           externalGroupId: schema.transactions.externalGroupId,
@@ -213,12 +216,19 @@ const make = Effect.gen(function* () {
         readonly row: (typeof rows)[number]
       }> = []
       const eventCountByTransactionId = new Map<string, number>()
+      const isReconciledEconomicLeg = (row: (typeof rows)[number]) =>
+        row.kind !== "fee" &&
+        ((row.sourceTransferId !== null &&
+          reconciledCanonicalTransferIds.has(row.sourceTransferId)) ||
+          (row.sourceTransferId === null &&
+            row.transactionId !== null &&
+            reconciledProviderTransactionIds.has(row.transactionId)))
 
       for (const row of rows) {
         if (
           row.transactionId !== null &&
           row.kind !== "fee" &&
-          !reconciledTransactionIds.has(row.transactionId) &&
+          !isReconciledEconomicLeg(row) &&
           row.derivationRule !== "internal_transfer_in" &&
           row.derivationRule !== "internal_transfer_out"
         ) {
@@ -231,9 +241,7 @@ const make = Effect.gen(function* () {
 
       for (const row of rows) {
         if (
-          (row.kind !== "fee" &&
-            row.transactionId !== null &&
-            reconciledTransactionIds.has(row.transactionId)) ||
+          isReconciledEconomicLeg(row) ||
           row.derivationRule === "internal_transfer_in" ||
           row.derivationRule === "internal_transfer_out"
         ) {
@@ -375,7 +383,8 @@ const make = Effect.gen(function* () {
         .pipe(wrapSqlError("factualLedgerRepository.load.custodyMovements"))
 
       const events: AccountingEvent[] = []
-      const reconciledTransactionIds = new Set<string>()
+      const reconciledCanonicalTransferIds = new Set<string>()
+      const reconciledProviderTransactionIds = new Set<string>()
       const seenCanonicalTransferIds = new Set<string>()
       for (const row of rows) {
         if (row.canonicalTransferId === null) continue
@@ -386,10 +395,8 @@ const make = Effect.gen(function* () {
           })
         }
         seenCanonicalTransferIds.add(row.canonicalTransferId)
-        reconciledTransactionIds.add(row.providerTransactionId)
-        if (row.canonicalTransactionId !== null) {
-          reconciledTransactionIds.add(row.canonicalTransactionId)
-        }
+        reconciledCanonicalTransferIds.add(row.canonicalTransferId)
+        reconciledProviderTransactionIds.add(row.providerTransactionId)
 
         const reference = transactionReference({
           externalGroupId: row.canonicalExternalGroupId,
@@ -419,7 +426,7 @@ const make = Effect.gen(function* () {
         )
       }
 
-      return { events, reconciledTransactionIds }
+      return { events, reconciledCanonicalTransferIds, reconciledProviderTransactionIds }
     })
 
   const makeObservedValuationFacts = ({
@@ -593,7 +600,8 @@ const make = Effect.gen(function* () {
       const custodyMovementEvents = yield* loadCustodyMovementEvents({ principalId })
       const legEvents = yield* loadLegEvents({
         principalId,
-        reconciledTransactionIds: custodyMovementEvents.reconciledTransactionIds,
+        reconciledCanonicalTransferIds: custodyMovementEvents.reconciledCanonicalTransferIds,
+        reconciledProviderTransactionIds: custodyMovementEvents.reconciledProviderTransactionIds,
       })
       const events = [...legEvents.events, ...custodyMovementEvents.events].sort(compareEvents)
       const valuationEvents = events.filter((event) => event._tag !== "custody_movement")
