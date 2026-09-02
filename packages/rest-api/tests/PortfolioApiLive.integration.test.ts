@@ -124,7 +124,7 @@ const fixtureIds = {
   activeRunId: "00000000-0000-4000-8000-000000000484",
   latestRunId: "00000000-0000-4000-8000-000000000485",
   acquisitionEventId: "00000000-0000-4000-8000-000000000486",
-  legacyLegId: "00000000-0000-4000-8000-000000000487",
+  factualLegId: "00000000-0000-4000-8000-000000000487",
   otherCustodyUnitId: "00000000-0000-4000-8000-000000000488",
   otherAcquisitionEventId: "00000000-0000-4000-8000-000000000489",
 } as const
@@ -221,7 +221,7 @@ const seedActivePortfolioRun = Effect.gen(function* () {
   })
 })
 
-const seedLegacyPortfolioOnly = Effect.gen(function* () {
+const seedFactualLedgerOnly = Effect.gen(function* () {
   const fixture = yield* seedSyncEngineRepositoryFixture(fixtureIds)
   yield* seedSyncEngineAssets({
     baseBlockchainId: fixture.baseBlockchainId,
@@ -231,9 +231,9 @@ const seedLegacyPortfolioOnly = Effect.gen(function* () {
   const db = yield* drizzle
   const timestamp = DateTime.toDateUtc(DateTime.makeUnsafe("2026-05-01T10:00:00.000Z"))
   yield* db.insert(schema.transactionLegs).values({
-    id: fixtureIds.legacyLegId,
+    id: fixtureIds.factualLegId,
     sourceId: fixture.sourceId,
-    externalId: "portfolio-legacy-only-leg",
+    externalId: "portfolio-factual-only-leg",
     timestamp,
     principalId: fixture.principalId,
     assetId: TEST_BTC_ASSET_ID,
@@ -243,18 +243,6 @@ const seedLegacyPortfolioOnly = Effect.gen(function* () {
     provenance: "deterministic",
     fiatAmount: "990",
     fiatCurrency: "EUR",
-  })
-  yield* db.insert(schema.fifoLots).values({
-    principalId: fixture.principalId,
-    sourceId: fixture.sourceId,
-    assetId: TEST_BTC_ASSET_ID,
-    assetRepresentationId: null,
-    acquiredAt: timestamp,
-    originalAmount: "99",
-    remainingAmount: "99",
-    costBasisPerToken: "10",
-    costBasisCurrency: "EUR",
-    sourceLegId: fixtureIds.legacyLegId,
   })
 })
 
@@ -328,9 +316,9 @@ describe("PortfolioApiLive", () => {
     })
   )
 
-  it.effect("returns an empty portfolio instead of falling back to live FIFO lots", () =>
+  it.effect("returns an empty portfolio instead of deriving positions from factual rows", () =>
     Effect.gen(function* () {
-      yield* seedLegacyPortfolioOnly.pipe(Effect.provide(TestPgClientLive), Effect.scoped)
+      yield* seedFactualLedgerOnly.pipe(Effect.provide(TestPgClientLive), Effect.scoped)
 
       const response = yield* getPortfolio({ userId: fixtureIds.userId }).pipe(
         Effect.provide(HttpLive),

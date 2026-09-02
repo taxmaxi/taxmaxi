@@ -579,9 +579,6 @@ const reportFixtureIds = {
   internalTransferLegId: "00000000-0000-4000-8000-000000046206",
   internalTransferInTransactionId: "00000000-0000-4000-8000-000000046207",
   internalTransferInLegId: "00000000-0000-4000-8000-000000046208",
-  taxFreeFifoLotId: "00000000-0000-4000-8000-000000046301",
-  taxableFifoLotId: "00000000-0000-4000-8000-000000046302",
-  internalTransferFifoLotId: "00000000-0000-4000-8000-000000046303",
   custodyProviderTransferId: "00000000-0000-4000-8000-000000046401",
   custodyMovementId: "00000000-0000-4000-8000-000000046402",
   activeCalculationRunId: "00000000-0000-4000-8000-000000046501",
@@ -663,54 +660,6 @@ const seedSourceReportRows = ({
         transactionId: reportFixtureIds.sellTransactionId,
         fiatAmount: "6000",
         fiatCurrency: "EUR",
-      },
-    ])
-
-    yield* db.insert(schema.fifoLots).values([
-      {
-        id: reportFixtureIds.taxFreeFifoLotId,
-        sourceId,
-        principalId,
-        assetId: TEST_BTC_ASSET_ID,
-        acquiredAt: DateTime.toDateUtc(DateTime.makeUnsafe("2023-01-10T12:00:00.000Z")),
-        originalAmount: "0.2",
-        remainingAmount: "0",
-        costBasisPerToken: "5000",
-        costBasisCurrency: "EUR",
-        sourceLegId: reportFixtureIds.acquisitionLegId,
-        sourceLegSequence: 0,
-      },
-      {
-        id: reportFixtureIds.taxableFifoLotId,
-        sourceId,
-        principalId,
-        assetId: TEST_BTC_ASSET_ID,
-        acquiredAt: DateTime.toDateUtc(DateTime.makeUnsafe("2025-01-10T12:00:00.000Z")),
-        originalAmount: "0.8",
-        remainingAmount: "0.6",
-        costBasisPerToken: "15000",
-        costBasisCurrency: "EUR",
-        sourceLegId: reportFixtureIds.acquisitionLegId,
-        sourceLegSequence: 1,
-      },
-    ])
-
-    yield* db.insert(schema.disposalMatches).values([
-      {
-        disposalLegId: reportFixtureIds.disposalLegId,
-        fifoLotId: reportFixtureIds.taxFreeFifoLotId,
-        matchedAmount: "0.2",
-        costBasis: "1000",
-        proceeds: "3000",
-        gainLoss: "2000",
-      },
-      {
-        disposalLegId: reportFixtureIds.disposalLegId,
-        fifoLotId: reportFixtureIds.taxableFifoLotId,
-        matchedAmount: "0.2",
-        costBasis: "3000",
-        proceeds: "3000",
-        gainLoss: "0",
       },
     ])
   })
@@ -1774,29 +1723,6 @@ const seedSourceReportTaxTreatmentRows = ({
         fiatCurrency: "EUR",
       },
     ])
-
-    yield* db.insert(schema.fifoLots).values({
-      id: reportFixtureIds.internalTransferFifoLotId,
-      sourceId,
-      principalId,
-      assetId: TEST_BTC_ASSET_ID,
-      acquiredAt: DateTime.toDateUtc(DateTime.makeUnsafe("2025-04-01T12:00:00.000Z")),
-      originalAmount: "0.1",
-      remainingAmount: "0",
-      costBasisPerToken: "5000",
-      costBasisCurrency: "EUR",
-      sourceLegId: reportFixtureIds.acquisitionLegId,
-      sourceLegSequence: 2,
-    })
-
-    yield* db.insert(schema.disposalMatches).values({
-      disposalLegId: reportFixtureIds.internalTransferLegId,
-      fifoLotId: reportFixtureIds.internalTransferFifoLotId,
-      matchedAmount: "0.1",
-      costBasis: "500",
-      proceeds: "500",
-      gainLoss: "0",
-    })
   })
 
 const seedDailyQuoteMonetaryRows = ({
@@ -2775,16 +2701,6 @@ describe("SourcesApiLive", () => {
         reconciliationStatus: "unmatched",
         amount: "0.1",
       })
-      yield* db.insert(schema.inventoryMovementAllocations).values({
-        inventoryMovementId: reportFixtureIds.custodyMovementId,
-        fifoLotId: reportFixtureIds.taxableFifoLotId,
-        matchedAmount: "0.1",
-      })
-      yield* db
-        .update(schema.fifoLots)
-        .set({ remainingAmount: "0.5" })
-        .where(eq(schema.fifoLots.id, reportFixtureIds.taxableFifoLotId))
-
       const client = yield* makeAuthenticatedClient({ userId: fixture.userId })
 
       const overview = yield* client.sources.getSourceOverview({
@@ -2875,7 +2791,7 @@ describe("SourcesApiLive", () => {
     }).pipe(Effect.provide(HttpLive))
   )
 
-  it.effect("surfaces FIFO inventory review state for unmatched source disposals", () =>
+  it.effect("surfaces factual review state for source disposals without an active run", () =>
     Effect.gen(function* () {
       const fixture = yield* seedSyncEngineRepositoryFixture(REPORT_TEST_FIXTURE)
 
@@ -2890,10 +2806,6 @@ describe("SourcesApiLive", () => {
       })
 
       const db = yield* drizzle
-
-      yield* db
-        .delete(schema.disposalMatches)
-        .where(eq(schema.disposalMatches.disposalLegId, reportFixtureIds.disposalLegId))
 
       yield* db.insert(schema.transactionReviews).values({
         transactionId: reportFixtureIds.sellTransactionId,
@@ -2993,7 +2905,7 @@ describe("SourcesApiLive", () => {
     }).pipe(Effect.provide(HttpLive))
   )
 
-  it.effect("does not fall back to provider-origin live FIFO lots without an active run", () =>
+  it.effect("does not derive positions from provider transfers without an active run", () =>
     Effect.gen(function* () {
       const fixture = yield* seedSyncEngineRepositoryFixture(REPORT_TEST_FIXTURE)
       yield* seedSyncEngineAssets({
@@ -3024,19 +2936,6 @@ describe("SourcesApiLive", () => {
         toAccountRef: "coinbase-account-1",
         amount: "0.25",
       })
-      yield* db.insert(schema.fifoLots).values({
-        principalId: fixture.principalId,
-        sourceId: fixture.sourceId,
-        assetId: TEST_BTC_ASSET_ID,
-        acquiredAt: DateTime.toDateUtc(DateTime.makeUnsafe("2025-03-11T12:00:00.000Z")),
-        originalAmount: "0.25",
-        remainingAmount: "0.25",
-        costBasisPerToken: "0",
-        costBasisCurrency: "EUR",
-        costBasisStatus: "pending_review",
-        sourceProviderTransferId: providerTransferId,
-      })
-
       const client = yield* makeAuthenticatedClient({ userId: fixture.userId })
       const overview = yield* client.sources.getSourceOverview({
         params: { sourceId: fixture.sourceId },

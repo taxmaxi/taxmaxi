@@ -246,14 +246,12 @@ const seedProviderTransfer = ({
     return providerTransfer.id
   })
 
-const seedCustodyInventory = ({
+const seedCustodyMovement = ({
   amount,
-  externalId,
   providerTransferId,
   timestamp,
 }: {
   readonly amount: string
-  readonly externalId: string
   readonly providerTransferId: string
   readonly timestamp: Date
 }) =>
@@ -264,39 +262,9 @@ const seedCustodyInventory = ({
       .from(schema.providerTransfers)
       .where(eq(schema.providerTransfers.id, providerTransferId))
       .limit(1)
-    const [openingLeg] = yield* db
-      .insert(schema.transactionLegs)
-      .values({
-        sourceId: TEST_SOURCE_ID,
-        externalId: `${externalId}:opening-leg`,
-        timestamp: DateTime.toDateUtc(DateTime.makeUnsafe("2025-04-01T10:00:00.000Z")),
-        principalId: TEST_PRINCIPAL_ID,
-        assetId: TEST_BTC_ASSET_ID,
-        amount: "0.50000000",
-        kind: "acquisition",
-        provenance: "deterministic",
-        fiatAmount: "25000.00",
-        fiatCurrency: "EUR",
-      })
-      .returning({ id: schema.transactionLegs.id })
-    if (providerTransfer === undefined || openingLeg === undefined) {
-      return yield* Effect.die("Failed to seed custody inventory")
+    if (providerTransfer === undefined) {
+      return yield* Effect.die("Failed to seed custody movement")
     }
-    const [openingLot] = yield* db
-      .insert(schema.fifoLots)
-      .values({
-        principalId: TEST_PRINCIPAL_ID,
-        sourceId: TEST_SOURCE_ID,
-        assetId: TEST_BTC_ASSET_ID,
-        acquiredAt: DateTime.toDateUtc(DateTime.makeUnsafe("2025-04-01T10:00:00.000Z")),
-        originalAmount: "0.50000000",
-        remainingAmount: "0.37500000",
-        costBasisPerToken: "50000.000000000000000000",
-        costBasisCurrency: "EUR",
-        sourceLegId: openingLeg.id,
-        sourceLegSequence: 0,
-      })
-      .returning({ id: schema.fifoLots.id })
     const [movement] = yield* db
       .insert(schema.inventoryMovements)
       .values({
@@ -313,14 +281,7 @@ const seedCustodyInventory = ({
         amount,
       })
       .returning({ id: schema.inventoryMovements.id })
-    if (openingLot === undefined || movement === undefined) {
-      return yield* Effect.die("Failed to seed custody FIFO rows")
-    }
-    yield* db.insert(schema.inventoryMovementAllocations).values({
-      inventoryMovementId: movement.id,
-      fifoLotId: openingLot.id,
-      matchedAmount: amount,
-    })
+    if (movement === undefined) return yield* Effect.die("Failed to seed custody movement")
     return { movementId: movement.id }
   })
 
@@ -977,13 +938,6 @@ describe("TransferReconciliationServiceLive", () => {
               })
               .from(schema.inventoryMovements)
               .where(eq(schema.inventoryMovements.providerTransferId, providerTransferId))
-            const [legacyLots, legacyMatches, legacyAllocations] = yield* Effect.all([
-              db.select({ id: schema.fifoLots.id }).from(schema.fifoLots),
-              db.select({ id: schema.disposalMatches.id }).from(schema.disposalMatches),
-              db
-                .select({ id: schema.inventoryMovementAllocations.id })
-                .from(schema.inventoryMovementAllocations),
-            ])
             const factualLegs = yield* db
               .select({ kind: schema.transactionLegs.kind })
               .from(schema.transactionLegs)
@@ -997,9 +951,6 @@ describe("TransferReconciliationServiceLive", () => {
               transactions,
               movement,
               factualLegs,
-              legacyLots,
-              legacyMatches,
-              legacyAllocations,
             }
           })
         )
@@ -1013,9 +964,6 @@ describe("TransferReconciliationServiceLive", () => {
         taxTreatment: "pending_review",
       })
       expect(state.factualLegs.map(({ kind }) => kind).sort()).toEqual(["acquisition", "disposal"])
-      expect(state.legacyLots).toHaveLength(0)
-      expect(state.legacyMatches).toHaveLength(0)
-      expect(state.legacyAllocations).toHaveLength(0)
 
       const legacyReviewTransactionId = yield* Effect.promise(() =>
         runPg(
@@ -1417,21 +1365,6 @@ describe("TransferReconciliationServiceLive", () => {
                 userNotes: "Preserve the reviewed gift accounting.",
                 reviewedAt: DateTime.toDateUtc(DateTime.makeUnsafe("2025-04-10T11:00:00.000Z")),
               })
-              const [openingLeg] = yield* db
-                .insert(schema.transactionLegs)
-                .values({
-                  sourceId: reviewedSourceId,
-                  externalId: `reviewed-${reviewStatus}-${reviewedSide}:opening`,
-                  timestamp: DateTime.toDateUtc(DateTime.makeUnsafe("2025-04-01T10:00:00.000Z")),
-                  principalId: TEST_PRINCIPAL_ID,
-                  assetId: TEST_BTC_ASSET_ID,
-                  amount: "0.50000000",
-                  kind: "acquisition",
-                  provenance: "deterministic",
-                  fiatAmount: "25000.00",
-                  fiatCurrency: "EUR",
-                })
-                .returning({ id: schema.transactionLegs.id })
               const [giftLeg] = yield* db
                 .insert(schema.transactionLegs)
                 .values({
@@ -1449,35 +1382,9 @@ describe("TransferReconciliationServiceLive", () => {
                   fiatCurrency: "EUR",
                 })
                 .returning({ id: schema.transactionLegs.id })
-              if (openingLeg === undefined || giftLeg === undefined) {
-                return yield* Effect.die("Failed to create reviewed accounting legs")
+              if (giftLeg === undefined) {
+                return yield* Effect.die("Failed to create reviewed accounting leg")
               }
-              const [openingLot] = yield* db
-                .insert(schema.fifoLots)
-                .values({
-                  principalId: TEST_PRINCIPAL_ID,
-                  sourceId: reviewedSourceId,
-                  assetId: TEST_BTC_ASSET_ID,
-                  acquiredAt: DateTime.toDateUtc(DateTime.makeUnsafe("2025-04-01T10:00:00.000Z")),
-                  originalAmount: "0.50000000",
-                  remainingAmount: "0.40000000",
-                  costBasisPerToken: "50000.000000000000000000",
-                  costBasisCurrency: "EUR",
-                  sourceLegId: openingLeg.id,
-                  sourceLegSequence: 0,
-                })
-                .returning({ id: schema.fifoLots.id })
-              if (openingLot === undefined) {
-                return yield* Effect.die("Failed to create reviewed accounting lot")
-              }
-              yield* db.insert(schema.disposalMatches).values({
-                disposalLegId: giftLeg.id,
-                fifoLotId: openingLot.id,
-                matchedAmount: "0.10000000",
-                costBasis: "5000.00000000",
-                proceeds: "5000.00000000",
-                gainLoss: "0.00000000",
-              })
 
               return { giftLegId: giftLeg.id, transactionId: reviewedTransactionId }
             })
@@ -3883,9 +3790,8 @@ describe("TransferReconciliationServiceLive", () => {
       )
       yield* Effect.promise(() =>
         runPg(
-          seedCustodyInventory({
+          seedCustodyMovement({
             amount: "0.12500000",
-            externalId: "source-replay-lock-set",
             providerTransferId,
             timestamp: providerTimestamp,
           })

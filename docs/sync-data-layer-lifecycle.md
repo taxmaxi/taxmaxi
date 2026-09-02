@@ -8,7 +8,7 @@ A sync has three different kinds of memory:
 
 1. **The request** — `sync_runs`, `sync_run_items`, and `processing_jobs` say what the user asked for and whether each source job is queued, running, complete, or failed.
 2. **The import memory** — `source_sync_state` and `source_records_raw` let TaxMaxi resume remote fetching and reprocess original provider data without downloading it again.
-3. **The useful result** — `transactions`, contexts, transfers, transaction legs, inventory rows, and reconciliation rows turn provider payloads into data used by the portfolio and tax calculations.
+3. **The useful result** — factual rows (`transactions`, contexts, transfers, transaction legs, inventory movements, and reconciliations) feed immutable `calculation_runs` that serve portfolio and tax results.
 
 The most important distinction is between `provider_transfers` and `transfers`:
 
@@ -27,14 +27,15 @@ flowchart TD
   E --> F["transactions: canonical event envelope"]
   F --> G["transaction_venue_context / transaction_onchain_context"]
   F --> H["provider_transfers: provider-side movements"]
-  F --> I["transaction_legs: accounting meaning"]
+  F --> I["transaction_legs: factual accounting events"]
   E --> J["transfers: canonical movements and fees"]
-  H --> K["inventory_movements and FIFO state"]
-  I --> L["fifo_lots and disposal_matches"]
+  H --> K["inventory_movements: custody facts"]
   H --> M["transfer_reconciliations: candidate evidence"]
   J --> M
   M --> N["unresolved reconciliation review queue"]
   D --> O["processing_jobs = completed"]
+  O --> Q["principal recompute job"]
+  Q --> R["calculation_runs and immutable results"]
   O --> P["sync_run_items and sync_runs are refreshed"]
 ```
 
@@ -54,13 +55,12 @@ Before following the story, it helps to know the main records by role.
 | `transaction_venue_context` / `transaction_onchain_context` | Details that only make sense for an exchange or chain transaction.                                 | One-to-one companions of a transaction.                                                            |
 | `provider_transfers`                                        | Custody-provider movements before cross-provider reconciliation.                                   | Belongs to a transaction, raw row, source, and provider asset.                                     |
 | `transfers`                                                 | Canonical asset movements used for onchain matching, explanation, and some leg derivation.         | Belongs to a source, principal, asset, and usually a raw row.                                      |
-| `transaction_legs`                                          | Accounting meaning: acquisition, disposal, income, or fee.                                         | Belongs to a transaction and can point to a canonical transfer.                                    |
+| `transaction_legs`                                          | Factual acquisition, disposition, income, or fee legs.                                             | Belongs to a transaction and can point to a canonical transfer.                                    |
 | `inventory_movements`                                       | Factual custody movement, kept separate from tax meaning.                                          | Comes from exactly one provider transfer or one fee leg.                                           |
-| `fifo_lots`                                                 | Units available for FIFO accounting.                                                               | Originates from exactly one acquisition leg or inbound provider transfer.                          |
-| `disposal_matches`                                          | The FIFO lots consumed by a taxable disposal leg.                                                  | Joins a disposal leg to a FIFO lot.                                                                |
-| `inventory_movement_allocations`                            | The FIFO lots consumed by a custody movement that is not yet a tax disposal.                       | Joins an inventory movement to a FIFO lot.                                                         |
 | `transfer_reconciliations`                                  | The decision that links a provider transfer to a canonical transfer/transaction.                   | One row per provider transfer, optionally pointing to canonical targets.                           |
 | `transaction_reviews`                                       | A durable explanation that a transaction needs human review.                                       | One-to-one with a transaction.                                                                     |
+| `calculation_runs`                                          | One write-once accounting calculation over a stable factual ledger.                                | Belongs to a principal and scope; immutable result rows reference the run.                         |
+| `active_calculation_runs`                                   | The active run pointer for a principal and reporting scope.                                        | Selects one complete or partial run without mutating older results.                                |
 
 The table definitions are in [`packages/persistence/src/schema`](../packages/persistence/src/schema/index.ts). The source root is documented in [`SourcesTable.ts`](../packages/persistence/src/schema/SourcesTable.ts), job state in [`ProcessingJobsTable.ts`](../packages/persistence/src/schema/ProcessingJobsTable.ts), and the central accounting rows in [`TransactionsTable.ts`](../packages/persistence/src/schema/TransactionsTable.ts), [`TransfersTable.ts`](../packages/persistence/src/schema/TransfersTable.ts), [`ProviderTransfersTable.ts`](../packages/persistence/src/schema/ProviderTransfersTable.ts), and [`TransactionLegsTable.ts`](../packages/persistence/src/schema/TransactionLegsTable.ts).
 
@@ -193,29 +193,28 @@ Input side of reconciliation               Candidate canonical side of reconcili
 
 ### 7.3 Transaction legs
 
-After the transaction and movements have database ids, the provider’s leg derivation service creates `transaction_legs`. A leg is not another copy of a transfer. It is the accounting statement made from the evidence:
+After the transaction and movements have database ids, the provider’s leg derivation service creates `transaction_legs`. A leg is not another copy of a transfer. It records a factual asset direction and cause from the evidence:
 
 - `acquisition`: units entered inventory;
-- `disposal`: units left in a tax-relevant way;
+- `disposal`: units left ownership;
 - `income`: units were received as income;
 - `fee`: units paid as a cost.
 
-A swap can therefore have multiple legs even though it is one transaction. A leg may point at `source_transfer_id` when it came from a canonical transfer and at `transaction_id` for its parent event. The schema and its accounting rules are in [`TransactionLegsTable.ts`](../packages/persistence/src/schema/TransactionLegsTable.ts).
+A swap can therefore have multiple legs even though it is one transaction. A leg may point at `source_transfer_id` when it came from a canonical transfer and at `transaction_id` for its parent event. The schema is in [`TransactionLegsTable.ts`](../packages/persistence/src/schema/TransactionLegsTable.ts). Jurisdiction rules belong to the accounting engine, not the leg.
 
-### 7.4 FIFO and custody inventory
+### 7.4 Factual ledger and calculation runs
 
-Normalization immediately feeds the derived facts into inventory state:
+Normalization persists facts only:
 
-- Acquisition and income legs can create or update `fifo_lots`.
-- Disposal legs consume those lots in chronological order and create `disposal_matches`, including cost basis, proceeds, and gain/loss.
-- Completed provider transfers create `inventory_movements`. An inbound movement can create a provider-origin FIFO lot; an outbound movement consumes lots through `inventory_movement_allocations`.
-- Fee legs also become outbound inventory movements and allocations.
+- Acquisition, disposition, income, and fee legs become the factual ledger.
+- Completed provider transfers and fee legs can create `inventory_movements` as custody evidence.
+- Reconciliation records whether provider and onchain movements are the same factual custody move.
 
-The separation between `disposal_matches` and `inventory_movement_allocations` is important. A disposal is a tax claim. A custody movement is merely evidence that units moved. Reconciliation may later prove that an exchange withdrawal was an internal transfer rather than a disposal.
+After the source job completes, one coalesced principal recompute job reads a stable factual snapshot and calls the stateless accounting engine. The result is stored under one write-once `calculation_runs` row with run-keyed allocations, realized results, income results, derived lots, blockers, and explanation rows. A compare-and-set moves the active-run pointer only when the new run read a sufficiently new ledger revision.
 
-If the source does not yet have enough inventory to cover an outbound row, the transaction is not silently discarded. Its `transaction_reviews` row is marked `needs_review` with an explanation that opening balance or acquisition history is likely missing.
+Missing valuation, unknown cause, or inventory shortage does not roll back factual persistence. The calculation run becomes partial and records machine-readable blockers while unrelated results remain readable.
 
-The detailed write order and FIFO allocation code are all in [`SourceNormalizationRepositoryLive.ts`](../packages/persistence/src/layers/SourceNormalizationRepositoryLive.ts). The related schemas are [`FifoLotsTable.ts`](../packages/persistence/src/schema/FifoLotsTable.ts), [`DisposalMatchesTable.ts`](../packages/persistence/src/schema/DisposalMatchesTable.ts), and [`InventoryMovementsTable.ts`](../packages/persistence/src/schema/InventoryMovementsTable.ts).
+The factual write order is in [`SourceNormalizationRepositoryLive.ts`](../packages/persistence/src/layers/SourceNormalizationRepositoryLive.ts). Run calculation and persistence are in [`CalculationRunServiceLive.ts`](../packages/persistence/src/layers/CalculationRunServiceLive.ts) and [`CalculationRunRepositoryLive.ts`](../packages/persistence/src/layers/CalculationRunRepositoryLive.ts).
 
 ### 7.5 The raw row is acknowledged last
 
@@ -244,7 +243,7 @@ The result is upserted into `transfer_reconciliations` by `TransferReconciliatio
 
 Each row always points to the provider transfer. A candidate based on an exact provider observation can point to the canonical transaction before that observation has produced a canonical transfer. A fully resolved deterministic candidate points to both, but remains pending. The schema is in [`TransferReconciliationsTable.ts`](../packages/persistence/src/schema/TransferReconciliationsTable.ts). Admins can inspect pending and `needs_review` evidence through the narrow unresolved-reconciliation endpoint in [`AssetsApi.ts`](../packages/rest-api/src/definitions/AssetsApi.ts).
 
-Candidate reconciliation does not approve mappings or change FIFO/internal-transfer state. The executor still runs the canonicalization pass, but that pass accepts only `approved` rows or legacy deterministic `auto_applied` rows; the new pending candidate states are not eligible. Approval, replay after a later destination sync, and FIFO application belong to the next delivery step.
+Candidate reconciliation does not approve mappings or change factual custody state. The executor still runs the canonicalization pass, but that pass accepts only `approved` rows or legacy deterministic `auto_applied` rows; the new pending candidate states are not eligible. Approval and replay after a later destination sync belong to the next delivery step.
 
 ## Chapter 9: completion moves back up the tree
 
@@ -273,12 +272,12 @@ The executor chooses retry versus final failure in [`SourceSyncJobExecutorLive.t
 
 ## Replay: rebuilding the result without redownloading it
 
-A replay uses the same `processing_jobs` machinery but sets `mode = replay`. It does not call the provider for pages. `SourceReplayRepository.resetSourceDerivedState` first checks that deleting this source’s FIFO state will not break later allocations belonging to another source. If it is safe, it:
+A replay uses the same `processing_jobs` machinery but sets `mode = replay`. It does not call the provider for pages. `SourceReplayRepository.resetSourceDerivedState`:
 
-1. restores FIFO quantities consumed by this source;
-2. deletes this source’s transaction legs, transactions, and transfers; cascading foreign keys remove many dependent rows;
-3. clears normalization state on this source’s `source_records_raw` rows;
-4. runs the ordinary classification and reconciliation stages again from the cached payloads.
+1. deletes this source’s factual transaction legs, transactions, and transfers; cascading foreign keys remove their dependent factual rows;
+2. clears normalization state on this source’s `source_records_raw` rows;
+3. runs the ordinary classification and reconciliation stages again from the cached payloads;
+4. enqueues a fresh principal calculation after the replay completes.
 
 The reset is in [`SourceReplayRepositoryLive.ts`](../packages/persistence/src/layers/SourceReplayRepositoryLive.ts), and replay orchestration is in [`SourceSyncJobExecutorLive.ts`](../packages/sync-engine/src/layers/SourceSyncJobExecutorLive.ts#L741).
 
@@ -303,12 +302,11 @@ This is the compact lookup when reading code. “Writes” includes inserts, upd
 | `provider_transfers`                 | `SourceNormalizationRepositoryLive`                                                                                                              | Stores provider-reported custody movements.                                                                         |
 | `transfers`                          | `SourceNormalizationRepositoryLive`; deleted on replay by `SourceReplayRepositoryLive`                                                           | Stores canonical movements, including onchain candidates and fee movements.                                         |
 | `transaction_legs`                   | `SourceNormalizationRepositoryLive`; adjusted by `TransferReconciliationRepositoryLive`; deleted on replay by `SourceReplayRepositoryLive`       | Stores acquisition, disposal, income, and fee meaning.                                                              |
-| `transaction_reviews`                | `SourceNormalizationRepositoryLive` and `TransferReconciliationRepositoryLive`                                                                   | Records uncertain mappings, insufficient inventory, or reconciliation issues.                                       |
-| `fifo_lots`                          | `SourceNormalizationRepositoryLive`, `TransferReconciliationRepositoryLive`, and `SourceReplayRepositoryLive`                                    | Creates inventory lots and adjusts their remaining quantity as facts are rebuilt.                                   |
-| `disposal_matches`                   | `SourceNormalizationRepositoryLive` and `TransferReconciliationRepositoryLive`                                                                   | Connects tax disposal legs to the FIFO lots they consume.                                                           |
+| `transaction_reviews`                | `SourceNormalizationRepositoryLive` and `TransferReconciliationRepositoryLive`                                                                   | Records uncertain mappings or reconciliation issues.                                                                |
 | `inventory_movements`                | `SourceNormalizationRepositoryLive` and `TransferReconciliationRepositoryLive`                                                                   | Stores custody movement facts separately from tax classification.                                                   |
-| `inventory_movement_allocations`     | `SourceNormalizationRepositoryLive`, `TransferReconciliationRepositoryLive`, and replay reset logic                                              | Connects outbound custody movements to FIFO lots without declaring a tax disposal.                                  |
 | `transfer_reconciliations`           | `TransferReconciliationRepositoryLive`                                                                                                           | Stores the provider-to-canonical match and its status/reason.                                                       |
+| `calculation_runs` and result tables | `CalculationRunServiceLive` and `CalculationRunRepositoryLive`                                                                                   | Store one immutable complete or partial engine result and its blocker/explanation rows.                             |
+| `active_calculation_runs`            | `CalculationRunRepositoryLive`                                                                                                                   | Activates a sufficiently new run without changing prior runs.                                                       |
 
 ## A practical reading path through the code
 

@@ -22,11 +22,11 @@ import { transactions } from "./TransactionsTable.ts"
 import { transfers } from "./TransfersTable.ts"
 
 /**
- * Leg kind enum - the accounting classification of each leg
- * - acquisition: receiving an asset (creates tax basis)
- * - disposal: sending an asset (triggers gain/loss calculation)
+ * Leg kind enum - the factual direction of each accounting leg
+ * - acquisition: receiving an asset
+ * - disposal: sending an asset
  * - income: receiving an asset as income (e.g., staking rewards, airdrops)
- * - fee: gas fees or other transaction costs (always deductible)
+ * - fee: gas fees or other transaction costs
  */
 export const legKindEnum = pgEnum("leg_kind", ["acquisition", "disposal", "income", "fee"])
 
@@ -44,24 +44,23 @@ export const legProvenanceEnum = pgEnum("leg_provenance", ["deterministic", "rul
 export type LegProvenance = (typeof legProvenanceEnum.enumValues)[number]
 
 /**
- * Transaction legs table - normalized accounting legs derived from raw transfers/events
+ * Transaction legs table - factual accounting legs derived from raw transfers/events
  *
- * This table is the canonical substrate for FIFO and tax reporting. Each transfer
+ * This table is part of the factual ledger used by calculation runs. Each transfer
  * may produce multiple legs (e.g., a swap produces a disposal leg and an acquisition leg,
  * plus potentially a fee leg for gas).
  *
  * Key invariants:
  * - Fee legs are always explicit (never conflated with payments)
- * - Acquisition legs create FIFO lots
- * - Disposal legs consume FIFO lots via disposal_matches
- * - Income legs are taxable events at acquisition value
+ * - Direction and cause stay factual; the engine decides tax treatment
+ * - Derived lots, allocations, and money belong to immutable calculation runs
  */
 export const transactionLegs = pgTable(
   "transaction_legs",
   {
     id: uuid("id").primaryKey().defaultRandom(),
 
-    sourceId: uuid("source_id") // Owning source for cross-provider FIFO and replay.
+    sourceId: uuid("source_id") // Owning custody source for factual-ledger replay.
       .notNull()
       .references(() => sources.id, {
         onDelete: "cascade",
@@ -152,7 +151,7 @@ export const transactionLegs = pgTable(
         sql`${table.txHash} is not null AND ${table.addressId} is not null AND ${table.kind} = 'fee' AND ${table.derivationRule} IN ('gas_fee', 'failed_tx_gas_fee')`
       ),
 
-    // Query legs by source (cross-provider import and tax replay)
+    // Query legs by source (provider import and factual-ledger replay)
     index("idx_transaction_legs_source").on(table.sourceId),
 
     // Query legs by transaction
@@ -164,10 +163,10 @@ export const transactionLegs = pgTable(
     // Query legs by principal (for tax reports)
     index("idx_transaction_legs_principal").on(table.principalId),
 
-    // Query legs by asset (for FIFO processing)
+    // Query legs by asset (for factual-ledger calculation input)
     index("idx_transaction_legs_asset").on(table.assetId),
 
-    // Query legs by kind (e.g., all acquisitions for FIFO lot creation)
+    // Query legs by kind for factual-ledger calculation input
     index("idx_transaction_legs_kind").on(table.kind),
 
     // Timestamp ordering for chronological processing

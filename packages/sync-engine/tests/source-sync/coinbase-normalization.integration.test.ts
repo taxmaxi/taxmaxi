@@ -489,7 +489,7 @@ const replaySource = () =>
     })
   }).pipe(Effect.provide(TestLayer))
 
-const fetchProviderTransferInventoryState = () =>
+const fetchProviderTransferState = () =>
   Effect.gen(function* () {
     const db = yield* drizzle
 
@@ -503,17 +503,6 @@ const fetchProviderTransferInventoryState = () =>
       .from(schema.providerTransfers)
       .where(eq(schema.providerTransfers.sourceId, sourceId))
 
-    const providerLots = yield* db
-      .select({
-        sourceProviderTransferId: schema.fifoLots.sourceProviderTransferId,
-        assetId: schema.fifoLots.assetId,
-        originalAmount: schema.fifoLots.originalAmount,
-        remainingAmount: schema.fifoLots.remainingAmount,
-        costBasisStatus: schema.fifoLots.costBasisStatus,
-      })
-      .from(schema.fifoLots)
-      .where(eq(schema.fifoLots.sourceId, sourceId))
-
     const inventoryMovements = yield* db
       .select({
         providerTransferId: schema.inventoryMovements.providerTransferId,
@@ -526,7 +515,6 @@ const fetchProviderTransferInventoryState = () =>
 
     return {
       providerTransferRows,
-      providerLots,
       inventoryMovements,
     }
   }).pipe(Effect.provide(TestPgClientLive))
@@ -586,21 +574,6 @@ const fetchCounts = () =>
       .from(schema.transactionLegs)
       .where(eq(schema.transactionLegs.sourceId, sourceId))
 
-    const fifoLots = yield* db
-      .select({
-        originalAmount: schema.fifoLots.originalAmount,
-        remainingAmount: schema.fifoLots.remainingAmount,
-      })
-      .from(schema.fifoLots)
-      .where(eq(schema.fifoLots.sourceId, sourceId))
-
-    const disposalMatches = yield* db
-      .select({
-        matchedAmount: schema.disposalMatches.matchedAmount,
-        gainLoss: schema.disposalMatches.gainLoss,
-      })
-      .from(schema.disposalMatches)
-
     const transactionTypeCatalogRows = yield* db
       .select({
         providerTransactionType: schema.providerTransactionTypeCatalog.providerTransactionType,
@@ -621,8 +594,6 @@ const fetchCounts = () =>
       venueContextCount: venueContexts.length,
       transfers,
       legs,
-      fifoLots,
-      disposalMatches,
       transactionTypeCatalogCount: transactionTypeCatalogRows.length,
       providerAssetCatalogCount: providerAssetRows.length,
     }
@@ -893,8 +864,6 @@ describe("coinbase normalization persistence", () => {
           expect(state.transactionReviews).toHaveLength(3)
           expect(state.transactionReviews.every((row) => row.needsReview)).toBe(true)
           expect(state.legs).toHaveLength(0)
-          expect(state.fifoLots).toHaveLength(0)
-          expect(state.disposalMatches).toHaveLength(0)
         })
       }),
     15_000
@@ -951,7 +920,6 @@ describe("coinbase normalization persistence", () => {
             }),
           ])
           expect(state.legs).toHaveLength(0)
-          expect(state.fifoLots).toHaveLength(0)
         })
       }),
     15_000
@@ -978,8 +946,6 @@ describe("coinbase normalization persistence", () => {
           "tx-send-1:network_fee",
         ])
         expect(firstRun.legs).toHaveLength(4)
-        expect(firstRun.fifoLots).toHaveLength(0)
-        expect(firstRun.disposalMatches).toHaveLength(0)
         expect(firstRun.transactionReviews).toEqual([
           expect.objectContaining({
             reviewStatus: "needs_review",
@@ -999,8 +965,6 @@ describe("coinbase normalization persistence", () => {
         expect(secondRun.transactionReviews).toHaveLength(firstRun.transactionReviews.length)
         expect(secondRun.transfers).toHaveLength(firstRun.transfers.length)
         expect(secondRun.legs).toHaveLength(firstRun.legs.length)
-        expect(secondRun.fifoLots).toHaveLength(firstRun.fifoLots.length)
-        expect(secondRun.disposalMatches).toHaveLength(firstRun.disposalMatches.length)
       })
     )
   )
@@ -1085,7 +1049,7 @@ describe("coinbase normalization persistence", () => {
       yield* Effect.gen(function* () {
         yield* runSync()
 
-        const state = yield* fetchProviderTransferInventoryState()
+        const state = yield* fetchProviderTransferState()
 
         const depositTransfer = state.providerTransferRows.find(
           (row) => row.externalId === "tx-deposit-send-1:principal"
@@ -1106,12 +1070,10 @@ describe("coinbase normalization persistence", () => {
         expect(depositMovement?.assetId).toBe(DOT_ASSET_ID)
         expect(depositMovement?.direction).toBe("inbound")
         expectDecimalAmount(String(depositMovement?.amount), "87.95")
-        expect(state.providerLots).toHaveLength(0)
-
         const replay = yield* replaySource()
         expect(replay.status).toBe("completed")
 
-        const replayedState = yield* fetchProviderTransferInventoryState()
+        const replayedState = yield* fetchProviderTransferState()
         const replayedDepositTransfer = replayedState.providerTransferRows.find(
           (row) => row.externalId === "tx-deposit-send-1:principal"
         )
@@ -1121,7 +1083,6 @@ describe("coinbase normalization persistence", () => {
         )
         expect(replayedDepositMovement?.direction).toBe("inbound")
         expectDecimalAmount(String(replayedDepositMovement?.amount), "87.95")
-        expect(replayedState.providerLots).toHaveLength(0)
       })
     })
   )
@@ -1645,8 +1606,6 @@ describe("coinbase normalization persistence", () => {
             derivationRule: "coinbase_buy",
           }),
         ])
-        expect(repairedCounts.fifoLots).toHaveLength(0)
-        expect(repairedCounts.disposalMatches).toHaveLength(0)
 
         const replay = yield* replaySource()
         const replayedCounts = yield* fetchCounts()
@@ -1655,8 +1614,6 @@ describe("coinbase normalization persistence", () => {
         expect(replayedCounts.transactions).toHaveLength(repairedCounts.transactions.length)
         expect(replayedCounts.transfers).toHaveLength(repairedCounts.transfers.length)
         expect(replayedCounts.legs).toHaveLength(repairedCounts.legs.length)
-        expect(replayedCounts.fifoLots).toHaveLength(repairedCounts.fifoLots.length)
-        expect(replayedCounts.disposalMatches).toHaveLength(repairedCounts.disposalMatches.length)
       })
     })
   )
