@@ -6,6 +6,9 @@ import {
   TaxMaxi,
   getTaxMaxiAssetOverrideError,
   toTaxMaxiError,
+  type AssetOverrideCreateError,
+  type AssetOverrideCreateInput,
+  type AssetOverrideCreateResult,
   type AssetOverrideIdentityValidation,
   type AssetOverrideTarget,
 } from "../src/index.ts"
@@ -26,8 +29,11 @@ const ids = {
   activeOverride: "00000000-0000-4000-8000-000000000101",
   asset: "00000000-0000-4000-8000-000000000102",
   actor: "00000000-0000-4000-8000-000000000105",
+  inclusionOverride: "00000000-0000-4000-8000-000000000108",
+  job: "00000000-0000-4000-8000-000000000106",
   replacementAsset: "00000000-0000-4000-8000-000000000103",
   providerAsset: "00000000-0000-4000-8000-000000000104",
+  source: "00000000-0000-4000-8000-000000000107",
 } as const
 
 const contractAddress = "0x1111111111111111111111111111111111111111"
@@ -93,6 +99,56 @@ const currentResponseWithHistory = {
   activeIdentityOverride: historyRecord,
   effectiveDecision: { _tag: "included", assetId: ids.replacementAsset },
   history: [historyRecord],
+} as const
+
+const updatingRecomputation = {
+  status: "updating",
+  overrideIds: [ids.activeOverride, ids.inclusionOverride],
+  sourceJobs: [
+    {
+      overrideId: ids.activeOverride,
+      sourceId: ids.source,
+      requestedJobId: ids.job,
+      jobId: ids.job,
+      status: "pending",
+      failureCode: null,
+    },
+    {
+      overrideId: ids.inclusionOverride,
+      sourceId: ids.source,
+      requestedJobId: ids.job,
+      jobId: ids.job,
+      status: "running",
+      failureCode: null,
+    },
+  ],
+} as const
+
+const identityCreateResponse = {
+  ...currentResponseWithHistory,
+  recomputation: updatingRecomputation,
+} as const
+
+const inclusionCreateRecord = {
+  ...historyRecord,
+  id: ids.inclusionOverride,
+  kind: "inclusion",
+  inspectedSystemIdentity: null,
+  inspectedSystemInclusion: "included",
+  replacementIdentity: null,
+  replacementInclusion: "excluded",
+  reason: "Exclude this asset from my calculation.",
+} as const
+
+const inclusionCreateResponse = {
+  ...currentResponse,
+  activeInclusionOverride: inclusionCreateRecord,
+  effectiveDecision: {
+    _tag: "excluded",
+    identity: { _tag: "resolved", assetId: ids.asset },
+  },
+  history: [inclusionCreateRecord],
+  recomputation: updatingRecomputation,
 } as const
 
 const historyResponse = {
@@ -174,7 +230,7 @@ const makeErrorFetch = ({ body, status }: { readonly body: unknown; readonly sta
     )) satisfies typeof globalThis.fetch
 
 describe("TaxMaxi asset override resources", () => {
-  it.effect("exposes current, history, validation, replace, and withdraw in both clients", () =>
+  it.effect("supports create in both clients alongside existing asset override methods", () =>
     Effect.gen(function* () {
       const captured: Array<CapturedRequest> = []
       const taxmaxi = new TaxMaxi({
@@ -186,6 +242,8 @@ describe("TaxMaxi asset override resources", () => {
             currentResponse,
             historyResponse,
             validationResponse,
+            identityCreateResponse,
+            inclusionCreateResponse,
             currentResponse,
             currentResponse,
           ],
@@ -202,6 +260,28 @@ describe("TaxMaxi asset override resources", () => {
           assetId: ids.replacementAsset,
         })
       )
+      const identityCreateInput = {
+        target: representationTarget,
+        override: {
+          _tag: "identity",
+          assetId: ids.replacementAsset,
+          expectedSystemRevision: "identity-revision",
+          reason: "Use the existing USDC economic asset.",
+        },
+      } as const satisfies AssetOverrideCreateInput
+      const identityCreated: AssetOverrideCreateResult = yield* Effect.promise(() =>
+        taxmaxi.assetOverrides.create(identityCreateInput)
+      )
+      const inclusionCreated: AssetOverrideCreateResult =
+        yield* taxmaxi.effect.assetOverrides.create({
+          target: representationTarget,
+          override: {
+            _tag: "inclusion",
+            inclusion: "excluded",
+            expectedSystemRevision: "inclusion-revision",
+            reason: "Exclude this asset from my calculation.",
+          },
+        })
       const replaced = yield* taxmaxi.effect.assetOverrides.replace({
         target: representationTarget,
         replacement: {
@@ -227,33 +307,39 @@ describe("TaxMaxi asset override resources", () => {
       expect(current).toEqual(currentResponse)
       expect(history).toEqual(historyResponse)
       expect(validation).toEqual(validationResponse)
+      expect(identityCreated.recomputation).toEqual(updatingRecomputation)
+      expect(inclusionCreated.recomputation).toEqual(updatingRecomputation)
       expect(replaced.recomputation.status).toBe("not_scheduled")
       expect(withdrawn.checkedTechnicalBlockerKinds).toEqual([
         "missing_decimals",
         "unsupported_asset_type",
       ])
-      expect("create" in taxmaxi.assetOverrides).toBe(false)
-      expect("create" in taxmaxi.effect.assetOverrides).toBe(false)
 
       const currentRequest = captured[0]
       const historyRequest = captured[1]
       const validationRequest = captured[2]
-      const replaceRequest = captured[3]
-      const withdrawRequest = captured[4]
+      const identityCreateRequest = captured[3]
+      const inclusionCreateRequest = captured[4]
+      const replaceRequest = captured[5]
+      const withdrawRequest = captured[6]
       if (
         currentRequest === undefined ||
         historyRequest === undefined ||
         validationRequest === undefined ||
+        identityCreateRequest === undefined ||
+        inclusionCreateRequest === undefined ||
         replaceRequest === undefined ||
         withdrawRequest === undefined
       ) {
-        return yield* Effect.die("Expected all five asset override requests.")
+        return yield* Effect.die("Expected all seven asset override requests.")
       }
 
       expect(captured.map(({ method, url }) => ({ method, path: new URL(url).pathname }))).toEqual([
         { method: "GET", path: "/v1/asset-overrides/current" },
         { method: "GET", path: "/v1/asset-overrides/history" },
         { method: "GET", path: "/v1/asset-overrides/validation" },
+        { method: "POST", path: "/v1/asset-overrides/create" },
+        { method: "POST", path: "/v1/asset-overrides/create" },
         { method: "POST", path: "/v1/asset-overrides/replace" },
         { method: "POST", path: "/v1/asset-overrides/withdraw" },
       ])
@@ -274,6 +360,19 @@ describe("TaxMaxi asset override resources", () => {
         contractAddress,
         assetId: ids.replacementAsset,
       })
+      expect(query(identityCreateRequest)).toEqual({
+        targetKind: "representation",
+        blockchain: "Base",
+        representationType: "token",
+        contractAddress,
+      })
+      expect(identityCreateRequest.body).toEqual(identityCreateInput.override)
+      expect(inclusionCreateRequest.body).toEqual({
+        _tag: "inclusion",
+        inclusion: "excluded",
+        expectedSystemRevision: "inclusion-revision",
+        reason: "Exclude this asset from my calculation.",
+      })
       expect(replaceRequest.body).toEqual({
         _tag: "identity",
         assetId: ids.replacementAsset,
@@ -287,6 +386,86 @@ describe("TaxMaxi asset override resources", () => {
         expectedSystemRevision: "identity-revision",
         reason: "Return to TaxMaxi's current conclusion.",
       })
+    })
+  )
+
+  it.effect("decodes typed create validation and conflict errors", () =>
+    Effect.gen(function* () {
+      const validationError = {
+        _tag: "AssetOverrideReplacementValidationError",
+        code: "invalid_replacement",
+        validation: {
+          _tag: "asset_not_found",
+          assetId: ids.replacementAsset,
+          checkedTechnicalBlockerKinds: ["missing_decimals", "unsupported_asset_type"],
+          technicalBlockers: ["missing_decimals"],
+          recomputation: { status: "not_scheduled" },
+        },
+        currentProjection: currentResponse,
+      } as const
+      const effectClient = new TaxMaxi({
+        apiKey: "tm_asset_overrides",
+        baseUrl: "https://sdk.example.test",
+        fetch: makeErrorFetch({ body: validationError, status: 422 }),
+      })
+      const effectError: AssetOverrideCreateError = yield* effectClient.effect.assetOverrides
+        .create({
+          target: representationTarget,
+          override: {
+            _tag: "identity",
+            assetId: ids.replacementAsset,
+            expectedSystemRevision: "identity-revision",
+            reason: "Use the existing USDC economic asset.",
+          },
+        })
+        .pipe(Effect.flip)
+
+      expect(effectError).toMatchObject(validationError)
+
+      const conflict = {
+        _tag: "AssetOverrideMutationConflictError",
+        code: "override_conflict",
+        conflictKinds: ["active_override"],
+        currentProjection: identityCreateResponse,
+        currentActiveOverrideId: ids.activeOverride,
+        currentSystemRevision: "current-revision",
+        expectedActiveOverrideId: null,
+        expectedSystemRevision: "identity-revision",
+      } as const
+      const promiseClient = new TaxMaxi({
+        apiKey: "tm_asset_overrides",
+        baseUrl: "https://sdk.example.test",
+        fetch: makeErrorFetch({ body: conflict, status: 409 }),
+      })
+      const promiseError = yield* Effect.tryPromise({
+        try: () =>
+          promiseClient.assetOverrides.create({
+            target: representationTarget,
+            override: {
+              _tag: "identity",
+              assetId: ids.replacementAsset,
+              expectedSystemRevision: "identity-revision",
+              reason: "Use the existing USDC economic asset.",
+            },
+          }),
+        catch: (cause) => new CaughtPromiseError({ cause }),
+      }).pipe(Effect.flip)
+      const conflictDetails = getTaxMaxiAssetOverrideError(promiseError.cause)
+
+      expect(conflictDetails).toMatchObject({
+        _tag: "AssetOverrideMutationConflictError",
+        code: "override_conflict",
+        conflictKinds: ["active_override"],
+        currentActiveOverrideId: ids.activeOverride,
+        currentSystemRevision: "current-revision",
+        expectedActiveOverrideId: null,
+        expectedSystemRevision: "identity-revision",
+      })
+      if (conflictDetails?._tag !== "AssetOverrideMutationConflictError") {
+        return yield* Effect.die("Expected structured create conflict details.")
+      }
+      expect(conflictDetails.currentProjection.recomputation).toEqual(updatingRecomputation)
+      expect(conflictDetails.currentProjection.recomputation.status).toBe("updating")
     })
   )
 

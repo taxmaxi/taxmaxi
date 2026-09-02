@@ -1,5 +1,6 @@
 import {
   AssetOverrideCanonicalTargetError,
+  AssetOverrideCreateRequest,
   AssetOverrideCurrentResponse,
   AssetOverrideHistoryResponse,
   AssetOverrideIdentityValidationResponse,
@@ -50,6 +51,15 @@ export type AssetOverrideIdentityValidationInput = {
   readonly assetId: string
 }
 
+/** Initial override request for one owned target. */
+export type AssetOverrideCreateInput = {
+  readonly target: AssetOverrideTarget
+  readonly override: Schema.Codec.Encoded<typeof AssetOverrideCreateRequest>
+}
+
+/** Accepted override and its durable recomputation state. */
+export type AssetOverrideCreateResult = AssetOverrideCurrent
+
 export type AssetOverrideReplaceInput = {
   readonly target: AssetOverrideTarget
   readonly replacement: AssetOverrideReplacement
@@ -70,6 +80,10 @@ export type AssetOverrideHistoryError = Effect.Error<
 
 export type AssetOverrideIdentityValidationError = Effect.Error<
   ReturnType<AssetOverridesClient["validateAssetOverrideIdentity"]>
+>
+
+export type AssetOverrideCreateError = Effect.Error<
+  ReturnType<AssetOverridesClient["createAssetOverride"]>
 >
 
 export type AssetOverrideReplaceError = Effect.Error<
@@ -99,6 +113,9 @@ export interface AssetOverridesEffectResource {
   readonly validateIdentity: (
     input: AssetOverrideIdentityValidationInput
   ) => Effect.Effect<AssetOverrideIdentityValidation, AssetOverrideIdentityValidationError, never>
+  readonly create: (
+    input: AssetOverrideCreateInput
+  ) => Effect.Effect<AssetOverrideCreateResult, AssetOverrideCreateError, never>
   readonly replace: (
     input: AssetOverrideReplaceInput
   ) => Effect.Effect<AssetOverrideCurrent, AssetOverrideReplaceError, never>
@@ -121,6 +138,10 @@ export interface AssetOverridesPromiseResource {
     input: AssetOverrideIdentityValidationInput,
     options?: AssetRequestOptions
   ) => Promise<AssetOverrideIdentityValidation>
+  readonly create: (
+    input: AssetOverrideCreateInput,
+    options?: AssetRequestOptions
+  ) => Promise<AssetOverrideCreateResult>
   readonly replace: (
     input: AssetOverrideReplaceInput,
     options?: AssetRequestOptions
@@ -163,6 +184,20 @@ const replaceAssetOverride = ({
     ? client.replaceAssetOverride({ query, payload })
     : client.replaceAssetOverride({ query, payload })
 
+const createAssetOverride = ({
+  client,
+  payload,
+  query,
+}: {
+  readonly client: AssetOverridesClient
+  readonly payload: typeof AssetOverrideCreateRequest.Type
+  readonly query: ReturnType<typeof toTargetQuery>
+}) =>
+  // The generated client has one call signature for each tagged payload member.
+  payload._tag === "identity"
+    ? client.createAssetOverride({ query, payload })
+    : client.createAssetOverride({ query, payload })
+
 export const makeAssetOverridesEffectResource = (
   client: Effect.Effect<TaxMaxiAssetOverridesClient, never>
 ): AssetOverridesEffectResource => ({
@@ -188,6 +223,19 @@ export const makeAssetOverridesEffectResource = (
         })
       ),
       encodeIdentityValidation
+    ),
+  create: ({ override, target }) =>
+    Effect.map(
+      Effect.flatMap(Schema.decodeEffect(AssetOverrideCreateRequest)(override), (payload) =>
+        Effect.flatMap(client, (resolved) =>
+          createAssetOverride({
+            client: resolved.assetOverrides,
+            payload,
+            query: toTargetQuery(target),
+          })
+        )
+      ),
+      encodeCurrent
     ),
   replace: ({ replacement, target }) =>
     Effect.map(
@@ -223,6 +271,7 @@ export const makeAssetOverridesPromiseResource = (
   getCurrent: (target, options) => run(effect.getCurrent(target), options),
   getHistory: (target, options) => run(effect.getHistory(target), options),
   validateIdentity: (input, options) => run(effect.validateIdentity(input), options),
+  create: (input, options) => run(effect.create(input), options),
   replace: (input, options) => run(effect.replace(input), options),
   withdraw: (input, options) => run(effect.withdraw(input), options),
 })
