@@ -1246,7 +1246,10 @@ describe("AssetExceptionRepositoryLive", () => {
             const work = yield* db
               .select({ processingJobId: schema.assetDecisionRematerializations.processingJobId })
               .from(schema.assetDecisionRematerializations)
-            return { jobs, work }
+            const calculationRuns = yield* db
+              .select({ id: schema.calculationRuns.id })
+              .from(schema.calculationRuns)
+            return { calculationRuns, jobs, work }
           })
         )
       )
@@ -1258,6 +1261,79 @@ describe("AssetExceptionRepositoryLive", () => {
         { id: pendingReplayJobId, mode: "replay", status: "pending", followUpMode: null },
       ])
       expect(state.work).toEqual([{ processingJobId: pendingReplayJobId }])
+      expect(state.calculationRuns).toEqual([])
+    })
+  )
+
+  it.effect("preserves the replay scheduling error operation", () =>
+    Effect.gen(function* () {
+      const fixture = yield* Effect.promise(() => seedException())
+      yield* Effect.promise(() =>
+        runPg(
+          Effect.gen(function* () {
+            const db = yield* drizzle
+            yield* db.insert(schema.processingJobs).values({
+              sourceId: TEST_SOURCE_ID,
+              principalId: TEST_PRINCIPAL_ID,
+              mode: "replay",
+              status: "pending",
+            })
+            yield* db.execute(sql`
+              create function fail_asset_exception_replay_update() returns trigger
+              language plpgsql as $trigger$
+              begin
+                raise exception 'injected replay update failure';
+              end
+              $trigger$
+            `)
+            yield* db.execute(sql`
+              create trigger fail_asset_exception_replay_update
+              before update on processing_jobs
+              for each row execute function fail_asset_exception_replay_update()
+            `)
+          })
+        )
+      )
+
+      const result = yield* Effect.promise(() =>
+        runRepository(
+          Effect.result(
+            Effect.flatMap(AssetExceptionRepository, (repository) =>
+              repository.submitDecision({
+                actorId: TEST_USER_ID,
+                input: {
+                  providerAssetRowId: fixture.providerAssetRowId,
+                  claim: { _tag: "exclusion", reason: "confirmed_spam" },
+                  evidenceRevision: 2,
+                  currentConclusionRevision: NO_CURRENT_ASSET_CONCLUSION,
+                  currentPolicyEvaluationRevision: fixture.decisionId,
+                  evidenceSnapshotIds: [fixture.evidenceId],
+                  rationale: null,
+                  expectedResultingAssetId: null,
+                  expectedAssetOutcome: "none",
+                  expectedRepresentationOutcome: "none",
+                },
+              })
+            )
+          )
+        )
+      )
+      yield* Effect.promise(() =>
+        runPg(
+          Effect.gen(function* () {
+            const db = yield* drizzle
+            yield* db.execute(
+              sql`drop trigger fail_asset_exception_replay_update on processing_jobs`
+            )
+            yield* db.execute(sql`drop function fail_asset_exception_replay_update()`)
+          })
+        )
+      )
+
+      expect(result).toMatchObject({
+        _tag: "Failure",
+        failure: { operation: "assetExceptionRepository.scheduleRematerialization" },
+      })
     })
   )
 
