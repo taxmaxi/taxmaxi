@@ -847,7 +847,7 @@ describe("asset resolution attach and rebuild", () => {
         expect(accountingState.legs).toEqual([
           expect.objectContaining({ kind: "acquisition", derivationRule: "coinbase_buy" }),
         ])
-        expect(accountingState.fifoLots).toHaveLength(1)
+        expect(accountingState.fifoLots).toHaveLength(0)
 
         expect((yield* calculateTax().pipe(Effect.result))._tag).toBe("Failure")
       })
@@ -1143,7 +1143,7 @@ describe("asset resolution attach and rebuild", () => {
           expect(accountingState.legs).toEqual([
             expect.objectContaining({ kind: "acquisition", derivationRule: "coinbase_buy" }),
           ])
-          expect(accountingState.fifoLots).toHaveLength(1)
+          expect(accountingState.fifoLots).toHaveLength(0)
 
           expect((yield* calculateTax().pipe(Effect.result))._tag).toBe("Failure")
         })
@@ -1973,9 +1973,7 @@ describe("asset resolution attach and rebuild", () => {
               derivationRule: "coinbase_buy",
             }),
           ])
-          expect(accountingState.fifoLots).toEqual([
-            expect.objectContaining({ assetId: ORB_CORRECTION_ASSET_ID }),
-          ])
+          expect(accountingState.fifoLots).toHaveLength(0)
           expect((yield* calculateTax().pipe(Effect.result))._tag).toBe("Failure")
         }).pipe(Effect.provide(TestLayer))
       )

@@ -151,7 +151,12 @@ const make = Effect.gen(function* () {
   const canonicalSourceTable = aliasedTable(schema.sources, "canonical_source")
   type LoadParams = Parameters<FactualLedgerRepositoryShape["load"]>[0]
 
-  const loadLegEvents = ({ principalId }: Pick<LoadParams, "principalId">) =>
+  const loadLegEvents = ({
+    principalId,
+    reconciledTransactionIds,
+  }: Pick<LoadParams, "principalId"> & {
+    readonly reconciledTransactionIds: ReadonlySet<string>
+  }) =>
     Effect.gen(function* () {
       const rows = yield* db
         .select({
@@ -213,6 +218,7 @@ const make = Effect.gen(function* () {
         if (
           row.transactionId !== null &&
           row.kind !== "fee" &&
+          !reconciledTransactionIds.has(row.transactionId) &&
           row.derivationRule !== "internal_transfer_in" &&
           row.derivationRule !== "internal_transfer_out"
         ) {
@@ -225,6 +231,9 @@ const make = Effect.gen(function* () {
 
       for (const row of rows) {
         if (
+          (row.kind !== "fee" &&
+            row.transactionId !== null &&
+            reconciledTransactionIds.has(row.transactionId)) ||
           row.derivationRule === "internal_transfer_in" ||
           row.derivationRule === "internal_transfer_out"
         ) {
@@ -287,6 +296,7 @@ const make = Effect.gen(function* () {
       const rows = yield* db
         .select({
           id: schema.transferReconciliations.id,
+          providerTransactionId: providerTransactionTable.id,
           canonicalTransferId: schema.transferReconciliations.canonicalTransferId,
           canonicalTransactionId: schema.transferReconciliations.canonicalTransactionId,
           providerDirection: schema.providerTransfers.direction,
@@ -365,6 +375,7 @@ const make = Effect.gen(function* () {
         .pipe(wrapSqlError("factualLedgerRepository.load.custodyMovements"))
 
       const events: AccountingEvent[] = []
+      const reconciledTransactionIds = new Set<string>()
       const seenCanonicalTransferIds = new Set<string>()
       for (const row of rows) {
         if (row.canonicalTransferId === null) continue
@@ -375,6 +386,10 @@ const make = Effect.gen(function* () {
           })
         }
         seenCanonicalTransferIds.add(row.canonicalTransferId)
+        reconciledTransactionIds.add(row.providerTransactionId)
+        if (row.canonicalTransactionId !== null) {
+          reconciledTransactionIds.add(row.canonicalTransactionId)
+        }
 
         const reference = transactionReference({
           externalGroupId: row.canonicalExternalGroupId,
@@ -404,7 +419,7 @@ const make = Effect.gen(function* () {
         )
       }
 
-      return events
+      return { events, reconciledTransactionIds }
     })
 
   const makeObservedValuationFacts = ({
@@ -575,9 +590,12 @@ const make = Effect.gen(function* () {
           asc(schema.custodyUnitSources.sourceId)
         )
         .pipe(wrapSqlError("factualLedgerRepository.load.custodyUnitMembership"))
-      const legEvents = yield* loadLegEvents({ principalId })
       const custodyMovementEvents = yield* loadCustodyMovementEvents({ principalId })
-      const events = [...legEvents.events, ...custodyMovementEvents].sort(compareEvents)
+      const legEvents = yield* loadLegEvents({
+        principalId,
+        reconciledTransactionIds: custodyMovementEvents.reconciledTransactionIds,
+      })
+      const events = [...legEvents.events, ...custodyMovementEvents.events].sort(compareEvents)
       const valuationEvents = events.filter((event) => event._tag !== "custody_movement")
       const observedValuationFacts = yield* makeObservedValuationFacts({
         eventRows: legEvents.eventRows,

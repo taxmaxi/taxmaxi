@@ -9,6 +9,7 @@ import {
   type AuthServiceShape,
 } from "@my/core/authentication"
 import {
+  SourceNormalizationRepository,
   SourceSyncRunService,
   SourceSyncService,
   TransferReconciliationService,
@@ -470,6 +471,102 @@ describe("TransactionsApiLive", () => {
 
       expect(status).toBe(400)
     })
+  )
+
+  it.effect("keeps a factual disposal visible without creating a FIFO shortage review", () =>
+    Effect.asVoid(
+      Effect.gen(function* () {
+        const fixture = yield* seedTransactions
+        const repository = yield* SourceNormalizationRepository
+        const timestamp = DateTime.toDateUtc(DateTime.makeUnsafe("2025-03-11T12:00:00.000Z"))
+
+        const persisted = yield* repository.persistNormalizedArtifacts({
+          transaction: {
+            sourceId: fixture.sourceId,
+            sourceRawRecordId: null,
+            externalId: "transaction-overdrawn-disposal",
+            externalGroupId: null,
+            timestamp,
+            transactionType: "sell_fiat",
+            providerTransactionType: "sell",
+            providerStatus: "completed",
+            providerResourcePath: null,
+            providerDescription: "Sell BTC beyond legacy lot balance",
+            providerCreatedAt: timestamp,
+            providerUpdatedAt: timestamp,
+            metadata: { provider: "coinbase" },
+            providerFiatAmount: "12000",
+            providerFiatCurrency: "EUR",
+            principalId: fixture.principalId,
+          },
+          venueContext: {
+            venueType: "cex",
+            cexAccountId: fixture.cexAccountId,
+            externalAccountId: "coinbase-account-1",
+            externalOrderId: null,
+            externalFillId: null,
+            side: "sell",
+            instrument: "BTC-EUR",
+            fillPrice: "12000",
+            commissionAmount: null,
+            commissionCurrency: null,
+            metadata: { provider: "coinbase" },
+          },
+          providerTransfers: [],
+          canonicalTransfers: [],
+          providerAssetRowIds: [],
+          deriveLegs: ({ transaction }) =>
+            Effect.succeed([
+              {
+                sourceId: fixture.sourceId,
+                sourceRawRecordId: null,
+                externalId: "transaction-overdrawn-disposal:disposal",
+                txHash: null,
+                timestamp,
+                principalId: fixture.principalId,
+                addressId: null,
+                assetId: TEST_BTC_ASSET_ID,
+                amount: "1",
+                kind: "disposal",
+                provenance: "deterministic",
+                derivationRule: "provider_observed_sell",
+                metadata: { provider: "coinbase" },
+                transactionId: transaction.id,
+                sourceTransferId: null,
+                fiatAmount: "12000",
+                fiatCurrency: "EUR",
+                feeForTransactionId: null,
+              },
+            ]),
+          transactionReview: null,
+          resolvedTransactionType: {
+            providerTransactionType: "sell",
+            transactionType: "sell_fiat",
+            inventoryEffect: "disposal",
+            taxTreatment: "taxable_by_default",
+            resolutionStrategy: "static",
+            pairedRecordRequired: false,
+            mappingStatus: "approved",
+          },
+        })
+
+        const client = yield* makeAuthenticatedClient({ userId: fixture.userId })
+        const response = yield* client.transactions.listTransactions({ query: { limit: 100 } })
+        const transaction = response.transactions.find(
+          (candidate) => candidate.transactionId === persisted.transaction.id
+        )
+
+        expect(response.transactions.map((candidate) => candidate.transactionId)).toContain(
+          persisted.transaction.id
+        )
+        expect(transaction).toMatchObject({
+          externalId: "transaction-overdrawn-disposal",
+          movements: [{ amount: "1", assetSymbol: "BTC", kind: "disposal" }],
+          calculationState: "partial",
+          needsReview: false,
+        })
+      }).pipe(Effect.provide(HttpLive), Effect.scoped)
+    )
   )
 
   it.effect("keeps non-taxable transfers complete and marks unfinished calculations partial", () =>

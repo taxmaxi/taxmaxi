@@ -1141,7 +1141,7 @@ describe("FactualLedgerRepositoryLive", () => {
               status: "approved",
               deterministic: false,
             })
-            yield* seedCustodyReconciliation({
+            const finalizedInbound = yield* seedCustodyReconciliation({
               reconciliationId: "10000000-0000-4000-8000-000000000023",
               fixtureName: "custody-inbound",
               providerSourceId: TEST_DESTINATION_SOURCE_ID,
@@ -1210,6 +1210,54 @@ describe("FactualLedgerRepositoryLive", () => {
               deterministic: false,
             })
             yield* db.insert(schema.transactionLegs).values([
+              {
+                id: "10000000-0000-4000-8000-000000000017",
+                sourceId: TEST_CUSTODY_SOURCE_ID,
+                externalId: "custody-provider-disposition-leg",
+                timestamp: providerTimestamp,
+                principalId: TEST_PRINCIPAL_ID,
+                assetId: TEST_BTC_ASSET_ID,
+                amount: "0.75",
+                kind: "disposal",
+                provenance: "deterministic",
+                transactionId: finalized.providerTransactionId,
+              },
+              {
+                id: "10000000-0000-4000-8000-000000000018",
+                sourceId: TEST_DESTINATION_SOURCE_ID,
+                externalId: "custody-canonical-acquisition-leg",
+                timestamp: canonicalTimestamp,
+                principalId: TEST_PRINCIPAL_ID,
+                assetId: TEST_BTC_ASSET_ID,
+                amount: "0.75",
+                kind: "acquisition",
+                provenance: "deterministic",
+                transactionId: finalized.canonicalTransactionId,
+              },
+              {
+                id: "10000000-0000-4000-8000-000000000019",
+                sourceId: TEST_DESTINATION_SOURCE_ID,
+                externalId: "custody-inbound-provider-acquisition-leg",
+                timestamp: inboundProviderTimestamp,
+                principalId: TEST_PRINCIPAL_ID,
+                assetId: TEST_BTC_ASSET_ID,
+                amount: "0.5",
+                kind: "acquisition",
+                provenance: "deterministic",
+                transactionId: finalizedInbound.providerTransactionId,
+              },
+              {
+                id: "10000000-0000-4000-8000-000000000016",
+                sourceId: TEST_CUSTODY_SOURCE_ID,
+                externalId: "custody-inbound-canonical-disposition-leg",
+                timestamp: inboundCanonicalTimestamp,
+                principalId: TEST_PRINCIPAL_ID,
+                assetId: TEST_BTC_ASSET_ID,
+                amount: "0.5",
+                kind: "disposal",
+                provenance: "deterministic",
+                transactionId: finalizedInbound.canonicalTransactionId,
+              },
               {
                 id: "10000000-0000-4000-8000-000000000021",
                 sourceId: TEST_CUSTODY_SOURCE_ID,
