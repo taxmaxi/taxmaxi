@@ -25,6 +25,7 @@ import * as oauthStates from "./OAuthStatesTable.ts"
 import * as processingJobDependencies from "./ProcessingJobDependenciesTable.ts"
 import * as processingJobs from "./ProcessingJobsTable.ts"
 import * as principalClaims from "./PrincipalClaimsTable.ts"
+import * as principalAssetOverrideApplications from "./PrincipalAssetOverrideApplicationsTable.ts"
 import * as principalAssetOverrides from "./PrincipalAssetOverridesTables.ts"
 import * as principals from "./PrincipalsTable.ts"
 import * as protocolCandidateObservations from "./ProtocolCandidateObservationsTable.ts"
@@ -86,6 +87,7 @@ export const schema = {
   ...processingJobDependencies,
   ...processingJobs,
   ...principalClaims,
+  ...principalAssetOverrideApplications,
   ...principalAssetOverrides,
   ...principals,
   ...protocolCandidateObservations,
@@ -209,6 +211,7 @@ export type {
 } from "./ProcessingJobDependenciesTable.ts"
 export type { ProcessingJob, ProcessingJobInsert } from "./ProcessingJobsTable.ts"
 export type { PrincipalClaimInsert, PrincipalClaimRow } from "./PrincipalClaimsTable.ts"
+export type { PrincipalAssetOverrideApplication } from "./PrincipalAssetOverrideApplicationsTable.ts"
 export type {
   PrincipalAssetOverride,
   PrincipalAssetOverrideInsert,

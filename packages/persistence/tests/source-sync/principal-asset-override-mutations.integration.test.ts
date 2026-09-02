@@ -2,7 +2,8 @@ import { beforeEach, describe, expect, it } from "@effect/vitest"
 import { AuthUserId } from "@my/core/authentication"
 import type { PrincipalAssetOverrideTarget } from "@my/core/assets"
 import { PrincipalId } from "@my/core/ownership"
-import { eq } from "drizzle-orm"
+import { eq, sql } from "drizzle-orm"
+import * as DateTime from "effect/DateTime"
 import * as Effect from "effect/Effect"
 import * as Option from "effect/Option"
 import * as Result from "effect/Result"
@@ -34,7 +35,13 @@ const NFT_ASSET_ID = "00000000-0000-4000-8000-000000000809"
 const OTHER_USER_ID = "00000000-0000-4000-8000-000000000810"
 const OTHER_PRINCIPAL_ID = "00000000-0000-4000-8000-000000000811"
 const OTHER_SOURCE_ID = "00000000-0000-4000-8000-000000000812"
+const SECOND_SOURCE_ID = "00000000-0000-4000-8000-000000000813"
+const PROVIDER_ASSET_ID = "00000000-0000-4000-8000-000000000814"
+const CHAINLESS_TRANSACTION_ID = "00000000-0000-4000-8000-000000000815"
+const EXACT_TRANSACTION_ID = "00000000-0000-4000-8000-000000000816"
+const SECOND_CEX_ACCOUNT_ID = "00000000-0000-4000-8000-000000000817"
 const CONTRACT_ADDRESS = "0xabcd000000000000000000000000000000000109"
+const date = (value: string) => DateTime.toDateUtc(DateTime.makeUnsafe(value))
 
 const target: PrincipalAssetOverrideTarget = {
   _tag: "representation",
@@ -64,7 +71,45 @@ const expectProjection = (
   return Option.getOrThrow(projection)
 }
 
-const seedActiveOverrides = () =>
+const create = (params: {
+  readonly expectedSystemRevision: string
+  readonly principalId?: string
+  readonly replacement:
+    | { readonly _tag: "identity"; readonly assetId: string }
+    | { readonly _tag: "inclusion"; readonly inclusion: "included" | "excluded" }
+  readonly target?: PrincipalAssetOverrideTarget
+}) =>
+  runRepository(
+    Effect.flatMap(PrincipalAssetOverrideRepository, (repository) =>
+      repository.create({
+        actorUserId: AuthUserId.make(USER_ID),
+        expectedSystemRevision: params.expectedSystemRevision,
+        principalId: PrincipalId.make(params.principalId ?? PRINCIPAL_ID),
+        reason: "Create my override.",
+        replacement: params.replacement,
+        target: params.target ?? target,
+      })
+    )
+  )
+
+const findProjection = (
+  params: {
+    readonly principalId?: string
+    readonly target?: PrincipalAssetOverrideTarget
+  } = {}
+) =>
+  runRepository(
+    Effect.flatMap(PrincipalAssetOverrideRepository, (repository) =>
+      repository.findProjection({
+        principalId: PrincipalId.make(params.principalId ?? PRINCIPAL_ID),
+        target: params.target ?? target,
+      })
+    )
+  )
+
+const seedActiveOverrides = ({
+  withActiveOverrides = true,
+}: { withActiveOverrides?: boolean } = {}) =>
   Effect.promise(() =>
     runPg(
       Effect.gen(function* () {
@@ -118,50 +163,52 @@ const seedActiveOverrides = () =>
         )
         const projection = expectProjection(initial)
 
-        yield* db.insert(schema.principalAssetOverrideTargets).values({
-          id: TARGET_ID,
-          principalId: PRINCIPAL_ID,
-          targetKind: "representation",
-          blockchainId: fixture.baseBlockchainId,
-          representationType: "token",
-          contractAddress: CONTRACT_ADDRESS,
-          mintAddress: null,
-          providerAssetRowId: null,
-        })
-        yield* db.insert(schema.principalAssetOverrides).values([
-          {
-            id: IDENTITY_OVERRIDE_ID,
+        if (withActiveOverrides) {
+          yield* db.insert(schema.principalAssetOverrideTargets).values({
+            id: TARGET_ID,
             principalId: PRINCIPAL_ID,
-            targetId: TARGET_ID,
-            kind: "identity",
-            operation: "create",
-            inspectedSystemRevision: projection.system.identityRevision,
-            inspectedSystemIdentity: "resolved",
-            inspectedSystemAssetId: CURRENT_ASSET_ID,
-            inspectedSystemInclusion: null,
-            replacementAssetId: TEST_BTC_ASSET_ID,
-            replacementInclusion: null,
-            actorUserId: USER_ID,
-            reason: "Use the existing BTC asset.",
-            supersedesOverrideId: null,
-          },
-          {
-            id: INCLUSION_OVERRIDE_ID,
-            principalId: PRINCIPAL_ID,
-            targetId: TARGET_ID,
-            kind: "inclusion",
-            operation: "create",
-            inspectedSystemRevision: projection.system.inclusionRevision,
-            inspectedSystemIdentity: null,
-            inspectedSystemAssetId: null,
-            inspectedSystemInclusion: "included",
-            replacementAssetId: null,
-            replacementInclusion: "excluded",
-            actorUserId: USER_ID,
-            reason: "Exclude this asset from my calculation.",
-            supersedesOverrideId: null,
-          },
-        ])
+            targetKind: "representation",
+            blockchainId: fixture.baseBlockchainId,
+            representationType: "token",
+            contractAddress: CONTRACT_ADDRESS,
+            mintAddress: null,
+            providerAssetRowId: null,
+          })
+          yield* db.insert(schema.principalAssetOverrides).values([
+            {
+              id: IDENTITY_OVERRIDE_ID,
+              principalId: PRINCIPAL_ID,
+              targetId: TARGET_ID,
+              kind: "identity",
+              operation: "create",
+              inspectedSystemRevision: projection.system.identityRevision,
+              inspectedSystemIdentity: "resolved",
+              inspectedSystemAssetId: CURRENT_ASSET_ID,
+              inspectedSystemInclusion: null,
+              replacementAssetId: TEST_BTC_ASSET_ID,
+              replacementInclusion: null,
+              actorUserId: USER_ID,
+              reason: "Use the existing BTC asset.",
+              supersedesOverrideId: null,
+            },
+            {
+              id: INCLUSION_OVERRIDE_ID,
+              principalId: PRINCIPAL_ID,
+              targetId: TARGET_ID,
+              kind: "inclusion",
+              operation: "create",
+              inspectedSystemRevision: projection.system.inclusionRevision,
+              inspectedSystemIdentity: null,
+              inspectedSystemAssetId: null,
+              inspectedSystemInclusion: "included",
+              replacementAssetId: null,
+              replacementInclusion: "excluded",
+              actorUserId: USER_ID,
+              reason: "Exclude this asset from my calculation.",
+              supersedesOverrideId: null,
+            },
+          ])
+        }
 
         return projection
       })
@@ -210,6 +257,142 @@ const withdraw = (params: {
   )
 
 describe("PrincipalAssetOverrideRepository mutations", () => {
+  it.effect("atomically creates an override and durable replay work", () =>
+    Effect.gen(function* () {
+      const initial = yield* seedActiveOverrides({ withActiveOverrides: false })
+      yield* Effect.promise(() =>
+        runPg(
+          Effect.gen(function* () {
+            const other = yield* seedSyncEngineRepositoryFixture({
+              userId: OTHER_USER_ID,
+              principalId: OTHER_PRINCIPAL_ID,
+              sourceId: OTHER_SOURCE_ID,
+            })
+            const db = yield* drizzle
+            const [coinbase] = yield* db
+              .select({ id: schema.cex.id })
+              .from(schema.cex)
+              .where(eq(schema.cex.name, "coinbase"))
+            if (coinbase === undefined) return yield* Effect.die("Missing Coinbase fixture")
+            yield* db.insert(schema.cexAccount).values({
+              id: SECOND_CEX_ACCOUNT_ID,
+              cexId: coinbase.id,
+              principalId: PRINCIPAL_ID,
+              providerUserId: "second-exact-source-user",
+              providerAccountId: "second-exact-source-account",
+            })
+            yield* db.insert(schema.sources).values({
+              id: SECOND_SOURCE_ID,
+              principalId: PRINCIPAL_ID,
+              name: "Second exact observation source",
+              providerKey: "coinbase",
+              sourceableType: "cex",
+              cexAccountId: SECOND_CEX_ACCOUNT_ID,
+              addressId: null,
+            })
+            yield* db.insert(schema.sourceRepresentationUses).values([
+              {
+                sourceId: SECOND_SOURCE_ID,
+                blockchainId: other.baseBlockchainId,
+                representationType: "token",
+                contractAddress: CONTRACT_ADDRESS,
+                mintAddress: null,
+              },
+              {
+                sourceId: OTHER_SOURCE_ID,
+                blockchainId: other.baseBlockchainId,
+                representationType: "token",
+                contractAddress: CONTRACT_ADDRESS,
+                mintAddress: null,
+              },
+            ])
+          })
+        )
+      )
+
+      const created = expectProjection(
+        yield* create({
+          expectedSystemRevision: initial.system.identityRevision,
+          replacement: { _tag: "identity", assetId: CURRENT_ASSET_ID },
+        })
+      )
+
+      expect(created.activeIdentityOverride).toMatchObject({
+        kind: "identity",
+        operation: "create",
+        replacementIdentity: { _tag: "resolved", assetId: CURRENT_ASSET_ID },
+        supersedesOverrideId: null,
+      })
+      expect(created.recomputation).toMatchObject({
+        status: "updating",
+        overrideId: created.activeIdentityOverride?.id,
+        sourceJobs: [
+          { sourceId: SOURCE_ID, status: "pending", failureCode: null },
+          { sourceId: SECOND_SOURCE_ID, status: "pending", failureCode: null },
+        ],
+      })
+
+      const stored = yield* Effect.promise(() =>
+        runPg(
+          Effect.gen(function* () {
+            const db = yield* drizzle
+            return yield* Effect.all({
+              applications: db
+                .select({
+                  overrideId: schema.principalAssetOverrideApplications.overrideId,
+                  sourceId: schema.principalAssetOverrideApplications.sourceId,
+                })
+                .from(schema.principalAssetOverrideApplications),
+              jobs: db
+                .select({
+                  sourceId: schema.processingJobs.sourceId,
+                  principalId: schema.processingJobs.principalId,
+                  mode: schema.processingJobs.mode,
+                  status: schema.processingJobs.status,
+                  progressDetails: schema.processingJobs.progressDetails,
+                })
+                .from(schema.processingJobs),
+              targets: db
+                .select({ id: schema.principalAssetOverrideTargets.id })
+                .from(schema.principalAssetOverrideTargets),
+            })
+          })
+        )
+      )
+      expect(stored.targets).toHaveLength(1)
+      expect(stored.applications).toHaveLength(2)
+      expect(stored.applications).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            overrideId: created.activeIdentityOverride?.id,
+            sourceId: SOURCE_ID,
+          }),
+          expect.objectContaining({
+            overrideId: created.activeIdentityOverride?.id,
+            sourceId: SECOND_SOURCE_ID,
+          }),
+        ])
+      )
+      expect(stored.jobs).toHaveLength(2)
+      expect(stored.jobs).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            sourceId: SOURCE_ID,
+            principalId: PRINCIPAL_ID,
+            mode: "replay",
+            status: "pending",
+            progressDetails: expect.objectContaining({
+              mode: "replay",
+              reason: "principal_asset_override",
+              overrideId: created.activeIdentityOverride?.id,
+            }),
+          }),
+          expect.objectContaining({ sourceId: SECOND_SOURCE_ID }),
+        ])
+      )
+    })
+  )
+
   it.effect("appends identity replacements and withdrawals without editing history", () =>
     Effect.gen(function* () {
       const initial = yield* seedActiveOverrides()
@@ -234,6 +417,10 @@ describe("PrincipalAssetOverrideRepository mutations", () => {
         _tag: "excluded",
         identity: replacement?.replacementIdentity,
       })
+      expect(replaced.recomputation).toMatchObject({
+        status: "updating",
+        sourceJobs: [{ sourceId: SOURCE_ID, status: "pending" }],
+      })
 
       const withdrawn = expectProjection(
         yield* withdraw({
@@ -250,6 +437,10 @@ describe("PrincipalAssetOverrideRepository mutations", () => {
         replacementIdentity: null,
         supersedesOverrideId: replacement?.id,
       })
+      expect(withdrawn.recomputation).toMatchObject({
+        status: "updating",
+        sourceJobs: [{ sourceId: SOURCE_ID, status: "pending" }],
+      })
 
       const storedRoot = yield* Effect.promise(() =>
         runPg(
@@ -263,14 +454,41 @@ describe("PrincipalAssetOverrideRepository mutations", () => {
               })
               .from(schema.principalAssetOverrides)
               .where(eq(schema.principalAssetOverrides.id, IDENTITY_OVERRIDE_ID))
-            return row
+            const applications = yield* db
+              .select({
+                overrideId: schema.principalAssetOverrideApplications.overrideId,
+                processingJobId: schema.principalAssetOverrideApplications.processingJobId,
+              })
+              .from(schema.principalAssetOverrideApplications)
+            const jobs = yield* db
+              .select({ id: schema.processingJobs.id })
+              .from(schema.processingJobs)
+            return { applications, jobs, row }
           })
         )
       )
-      expect(storedRoot).toMatchObject({
+      expect(storedRoot.row).toMatchObject({
         operation: "create",
         replacementAssetId: TEST_BTC_ASSET_ID,
         supersedesOverrideId: null,
+      })
+      expect(storedRoot.applications).toHaveLength(2)
+      expect(
+        new Set(storedRoot.applications.map(({ processingJobId }) => processingJobId)).size
+      ).toBe(1)
+      expect(storedRoot.jobs).toHaveLength(1)
+
+      yield* Effect.promise(() =>
+        runPg(
+          Effect.gen(function* () {
+            const db = yield* drizzle
+            yield* db.update(schema.processingJobs).set({ status: "completed" })
+          })
+        )
+      )
+      expect(expectProjection(yield* findProjection()).recomputation).toMatchObject({
+        status: "updating",
+        sourceJobs: [{ status: "complete" }],
       })
     })
   )
@@ -305,6 +523,608 @@ describe("PrincipalAssetOverrideRepository mutations", () => {
       )
       expect(withdrawn.activeInclusionOverride).toBeNull()
       expect(withdrawn.activeIdentityOverride?.id).toBe(IDENTITY_OVERRIDE_ID)
+    })
+  )
+
+  it.effect("creates again after withdrawal and supersedes the withdrawal", () =>
+    Effect.gen(function* () {
+      const initial = yield* seedActiveOverrides({ withActiveOverrides: false })
+      const first = expectProjection(
+        yield* create({
+          expectedSystemRevision: initial.system.identityRevision,
+          replacement: { _tag: "identity", assetId: TEST_BTC_ASSET_ID },
+        })
+      )
+      const firstId = first.activeIdentityOverride?.id ?? "missing"
+      const withdrawn = expectProjection(
+        yield* withdraw({
+          expectedActiveOverrideId: firstId,
+          expectedSystemRevision: initial.system.identityRevision,
+          kind: "identity",
+        })
+      )
+      const withdrawal = withdrawn.history.at(-1)
+
+      const recreated = expectProjection(
+        yield* create({
+          expectedSystemRevision: initial.system.identityRevision,
+          replacement: { _tag: "identity", assetId: CURRENT_ASSET_ID },
+        })
+      )
+      expect(recreated.activeIdentityOverride).toMatchObject({
+        operation: "create",
+        supersedesOverrideId: withdrawal?.id,
+      })
+      expect(recreated.history.filter(({ kind }) => kind === "identity")).toHaveLength(3)
+
+      const stored = yield* Effect.promise(() =>
+        runPg(
+          Effect.gen(function* () {
+            const db = yield* drizzle
+            return yield* Effect.all({
+              applications: db
+                .select({ overrideId: schema.principalAssetOverrideApplications.overrideId })
+                .from(schema.principalAssetOverrideApplications),
+              jobs: db.select({ id: schema.processingJobs.id }).from(schema.processingJobs),
+            })
+          })
+        )
+      )
+      expect(stored.applications).toHaveLength(3)
+      expect(stored.jobs).toHaveLength(1)
+    })
+  )
+
+  it.effect("recovers a target-creation race as a typed create conflict", () =>
+    Effect.gen(function* () {
+      const initial = yield* seedActiveOverrides({ withActiveOverrides: false })
+      yield* Effect.promise(() =>
+        runPg(
+          Effect.gen(function* () {
+            const db = yield* drizzle
+            yield* db.execute(sql`create sequence delay_first_override_target_insert`)
+            yield* db.execute(sql`
+              create function delay_first_override_target_insert() returns trigger
+              language plpgsql as $trigger$
+              begin
+                if nextval('delay_first_override_target_insert') = 1 then
+                  perform pg_sleep(0.25);
+                end if;
+                return new;
+              end
+              $trigger$
+            `)
+            yield* db.execute(sql`
+              create trigger delay_first_override_target_insert
+              before insert on principal_asset_override_targets
+              for each row execute function delay_first_override_target_insert()
+            `)
+          })
+        )
+      )
+
+      const attempts = yield* Effect.all(
+        [
+          create({
+            expectedSystemRevision: initial.system.identityRevision,
+            replacement: { _tag: "identity", assetId: TEST_BTC_ASSET_ID },
+          }).pipe(Effect.result),
+          create({
+            expectedSystemRevision: initial.system.identityRevision,
+            replacement: { _tag: "identity", assetId: TEST_BTC_ASSET_ID },
+          }).pipe(Effect.result),
+        ],
+        { concurrency: "unbounded" }
+      )
+
+      yield* Effect.promise(() =>
+        runPg(
+          Effect.gen(function* () {
+            const db = yield* drizzle
+            yield* db.execute(
+              sql`drop trigger delay_first_override_target_insert on principal_asset_override_targets`
+            )
+            yield* db.execute(sql`drop function delay_first_override_target_insert()`)
+            yield* db.execute(sql`drop sequence delay_first_override_target_insert`)
+          })
+        )
+      )
+
+      expect(attempts.filter(Result.isSuccess)).toHaveLength(1)
+      const [failed] = attempts.filter(Result.isFailure)
+      expect(failed?.failure).toBeInstanceOf(PrincipalAssetOverrideConflictError)
+      if (failed?.failure instanceof PrincipalAssetOverrideConflictError) {
+        expect(failed.failure.conflictKinds).toEqual(["active_override"])
+        expect(failed.failure.expectedActiveOverrideId).toBe("")
+      }
+
+      const counts = yield* Effect.promise(() =>
+        runPg(
+          Effect.gen(function* () {
+            const db = yield* drizzle
+            const [overrides, applications, jobs] = yield* Effect.all([
+              db
+                .select({ id: schema.principalAssetOverrides.id })
+                .from(schema.principalAssetOverrides),
+              db
+                .select({ overrideId: schema.principalAssetOverrideApplications.overrideId })
+                .from(schema.principalAssetOverrideApplications),
+              db.select({ id: schema.processingJobs.id }).from(schema.processingJobs),
+            ])
+            return [overrides.length, applications.length, jobs.length]
+          })
+        )
+      )
+      expect(counts).toEqual([1, 1, 1])
+    })
+  )
+
+  it.effect("binds concurrent cross-kind responses to the override each mutation appended", () =>
+    Effect.gen(function* () {
+      const initial = yield* seedActiveOverrides({ withActiveOverrides: false })
+      const [identity, inclusion] = yield* Effect.all(
+        [
+          create({
+            expectedSystemRevision: initial.system.identityRevision,
+            replacement: { _tag: "identity", assetId: TEST_BTC_ASSET_ID },
+          }),
+          create({
+            expectedSystemRevision: initial.system.inclusionRevision,
+            replacement: { _tag: "inclusion", inclusion: "excluded" },
+          }),
+        ],
+        { concurrency: "unbounded" }
+      )
+
+      const identityProjection = expectProjection(identity)
+      const inclusionProjection = expectProjection(inclusion)
+      expect(identityProjection.recomputation).toMatchObject({
+        status: "updating",
+        overrideId: identityProjection.activeIdentityOverride?.id,
+      })
+      expect(inclusionProjection.recomputation).toMatchObject({
+        status: "updating",
+        overrideId: inclusionProjection.activeInclusionOverride?.id,
+      })
+    })
+  )
+
+  it.effect("retries a serialization failure without duplicating history or work", () =>
+    Effect.gen(function* () {
+      const initial = yield* seedActiveOverrides({ withActiveOverrides: false })
+      yield* Effect.promise(() =>
+        runPg(
+          Effect.gen(function* () {
+            const db = yield* drizzle
+            yield* db.execute(sql`create sequence fail_first_override_insert`)
+            yield* db.execute(sql`
+              create function fail_first_override_insert() returns trigger
+              language plpgsql as $trigger$
+              begin
+                if nextval('fail_first_override_insert') = 1 then
+                  raise exception 'forced serialization retry' using errcode = '40001';
+                end if;
+                return new;
+              end
+              $trigger$
+            `)
+            yield* db.execute(sql`
+              create trigger fail_first_override_insert
+              before insert on principal_asset_overrides
+              for each row execute function fail_first_override_insert()
+            `)
+          })
+        )
+      )
+
+      const created = expectProjection(
+        yield* create({
+          expectedSystemRevision: initial.system.identityRevision,
+          replacement: { _tag: "identity", assetId: TEST_BTC_ASSET_ID },
+        })
+      )
+      expect(created.recomputation).toMatchObject({ status: "updating" })
+
+      yield* Effect.promise(() =>
+        runPg(
+          Effect.gen(function* () {
+            const db = yield* drizzle
+            yield* db.execute(
+              sql`drop trigger fail_first_override_insert on principal_asset_overrides`
+            )
+            yield* db.execute(sql`drop function fail_first_override_insert()`)
+            yield* db.execute(sql`drop sequence fail_first_override_insert`)
+          })
+        )
+      )
+
+      const counts = yield* Effect.promise(() =>
+        runPg(
+          Effect.gen(function* () {
+            const db = yield* drizzle
+            const [targets, overrides, applications, jobs] = yield* Effect.all([
+              db
+                .select({ id: schema.principalAssetOverrideTargets.id })
+                .from(schema.principalAssetOverrideTargets),
+              db
+                .select({ id: schema.principalAssetOverrides.id })
+                .from(schema.principalAssetOverrides),
+              db
+                .select({ overrideId: schema.principalAssetOverrideApplications.overrideId })
+                .from(schema.principalAssetOverrideApplications),
+              db.select({ id: schema.processingJobs.id }).from(schema.processingJobs),
+            ])
+            return [targets.length, overrides.length, applications.length, jobs.length]
+          })
+        )
+      )
+      expect(counts).toEqual([1, 1, 1, 1])
+    })
+  )
+
+  it.effect("writes nothing when create sees a stale system revision", () =>
+    Effect.gen(function* () {
+      const initial = yield* seedActiveOverrides({ withActiveOverrides: false })
+      const result = yield* Effect.result(
+        create({
+          expectedSystemRevision: `${initial.system.identityRevision}:stale`,
+          replacement: { _tag: "identity", assetId: TEST_BTC_ASSET_ID },
+        })
+      )
+      expect(Result.isFailure(result)).toBe(true)
+      if (Result.isFailure(result)) {
+        expect(result.failure).toBeInstanceOf(PrincipalAssetOverrideConflictError)
+        if (result.failure instanceof PrincipalAssetOverrideConflictError) {
+          expect(result.failure.conflictKinds).toEqual(["system_revision"])
+          expect(result.failure.currentActiveOverrideId).toBeNull()
+        }
+      }
+
+      const counts = yield* Effect.promise(() =>
+        runPg(
+          Effect.gen(function* () {
+            const db = yield* drizzle
+            const [targets, overrides, applications, jobs] = yield* Effect.all([
+              db
+                .select({ id: schema.principalAssetOverrideTargets.id })
+                .from(schema.principalAssetOverrideTargets),
+              db
+                .select({ id: schema.principalAssetOverrides.id })
+                .from(schema.principalAssetOverrides),
+              db
+                .select({ overrideId: schema.principalAssetOverrideApplications.overrideId })
+                .from(schema.principalAssetOverrideApplications),
+              db.select({ id: schema.processingJobs.id }).from(schema.processingJobs),
+            ])
+            return [targets.length, overrides.length, applications.length, jobs.length]
+          })
+        )
+      )
+      expect(counts).toEqual([0, 0, 0, 0])
+    })
+  )
+
+  it.effect("requests one replay follow-up behind an active sync", () =>
+    Effect.gen(function* () {
+      const initial = yield* seedActiveOverrides()
+      const activeJobId = "00000000-0000-4000-8000-000000000820"
+      yield* Effect.promise(() =>
+        runPg(
+          Effect.gen(function* () {
+            const db = yield* drizzle
+            yield* db.insert(schema.processingJobs).values({
+              id: activeJobId,
+              sourceId: SOURCE_ID,
+              principalId: PRINCIPAL_ID,
+              mode: "sync",
+              status: "processing",
+            })
+          })
+        )
+      )
+
+      const replaced = expectProjection(
+        yield* replace({
+          expectedActiveOverrideId: IDENTITY_OVERRIDE_ID,
+          expectedSystemRevision: initial.system.identityRevision,
+          replacement: { _tag: "identity", assetId: CURRENT_ASSET_ID },
+        })
+      )
+      expect(replaced.recomputation).toMatchObject({
+        status: "updating",
+        sourceJobs: [
+          {
+            sourceId: SOURCE_ID,
+            requestedJobId: activeJobId,
+            jobId: activeJobId,
+            status: "running",
+          },
+        ],
+      })
+
+      const [job] = yield* Effect.promise(() =>
+        runPg(
+          Effect.gen(function* () {
+            const db = yield* drizzle
+            return yield* db
+              .select({ followUpMode: schema.processingJobs.followUpMode })
+              .from(schema.processingJobs)
+              .where(eq(schema.processingJobs.id, activeJobId))
+          })
+        )
+      )
+      expect(job?.followUpMode).toBe("replay")
+    })
+  )
+
+  it.effect("follows an active replay's durable follow-up and exposes failures", () =>
+    Effect.gen(function* () {
+      const initial = yield* seedActiveOverrides()
+      const activeJobId = "00000000-0000-4000-8000-000000000821"
+      const followUpJobId = "00000000-0000-4000-8000-000000000822"
+      yield* Effect.promise(() =>
+        runPg(
+          Effect.gen(function* () {
+            const db = yield* drizzle
+            yield* db.insert(schema.processingJobs).values({
+              id: activeJobId,
+              sourceId: SOURCE_ID,
+              principalId: PRINCIPAL_ID,
+              mode: "replay",
+              status: "processing",
+            })
+          })
+        )
+      )
+      yield* replace({
+        expectedActiveOverrideId: IDENTITY_OVERRIDE_ID,
+        expectedSystemRevision: initial.system.identityRevision,
+        replacement: { _tag: "identity", assetId: CURRENT_ASSET_ID },
+      })
+
+      yield* Effect.promise(() =>
+        runPg(
+          Effect.gen(function* () {
+            const db = yield* drizzle
+            yield* db.insert(schema.processingJobs).values({
+              id: followUpJobId,
+              sourceId: SOURCE_ID,
+              principalId: PRINCIPAL_ID,
+              mode: "replay",
+              status: "failed",
+              errorMessage: "provider unavailable",
+            })
+            yield* db
+              .update(schema.processingJobs)
+              .set({ status: "completed", followUpJobId })
+              .where(eq(schema.processingJobs.id, activeJobId))
+          })
+        )
+      )
+
+      expect(expectProjection(yield* findProjection()).recomputation).toMatchObject({
+        status: "failed",
+        sourceJobs: [
+          {
+            requestedJobId: activeJobId,
+            jobId: followUpJobId,
+            status: "failed",
+            failureCode: "source_replay_failed",
+          },
+        ],
+      })
+
+      yield* Effect.promise(() =>
+        runPg(
+          Effect.gen(function* () {
+            const db = yield* drizzle
+            yield* db
+              .update(schema.processingJobs)
+              .set({ status: "credit_required", creditReasonCode: "credits_exhausted" })
+              .where(eq(schema.processingJobs.id, followUpJobId))
+          })
+        )
+      )
+      expect(expectProjection(yield* findProjection()).recomputation).toMatchObject({
+        status: "failed",
+        sourceJobs: [
+          {
+            status: "credit_required",
+            failureCode: "credits_exhausted",
+          },
+        ],
+      })
+    })
+  )
+
+  it.effect("schedules chainless provider-asset uses but excludes exact observations", () =>
+    Effect.gen(function* () {
+      yield* seedActiveOverrides({ withActiveOverrides: false })
+      const providerTarget: PrincipalAssetOverrideTarget = {
+        _tag: "provider_asset",
+        providerAssetRowId: PROVIDER_ASSET_ID,
+      }
+      yield* Effect.promise(() =>
+        runPg(
+          Effect.gen(function* () {
+            const db = yield* drizzle
+            const [coinbase] = yield* db
+              .select({ id: schema.cex.id })
+              .from(schema.cex)
+              .where(eq(schema.cex.name, "coinbase"))
+            if (coinbase === undefined) return yield* Effect.die("Missing Coinbase fixture")
+
+            yield* db.insert(schema.cexAccount).values({
+              id: SECOND_CEX_ACCOUNT_ID,
+              cexId: coinbase.id,
+              principalId: PRINCIPAL_ID,
+              providerUserId: "provider-asset-second-user",
+              providerAccountId: "provider-asset-second-account",
+            })
+            yield* db.insert(schema.sources).values({
+              id: SECOND_SOURCE_ID,
+              principalId: PRINCIPAL_ID,
+              name: "Exact observation source",
+              providerKey: "coinbase",
+              sourceableType: "cex",
+              cexAccountId: SECOND_CEX_ACCOUNT_ID,
+              addressId: null,
+            })
+            yield* db.insert(schema.providerAssets).values({
+              id: PROVIDER_ASSET_ID,
+              provider: "coinbase",
+              providerAssetId: "provider-usdc",
+              currencyCode: "USDC",
+              name: "USD Coin",
+              exponent: 6,
+              providerType: "crypto",
+              retrievedAt: date("2026-09-02T10:00:00.000Z"),
+            })
+            yield* db.insert(schema.providerAssetSourceUses).values([
+              { providerAssetRowId: PROVIDER_ASSET_ID, sourceId: SOURCE_ID },
+              { providerAssetRowId: PROVIDER_ASSET_ID, sourceId: SECOND_SOURCE_ID },
+            ])
+            yield* db.insert(schema.transactions).values([
+              {
+                id: CHAINLESS_TRANSACTION_ID,
+                sourceId: SOURCE_ID,
+                externalId: "chainless-provider-asset-use",
+                timestamp: date("2026-09-02T10:00:00.000Z"),
+                principalId: PRINCIPAL_ID,
+              },
+              {
+                id: EXACT_TRANSACTION_ID,
+                sourceId: SECOND_SOURCE_ID,
+                externalId: "exact-provider-asset-use",
+                timestamp: date("2026-09-02T10:01:00.000Z"),
+                principalId: PRINCIPAL_ID,
+              },
+            ])
+            yield* db.insert(schema.providerAssetTransactionUses).values([
+              {
+                providerAssetRowId: PROVIDER_ASSET_ID,
+                transactionId: CHAINLESS_TRANSACTION_ID,
+                sourceId: SOURCE_ID,
+              },
+              {
+                providerAssetRowId: PROVIDER_ASSET_ID,
+                transactionId: EXACT_TRANSACTION_ID,
+                sourceId: SECOND_SOURCE_ID,
+              },
+            ])
+            yield* db.insert(schema.providerTransfers).values({
+              sourceId: SECOND_SOURCE_ID,
+              transactionId: EXACT_TRANSACTION_ID,
+              externalId: "exact-provider-asset-transfer",
+              timestamp: date("2026-09-02T10:01:00.000Z"),
+              direction: "inbound",
+              processingMode: "accounting_and_evidence",
+              fromAddress: "external",
+              toAddress: "owned",
+              providerAssetId: PROVIDER_ASSET_ID,
+              observedBlockchainId: sql`(select id from blockchains where lower(name) = 'base')`,
+              observedRepresentationType: "token",
+              observedContractAddress: CONTRACT_ADDRESS,
+              observedMintAddress: null,
+              observedDecimals: 6,
+              amount: "1",
+            })
+          })
+        )
+      )
+
+      const initial = expectProjection(yield* findProjection({ target: providerTarget }))
+      const created = expectProjection(
+        yield* create({
+          expectedSystemRevision: initial.system.identityRevision,
+          replacement: { _tag: "identity", assetId: TEST_BTC_ASSET_ID },
+          target: providerTarget,
+        })
+      )
+      expect(created.recomputation).toMatchObject({
+        status: "updating",
+        sourceJobs: [{ sourceId: SOURCE_ID }],
+      })
+
+      const jobs = yield* Effect.promise(() =>
+        runPg(
+          Effect.gen(function* () {
+            const db = yield* drizzle
+            return yield* db
+              .select({ sourceId: schema.processingJobs.sourceId })
+              .from(schema.processingJobs)
+          })
+        )
+      )
+      expect(jobs).toEqual([{ sourceId: SOURCE_ID }])
+    })
+  )
+
+  it.effect("rolls back history and replay work when application linking fails", () =>
+    Effect.gen(function* () {
+      const initial = yield* seedActiveOverrides({ withActiveOverrides: false })
+      yield* Effect.promise(() =>
+        runPg(
+          Effect.gen(function* () {
+            const db = yield* drizzle
+            yield* db.execute(sql`
+              create function reject_test_override_application() returns trigger
+              language plpgsql as $trigger$
+              begin
+                raise exception 'forced override application failure';
+              end
+              $trigger$
+            `)
+            yield* db.execute(sql`
+              create trigger reject_test_override_application
+              before insert on principal_asset_override_applications
+              for each row execute function reject_test_override_application()
+            `)
+          })
+        )
+      )
+
+      const result = yield* Effect.result(
+        create({
+          expectedSystemRevision: initial.system.identityRevision,
+          replacement: { _tag: "identity", assetId: TEST_BTC_ASSET_ID },
+        })
+      )
+      expect(Result.isFailure(result)).toBe(true)
+
+      yield* Effect.promise(() =>
+        runPg(
+          Effect.gen(function* () {
+            const db = yield* drizzle
+            yield* db.execute(sql`
+              drop trigger reject_test_override_application
+              on principal_asset_override_applications
+            `)
+            yield* db.execute(sql`drop function reject_test_override_application()`)
+          })
+        )
+      )
+
+      const stored = yield* Effect.promise(() =>
+        runPg(
+          Effect.gen(function* () {
+            const db = yield* drizzle
+            return yield* Effect.all({
+              applications: db
+                .select({ overrideId: schema.principalAssetOverrideApplications.overrideId })
+                .from(schema.principalAssetOverrideApplications),
+              jobs: db.select({ id: schema.processingJobs.id }).from(schema.processingJobs),
+              overrides: db
+                .select({ id: schema.principalAssetOverrides.id })
+                .from(schema.principalAssetOverrides),
+              targets: db
+                .select({ id: schema.principalAssetOverrideTargets.id })
+                .from(schema.principalAssetOverrideTargets),
+            })
+          })
+        )
+      )
+      expect(stored).toEqual({ applications: [], jobs: [], overrides: [], targets: [] })
     })
   )
 
@@ -347,17 +1167,25 @@ describe("PrincipalAssetOverrideRepository mutations", () => {
           expect(staleActive.failure.currentActiveOverrideId).toBe(IDENTITY_OVERRIDE_ID)
         }
 
-        const rows = yield* Effect.promise(() =>
+        const stored = yield* Effect.promise(() =>
           runPg(
             Effect.gen(function* () {
               const db = yield* drizzle
-              return yield* db
-                .select({ id: schema.principalAssetOverrides.id })
-                .from(schema.principalAssetOverrides)
+              return yield* Effect.all({
+                applications: db
+                  .select({ overrideId: schema.principalAssetOverrideApplications.overrideId })
+                  .from(schema.principalAssetOverrideApplications),
+                jobs: db.select({ id: schema.processingJobs.id }).from(schema.processingJobs),
+                overrides: db
+                  .select({ id: schema.principalAssetOverrides.id })
+                  .from(schema.principalAssetOverrides),
+              })
             })
           )
         )
-        expect(rows).toHaveLength(2)
+        expect(stored.overrides).toHaveLength(2)
+        expect(stored.applications).toEqual([])
+        expect(stored.jobs).toEqual([])
       })
   )
 
@@ -399,6 +1227,26 @@ describe("PrincipalAssetOverrideRepository mutations", () => {
           targetAssetType: "fungible",
         })
       }
+
+      const stored = yield* Effect.promise(() =>
+        runPg(
+          Effect.gen(function* () {
+            const db = yield* drizzle
+            return yield* Effect.all({
+              applications: db
+                .select({ overrideId: schema.principalAssetOverrideApplications.overrideId })
+                .from(schema.principalAssetOverrideApplications),
+              jobs: db.select({ id: schema.processingJobs.id }).from(schema.processingJobs),
+              overrides: db
+                .select({ id: schema.principalAssetOverrides.id })
+                .from(schema.principalAssetOverrides),
+            })
+          })
+        )
+      )
+      expect(stored.overrides).toHaveLength(2)
+      expect(stored.applications).toEqual([])
+      expect(stored.jobs).toEqual([])
     })
   )
 
@@ -466,6 +1314,19 @@ describe("PrincipalAssetOverrideRepository mutations", () => {
 
       expect(unowned).toEqual(missing)
       expect(Option.isNone(unowned)).toBe(true)
+
+      const unownedCreate = yield* create({
+        expectedSystemRevision: initial.system.identityRevision,
+        principalId: OTHER_PRINCIPAL_ID,
+        replacement: { _tag: "identity", assetId: CURRENT_ASSET_ID },
+      })
+      const missingCreate = yield* create({
+        expectedSystemRevision: initial.system.identityRevision,
+        replacement: { _tag: "identity", assetId: CURRENT_ASSET_ID },
+        target: { ...target, contractAddress: "0xabcd000000000000000000000000000000000110" },
+      })
+      expect(unownedCreate).toEqual(missingCreate)
+      expect(Option.isNone(unownedCreate)).toBe(true)
     })
   )
 })
