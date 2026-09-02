@@ -115,6 +115,9 @@ export type {
   TaxMaxiAssetType,
 } from "./assets/index.ts"
 export type {
+  AssetOverrideCreateError,
+  AssetOverrideCreateInput,
+  AssetOverrideCreateResult,
   AssetOverrideCurrent,
   AssetOverrideCurrentError,
   AssetOverrideHistory,
