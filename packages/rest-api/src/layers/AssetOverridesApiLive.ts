@@ -11,6 +11,7 @@ import {
   type PrincipalAssetOverrideProjection,
   type PrincipalAssetOverrideMutationError,
   type PrincipalAssetOverrideReadError,
+  type PrincipalAssetOverrideRecomputation,
   type PrincipalAssetIdentityOverrideValidation,
 } from "@my/persistence/services"
 import * as DateTime from "effect/DateTime"
@@ -25,9 +26,11 @@ import {
   AssetOverrideHistoryRecordResponse,
   AssetOverrideHistoryResponse,
   AssetOverrideIncompatibleAssetTypeValidationResponse,
+  AssetOverrideNotScheduledRecomputationResponse,
   AssetOverrideReadyValidationResponse,
-  AssetOverrideRecomputationResponse,
+  AssetOverrideReplayJobResponse,
   AssetOverrideReadonlyError,
+  AssetOverrideScheduledRecomputationResponse,
   AssetOverrideSelectedAssetResponse,
   AssetOverrideSystemResponse,
   AssetOverrideTargetNotFoundError,
@@ -40,7 +43,9 @@ import { InternalServerError } from "../definitions/ApiErrors.ts"
 import { TaxMaxiApi } from "../definitions/TaxMaxiApi.ts"
 import { PrincipalResolutionService } from "../services/PrincipalResolutionService.ts"
 
-const recomputation = AssetOverrideRecomputationResponse.make({ status: "not_scheduled" })
+const notScheduledRecomputation = AssetOverrideNotScheduledRecomputationResponse.make({
+  status: "not_scheduled",
+})
 
 const internalError = (message: string) =>
   new InternalServerError({ requestId: Option.none(), message })
@@ -108,6 +113,15 @@ const toSelectedAsset = (
   asset: Extract<PrincipalAssetIdentityOverrideValidation, { readonly _tag: "ready" }>["asset"]
 ): AssetOverrideSelectedAssetResponse => AssetOverrideSelectedAssetResponse.make(asset)
 
+const toRecomputationResponse = (recomputation: PrincipalAssetOverrideRecomputation) =>
+  recomputation.status === "not_scheduled"
+    ? notScheduledRecomputation
+    : AssetOverrideScheduledRecomputationResponse.make({
+        status: recomputation.status,
+        overrideIds: [...recomputation.overrideIds],
+        sourceJobs: recomputation.sourceJobs.map((job) => AssetOverrideReplayJobResponse.make(job)),
+      })
+
 const toCurrentResponse = (
   projection: PrincipalAssetOverrideProjection
 ): AssetOverrideCurrentResponse =>
@@ -128,12 +142,15 @@ const toCurrentResponse = (
     identityOverrideUsesStaleSystemRevision: projection.identityOverrideUsesStaleSystemRevision,
     inclusionOverrideUsesStaleSystemRevision: projection.inclusionOverrideUsesStaleSystemRevision,
     history: projection.history.map(toHistoryRecord),
-    recomputation,
+    recomputation: toRecomputationResponse(projection.recomputation),
   })
 
-const toValidationResponse = (validation: PrincipalAssetIdentityOverrideValidation) => {
+const toValidationResponse = (
+  validation: PrincipalAssetIdentityOverrideValidation,
+  recomputation: PrincipalAssetOverrideRecomputation
+) => {
   if (validation._tag !== "ready") {
-    return toRejectedValidationResponse(validation)
+    return toRejectedValidationResponse(validation, recomputation)
   }
 
   return AssetOverrideReadyValidationResponse.make({
@@ -144,12 +161,13 @@ const toValidationResponse = (validation: PrincipalAssetIdentityOverrideValidati
     warnings: validation.warnings.map((warning) =>
       AssetOverrideValidationWarningResponse.make(warning)
     ),
-    recomputation,
+    recomputation: toRecomputationResponse(validation.projection.recomputation),
   })
 }
 
 const toRejectedValidationResponse = (
-  validation: Exclude<PrincipalAssetIdentityOverrideValidation, { readonly _tag: "ready" }>
+  validation: Exclude<PrincipalAssetIdentityOverrideValidation, { readonly _tag: "ready" }>,
+  recomputation: PrincipalAssetOverrideRecomputation
 ) => {
   switch (validation._tag) {
     case "asset_not_found":
@@ -157,7 +175,7 @@ const toRejectedValidationResponse = (
         assetId: validation.assetId,
         checkedTechnicalBlockerKinds: validation.checkedTechnicalBlockerKinds,
         technicalBlockers: validation.technicalBlockers,
-        recomputation,
+        recomputation: toRecomputationResponse(recomputation),
       })
     case "incompatible_asset_type":
       return AssetOverrideIncompatibleAssetTypeValidationResponse.make({
@@ -165,7 +183,7 @@ const toRejectedValidationResponse = (
         targetAssetType: validation.targetAssetType,
         checkedTechnicalBlockerKinds: validation.checkedTechnicalBlockerKinds,
         technicalBlockers: validation.technicalBlockers,
-        recomputation,
+        recomputation: toRecomputationResponse(recomputation),
       })
   }
 }
@@ -182,7 +200,8 @@ const toMutationConflictError = (
     currentProjection: toCurrentResponse(error.currentProjection),
     currentActiveOverrideId: error.currentActiveOverrideId,
     currentSystemRevision: error.currentSystemRevision,
-    expectedActiveOverrideId: error.expectedActiveOverrideId,
+    expectedActiveOverrideId:
+      error.expectedActiveOverrideId === "" ? null : error.expectedActiveOverrideId,
     expectedSystemRevision: error.expectedSystemRevision,
   })
 
@@ -201,7 +220,10 @@ const mapMutationError = (
     case "PrincipalAssetOverrideReplacementValidationError":
       return new AssetOverrideReplacementValidationError({
         code: "invalid_replacement",
-        validation: toRejectedValidationResponse(error.validation),
+        validation: toRejectedValidationResponse(
+          error.validation,
+          error.currentProjection.recomputation
+        ),
         currentProjection: toCurrentResponse(error.currentProjection),
       })
     case "PersistenceError":
@@ -224,7 +246,7 @@ const mapWithdrawMutationError = (
   }
 }
 
-/** Live authenticated read, validation, replacement, and withdrawal handlers. */
+/** Live authenticated read, validation, creation, replacement, and withdrawal handlers. */
 export const AssetOverridesApiLive = HttpApiBuilder.group(
   TaxMaxiApi,
   "assetOverrides",
@@ -274,7 +296,7 @@ export const AssetOverridesApiLive = HttpApiBuilder.group(
             return AssetOverrideHistoryResponse.make({
               target: projection.target,
               history: projection.history.map(toHistoryRecord),
-              recomputation,
+              recomputation: toRecomputationResponse(projection.recomputation),
             })
           })
         )
@@ -292,7 +314,41 @@ export const AssetOverridesApiLive = HttpApiBuilder.group(
 
             if (Option.isNone(validation)) return yield* targetNotFound()
 
-            return toValidationResponse(validation.value)
+            if (validation.value._tag === "ready") {
+              return toValidationResponse(
+                validation.value,
+                validation.value.projection.recomputation
+              )
+            }
+
+            const projection = yield* repository
+              .findProjection({ principalId, target })
+              .pipe(Effect.mapError(mapReadError))
+            if (Option.isNone(projection)) return yield* targetNotFound()
+
+            return toValidationResponse(validation.value, projection.value.recomputation)
+          })
+        )
+        .handle("createAssetOverride", ({ payload, query }) =>
+          Effect.gen(function* () {
+            const target = yield* decodeTarget(query)
+            const actor = yield* resolveMutationActor
+            const projection = yield* repository
+              .create({
+                ...actor,
+                expectedSystemRevision: payload.expectedSystemRevision,
+                reason: payload.reason,
+                replacement:
+                  payload._tag === "identity"
+                    ? { _tag: "identity", assetId: payload.assetId }
+                    : { _tag: "inclusion", inclusion: payload.inclusion },
+                target,
+              })
+              .pipe(Effect.mapError(mapMutationError))
+
+            if (Option.isNone(projection)) return yield* targetNotFound()
+
+            return toCurrentResponse(projection.value)
           })
         )
         .handle("replaceAssetOverride", ({ payload, query }) =>
