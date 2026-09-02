@@ -53,6 +53,25 @@ export interface PrincipalAssetOverrideSystemState {
   readonly inclusionRevision: string
 }
 
+/** Current state of one durable source replay selected for an override record. */
+export interface PrincipalAssetOverrideReplayJob {
+  readonly overrideId: string
+  readonly sourceId: string
+  readonly requestedJobId: string | null
+  readonly jobId: string | null
+  readonly status: "pending" | "running" | "complete" | "failed" | "credit_required"
+  readonly failureCode: string | null
+}
+
+/** Durable recomputation work currently visible for one override target. */
+export type PrincipalAssetOverrideRecomputation =
+  | { readonly status: "not_scheduled" }
+  | {
+      readonly status: "updating" | "failed"
+      readonly overrideIds: ReadonlyArray<string>
+      readonly sourceJobs: ReadonlyArray<PrincipalAssetOverrideReplayJob>
+    }
+
 /** The current principal-scoped answer for one owned target. */
 export interface PrincipalAssetOverrideProjection {
   readonly target: PrincipalAssetOverrideTarget
@@ -66,6 +85,11 @@ export interface PrincipalAssetOverrideProjection {
   readonly identityOverrideUsesStaleSystemRevision: boolean
   readonly inclusionOverrideUsesStaleSystemRevision: boolean
   readonly history: ReadonlyArray<PrincipalAssetOverrideHistoryRecord>
+  /**
+   * Remains updating after replay completion until calculation revisions cover
+   * the override snapshot read by the factual-ledger adapter.
+   */
+  readonly recomputation: PrincipalAssetOverrideRecomputation
 }
 
 /** Non-blocking difference between a selected asset and stored evidence. */
@@ -156,6 +180,16 @@ export interface PrincipalAssetOverrideMutationParams {
   readonly target: PrincipalAssetOverrideTarget
 }
 
+/** Data required to append an initial override or create after withdrawal. */
+export interface CreatePrincipalAssetOverrideParams {
+  readonly actorUserId: AuthUserId
+  readonly expectedSystemRevision: string
+  readonly principalId: PrincipalId
+  readonly reason: string
+  readonly replacement: PrincipalAssetOverrideReplacement
+  readonly target: PrincipalAssetOverrideTarget
+}
+
 /** Data required to append a replacement record. */
 export interface ReplacePrincipalAssetOverrideParams extends PrincipalAssetOverrideMutationParams {
   readonly replacement: PrincipalAssetOverrideReplacement
@@ -174,6 +208,17 @@ export type PrincipalAssetOverrideMutationError =
 
 /** Principal-scoped persistence contract for asset override reads and mutations. */
 export interface PrincipalAssetOverrideRepositoryShape {
+  /**
+   * Append an override when its stream has no active record and atomically
+   * store the durable source replay requests selected for it.
+   */
+  readonly create: (
+    params: CreatePrincipalAssetOverrideParams
+  ) => Effect.Effect<
+    Option.Option<PrincipalAssetOverrideProjection>,
+    PrincipalAssetOverrideMutationError
+  >
+
   /**
    * Read the current effective projection and full history for one owned target.
    * Missing and other-principal targets both return `Option.none`.
