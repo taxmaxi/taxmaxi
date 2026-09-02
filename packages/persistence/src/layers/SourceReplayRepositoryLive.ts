@@ -514,7 +514,7 @@ const make = Effect.gen(function* () {
     )
   }
 
-  const restoreInventoryAndClearSource = ({
+  const clearSourceFacts = ({
     tx,
     sourceId,
   }: {
@@ -522,70 +522,6 @@ const make = Effect.gen(function* () {
     readonly sourceId: string
   }) =>
     Effect.gen(function* () {
-      const inventoryMovementAllocations = yield* tx
-        .select({
-          fifoLotId: schema.inventoryMovementAllocations.fifoLotId,
-          matchedAmount: schema.inventoryMovementAllocations.matchedAmount,
-        })
-        .from(schema.inventoryMovementAllocations)
-        .innerJoin(
-          schema.inventoryMovements,
-          eq(schema.inventoryMovements.id, schema.inventoryMovementAllocations.inventoryMovementId)
-        )
-        .where(eq(schema.inventoryMovements.sourceId, sourceId))
-        .pipe(
-          wrapSyncEngineSqlError(
-            "sourceReplayRepository.resetSourceDerivedState.selectInventoryMovementAllocations"
-          )
-        )
-
-      yield* Effect.forEach(inventoryMovementAllocations, (allocation) =>
-        tx
-          .update(schema.fifoLots)
-          .set({
-            remainingAmount: sql`${schema.fifoLots.remainingAmount} + ${allocation.matchedAmount}`,
-            updatedAt: nowDate(),
-          })
-          .where(eq(schema.fifoLots.id, allocation.fifoLotId))
-          .pipe(
-            wrapSyncEngineSqlError(
-              "sourceReplayRepository.resetSourceDerivedState.restoreInventoryMovementLots"
-            )
-          )
-      )
-
-      const disposalMatches = yield* tx
-        .select({
-          fifoLotId: schema.disposalMatches.fifoLotId,
-          matchedAmount: schema.disposalMatches.matchedAmount,
-        })
-        .from(schema.disposalMatches)
-        .innerJoin(
-          schema.transactionLegs,
-          eq(schema.transactionLegs.id, schema.disposalMatches.disposalLegId)
-        )
-        .where(eq(schema.transactionLegs.sourceId, sourceId))
-        .pipe(
-          wrapSyncEngineSqlError(
-            "sourceReplayRepository.resetSourceDerivedState.selectDisposalMatches"
-          )
-        )
-
-      yield* Effect.forEach(disposalMatches, (match) =>
-        tx
-          .update(schema.fifoLots)
-          .set({
-            remainingAmount: sql`${schema.fifoLots.remainingAmount} + ${match.matchedAmount}`,
-            updatedAt: nowDate(),
-          })
-          .where(eq(schema.fifoLots.id, match.fifoLotId))
-          .pipe(
-            wrapSyncEngineSqlError(
-              "sourceReplayRepository.resetSourceDerivedState.restoreMatchedLots"
-            )
-          )
-      )
-
       yield* tx
         .delete(schema.transactionLegs)
         .where(eq(schema.transactionLegs.sourceId, sourceId))
@@ -689,7 +625,7 @@ const make = Effect.gen(function* () {
             prerequisiteSourceIds,
           })
 
-          yield* restoreInventoryAndClearSource({ tx, sourceId })
+          yield* clearSourceFacts({ tx, sourceId })
 
           return { dependentReplays }
         })

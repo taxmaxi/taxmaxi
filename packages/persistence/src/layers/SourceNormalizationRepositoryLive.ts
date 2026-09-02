@@ -1,27 +1,13 @@
 /**
  * SourceNormalizationRepositoryLive - Atomic canonical persistence for normalized sync artifacts.
  *
- * Tax disposals consume FIFO lots through disposal matches. Factual custody outflows consume
- * them through inventory movement allocations. A normalized quantity must use exactly one path;
- * provider movements equivalent to a persisted tax leg are therefore not allocated again.
+ * This repository writes provider and canonical facts only. Tax accounting is produced later by
+ * immutable calculation runs over the factual ledger.
  *
  * @module SourceNormalizationRepositoryLive
  */
 
 import { createHash } from "node:crypto"
-import {
-  FifoInputRejectedError,
-  isFifoInputRejectedError,
-  matchFifoLots,
-  type FifoMatchError,
-} from "@my/accounting"
-import {
-  AccountingQuantity,
-  format as formatAccountingQuantity,
-  MonetaryAmount,
-  prorate,
-  subtract as subtractAccountingQuantity,
-} from "@my/core/accounting"
 import { and, asc, eq, gt, inArray, isNotNull, isNull, lte, notInArray, or, sql } from "drizzle-orm"
 import * as BigDecimal from "effect/BigDecimal"
 import * as Effect from "effect/Effect"
@@ -70,32 +56,6 @@ interface PersistedSourceLegRecord {
   readonly fiatCurrency: string | null
   readonly derivationRule: string | null
 }
-
-interface OpenFifoLotRecord {
-  readonly id: string
-  readonly acquiredAt: Date
-  readonly originalAmount: string
-  readonly remainingAmount: string
-  readonly costBasisPerToken: string
-  readonly costBasisCurrency: string
-  readonly costBasisStatus: "known" | "pending_review"
-}
-
-interface FifoLotAllocation {
-  readonly fifoLotId: string
-  readonly matchedAmount: string
-  readonly costBasis: string
-  readonly proceeds: string
-  readonly gainLoss: string
-  readonly remainingAmount: string
-}
-
-const INSUFFICIENT_FIFO_INVENTORY_OPERATION =
-  "sourceNormalizationRepository.buildFifoLotAllocations"
-const FIFO_CURRENCY_MISMATCH_OPERATION =
-  "sourceNormalizationRepository.buildFifoLotAllocations.currencyMismatch"
-const FIFO_MATCHER_REJECTED_OPERATION =
-  "sourceNormalizationRepository.buildFifoLotAllocations.matcherRejected"
 
 /**
  * Wrap residual errors in `SyncEngineStorageError`, but let a typed credit-exhaustion
@@ -177,157 +137,7 @@ const decodeNumericString = ({
     )
   )
 
-const isFifoInventoryReviewError = (error: SyncEngineStorageError): boolean =>
-  error.operation === INSUFFICIENT_FIFO_INVENTORY_OPERATION ||
-  error.operation === FIFO_CURRENCY_MISMATCH_OPERATION ||
-  error.operation === FIFO_MATCHER_REJECTED_OPERATION ||
-  isFifoInputRejectedError(error.cause)
-
-const FIFO_INVENTORY_REVIEW_LAYER = "fifo_inventory"
-const FIFO_INVENTORY_REVIEW_REASON_PREFIX =
-  "fifo_inventory: Review required because the transaction moves more inventory out than the synced source FIFO lots currently cover."
-
-const appendReviewSegment = ({
-  existing,
-  segment,
-  separator,
-}: {
-  readonly existing: string | null | undefined
-  readonly segment: string
-  readonly separator: string
-}): string =>
-  existing === null || existing === undefined || existing.trim() === ""
-    ? segment
-    : existing.includes(segment)
-      ? existing
-      : `${existing}${separator}${segment}`
-
-const buildFifoInventoryReview = ({
-  transaction,
-  existingReview,
-  resolvedTransactionType,
-  error,
-}: {
-  readonly transaction: {
-    readonly principalId: string
-  }
-  readonly existingReview: SourceTransactionReviewDraft | null
-  readonly resolvedTransactionType: {
-    readonly transactionType: string | null
-  }
-  readonly error: SyncEngineStorageError
-}): SourceTransactionReviewDraft | null => {
-  const principalId = transaction.principalId
-
-  const inventoryReason =
-    error.operation === FIFO_CURRENCY_MISMATCH_OPERATION
-      ? `${FIFO_INVENTORY_REVIEW_LAYER}: Review required because the lot cost-basis currency does not match the disposal proceeds currency. ${String(error.cause)}`
-      : error.operation === INSUFFICIENT_FIFO_INVENTORY_OPERATION
-        ? `${FIFO_INVENTORY_REVIEW_REASON_PREFIX} ` +
-          "This usually means an opening balance, transfer in, or historical acquisition is missing. " +
-          String(error.cause)
-        : `${FIFO_INVENTORY_REVIEW_LAYER}: Review required because a FIFO value could not be processed safely. ${String(error.cause)}`
-  const preservesReviewedState =
-    existingReview?.reviewStatus === "approved" || existingReview?.reviewStatus === "changed"
-
-  return {
-    principalId,
-    reviewStatus: preservesReviewedState ? existingReview.reviewStatus : "needs_review",
-    originalTypeKey: existingReview?.originalTypeKey ?? resolvedTransactionType.transactionType,
-    originalConfidence: existingReview?.originalConfidence ?? null,
-    currentTypeKey: existingReview?.currentTypeKey ?? resolvedTransactionType.transactionType,
-    legalRuleSetVersion: existingReview?.legalRuleSetVersion ?? null,
-    categorizationReason: appendReviewSegment({
-      existing: existingReview?.categorizationReason,
-      segment: inventoryReason,
-      separator: "\n",
-    }),
-    matchedLayer: appendReviewSegment({
-      existing: existingReview?.matchedLayer,
-      segment: FIFO_INVENTORY_REVIEW_LAYER,
-      separator: ",",
-    }),
-    needsReview: true,
-    userNotes: existingReview?.userNotes ?? null,
-    reviewedAt: preservesReviewedState ? existingReview.reviewedAt : null,
-  }
-}
-
-const decodeFifoQuantity = (value: string) =>
-  Schema.decodeEffect(AccountingQuantity)(value).pipe(
-    Effect.mapError((cause) => new FifoInputRejectedError({ cause }))
-  )
-
-const decodeFifoMonetaryAmount = ({
-  amount,
-  currency,
-}: {
-  readonly amount: string
-  readonly currency: string
-}) =>
-  Schema.decodeEffect(MonetaryAmount)({ amount, currency: currency.toUpperCase() }).pipe(
-    Effect.mapError((cause) => new FifoInputRejectedError({ cause }))
-  )
-
-const decodeSourceFifoMatchRow = <Row extends { readonly matchedAmount: string }>(row: Row) =>
-  decodeFifoQuantity(row.matchedAmount).pipe(
-    Effect.map((matchedAmount) => ({
-      ...row,
-      matchedAmount: formatAccountingQuantity(matchedAmount),
-    }))
-  )
-
-const decodeSourceFifoLotRow = ({
-  lot,
-  disposalFiatCurrency,
-}: {
-  readonly lot: OpenFifoLotRecord
-  readonly disposalFiatCurrency: string | null
-}) =>
-  Effect.gen(function* () {
-    const remainingQuantity = yield* decodeFifoQuantity(lot.remainingAmount)
-    const storedCostBasisPerUnit = yield* decodeFifoMonetaryAmount({
-      amount: lot.costBasisPerToken,
-      currency: lot.costBasisCurrency,
-    })
-    // Only a zero pending basis is a currency-free placeholder. A nonzero pending basis
-    // still lacks a factual currency and must not be relabeled to make matching succeed.
-    const costBasisPerUnit =
-      lot.costBasisStatus === "pending_review" &&
-      storedCostBasisPerUnit.isZero &&
-      disposalFiatCurrency !== null
-        ? yield* decodeFifoMonetaryAmount({
-            amount: lot.costBasisPerToken,
-            currency: disposalFiatCurrency,
-          })
-        : storedCostBasisPerUnit
-
-    return { id: lot.id, remainingQuantity, costBasisPerUnit }
-  })
-
-const decodeSourceFifoEffectRow = ({
-  amount,
-  fiatAmount,
-  fiatCurrency,
-}: {
-  readonly amount: string
-  readonly fiatAmount: string | null
-  readonly fiatCurrency: string | null
-}) =>
-  Effect.gen(function* () {
-    const quantity = yield* decodeFifoQuantity(amount)
-    const proceeds =
-      fiatAmount === null
-        ? null
-        : yield* decodeFifoMonetaryAmount({
-            amount: fiatAmount,
-            currency: fiatCurrency ?? "EUR",
-          })
-
-    return { quantity, proceeds }
-  })
-
-const compareFifoQuantities = ({
+const compareDecimalStrings = ({
   left,
   right,
 }: {
@@ -335,80 +145,28 @@ const compareFifoQuantities = ({
   readonly right: string
 }) =>
   Effect.gen(function* () {
-    const leftQuantity = yield* decodeFifoQuantity(left)
-    const rightQuantity = yield* decodeFifoQuantity(right)
-
-    return BigDecimal.Order(leftQuantity, rightQuantity)
-  })
-
-const subtractFifoQuantities = ({
-  left,
-  right,
-}: {
-  readonly left: string
-  readonly right: string
-}) =>
-  Effect.gen(function* () {
-    const leftQuantity = yield* decodeFifoQuantity(left)
-    const rightQuantity = yield* decodeFifoQuantity(right)
-
-    return yield* Option.match(subtractAccountingQuantity(leftQuantity, rightQuantity), {
+    const leftQuantity = yield* Option.match(BigDecimal.fromString(left), {
       onNone: () =>
         Effect.fail(
-          new FifoInputRejectedError({
-            cause: `Cannot subtract ${right} from ${left}`,
+          toSyncEngineStorageError({
+            error: `Invalid decimal value: ${left}`,
+            operation: "sourceNormalizationRepository.compareDecimalStrings",
           })
         ),
-      onSome: (result) => Effect.succeed(formatAccountingQuantity(result)),
+      onSome: Effect.succeed,
     })
-  })
-
-const unitQuantity = AccountingQuantity.make(BigDecimal.fromBigInt(1n))
-
-const toFifoMatchStorageError = (error: FifoMatchError): SyncEngineStorageError =>
-  toSyncEngineStorageError({
-    error,
-    operation:
-      error._tag === "CurrencyMismatchError"
-        ? FIFO_CURRENCY_MISMATCH_OPERATION
-        : FIFO_MATCHER_REJECTED_OPERATION,
-  })
-
-const toCostBasisPerToken = ({
-  fiatAmount,
-  fiatCurrency,
-  quantityAmount,
-}: {
-  readonly fiatAmount: string | null
-  readonly fiatCurrency: string
-  readonly quantityAmount: string
-}) =>
-  Effect.gen(function* () {
-    if (fiatAmount === null) {
-      return "0.000000000000000000"
-    }
-
-    const totalCostBasis = yield* decodeFifoMonetaryAmount({
-      amount: fiatAmount,
-      currency: fiatCurrency,
+    const rightQuantity = yield* Option.match(BigDecimal.fromString(right), {
+      onNone: () =>
+        Effect.fail(
+          toSyncEngineStorageError({
+            error: `Invalid decimal value: ${right}`,
+            operation: "sourceNormalizationRepository.compareDecimalStrings",
+          })
+        ),
+      onSome: Effect.succeed,
     })
-    const quantity = yield* decodeFifoQuantity(quantityAmount)
-    const costBasisPerToken = yield* prorate({
-      // The legacy fixed-point adapter discarded the sign of acquisition fiat values.
-      total: totalCostBasis.abs(),
-      part: unitQuantity,
-      whole: quantity,
-      scale: 18,
-    }).pipe(
-      Effect.mapError((error) =>
-        toSyncEngineStorageError({
-          error,
-          operation: FIFO_MATCHER_REJECTED_OPERATION,
-        })
-      )
-    )
 
-    return costBasisPerToken.format()
+    return BigDecimal.Order(leftQuantity, rightQuantity)
   })
 
 const make = Effect.gen(function* () {
@@ -1402,74 +1160,6 @@ const make = Effect.gen(function* () {
             )
         })
 
-  const loadOpenFifoLots = ({
-    executor,
-    principalId,
-    sourceId,
-    assetId,
-    maxAcquiredAt,
-  }: {
-    readonly executor: SourceNormalizationExecutor
-    readonly principalId: string
-    readonly sourceId: string
-    readonly assetId: string
-    readonly maxAcquiredAt: Date
-  }) =>
-    Effect.gen(function* () {
-      const rows = yield* executor
-        .select({
-          id: schema.fifoLots.id,
-          acquiredAt: schema.fifoLots.acquiredAt,
-          originalAmount: schema.fifoLots.originalAmount,
-          remainingAmount: schema.fifoLots.remainingAmount,
-          costBasisPerToken: schema.fifoLots.costBasisPerToken,
-          costBasisCurrency: schema.fifoLots.costBasisCurrency,
-          costBasisStatus: schema.fifoLots.costBasisStatus,
-        })
-        .from(schema.fifoLots)
-        .innerJoin(
-          schema.transactionLegs,
-          eq(schema.transactionLegs.id, schema.fifoLots.sourceLegId)
-        )
-        .where(
-          and(
-            eq(schema.fifoLots.principalId, principalId),
-            eq(schema.fifoLots.sourceId, sourceId),
-            eq(schema.fifoLots.assetId, assetId),
-            sql`${schema.fifoLots.sourceLegId} is not null`,
-            gt(schema.fifoLots.remainingAmount, "0"),
-            lte(schema.fifoLots.acquiredAt, maxAcquiredAt),
-            lte(schema.transactionLegs.timestamp, maxAcquiredAt)
-          )
-        )
-        .orderBy(asc(schema.fifoLots.acquiredAt), asc(schema.fifoLots.createdAt))
-        .pipe(wrapSyncEngineSqlError("sourceNormalizationRepository.loadOpenFifoLots"))
-
-      return yield* Effect.forEach(rows, (row) =>
-        Effect.gen(function* () {
-          const originalAmount = yield* decodeNumericString({
-            value: row.originalAmount,
-            operation: "sourceNormalizationRepository.loadOpenFifoLots.originalAmount",
-          })
-          const remainingAmount = yield* decodeNumericString({
-            value: row.remainingAmount,
-            operation: "sourceNormalizationRepository.loadOpenFifoLots.remainingAmount",
-          })
-          const costBasisPerToken = yield* decodeNumericString({
-            value: row.costBasisPerToken,
-            operation: "sourceNormalizationRepository.loadOpenFifoLots.costBasisPerToken",
-          })
-
-          return {
-            ...row,
-            originalAmount,
-            remainingAmount,
-            costBasisPerToken,
-          } satisfies OpenFifoLotRecord
-        })
-      )
-    })
-
   const recordSourceRepresentationUses = ({
     executor,
     providerTransfers,
@@ -1535,379 +1225,6 @@ const make = Effect.gen(function* () {
       .pipe(wrapSyncEngineSqlError("sourceNormalizationRepository.recordSourceRepresentationUses"))
   }
 
-  const buildFifoLotAllocations = ({
-    lots,
-    disposalAmount,
-    disposalFiatAmount,
-    disposalFiatCurrency,
-  }: {
-    readonly lots: ReadonlyArray<OpenFifoLotRecord>
-    readonly disposalAmount: string
-    readonly disposalFiatAmount: string | null
-    readonly disposalFiatCurrency: string | null
-  }) =>
-    Effect.gen(function* () {
-      const { proceeds, quantity } = yield* decodeSourceFifoEffectRow({
-        amount: disposalAmount,
-        fiatAmount: disposalFiatAmount,
-        fiatCurrency: disposalFiatCurrency,
-      })
-      const decodedLots = [] as Array<{
-        readonly id: string
-        readonly remainingQuantity: AccountingQuantity
-        readonly costBasisPerUnit: MonetaryAmount
-      }>
-      let remainingDisposalQuantity = quantity
-
-      for (const lot of lots) {
-        if (BigDecimal.isZero(remainingDisposalQuantity)) {
-          break
-        }
-
-        const decodedLot = yield* decodeSourceFifoLotRow({ lot, disposalFiatCurrency })
-
-        decodedLots.push(decodedLot)
-
-        if (BigDecimal.Order(decodedLot.remainingQuantity, remainingDisposalQuantity) >= 0) {
-          break
-        }
-
-        const nextRemainingDisposalQuantity = subtractAccountingQuantity(
-          remainingDisposalQuantity,
-          decodedLot.remainingQuantity
-        )
-        if (Option.isNone(nextRemainingDisposalQuantity)) {
-          return yield* new FifoInputRejectedError({
-            cause: `Cannot subtract ${lot.remainingAmount} from ${formatAccountingQuantity(remainingDisposalQuantity)}`,
-          })
-        }
-        remainingDisposalQuantity = nextRemainingDisposalQuantity.value
-      }
-      const result = yield* matchFifoLots({
-        lots: decodedLots,
-        disposal: { quantity, proceeds },
-      }).pipe(Effect.mapError(toFifoMatchStorageError))
-
-      if (result._tag === "InventoryShortage") {
-        return yield* toSyncEngineStorageError({
-          operation: INSUFFICIENT_FIFO_INVENTORY_OPERATION,
-          error: `Insufficient FIFO inventory for outbound amount ${formatAccountingQuantity(result.shortage)}`,
-        })
-      }
-
-      return result.allocations.map(
-        (allocation): FifoLotAllocation => ({
-          fifoLotId: allocation.lotId,
-          matchedAmount: formatAccountingQuantity(allocation.matchedQuantity),
-          costBasis: allocation.costBasis.format(),
-          proceeds: allocation.proceeds.format(),
-          gainLoss: allocation.gainLoss.format(),
-          remainingAmount: formatAccountingQuantity(allocation.remainingQuantity),
-        })
-      )
-    })
-
-  const ensureFifoLotForLeg = ({
-    executor,
-    leg,
-  }: {
-    readonly executor: SourceNormalizationExecutor
-    readonly leg: PersistedSourceLegRecord
-  }) =>
-    Effect.gen(function* () {
-      if (leg.kind !== "acquisition" && leg.kind !== "income") {
-        return
-      }
-
-      const now = nowDate()
-      const costBasisCurrency = (leg.fiatCurrency ?? "EUR").toUpperCase()
-      const costBasisPerToken = yield* toCostBasisPerToken({
-        fiatAmount: leg.fiatAmount,
-        fiatCurrency: costBasisCurrency,
-        quantityAmount: leg.amount,
-      })
-
-      yield* executor
-        .insert(schema.fifoLots)
-        .values({
-          principalId: leg.principalId,
-          sourceId: leg.sourceId,
-          assetId: leg.assetId,
-          assetRepresentationId: leg.assetRepresentationId,
-          acquiredAt: leg.timestamp,
-          originalAmount: leg.amount,
-          remainingAmount: leg.amount,
-          costBasisPerToken,
-          costBasisCurrency,
-          costBasisStatus:
-            leg.fiatAmount === null || leg.fiatCurrency === null ? "pending_review" : "known",
-          sourceLegId: leg.id,
-          sourceLegSequence: 0,
-          createdAt: now,
-          updatedAt: now,
-        })
-        .onConflictDoUpdate({
-          target: [schema.fifoLots.sourceLegId, schema.fifoLots.sourceLegSequence],
-          targetWhere: sql`${schema.fifoLots.sourceLegId} is not null`,
-          set: {
-            assetRepresentationId: sql.raw("excluded.asset_representation_id"),
-            costBasisPerToken: sql.raw("excluded.cost_basis_per_token"),
-            costBasisCurrency: sql.raw("excluded.cost_basis_currency"),
-            costBasisStatus: sql.raw("excluded.cost_basis_status"),
-            updatedAt: now,
-          },
-          setWhere: eq(schema.fifoLots.assetId, leg.assetId),
-        })
-        .pipe(wrapSyncEngineSqlError("sourceNormalizationRepository.ensureFifoLotForLeg"))
-    })
-
-  const matchDisposalLeg = ({
-    executor,
-    leg,
-  }: {
-    readonly executor: SourceNormalizationExecutor
-    readonly leg: PersistedSourceLegRecord
-  }) =>
-    Effect.gen(function* () {
-      if (leg.kind !== "disposal") {
-        return
-      }
-
-      const [existingMatch] = yield* executor
-        .select({ id: schema.disposalMatches.id })
-        .from(schema.disposalMatches)
-        .where(eq(schema.disposalMatches.disposalLegId, leg.id))
-        .limit(1)
-        .pipe(wrapSyncEngineSqlError("sourceNormalizationRepository.matchDisposalLeg.findExisting"))
-
-      if (existingMatch !== undefined) {
-        return
-      }
-
-      const openLots = yield* loadOpenFifoLots({
-        executor,
-        principalId: leg.principalId,
-        sourceId: leg.sourceId,
-        assetId: leg.assetId,
-        maxAcquiredAt: leg.timestamp,
-      })
-      const allocations = yield* buildFifoLotAllocations({
-        lots: openLots,
-        disposalAmount: leg.amount,
-        disposalFiatAmount: leg.fiatAmount,
-        disposalFiatCurrency: leg.fiatCurrency,
-      })
-
-      yield* Effect.forEach(allocations, (allocation) =>
-        Effect.gen(function* () {
-          const now = nowDate()
-
-          yield* executor
-            .insert(schema.disposalMatches)
-            .values({
-              disposalLegId: leg.id,
-              fifoLotId: allocation.fifoLotId,
-              matchedAmount: allocation.matchedAmount,
-              costBasis: allocation.costBasis,
-              proceeds: allocation.proceeds,
-              gainLoss: allocation.gainLoss,
-              createdAt: now,
-            })
-            .onConflictDoNothing({
-              target: [schema.disposalMatches.fifoLotId, schema.disposalMatches.disposalLegId],
-            })
-            .pipe(
-              wrapSyncEngineSqlError("sourceNormalizationRepository.matchDisposalLeg.insertMatch")
-            )
-
-          yield* executor
-            .update(schema.fifoLots)
-            .set({
-              remainingAmount: allocation.remainingAmount,
-              updatedAt: now,
-            })
-            .where(eq(schema.fifoLots.id, allocation.fifoLotId))
-            .pipe(
-              wrapSyncEngineSqlError("sourceNormalizationRepository.matchDisposalLeg.updateLot")
-            )
-        })
-      )
-    })
-
-  const feedFifoLegs = ({
-    executor,
-    legs,
-  }: {
-    readonly executor: SourceNormalizationExecutor
-    readonly legs: ReadonlyArray<PersistedSourceLegRecord>
-  }) =>
-    Effect.forEach(legs, (leg) =>
-      Effect.gen(function* () {
-        yield* ensureFifoLotForLeg({ executor, leg })
-        yield* matchDisposalLeg({ executor, leg })
-      })
-    )
-
-  const resetInventoryMovementAllocations = ({
-    executor,
-    movementId,
-  }: {
-    readonly executor: SourceNormalizationExecutor
-    readonly movementId: string
-  }) =>
-    Effect.gen(function* () {
-      const allocations = yield* executor
-        .select({
-          fifoLotId: schema.inventoryMovementAllocations.fifoLotId,
-          matchedAmount: schema.inventoryMovementAllocations.matchedAmount,
-        })
-        .from(schema.inventoryMovementAllocations)
-        .where(eq(schema.inventoryMovementAllocations.inventoryMovementId, movementId))
-        .pipe(
-          wrapSyncEngineSqlError(
-            "sourceNormalizationRepository.resetInventoryMovementAllocations.selectAllocations"
-          )
-        )
-
-      yield* Effect.forEach(allocations, (allocation) =>
-        Effect.gen(function* () {
-          const decodedAllocation = yield* decodeSourceFifoMatchRow(allocation)
-
-          yield* executor
-            .update(schema.fifoLots)
-            .set({
-              remainingAmount: sql`${schema.fifoLots.remainingAmount} + ${decodedAllocation.matchedAmount}`,
-              updatedAt: nowDate(),
-            })
-            .where(eq(schema.fifoLots.id, decodedAllocation.fifoLotId))
-            .pipe(
-              wrapSyncEngineSqlError(
-                "sourceNormalizationRepository.resetInventoryMovementAllocations.restoreLot"
-              )
-            )
-        })
-      )
-
-      yield* executor
-        .delete(schema.inventoryMovementAllocations)
-        .where(eq(schema.inventoryMovementAllocations.inventoryMovementId, movementId))
-        .pipe(
-          wrapSyncEngineSqlError(
-            "sourceNormalizationRepository.resetInventoryMovementAllocations.deleteAllocations"
-          )
-        )
-    })
-
-  const deleteUnusedInboundProviderLot = ({
-    executor,
-    providerTransferId,
-    operation,
-  }: {
-    readonly executor: SourceNormalizationExecutor
-    readonly providerTransferId: string
-    readonly operation: string
-  }) =>
-    Effect.gen(function* () {
-      const [existingLot] = yield* executor
-        .select({ id: schema.fifoLots.id })
-        .from(schema.fifoLots)
-        .where(eq(schema.fifoLots.sourceProviderTransferId, providerTransferId))
-        .limit(1)
-        .pipe(wrapSyncEngineSqlError(`${operation}.selectLot`))
-
-      if (existingLot === undefined) {
-        return
-      }
-
-      const [deletedLot] = yield* executor
-        .delete(schema.fifoLots)
-        .where(
-          and(
-            eq(schema.fifoLots.id, existingLot.id),
-            eq(schema.fifoLots.remainingAmount, schema.fifoLots.originalAmount),
-            sql`not exists (
-              select 1
-              from ${schema.disposalMatches}
-              where ${schema.disposalMatches.fifoLotId} = ${schema.fifoLots.id}
-            )`,
-            sql`not exists (
-              select 1
-              from ${schema.inventoryMovementAllocations}
-              where ${schema.inventoryMovementAllocations.fifoLotId} = ${schema.fifoLots.id}
-            )`
-          )
-        )
-        .returning({ id: schema.fifoLots.id })
-        .pipe(wrapSyncEngineSqlError(`${operation}.deleteLot`))
-
-      if (deletedLot === undefined) {
-        return yield* toSyncEngineStorageError({
-          operation,
-          error: `Cannot remove inbound provider lot ${existingLot.id} because later inventory usage depends on it`,
-        })
-      }
-    })
-
-  const ensureInboundProviderLotCanChangeAmount = ({
-    executor,
-    providerTransferId,
-    assetId,
-    amount,
-  }: {
-    readonly executor: SourceNormalizationExecutor
-    readonly providerTransferId: string
-    readonly assetId: string
-    readonly amount: string
-  }) =>
-    Effect.gen(function* () {
-      const [existingLot] = yield* executor
-        .select({
-          id: schema.fifoLots.id,
-          assetId: schema.fifoLots.assetId,
-          originalAmount: schema.fifoLots.originalAmount,
-          remainingAmount: schema.fifoLots.remainingAmount,
-        })
-        .from(schema.fifoLots)
-        .where(eq(schema.fifoLots.sourceProviderTransferId, providerTransferId))
-        .limit(1)
-        .pipe(
-          wrapSyncEngineSqlError(
-            "sourceNormalizationRepository.ensureInboundProviderLotCanChangeAmount.selectLot"
-          )
-        )
-
-      if (existingLot === undefined) {
-        return
-      }
-
-      const consumedAmount = yield* subtractFifoQuantities({
-        left: existingLot.originalAmount,
-        right: existingLot.remainingAmount,
-      })
-      const consumedComparison = yield* compareFifoQuantities({
-        left: consumedAmount,
-        right: "0",
-      })
-
-      if (existingLot.assetId !== assetId && consumedComparison > 0) {
-        return yield* toSyncEngineStorageError({
-          operation:
-            "sourceNormalizationRepository.ensureInboundProviderLotCanChangeAmount.consumedAsset",
-          error: `Cannot change asset of inbound provider lot ${existingLot.id} because later inventory usage depends on it`,
-        })
-      }
-
-      const comparison = yield* compareFifoQuantities({ left: amount, right: consumedAmount })
-
-      if (comparison < 0) {
-        return yield* toSyncEngineStorageError({
-          operation:
-            "sourceNormalizationRepository.ensureInboundProviderLotCanChangeAmount.consumedAmount",
-          error: `Cannot reduce inbound provider lot ${existingLot.id} below its consumed amount ${consumedAmount}`,
-        })
-      }
-    })
-
   const removeInventoryMovementsForTransaction = ({
     executor,
     transactionId,
@@ -1915,75 +1232,14 @@ const make = Effect.gen(function* () {
     readonly executor: SourceNormalizationExecutor
     readonly transactionId: string
   }) =>
-    Effect.gen(function* () {
-      const movements = yield* executor
-        .select({
-          id: schema.inventoryMovements.id,
-          providerTransferId: schema.inventoryMovements.providerTransferId,
-        })
-        .from(schema.inventoryMovements)
-        .where(eq(schema.inventoryMovements.transactionId, transactionId))
-        .pipe(
-          wrapSyncEngineSqlError(
-            "sourceNormalizationRepository.removeInventoryMovementsForTransaction.selectMovements"
-          )
+    executor
+      .delete(schema.inventoryMovements)
+      .where(eq(schema.inventoryMovements.transactionId, transactionId))
+      .pipe(
+        wrapSyncEngineSqlError(
+          "sourceNormalizationRepository.removeInventoryMovementsForTransaction.deleteMovements"
         )
-
-      yield* Effect.forEach(movements, (movement) =>
-        resetInventoryMovementAllocations({
-          executor,
-          movementId: movement.id,
-        })
       )
-
-      yield* Effect.forEach(
-        movements.flatMap((movement) =>
-          movement.providerTransferId === null ? [] : [movement.providerTransferId]
-        ),
-        (providerTransferId) =>
-          deleteUnusedInboundProviderLot({
-            executor,
-            providerTransferId,
-            operation:
-              "sourceNormalizationRepository.removeInventoryMovementsForTransaction.deleteInboundLot",
-          })
-      )
-
-      yield* executor
-        .delete(schema.inventoryMovements)
-        .where(eq(schema.inventoryMovements.transactionId, transactionId))
-        .pipe(
-          wrapSyncEngineSqlError(
-            "sourceNormalizationRepository.removeInventoryMovementsForTransaction.deleteMovements"
-          )
-        )
-    })
-
-  const resetInventoryMovementAllocationsForTransaction = ({
-    executor,
-    transactionId,
-  }: {
-    readonly executor: SourceNormalizationExecutor
-    readonly transactionId: string
-  }) =>
-    Effect.gen(function* () {
-      const movements = yield* executor
-        .select({ id: schema.inventoryMovements.id })
-        .from(schema.inventoryMovements)
-        .where(eq(schema.inventoryMovements.transactionId, transactionId))
-        .pipe(
-          wrapSyncEngineSqlError(
-            "sourceNormalizationRepository.resetInventoryMovementAllocationsForTransaction.selectMovements"
-          )
-        )
-
-      yield* Effect.forEach(movements, (movement) =>
-        resetInventoryMovementAllocations({
-          executor,
-          movementId: movement.id,
-        })
-      )
-    })
 
   const removeInventoryMovementForProviderTransfer = ({
     executor,
@@ -1992,42 +1248,14 @@ const make = Effect.gen(function* () {
     readonly executor: SourceNormalizationExecutor
     readonly providerTransferId: string
   }) =>
-    Effect.gen(function* () {
-      const [movement] = yield* executor
-        .select({ id: schema.inventoryMovements.id })
-        .from(schema.inventoryMovements)
-        .where(eq(schema.inventoryMovements.providerTransferId, providerTransferId))
-        .limit(1)
-        .pipe(
-          wrapSyncEngineSqlError(
-            "sourceNormalizationRepository.removeInventoryMovementForProviderTransfer.selectMovement"
-          )
+    executor
+      .delete(schema.inventoryMovements)
+      .where(eq(schema.inventoryMovements.providerTransferId, providerTransferId))
+      .pipe(
+        wrapSyncEngineSqlError(
+          "sourceNormalizationRepository.removeInventoryMovementForProviderTransfer.deleteMovement"
         )
-
-      yield* deleteUnusedInboundProviderLot({
-        executor,
-        providerTransferId,
-        operation:
-          "sourceNormalizationRepository.removeInventoryMovementForProviderTransfer.deleteInboundLot",
-      })
-
-      if (movement === undefined) {
-        return
-      }
-
-      yield* resetInventoryMovementAllocations({
-        executor,
-        movementId: movement.id,
-      })
-      yield* executor
-        .delete(schema.inventoryMovements)
-        .where(eq(schema.inventoryMovements.id, movement.id))
-        .pipe(
-          wrapSyncEngineSqlError(
-            "sourceNormalizationRepository.removeInventoryMovementForProviderTransfer.deleteMovement"
-          )
-        )
-    })
+      )
 
   const removeStaleProviderInventoryMovements = ({
     executor,
@@ -2133,20 +1361,16 @@ const make = Effect.gen(function* () {
       )
     })
 
-  const allocateProviderInventoryMovements = ({
+  const persistProviderInventoryMovements = ({
     executor,
     transaction,
     providerTransfers,
-    legs,
     feesOnly,
-    fifoMode,
   }: {
     readonly executor: SourceNormalizationExecutor
     readonly transaction: PersistedSourceTransaction
     readonly providerTransfers: ReadonlyArray<PersistedSourceProviderTransfer>
-    readonly legs: ReadonlyArray<PersistedSourceLegRecord>
     readonly feesOnly: boolean
-    readonly fifoMode: "facts_only" | "allocate"
   }) => {
     const orderedProviderTransfers = [
       ...providerTransfers.filter((providerTransfer) => providerTransfer.direction === "inbound"),
@@ -2159,9 +1383,6 @@ const make = Effect.gen(function* () {
           providerTransfer.processingMode === "evidence_only" ||
           providerTransfer.processingMode === "stale"
         ) {
-          if (fifoMode === "facts_only") {
-            return
-          }
           return yield* removeInventoryMovementForProviderTransfer({
             executor,
             providerTransferId: providerTransfer.id,
@@ -2172,9 +1393,6 @@ const make = Effect.gen(function* () {
         const purpose = metadata.purpose
 
         if (feesOnly && purpose !== "fee") {
-          if (fifoMode === "facts_only") {
-            return
-          }
           return yield* removeInventoryMovementForProviderTransfer({
             executor,
             providerTransferId: providerTransfer.id,
@@ -2182,9 +1400,6 @@ const make = Effect.gen(function* () {
         }
 
         if (providerTransfer.providerAssetId === null) {
-          if (fifoMode === "facts_only") {
-            return
-          }
           return yield* removeInventoryMovementForProviderTransfer({
             executor,
             providerTransferId: providerTransfer.id,
@@ -2207,14 +1422,11 @@ const make = Effect.gen(function* () {
           .limit(1)
           .pipe(
             wrapSyncEngineSqlError(
-              "sourceNormalizationRepository.allocateOutboundInventoryMovements.assetMapping"
+              "sourceNormalizationRepository.persistProviderInventoryMovements.assetMapping"
             )
           )
 
         if (assetMapping?.assetId === null || assetMapping?.assetId === undefined) {
-          if (fifoMode === "facts_only") {
-            return
-          }
           return yield* removeInventoryMovementForProviderTransfer({
             executor,
             providerTransferId: providerTransfer.id,
@@ -2253,18 +1465,6 @@ const make = Effect.gen(function* () {
               timestamp: sql.raw("excluded.timestamp"),
               direction: sql.raw("excluded.direction"),
               purpose: sql.raw("excluded.purpose"),
-              taxTreatment: sql`case
-                  when ${schema.inventoryMovements.sourceRawRecordId} is distinct from excluded.source_raw_record_id
-                    or ${schema.inventoryMovements.transactionId} is distinct from excluded.transaction_id
-                    or ${schema.inventoryMovements.assetId} is distinct from excluded.asset_id
-                    or ${schema.inventoryMovements.assetRepresentationId} is distinct from excluded.asset_representation_id
-                    or ${schema.inventoryMovements.timestamp} is distinct from excluded.timestamp
-                    or ${schema.inventoryMovements.direction} is distinct from excluded.direction
-                    or ${schema.inventoryMovements.purpose} is distinct from excluded.purpose
-                    or ${schema.inventoryMovements.amount} is distinct from excluded.amount
-                  then 'pending_review'::inventory_movement_tax_treatment
-                  else ${schema.inventoryMovements.taxTreatment}
-                end`,
               reconciliationStatus: sql`case
                   when ${schema.inventoryMovements.sourceRawRecordId} is distinct from excluded.source_raw_record_id
                     or ${schema.inventoryMovements.transactionId} is distinct from excluded.transaction_id
@@ -2284,223 +1484,44 @@ const make = Effect.gen(function* () {
           .returning({ id: schema.inventoryMovements.id })
           .pipe(
             wrapSyncEngineSqlError(
-              "sourceNormalizationRepository.allocateProviderInventoryMovements.upsertMovement"
+              "sourceNormalizationRepository.persistProviderInventoryMovements.upsertMovement"
             )
           )
 
         if (movement === undefined) {
           return yield* toSyncEngineStorageError({
             operation:
-              "sourceNormalizationRepository.allocateProviderInventoryMovements.upsertMovement",
+              "sourceNormalizationRepository.persistProviderInventoryMovements.upsertMovement",
             error: "failed to persist inventory movement",
           })
         }
-
-        if (fifoMode === "facts_only") {
-          return
-        }
-
-        yield* resetInventoryMovementAllocations({
-          executor,
-          movementId: movement.id,
-        })
-
-        if (providerTransfer.direction === "inbound") {
-          const matchingAcquisitionResults = yield* Effect.forEach(
-            legs.filter(
-              (leg) =>
-                (leg.kind === "acquisition" || leg.kind === "income") &&
-                leg.assetId === assetMapping.assetId
-            ),
-            (leg) =>
-              compareFifoQuantities({
-                left: leg.amount,
-                right: providerTransfer.amount,
-              })
-          )
-
-          if (matchingAcquisitionResults.some((comparison) => comparison === 0)) {
-            yield* deleteUnusedInboundProviderLot({
-              executor,
-              providerTransferId: providerTransfer.id,
-              operation:
-                "sourceNormalizationRepository.allocateProviderInventoryMovements.removeRedundantInboundLot",
-            })
-            return
-          }
-
-          yield* ensureInboundProviderLotCanChangeAmount({
-            executor,
-            providerTransferId: providerTransfer.id,
-            assetId: assetMapping.assetId,
-            amount: providerTransfer.amount,
-          })
-
-          yield* executor
-            .insert(schema.fifoLots)
-            .values({
-              principalId: transaction.principalId,
-              sourceId: providerTransfer.sourceId,
-              assetId: assetMapping.assetId,
-              assetRepresentationId: assetMapping.assetRepresentationId,
-              acquiredAt: providerTransfer.timestamp,
-              originalAmount: providerTransfer.amount,
-              remainingAmount: providerTransfer.amount,
-              costBasisPerToken: "0",
-              costBasisCurrency: "EUR",
-              costBasisStatus: "pending_review",
-              sourceLegId: null,
-              sourceProviderTransferId: providerTransfer.id,
-              sourceLegSequence: 0,
-              createdAt: now,
-              updatedAt: now,
-            })
-            .onConflictDoUpdate({
-              target: schema.fifoLots.sourceProviderTransferId,
-              targetWhere: sql`${schema.fifoLots.sourceProviderTransferId} is not null`,
-              set: {
-                sourceId: sql.raw("excluded.source_id"),
-                assetId: sql.raw("excluded.asset_id"),
-                assetRepresentationId: sql.raw("excluded.asset_representation_id"),
-                acquiredAt: sql.raw("excluded.acquired_at"),
-                originalAmount: sql.raw("excluded.original_amount"),
-                remainingAmount: sql`${schema.fifoLots.remainingAmount} + excluded.original_amount - ${schema.fifoLots.originalAmount}`,
-                updatedAt: now,
-              },
-            })
-            .pipe(
-              wrapSyncEngineSqlError(
-                "sourceNormalizationRepository.allocateProviderInventoryMovements.upsertInboundLot"
-              )
-            )
-          return
-        }
-
-        yield* deleteUnusedInboundProviderLot({
-          executor,
-          providerTransferId: providerTransfer.id,
-          operation:
-            "sourceNormalizationRepository.allocateProviderInventoryMovements.removeStaleInboundLot",
-        })
-
-        const matchingLegKind = purpose === "fee" ? "fee" : "disposal"
-        const matchingOutboundLegResults = yield* Effect.forEach(
-          legs.filter(
-            (leg) => leg.kind === matchingLegKind && leg.assetId === assetMapping.assetId
-          ),
-          (leg) =>
-            compareFifoQuantities({
-              left: leg.amount,
-              right: providerTransfer.amount,
-            })
-        )
-
-        if (matchingOutboundLegResults.some((comparison) => comparison === 0)) {
-          return
-        }
-
-        const openLots = yield* loadOpenFifoLots({
-          executor,
-          principalId: transaction.principalId,
-          sourceId: providerTransfer.sourceId,
-          assetId: assetMapping.assetId,
-          maxAcquiredAt: providerTransfer.timestamp,
-        })
-        const allocations = yield* buildFifoLotAllocations({
-          lots: openLots,
-          disposalAmount: providerTransfer.amount,
-          disposalFiatAmount: null,
-          disposalFiatCurrency: null,
-        })
-
-        yield* Effect.forEach(allocations, (allocation) =>
-          Effect.gen(function* () {
-            yield* executor
-              .insert(schema.inventoryMovementAllocations)
-              .values({
-                inventoryMovementId: movement.id,
-                fifoLotId: allocation.fifoLotId,
-                matchedAmount: allocation.matchedAmount,
-                createdAt: now,
-              })
-              .onConflictDoNothing({
-                target: [
-                  schema.inventoryMovementAllocations.inventoryMovementId,
-                  schema.inventoryMovementAllocations.fifoLotId,
-                ],
-              })
-              .pipe(
-                wrapSyncEngineSqlError(
-                  "sourceNormalizationRepository.allocateOutboundInventoryMovements.insertAllocation"
-                )
-              )
-
-            yield* executor
-              .update(schema.fifoLots)
-              .set({
-                remainingAmount: allocation.remainingAmount,
-                updatedAt: now,
-              })
-              .where(eq(schema.fifoLots.id, allocation.fifoLotId))
-              .pipe(
-                wrapSyncEngineSqlError(
-                  "sourceNormalizationRepository.allocateOutboundInventoryMovements.updateLot"
-                )
-              )
-          })
-        )
       })
     )
   }
 
-  const allocateFeeInventoryMovements = ({
+  const persistFeeInventoryMovements = ({
     executor,
     legs,
-    fifoMode,
   }: {
     readonly executor: SourceNormalizationExecutor
     readonly legs: ReadonlyArray<PersistedSourceLegRecord>
-    readonly fifoMode: "facts_only" | "allocate"
   }) =>
     Effect.forEach(
       legs.filter((leg) => leg.kind === "fee"),
       (leg) =>
         Effect.gen(function* () {
-          const amountComparison = yield* compareFifoQuantities({
+          const amountComparison = yield* compareDecimalStrings({
             left: leg.amount,
             right: "0",
           })
 
           if (amountComparison === 0) {
-            if (fifoMode === "facts_only") {
-              return
-            }
-
-            const [existingMovement] = yield* executor
-              .select({ id: schema.inventoryMovements.id })
-              .from(schema.inventoryMovements)
-              .where(eq(schema.inventoryMovements.transactionLegId, leg.id))
-              .limit(1)
-              .pipe(
-                wrapSyncEngineSqlError(
-                  "sourceNormalizationRepository.allocateFeeInventoryMovements.selectZeroMovement"
-                )
-              )
-
-            if (existingMovement === undefined) {
-              return
-            }
-
-            yield* resetInventoryMovementAllocations({
-              executor,
-              movementId: existingMovement.id,
-            })
             yield* executor
               .delete(schema.inventoryMovements)
-              .where(eq(schema.inventoryMovements.id, existingMovement.id))
+              .where(eq(schema.inventoryMovements.transactionLegId, leg.id))
               .pipe(
                 wrapSyncEngineSqlError(
-                  "sourceNormalizationRepository.allocateFeeInventoryMovements.deleteZeroMovement"
+                  "sourceNormalizationRepository.persistFeeInventoryMovements.deleteZeroMovement"
                 )
               )
             return
@@ -2508,8 +1529,7 @@ const make = Effect.gen(function* () {
 
           if (leg.transactionId === null) {
             return yield* toSyncEngineStorageError({
-              operation:
-                "sourceNormalizationRepository.allocateFeeInventoryMovements.transactionId",
+              operation: "sourceNormalizationRepository.persistFeeInventoryMovements.transactionId",
               error: "fee leg is missing its transaction",
             })
           }
@@ -2545,16 +1565,6 @@ const make = Effect.gen(function* () {
                 assetId: sql.raw("excluded.asset_id"),
                 assetRepresentationId: sql.raw("excluded.asset_representation_id"),
                 timestamp: sql.raw("excluded.timestamp"),
-                taxTreatment: sql`case
-                  when ${schema.inventoryMovements.sourceRawRecordId} is distinct from excluded.source_raw_record_id
-                    or ${schema.inventoryMovements.transactionId} is distinct from excluded.transaction_id
-                    or ${schema.inventoryMovements.assetId} is distinct from excluded.asset_id
-                    or ${schema.inventoryMovements.assetRepresentationId} is distinct from excluded.asset_representation_id
-                    or ${schema.inventoryMovements.timestamp} is distinct from excluded.timestamp
-                    or ${schema.inventoryMovements.amount} is distinct from excluded.amount
-                  then 'pending_review'::inventory_movement_tax_treatment
-                  else ${schema.inventoryMovements.taxTreatment}
-                end`,
                 reconciliationStatus: sql`case
                   when ${schema.inventoryMovements.sourceRawRecordId} is distinct from excluded.source_raw_record_id
                     or ${schema.inventoryMovements.transactionId} is distinct from excluded.transaction_id
@@ -2572,77 +1582,17 @@ const make = Effect.gen(function* () {
             .returning({ id: schema.inventoryMovements.id })
             .pipe(
               wrapSyncEngineSqlError(
-                "sourceNormalizationRepository.allocateFeeInventoryMovements.upsertMovement"
+                "sourceNormalizationRepository.persistFeeInventoryMovements.upsertMovement"
               )
             )
 
           if (movement === undefined) {
             return yield* toSyncEngineStorageError({
               operation:
-                "sourceNormalizationRepository.allocateFeeInventoryMovements.upsertMovement",
+                "sourceNormalizationRepository.persistFeeInventoryMovements.upsertMovement",
               error: "failed to persist fee inventory movement",
             })
           }
-
-          if (fifoMode === "facts_only") {
-            return
-          }
-
-          yield* resetInventoryMovementAllocations({
-            executor,
-            movementId: movement.id,
-          })
-
-          const openLots = yield* loadOpenFifoLots({
-            executor,
-            principalId: leg.principalId,
-            sourceId: leg.sourceId,
-            assetId: leg.assetId,
-            maxAcquiredAt: leg.timestamp,
-          })
-          const allocations = yield* buildFifoLotAllocations({
-            lots: openLots,
-            disposalAmount: leg.amount,
-            disposalFiatAmount: null,
-            disposalFiatCurrency: null,
-          })
-
-          yield* Effect.forEach(allocations, (allocation) =>
-            Effect.gen(function* () {
-              yield* executor
-                .insert(schema.inventoryMovementAllocations)
-                .values({
-                  inventoryMovementId: movement.id,
-                  fifoLotId: allocation.fifoLotId,
-                  matchedAmount: allocation.matchedAmount,
-                  createdAt: now,
-                })
-                .onConflictDoNothing({
-                  target: [
-                    schema.inventoryMovementAllocations.inventoryMovementId,
-                    schema.inventoryMovementAllocations.fifoLotId,
-                  ],
-                })
-                .pipe(
-                  wrapSyncEngineSqlError(
-                    "sourceNormalizationRepository.allocateFeeInventoryMovements.insertAllocation"
-                  )
-                )
-
-              yield* executor
-                .update(schema.fifoLots)
-                .set({
-                  remainingAmount: allocation.remainingAmount,
-                  updatedAt: now,
-                })
-                .where(eq(schema.fifoLots.id, allocation.fifoLotId))
-                .pipe(
-                  wrapSyncEngineSqlError(
-                    "sourceNormalizationRepository.allocateFeeInventoryMovements.updateLot"
-                  )
-                )
-            })
-          )
         })
     )
 
@@ -2783,89 +1733,33 @@ const make = Effect.gen(function* () {
             currentProviderTransferIds,
           })
 
-          // Catch reviewable FIFO input and matcher errors outside this savepoint so every
-          // derived FIFO write rolls back together while the outer transaction persists facts.
-          const transactionReview = yield* Effect.gen(function* () {
-            if (materializesProviderMovements) {
-              yield* allocateProviderInventoryMovements({
-                executor: tx,
-                transaction: persistedTransaction,
-                providerTransfers: persistedProviderTransfers,
-                legs: persistedLegs,
-                feesOnly: hasFailedStatus,
-                fifoMode: "facts_only",
-              })
-              yield* allocateFeeInventoryMovements({
-                executor: tx,
-                legs: persistedLegs,
-                fifoMode: "facts_only",
-              })
-            }
-
-            yield* tx.transaction((fifoTx) =>
-              Effect.gen(function* () {
-                if (materializesProviderMovements) {
-                  yield* resetInventoryMovementAllocationsForTransaction({
-                    executor: fifoTx,
-                    transactionId: persistedTransaction.id,
-                  })
-                  yield* removeStaleProviderInventoryMovements({
-                    executor: fifoTx,
-                    transactionId: persistedTransaction.id,
-                    currentProviderTransferIds,
-                  })
-                } else {
-                  yield* removeInventoryMovementsForTransaction({
-                    executor: fifoTx,
-                    transactionId: persistedTransaction.id,
-                  })
-                }
-
-                yield* feedFifoLegs({
-                  executor: fifoTx,
-                  legs: persistedLegs,
-                })
-                if (materializesProviderMovements) {
-                  yield* allocateProviderInventoryMovements({
-                    executor: fifoTx,
-                    transaction: persistedTransaction,
-                    providerTransfers: persistedProviderTransfers,
-                    legs: persistedLegs,
-                    feesOnly: hasFailedStatus,
-                    fifoMode: "allocate",
-                  })
-                  yield* allocateFeeInventoryMovements({
-                    executor: fifoTx,
-                    legs: persistedLegs,
-                    fifoMode: "allocate",
-                  })
-                }
-              })
-            )
-
-            return params.transactionReview
-          }).pipe(
-            wrapSyncEngineStorageError(
-              "sourceNormalizationRepository.persistNormalizedArtifacts.applyFifo"
-            ),
-            Effect.catchTag("SyncEngineStorageError", (error) =>
-              isFifoInventoryReviewError(error)
-                ? Effect.succeed(
-                    buildFifoInventoryReview({
-                      transaction: persistedTransaction,
-                      existingReview: params.transactionReview,
-                      resolvedTransactionType: params.resolvedTransactionType,
-                      error,
-                    })
-                  )
-                : Effect.fail(error)
-            )
-          )
+          if (materializesProviderMovements) {
+            yield* removeStaleProviderInventoryMovements({
+              executor: tx,
+              transactionId: persistedTransaction.id,
+              currentProviderTransferIds,
+            })
+            yield* persistProviderInventoryMovements({
+              executor: tx,
+              transaction: persistedTransaction,
+              providerTransfers: persistedProviderTransfers,
+              feesOnly: hasFailedStatus,
+            })
+            yield* persistFeeInventoryMovements({
+              executor: tx,
+              legs: persistedLegs,
+            })
+          } else {
+            yield* removeInventoryMovementsForTransaction({
+              executor: tx,
+              transactionId: persistedTransaction.id,
+            })
+          }
 
           yield* upsertTransactionReview({
             executor: tx,
             transactionId: persistedTransaction.id,
-            transactionReview,
+            transactionReview: params.transactionReview,
           })
           if (persistedTransaction.sourceRawRecordId !== null) {
             yield* tx
