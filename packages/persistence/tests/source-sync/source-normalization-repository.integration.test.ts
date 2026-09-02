@@ -3147,7 +3147,6 @@ describe("SourceNormalizationRepositoryLive", () => {
   it.effect("moves a replayed fee movement to the leg's current transaction and raw record", () =>
     Effect.gen(function* () {
       const newRawRecordId = "00000000-0000-0000-0000-000000000710"
-      const openingTransactionId = "00000000-0000-0000-0000-000000000711"
       const oldTransactionId = "00000000-0000-0000-0000-000000000712"
       const feeLegExternalId = "fee-leg-moved-between-transactions"
       const occurredAt = DateTime.toDateUtc(DateTime.makeUnsafe("2025-04-03T10:00:00.000Z"))
@@ -3161,37 +3160,14 @@ describe("SourceNormalizationRepositoryLive", () => {
               externalRecordId: "raw-fee-new-parent",
               occurredAt,
             })
-            yield* db.insert(schema.transactions).values([
-              {
-                id: openingTransactionId,
-                sourceId: TEST_SOURCE_ID,
-                externalId: "fee-opening-transaction",
-                timestamp: DateTime.toDateUtc(DateTime.makeUnsafe("2025-04-01T10:00:00.000Z")),
-                principalId: TEST_PRINCIPAL_ID,
-              },
-              {
-                id: oldTransactionId,
-                sourceId: TEST_SOURCE_ID,
-                sourceRawRecordId: TEST_RAW_RECORD_ID,
-                externalId: "fee-old-parent",
-                timestamp: DateTime.toDateUtc(DateTime.makeUnsafe("2025-04-02T10:00:00.000Z")),
-                principalId: TEST_PRINCIPAL_ID,
-              },
-            ])
-            const [openingLeg] = yield* db
-              .insert(schema.transactionLegs)
-              .values({
-                sourceId: TEST_SOURCE_ID,
-                externalId: "fee-opening-leg",
-                timestamp: DateTime.toDateUtc(DateTime.makeUnsafe("2025-04-01T10:00:00.000Z")),
-                principalId: TEST_PRINCIPAL_ID,
-                assetId: TEST_BTC_ASSET_ID,
-                amount: "1.00000000",
-                kind: "acquisition",
-                provenance: "deterministic",
-                transactionId: openingTransactionId,
-              })
-              .returning({ id: schema.transactionLegs.id })
+            yield* db.insert(schema.transactions).values({
+              id: oldTransactionId,
+              sourceId: TEST_SOURCE_ID,
+              sourceRawRecordId: TEST_RAW_RECORD_ID,
+              externalId: "fee-old-parent",
+              timestamp: DateTime.toDateUtc(DateTime.makeUnsafe("2025-04-02T10:00:00.000Z")),
+              principalId: TEST_PRINCIPAL_ID,
+            })
             const [feeLeg] = yield* db
               .insert(schema.transactionLegs)
               .values({
@@ -3209,24 +3185,10 @@ describe("SourceNormalizationRepositoryLive", () => {
               })
               .returning({ id: schema.transactionLegs.id })
 
-            if (openingLeg === undefined || feeLeg === undefined) {
-              return yield* Effect.die("Failed to create replayed fee movement legs")
+            if (feeLeg === undefined) {
+              return yield* Effect.die("Failed to create replayed fee movement leg")
             }
 
-            const [lot] = yield* db
-              .insert(schema.fifoLots)
-              .values({
-                principalId: TEST_PRINCIPAL_ID,
-                sourceId: TEST_SOURCE_ID,
-                assetId: TEST_BTC_ASSET_ID,
-                acquiredAt: DateTime.toDateUtc(DateTime.makeUnsafe("2025-04-01T10:00:00.000Z")),
-                originalAmount: "1.00000000",
-                remainingAmount: "0.90000000",
-                costBasisPerToken: "10000.00",
-                costBasisCurrency: "EUR",
-                sourceLegId: openingLeg.id,
-              })
-              .returning({ id: schema.fifoLots.id })
             const [movement] = yield* db
               .insert(schema.inventoryMovements)
               .values({
@@ -3245,15 +3207,9 @@ describe("SourceNormalizationRepositoryLive", () => {
               })
               .returning({ id: schema.inventoryMovements.id })
 
-            if (lot === undefined || movement === undefined) {
-              return yield* Effect.die("Failed to create replayed fee movement allocation")
+            if (movement === undefined) {
+              return yield* Effect.die("Failed to create replayed fee movement")
             }
-
-            yield* db.insert(schema.inventoryMovementAllocations).values({
-              inventoryMovementId: movement.id,
-              fifoLotId: lot.id,
-              matchedAmount: "0.10000000",
-            })
           })
         )
       )

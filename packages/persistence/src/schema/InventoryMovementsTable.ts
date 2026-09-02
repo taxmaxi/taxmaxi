@@ -12,7 +12,6 @@ import {
 } from "drizzle-orm/pg-core"
 import { assets } from "./AssetsTable.ts"
 import { assetRepresentations } from "./AssetRepresentationsTable.ts"
-import { fifoLots } from "./FifoLotsTable.ts"
 import { principals } from "./PrincipalsTable.ts"
 import { providerTransfers } from "./ProviderTransfersTable.ts"
 import { sourceRecordsRaw } from "./SourceRecordsRawTable.ts"
@@ -105,32 +104,5 @@ export const inventoryMovements = pgTable(
   ]
 )
 
-/** FIFO quantity consumed by an outbound custody movement, without tax disposal semantics. */
-export const inventoryMovementAllocations = pgTable(
-  "inventory_movement_allocations",
-  {
-    id: uuid("id").primaryKey().defaultRandom(),
-    inventoryMovementId: uuid("inventory_movement_id")
-      .notNull()
-      .references(() => inventoryMovements.id, { onDelete: "cascade" }),
-    fifoLotId: uuid("fifo_lot_id")
-      .notNull()
-      .references(() => fifoLots.id, { onDelete: "cascade" }),
-    matchedAmount: numeric("matched_amount", { precision: 355, scale: 255 }).notNull(),
-    createdAt: timestamp("created_at").notNull().defaultNow(),
-  },
-  (table) => [
-    check("inventory_movement_allocations_amount_positive", sql`${table.matchedAmount} > 0`),
-    uniqueIndex("inventory_movement_allocations_lot_movement_unique_idx").on(
-      table.inventoryMovementId,
-      table.fifoLotId
-    ),
-    index("idx_inventory_movement_allocations_movement").on(table.inventoryMovementId),
-    index("idx_inventory_movement_allocations_fifo_lot").on(table.fifoLotId),
-  ]
-)
-
 export type InventoryMovement = typeof inventoryMovements.$inferSelect
 export type InventoryMovementInsert = typeof inventoryMovements.$inferInsert
-export type InventoryMovementAllocation = typeof inventoryMovementAllocations.$inferSelect
-export type InventoryMovementAllocationInsert = typeof inventoryMovementAllocations.$inferInsert

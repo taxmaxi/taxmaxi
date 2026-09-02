@@ -718,11 +718,6 @@ const fetchAccountingState = () =>
       .from(schema.transactionLegs)
       .where(eq(schema.transactionLegs.sourceId, sourceId))
 
-    const fifoLots = yield* db
-      .select({ assetId: schema.fifoLots.assetId, sourceId: schema.fifoLots.sourceId })
-      .from(schema.fifoLots)
-      .where(eq(schema.fifoLots.sourceId, sourceId))
-
     const rawRecords = yield* db
       .select({ externalRecordId: schema.sourceRecordsRaw.externalRecordId })
       .from(schema.sourceRecordsRaw)
@@ -747,7 +742,7 @@ const fetchAccountingState = () =>
         )
       )
 
-    return { legs, fifoLots, rawRecords, transactions }
+    return { legs, rawRecords, transactions }
   }).pipe(Effect.provide(TestPgClientLive))
 
 await Effect.runPromise(context.recreateTestDatabase())
@@ -847,8 +842,6 @@ describe("asset resolution attach and rebuild", () => {
         expect(accountingState.legs).toEqual([
           expect.objectContaining({ kind: "acquisition", derivationRule: "coinbase_buy" }),
         ])
-        expect(accountingState.fifoLots).toHaveLength(0)
-
         expect((yield* calculateTax().pipe(Effect.result))._tag).toBe("Failure")
       })
     )
@@ -1143,8 +1136,6 @@ describe("asset resolution attach and rebuild", () => {
           expect(accountingState.legs).toEqual([
             expect.objectContaining({ kind: "acquisition", derivationRule: "coinbase_buy" }),
           ])
-          expect(accountingState.fifoLots).toHaveLength(0)
-
           expect((yield* calculateTax().pipe(Effect.result))._tag).toBe("Failure")
         })
       )
@@ -1841,10 +1832,9 @@ describe("asset resolution attach and rebuild", () => {
         expect(replay.status).toBe("completed")
 
         // The excluded observation's raw transaction stays stored, but it
-        // produces no derived accounting.
+        // produces no factual accounting events.
         const accountingState = yield* fetchAccountingState()
         expect(accountingState.legs).toEqual([])
-        expect(accountingState.fifoLots).toHaveLength(0)
         expect(accountingState.rawRecords).toEqual([{ externalRecordId: "tx-orb-buy-1" }])
         expect(accountingState.transactions).toEqual([
           expect.objectContaining({
@@ -1973,7 +1963,6 @@ describe("asset resolution attach and rebuild", () => {
               derivationRule: "coinbase_buy",
             }),
           ])
-          expect(accountingState.fifoLots).toHaveLength(0)
           expect((yield* calculateTax().pipe(Effect.result))._tag).toBe("Failure")
         }).pipe(Effect.provide(TestLayer))
       )

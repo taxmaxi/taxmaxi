@@ -16,10 +16,8 @@ import * as cexAccount from "./CexAccountTable.ts"
 import * as calculationRunResults from "./CalculationRunResultsTables.ts"
 import * as calculationRuns from "./CalculationRunsTables.ts"
 import * as custodyUnits from "./CustodyUnitsTables.ts"
-import * as disposalMatches from "./DisposalMatchesTable.ts"
 import * as duneProtocolCandidateObservations from "./DuneProtocolCandidateObservationsTable.ts"
 import * as emailVerificationRequests from "./EmailVerificationRequestsTable.ts"
-import * as fifoLots from "./FifoLotsTable.ts"
 import * as identities from "./IdentitiesTable.ts"
 import * as inventoryMovements from "./InventoryMovementsTable.ts"
 import * as legalRules from "./LegalRulesTable.ts"
@@ -79,10 +77,8 @@ export const schema = {
   ...calculationRunResults,
   ...calculationRuns,
   ...custodyUnits,
-  ...disposalMatches,
   ...duneProtocolCandidateObservations,
   ...emailVerificationRequests,
-  ...fifoLots,
   ...identities,
   ...inventoryMovements,
   ...legalRules,
@@ -183,20 +179,13 @@ export type {
   CustodyUnitSource,
   CustodyUnitSourceInsert,
 } from "./CustodyUnitsTables.ts"
-export type { DisposalMatch, DisposalMatchInsert } from "./DisposalMatchesTable.ts"
 export type {
   DuneProtocolCandidateObservationInsert,
   DuneProtocolCandidateObservationRow,
 } from "./DuneProtocolCandidateObservationsTable.ts"
 export type { EmailVerificationRequest } from "./EmailVerificationRequestsTable.ts"
-export type { FifoLot, FifoLotInsert } from "./FifoLotsTable.ts"
 export type { IdentityRow } from "./IdentitiesTable.ts"
-export type {
-  InventoryMovement,
-  InventoryMovementAllocation,
-  InventoryMovementAllocationInsert,
-  InventoryMovementInsert,
-} from "./InventoryMovementsTable.ts"
+export type { InventoryMovement, InventoryMovementInsert } from "./InventoryMovementsTable.ts"
 export type {
   JurisdictionRuleSet,
   JurisdictionRuleSetInsert,
