@@ -112,11 +112,10 @@ export const transfers = pgTable(
       sql`${table.txHash} is null or (${table.blockchainId} is not null and ${table.addressId} is not null and ${table.fromAddress} is not null and ${table.toAddress} is not null)`
     ),
     foreignKey({
-      columns: [table.assetId, table.assetRepresentationId],
-      foreignColumns: [assetRepresentations.assetId, assetRepresentations.id],
-      name: "transfers_representation_matches_asset_fk",
+      columns: [table.assetRepresentationId],
+      foreignColumns: [assetRepresentations.id],
+      name: "transfers_asset_representation_fk",
     }),
-
     uniqueIndex("idx_transfers_source_external_unique")
       .on(table.sourceId, table.externalId)
       .where(sql`${table.externalId} is not null`),
