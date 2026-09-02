@@ -19,7 +19,9 @@ import * as ConfigProvider from "effect/ConfigProvider"
 import {
   CalculationRecomputeQueue,
   CalculationRecomputeQueueError,
+  SOURCE_SYNC_JOB_NAME,
   SOURCE_SYNC_QUEUE_NAME,
+  SourceProviderRegistry,
   SourceSyncJobRepository,
   SourceSyncQueue,
   SourceSyncQueueError,
@@ -27,8 +29,11 @@ import {
   TransferReconciliationService,
   type SourceSyncQueuePayload,
   type SourceSyncRunServiceShape,
+  type CalculationRecomputeQueueShape,
+  type SourceProviderModuleShape,
   type TransferReconciliationServiceShape,
 } from "@my/sync-engine/services"
+import { FetchProviderRawBatchResult, ProviderRawRecord } from "@my/sync-engine/shared"
 import * as Chunk from "effect/Chunk"
 import * as DateTime from "effect/DateTime"
 import * as Effect from "effect/Effect"
@@ -37,7 +42,12 @@ import * as Layer from "effect/Layer"
 import * as Option from "effect/Option"
 import * as EffectSchema from "effect/Schema"
 import { TestClock } from "effect/testing"
-import { SourceSyncServiceLive } from "@my/sync-engine/layers"
+import { SourceSyncJobExecutorLive, SourceSyncServiceLive } from "@my/sync-engine/layers"
+import {
+  makeWorkerBullMqSourceSyncConsumerLive,
+  type WorkerBullMqSourceSyncProcessor,
+} from "../../../apps/worker/src/layers/WorkerBullMqSourceSyncConsumerLive.ts"
+import { WorkerSourceSyncStartupRepair } from "../../../apps/worker/src/layers/WorkerSourceSyncStartupRepairLive.ts"
 import {
   CalculationRunRepositoryLive,
   CalculationRunServiceLive,
@@ -1819,6 +1829,285 @@ const seedDailyQuoteMonetaryRows = ({
     return dispositionEventId
   })
 
+interface EndToEndProviderEvent {
+  readonly externalRecordId: string
+  readonly transactionType: "buy_fiat" | "sell_fiat" | "gas_fee"
+  readonly inventoryEffect: "acquisition" | "disposal"
+  readonly legKind: "acquisition" | "disposal" | "fee"
+  readonly amount: string
+  readonly occurredAt: Date
+}
+
+const makeEndToEndProviderEvents = (taxYear: number): ReadonlyArray<EndToEndProviderEvent> => [
+  {
+    externalRecordId: "end-to-end-acquisition",
+    transactionType: "buy_fiat",
+    inventoryEffect: "acquisition",
+    legKind: "acquisition",
+    amount: "1",
+    occurredAt: DateTime.toDateUtc(DateTime.makeUnsafe(`${taxYear}-01-10T10:00:00.000Z`)),
+  },
+  {
+    externalRecordId: "end-to-end-disposition",
+    transactionType: "sell_fiat",
+    inventoryEffect: "disposal",
+    legKind: "disposal",
+    amount: "0.4",
+    occurredAt: DateTime.toDateUtc(DateTime.makeUnsafe(`${taxYear}-02-10T10:00:00.000Z`)),
+  },
+  {
+    externalRecordId: "end-to-end-fee",
+    transactionType: "gas_fee",
+    inventoryEffect: "disposal",
+    legKind: "fee",
+    amount: "0.1",
+    occurredAt: DateTime.toDateUtc(DateTime.makeUnsafe(`${taxYear}-02-11T10:00:00.000Z`)),
+  },
+]
+
+const seedEndToEndDailyQuotes = (taxYear: number) =>
+  Effect.gen(function* () {
+    const db = yield* drizzle
+
+    yield* db.insert(schema.assetPrices).values([
+      {
+        assetId: TEST_BTC_ASSET_ID,
+        timestamp: DateTime.toDateUtc(DateTime.makeUnsafe(`${taxYear}-01-10T00:00:00.000Z`)),
+        price: "100",
+        currency: "EUR",
+        source: "coingecko",
+      },
+      {
+        assetId: TEST_BTC_ASSET_ID,
+        timestamp: DateTime.toDateUtc(DateTime.makeUnsafe(`${taxYear}-02-10T00:00:00.000Z`)),
+        price: "200",
+        currency: "EUR",
+        source: "coingecko",
+      },
+      {
+        assetId: TEST_BTC_ASSET_ID,
+        timestamp: DateTime.toDateUtc(DateTime.makeUnsafe(`${taxYear}-02-11T00:00:00.000Z`)),
+        price: "200",
+        currency: "EUR",
+        source: "coingecko",
+      },
+    ])
+  })
+
+const makeEndToEndProviderRegistryLive = (taxYear: number) => {
+  const events = makeEndToEndProviderEvents(taxYear)
+  const providerModule: SourceProviderModuleShape = {
+    fetchRawBatch: () =>
+      Effect.succeed(
+        FetchProviderRawBatchResult.make({
+          records: events.map((event) =>
+            ProviderRawRecord.make({
+              recordType: "end_to_end_transaction",
+              providerKey: "coinbase",
+              externalRecordId: event.externalRecordId,
+              externalAccountId: "end-to-end-account",
+              externalParentId: null,
+              occurredAt: event.occurredAt,
+              payload: { externalRecordId: event.externalRecordId },
+            })
+          ),
+          cursorPayload: null,
+          highWatermark: null,
+          done: true,
+        })
+      ),
+    refreshReferenceData: Effect.succeed({
+      transactionTypeCatalogCount: 0,
+      providerAssetCatalogCount: 0,
+      defaultTransactionMappingCount: 0,
+      defaultProviderAssetMappingCount: 0,
+    }),
+    refreshDefaultMappings: Effect.succeed({
+      defaultTransactionMappingCount: 0,
+      defaultProviderAssetMappingCount: 0,
+    }),
+    makeRawRecordNormalizer: Effect.succeed(({ source, sourceRecord }) => {
+      const event = events.find(
+        ({ externalRecordId }) => externalRecordId === sourceRecord.externalRecordId
+      )
+      if (event === undefined) {
+        return Effect.succeed({ kind: "skipped" } as const)
+      }
+
+      return Effect.succeed({
+        kind: "prepared",
+        providerAssetRowIds: [],
+        transaction: {
+          sourceId: source.id,
+          sourceRawRecordId: sourceRecord.id,
+          externalId: event.externalRecordId,
+          externalGroupId: null,
+          timestamp: event.occurredAt,
+          transactionType: event.transactionType,
+          providerTransactionType: event.transactionType,
+          providerStatus: "completed",
+          providerResourcePath: null,
+          providerDescription: null,
+          providerCreatedAt: event.occurredAt,
+          providerUpdatedAt: event.occurredAt,
+          metadata: null,
+          providerFiatAmount: null,
+          providerFiatCurrency: null,
+          principalId: source.principalId,
+        },
+        venueContext: {
+          venueType: "cex",
+          cexAccountId: source.cexAccountId,
+          externalAccountId: "end-to-end-account",
+          externalOrderId: null,
+          externalFillId: null,
+          side: null,
+          instrument: null,
+          fillPrice: null,
+          commissionAmount: null,
+          commissionCurrency: null,
+          metadata: null,
+        },
+        providerTransfers: [],
+        canonicalTransfers: [],
+        transactionReview: null,
+        resolvedTransactionType: {
+          providerTransactionType: event.transactionType,
+          transactionType: event.transactionType,
+          inventoryEffect: event.inventoryEffect,
+          taxTreatment: "requires_additional_rule_logic",
+          resolutionStrategy: "static",
+          pairedRecordRequired: false,
+          mappingStatus: "approved",
+        },
+        deriveLegs: ({ transaction }) =>
+          Effect.succeed([
+            {
+              sourceId: source.id,
+              sourceRawRecordId: sourceRecord.id,
+              externalId: `${event.externalRecordId}-leg`,
+              txHash: null,
+              timestamp: event.occurredAt,
+              principalId: source.principalId,
+              addressId: null,
+              assetId: TEST_BTC_ASSET_ID,
+              assetRepresentationId: null,
+              amount: event.amount,
+              kind: event.legKind,
+              provenance: "deterministic",
+              derivationRule: "end_to_end_fixture",
+              metadata: null,
+              transactionId: transaction.id,
+              sourceTransferId: null,
+              fiatAmount: null,
+              fiatCurrency: null,
+              feeForTransactionId: null,
+            },
+          ]),
+      } as const)
+    }),
+  }
+
+  return Layer.succeed(SourceProviderRegistry, {
+    resolveProviderModule: () => Effect.succeed(providerModule),
+  })
+}
+
+const SourceSyncExecutorTransferReconciliationTestLive = Layer.succeed(
+  TransferReconciliationService,
+  {
+    reconcileTransferCandidates: () =>
+      Effect.succeed({ evaluatedProviderTransfers: 0, pending: 0, needsReview: 0, autoApplied: 0 }),
+    rollbackReconciliationsForSourceReplay: () => Effect.void,
+    applyDeterministicInternalTransferCanonicalization: () =>
+      Effect.succeed({ canonicalizedPairs: 0 }),
+  } satisfies TransferReconciliationServiceShape
+)
+
+const WorkerSourceSyncStartupRepairTestLive = Layer.succeed(WorkerSourceSyncStartupRepair, {
+  repair: Effect.succeed({
+    scannedJobs: 0,
+    requeuedPending: 0,
+    failedProcessing: 0,
+    skippedJobs: 0,
+    erroredJobs: 0,
+    stoppedAfterErrors: false,
+  }),
+  dispatchPending: Effect.succeed({
+    scannedJobs: 0,
+    requeuedPending: 0,
+    failedProcessing: 0,
+    skippedJobs: 0,
+    erroredJobs: 0,
+    stoppedAfterErrors: false,
+  }),
+  dispatchFollowUp: () => Effect.void,
+})
+
+const EndToEndWorkerConfigProvider = ConfigProvider.fromEnvRecord({
+  QUEUE_REDIS_URL: "redis://localhost:6379",
+  SOURCE_SYNC_QUEUE_PREFIX: "end-to-end",
+  SOURCE_SYNC_PENDING_DISPATCH_INTERVAL_MS: "60000",
+  SYNC_WORKER_CONCURRENCY: "1",
+  SYNC_WORKER_LOCK_DURATION_MS: "30000",
+  SOURCE_SYNC_HEARTBEAT_INTERVAL_MS: "60000",
+  WORKER_ID: "end-to-end-worker",
+})
+
+const runEndToEndSourceSync = ({
+  calculationQueue,
+  payload,
+  taxYear,
+}: {
+  readonly calculationQueue: CalculationRecomputeQueueShape
+  readonly payload: SourceSyncQueuePayload
+  readonly taxYear: number
+}) => {
+  let processor: WorkerBullMqSourceSyncProcessor | null = null
+  const executorLayer = SourceSyncJobExecutorLive.pipe(
+    Layer.provide(makeEndToEndProviderRegistryLive(taxYear)),
+    Layer.provide(SourceSyncExecutorTransferReconciliationTestLive),
+    Layer.provide(RepositoriesLive),
+    Layer.provide(TestPgClientLive),
+    Layer.provide(ConfigProvider.layer(EndToEndWorkerConfigProvider))
+  )
+  const workerLayer = makeWorkerBullMqSourceSyncConsumerLive({
+    acquireWorker: (_config, acquiredProcessor) =>
+      Effect.sync(() => {
+        processor = acquiredProcessor
+        return { close: Effect.void }
+      }),
+  }).pipe(
+    Layer.provideMerge(
+      Layer.mergeAll(
+        executorLayer,
+        WorkerSourceSyncStartupRepairTestLive,
+        Layer.succeed(CalculationRecomputeQueue, calculationQueue)
+      )
+    ),
+    Layer.provide(ConfigProvider.layer(EndToEndWorkerConfigProvider))
+  )
+
+  return Effect.scoped(
+    Effect.gen(function* () {
+      if (processor === null) {
+        return yield* Effect.die("Source sync worker processor was not acquired")
+      }
+      const acquiredProcessor = processor
+
+      return yield* Effect.promise(() =>
+        acquiredProcessor({
+          id: payload.jobId,
+          name: SOURCE_SYNC_JOB_NAME,
+          data: payload,
+          attemptsMade: 0,
+          opts: { attempts: 1, backoff: 1 },
+        })
+      )
+    }).pipe(Effect.provide(workerLayer))
+  )
+}
+
 await Effect.runPromise(context.recreateTestDatabase())
 
 describe("SourcesApiLive", () => {
@@ -1873,6 +2162,113 @@ describe("SourcesApiLive", () => {
       expect(tax).toMatchObject({ taxableGains: 40, taxableLosses: 0, incomeTotal: 0 })
       expect(taxEvents.taxEvents.find(({ legId }) => legId === dispositionEventId)).toMatchObject({
         legId: dispositionEventId,
+        costBasis: "40",
+        proceeds: "80",
+        gainLoss: "40",
+        treatmentCodes: ["de.taxable_private_disposal"],
+      })
+    }).pipe(Effect.provide(TaxCalculationHttpLive), Effect.scoped)
+  )
+
+  it.effect("serves one completed source sync through its partial calculation run", () =>
+    Effect.gen(function* () {
+      const fixture = yield* seedSyncEngineRepositoryFixture({
+        userId: nextTestUuid(),
+        principalId: nextTestUuid(),
+        sourceId: nextTestUuid(),
+      })
+      yield* seedSyncEngineAssets({
+        baseBlockchainId: fixture.baseBlockchainId,
+        bitcoinBlockchainId: fixture.bitcoinBlockchainId,
+      })
+
+      const taxYear = yield* DateTime.now.pipe(
+        Effect.map(DateTime.setZoneNamedUnsafe("Europe/Berlin")),
+        Effect.map(DateTime.toParts),
+        Effect.map(({ year }) => year)
+      )
+      yield* seedEndToEndDailyQuotes(taxYear)
+
+      const db = yield* drizzle
+      yield* db
+        .update(schema.assets)
+        .set({ coingeckoCoinId: null })
+        .where(eq(schema.assets.id, TEST_BTC_ASSET_ID))
+
+      const client = yield* makeAuthenticatedClient({ userId: fixture.userId })
+      const sync = yield* client.sources.startSourceSyncJob({
+        params: { sourceId: fixture.sourceId },
+      })
+      const calculationRunId = CalculationRunId.make(nextTestUuid())
+      const calculationQueue = CalculationRecomputeQueue.of({
+        enqueuePrincipalRecompute: (principalId) =>
+          Effect.gen(function* () {
+            calculationQueueEvents.push(principalId)
+            yield* Effect.flatMap(CalculationRunService, (service) =>
+              service.recompute({
+                id: calculationRunId,
+                principalId: PrincipalId.make(principalId),
+                jurisdiction: JurisdictionCode.make("DE"),
+                taxYear: TaxYear.make(taxYear),
+                reportingCurrency: EUR,
+                accountingChoices: [],
+              })
+            ).pipe(Effect.provide(CalculationRunServiceTestLive))
+          }).pipe(
+            Effect.mapError(
+              (cause) =>
+                new CalculationRecomputeQueueError({
+                  operation: "endToEndCalculationQueue.recompute",
+                  cause,
+                })
+            )
+          ),
+      })
+      const payload = queueEvents[0]
+      if (payload === undefined) {
+        return yield* Effect.die("Source sync was not queued")
+      }
+      const sourceResult = yield* runEndToEndSourceSync({
+        calculationQueue,
+        payload,
+        taxYear,
+      })
+
+      const [dispositionEvent] = yield* db
+        .select({ id: schema.transactionLegs.id })
+        .from(schema.transactionLegs)
+        .where(eq(schema.transactionLegs.externalId, "end-to-end-disposition-leg"))
+        .limit(1)
+      if (dispositionEvent === undefined) {
+        return yield* Effect.die("Source sync did not persist the disposition event")
+      }
+
+      const syncStatus = yield* client.sources.getSourceSyncJobStatus({
+        params: { sourceId: fixture.sourceId, jobId: sync.jobId },
+      })
+      const portfolioResponse = yield* HttpClientRequest.get("/v1/portfolio/assets").pipe(
+        HttpClientRequest.bearerToken(`user_${fixture.userId}_admin`),
+        HttpClient.execute
+      )
+      const portfolio = yield* portfolioResponse.json
+      const report = yield* client.sources.listSourceTaxEvents({
+        params: { sourceId: fixture.sourceId },
+        query: { limit: 10 },
+      })
+
+      expect(syncStatus.status).toBe("completed")
+      expect(sourceResult.status).toBe("completed")
+      expect(calculationQueueEvents).toEqual([fixture.principalId])
+      expect(portfolio).toMatchObject({
+        activeRun: {
+          runId: calculationRunId,
+          status: "partial",
+          blockerCounts: [{ code: "de.fee_allocation_required", count: 1 }],
+        },
+        assets: [{ assetId: TEST_BTC_ASSET_ID, amount: "0.5" }],
+      })
+      expect(report.calculationRunId).toBe(calculationRunId)
+      expect(report.taxEvents.find(({ legId }) => legId === dispositionEvent.id)).toMatchObject({
         costBasis: "40",
         proceeds: "80",
         gainLoss: "40",

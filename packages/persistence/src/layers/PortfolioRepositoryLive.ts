@@ -4,7 +4,7 @@
  * @module PortfolioRepositoryLive
  */
 
-import { and, asc, eq, gt } from "drizzle-orm"
+import { and, asc, count, eq, gt } from "drizzle-orm"
 import * as BigDecimal from "effect/BigDecimal"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
@@ -180,9 +180,21 @@ const make = Effect.gen(function* () {
         })
       }
 
+      const blockerCounts = yield* db
+        .select({
+          code: schema.calculationRunBlockers.code,
+          count: count(schema.calculationRunBlockers.code),
+        })
+        .from(schema.calculationRunBlockers)
+        .where(eq(schema.calculationRunBlockers.runId, activeRunRow.runId))
+        .groupBy(schema.calculationRunBlockers.code)
+        .orderBy(asc(schema.calculationRunBlockers.code))
+        .pipe(wrapSqlError("portfolioRepository.getActiveRunPortfolio.blockerCounts"))
+
       const activeRun = {
         runId: CalculationRunId.make(activeRunRow.runId),
         status: activeRunRow.status,
+        blockerCounts,
       } as const
 
       let custodyUnitId: string | null = null
