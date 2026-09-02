@@ -122,9 +122,9 @@ export const transactionLegs = pgTable(
   },
   (table) => [
     foreignKey({
-      columns: [table.assetId, table.assetRepresentationId],
-      foreignColumns: [assetRepresentations.assetId, assetRepresentations.id],
-      name: "transaction_legs_representation_matches_asset_fk",
+      columns: [table.assetRepresentationId],
+      foreignColumns: [assetRepresentations.id],
+      name: "transaction_legs_asset_representation_fk",
     }),
     check(
       "transaction_legs_identifier_present",
