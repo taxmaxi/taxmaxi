@@ -40,6 +40,10 @@ import {
   wrapSyncEngineSqlError,
   wrapSyncEngineStorageError,
 } from "./SyncEngineRepositorySupport.ts"
+import {
+  makePrincipalAssetOverrideDecisionLoader,
+  resolvePrincipalAssetId,
+} from "./PrincipalAssetOverrideDecisionLoader.ts"
 
 interface PersistedSourceLegRecord {
   readonly id: string
@@ -171,6 +175,7 @@ const compareDecimalStrings = ({
 
 const make = Effect.gen(function* () {
   const db = yield* drizzle
+  const principalAssetOverrideDecisionLoader = yield* makePrincipalAssetOverrideDecisionLoader
 
   type SourceNormalizationExecutor = Pick<typeof db, "delete" | "insert" | "select" | "update">
 
@@ -1661,6 +1666,26 @@ const make = Effect.gen(function* () {
             yield* params.beforePersist
           }
 
+          const decisions = yield* principalAssetOverrideDecisionLoader.load({
+            principalId: params.transaction.principalId,
+            assetRepresentationIds: [
+              ...params.canonicalTransfers,
+              ...("legs" in params ? params.legs : []),
+            ].flatMap(({ assetRepresentationId }) =>
+              assetRepresentationId === null || assetRepresentationId === undefined
+                ? []
+                : [assetRepresentationId]
+            ),
+          })
+          const canonicalTransfers = params.canonicalTransfers.map((transfer) => ({
+            ...transfer,
+            assetId: resolvePrincipalAssetId({
+              decisions,
+              systemAssetId: transfer.assetId,
+              assetRepresentationId: transfer.assetRepresentationId,
+            }),
+          }))
+
           const persistedTransaction = yield* upsertTransaction({
             executor: tx,
             transaction: params.transaction,
@@ -1704,7 +1729,7 @@ const make = Effect.gen(function* () {
           })
           const persistedCanonicalTransfers = yield* upsertCanonicalTransfers({
             executor: tx,
-            canonicalTransfers: params.canonicalTransfers,
+            canonicalTransfers,
           })
           const derivedLegs =
             "deriveLegs" in params
@@ -1715,9 +1740,50 @@ const make = Effect.gen(function* () {
                   canonicalTransfers: persistedCanonicalTransfers,
                 })
               : params.legs
+          const missingDerivedRepresentationIds = [
+            ...new Set(
+              derivedLegs.flatMap(({ assetRepresentationId }) =>
+                assetRepresentationId === null ||
+                assetRepresentationId === undefined ||
+                decisions.assetIdByRepresentationId.has(assetRepresentationId)
+                  ? []
+                  : [assetRepresentationId]
+              )
+            ),
+          ]
+          const additionalCatalogPairs =
+            missingDerivedRepresentationIds.length === 0
+              ? []
+              : yield* tx
+                  .select({
+                    id: schema.assetRepresentations.id,
+                    assetId: schema.assetRepresentations.assetId,
+                  })
+                  .from(schema.assetRepresentations)
+                  .where(inArray(schema.assetRepresentations.id, missingDerivedRepresentationIds))
+                  .pipe(
+                    wrapSyncEngineSqlError(
+                      "sourceNormalizationRepository.persistNormalizedArtifacts.loadDerivedLegRepresentations"
+                    )
+                  )
+          const completeDecisions = {
+            ...decisions,
+            assetIdByRepresentationId: new Map([
+              ...decisions.assetIdByRepresentationId,
+              ...additionalCatalogPairs.map(({ id, assetId }) => [id, assetId] as const),
+            ]),
+          }
+          const effectiveLegs = derivedLegs.map((leg) => ({
+            ...leg,
+            assetId: resolvePrincipalAssetId({
+              decisions: completeDecisions,
+              systemAssetId: leg.assetId,
+              assetRepresentationId: leg.assetRepresentationId,
+            }),
+          }))
           const persistedLegs = yield* upsertTransactionLegs({
             executor: tx,
-            legs: derivedLegs,
+            legs: effectiveLegs,
           })
 
           const hasCompletedStatus = hasCompletedProviderStatus(params.transaction.providerStatus)

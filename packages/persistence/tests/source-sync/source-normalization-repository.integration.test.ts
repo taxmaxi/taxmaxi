@@ -165,6 +165,9 @@ const APPROVED_MAPPING = {
   mappingStatus: "approved",
 } as const
 
+const OVERRIDE_ASSET_ID = "00000000-0000-4000-8000-000000000482"
+const SECOND_OVERRIDE_SOURCE_ID = "00000000-0000-4000-8000-000000000282"
+
 const seedRawRecord = ({
   rawRecordId,
   externalRecordId,
@@ -474,6 +477,317 @@ describe("SourceNormalizationRepositoryLive", () => {
       const recreated = yield* Effect.promise(() => persist("corrected-stable-external-id"))
 
       expect(recreated.transaction.id).toBe(first.transaction.id)
+    })
+  )
+
+  it.effect("applies one exact identity override to replayed and future accounting facts", () =>
+    Effect.gen(function* () {
+      const occurredAt = DateTime.toDateUtc(DateTime.makeUnsafe("2025-02-01T10:00:00.000Z"))
+      const secondCexAccountId = yield* Effect.promise(() =>
+        runPg(
+          Effect.gen(function* () {
+            const db = yield* drizzle
+            yield* db.insert(schema.assets).values({
+              id: OVERRIDE_ASSET_ID,
+              name: "Principal-selected asset",
+              symbol: "SELECTED",
+              type: "fungible",
+            })
+            const [firstAccount] = yield* db
+              .select({ cexId: schema.cexAccount.cexId })
+              .from(schema.cexAccount)
+              .where(eq(schema.cexAccount.id, fixture.cexAccountId))
+            if (firstAccount === undefined) return yield* Effect.die("Missing first CEX account")
+            const [secondAccount] = yield* db
+              .insert(schema.cexAccount)
+              .values({
+                cexId: firstAccount.cexId,
+                principalId: TEST_PRINCIPAL_ID,
+                providerUserId: "second-provider-user",
+                providerAccountId: "second-provider-account",
+              })
+              .returning({ id: schema.cexAccount.id })
+            if (secondAccount === undefined) {
+              return yield* Effect.die("Failed to create second provider account")
+            }
+            yield* db.insert(schema.sources).values({
+              id: SECOND_OVERRIDE_SOURCE_ID,
+              principalId: TEST_PRINCIPAL_ID,
+              name: "Second exact representation provider",
+              providerKey: "second-exact-provider",
+              sourceableType: "cex",
+              cexAccountId: secondAccount.id,
+            })
+            return secondAccount.id
+          })
+        )
+      )
+      const persist = (
+        externalId: string,
+        {
+          sourceId = TEST_SOURCE_ID,
+          cexAccountId = fixture.cexAccountId,
+          includeCanonicalTransfer = true,
+          inputAssetId = TEST_BTC_ASSET_ID,
+        }: {
+          readonly sourceId?: string
+          readonly cexAccountId?: string
+          readonly includeCanonicalTransfer?: boolean
+          readonly inputAssetId?: string
+        } = {}
+      ) =>
+        runRepository(
+          Effect.flatMap(SourceNormalizationRepository, (repository) =>
+            repository.persistNormalizedArtifacts({
+              transaction: {
+                sourceId,
+                sourceRawRecordId: null,
+                externalId: `${externalId}-transaction`,
+                externalGroupId: externalId,
+                timestamp: occurredAt,
+                transactionType: "buy_fiat",
+                providerTransactionType: "buy",
+                providerStatus: "completed",
+                providerResourcePath: `/test/${externalId}`,
+                providerDescription: "Exact representation override fixture",
+                providerCreatedAt: occurredAt,
+                providerUpdatedAt: occurredAt,
+                metadata: { evidence: externalId },
+                providerFiatAmount: null,
+                providerFiatCurrency: null,
+                principalId: TEST_PRINCIPAL_ID,
+              },
+              venueContext: {
+                venueType: "cex",
+                cexAccountId,
+                externalAccountId: "coinbase-account-1",
+                externalOrderId: null,
+                externalFillId: null,
+                side: "buy",
+                instrument: "BTC-EUR",
+                fillPrice: "10000",
+                commissionAmount: null,
+                commissionCurrency: null,
+                metadata: { evidence: externalId },
+              },
+              providerTransfers: [
+                {
+                  sourceId,
+                  sourceRawRecordId: null,
+                  externalId: `${externalId}-evidence`,
+                  externalGroupId: externalId,
+                  providerAssetId: null,
+                  timestamp: occurredAt,
+                  direction: "inbound",
+                  processingMode: "evidence_only",
+                  fromAccountRef: "external",
+                  toAccountRef: "owned",
+                  fromAddress: null,
+                  toAddress: null,
+                  networkName: "bitcoin",
+                  networkHash: `${externalId}-hash`,
+                  observedBlockchainId: fixture.bitcoinBlockchainId,
+                  observedRepresentationType: "token",
+                  observedContractAddress: "sync-engine-btc-fixture",
+                  observedMintAddress: null,
+                  observedDecimals: 8,
+                  amount: "1",
+                  metadata: { evidence: externalId },
+                },
+              ],
+              canonicalTransfers: includeCanonicalTransfer
+                ? [
+                    {
+                      sourceId,
+                      principalId: TEST_PRINCIPAL_ID,
+                      sourceRawRecordId: null,
+                      externalId: `${externalId}-transfer`,
+                      externalGroupId: externalId,
+                      addressId: null,
+                      blockchainId: fixture.bitcoinBlockchainId,
+                      txHash: null,
+                      timestamp: occurredAt,
+                      type: "cex",
+                      fromAddress: null,
+                      toAddress: null,
+                      fromAccountRef: "external",
+                      toAccountRef: "owned",
+                      fromPartyType: null,
+                      fromPartyResourcePath: null,
+                      toPartyType: null,
+                      toPartyResourcePath: null,
+                      assetId: inputAssetId,
+                      assetRepresentationId: TEST_BTC_REPRESENTATION_ID,
+                      amount: "1",
+                      tokenId: null,
+                      notes: null,
+                      metadata: { evidence: externalId },
+                    },
+                  ]
+                : [],
+              providerAssetRowIds: [],
+              legs: [
+                {
+                  sourceId,
+                  sourceRawRecordId: null,
+                  externalId: `${externalId}-leg`,
+                  txHash: null,
+                  timestamp: occurredAt,
+                  principalId: TEST_PRINCIPAL_ID,
+                  addressId: null,
+                  assetId: inputAssetId,
+                  assetRepresentationId: TEST_BTC_REPRESENTATION_ID,
+                  amount: "1",
+                  kind: "acquisition",
+                  provenance: "deterministic",
+                  derivationRule: "exact_override_fixture",
+                  metadata: { evidence: externalId },
+                  transactionId: null,
+                  sourceTransferId: null,
+                  fiatAmount: null,
+                  fiatCurrency: null,
+                  feeForTransactionId: null,
+                },
+              ],
+              transactionReview: null,
+              resolvedTransactionType: APPROVED_MAPPING,
+            })
+          )
+        )
+
+      const catalogCorrected = yield* Effect.promise(() =>
+        persist("catalog-leg-only", {
+          includeCanonicalTransfer: false,
+          inputAssetId: OVERRIDE_ASSET_ID,
+        })
+      )
+      expect(catalogCorrected.legs[0]?.assetId).toBe(TEST_BTC_ASSET_ID)
+
+      const beforeOverride = yield* Effect.promise(() => persist("historical-exact"))
+      expect(beforeOverride.canonicalTransfers[0]).toMatchObject({
+        assetId: TEST_BTC_ASSET_ID,
+        assetRepresentationId: TEST_BTC_REPRESENTATION_ID,
+      })
+
+      const activeOverride = yield* Effect.promise(() =>
+        runPg(
+          Effect.gen(function* () {
+            const db = yield* drizzle
+            const [target] = yield* db
+              .insert(schema.principalAssetOverrideTargets)
+              .values({
+                principalId: TEST_PRINCIPAL_ID,
+                targetKind: "representation",
+                blockchainId: fixture.bitcoinBlockchainId,
+                representationType: "token",
+                contractAddress: "sync-engine-btc-fixture",
+              })
+              .returning({ id: schema.principalAssetOverrideTargets.id })
+            if (target === undefined) return yield* Effect.die("Failed to create override target")
+
+            const [override] = yield* db
+              .insert(schema.principalAssetOverrides)
+              .values({
+                principalId: TEST_PRINCIPAL_ID,
+                targetId: target.id,
+                kind: "identity",
+                operation: "create",
+                inspectedSystemRevision: "exact-override-system-v1",
+                inspectedSystemIdentity: "resolved",
+                inspectedSystemAssetId: TEST_BTC_ASSET_ID,
+                replacementAssetId: OVERRIDE_ASSET_ID,
+                actorUserId: fixture.userId,
+                reason: "Use the selected economic asset in this principal's facts",
+              })
+              .returning({ id: schema.principalAssetOverrides.id })
+            if (override === undefined) return yield* Effect.die("Failed to create override")
+            return { targetId: target.id, overrideId: override.id }
+          })
+        )
+      )
+
+      const replayed = yield* Effect.promise(() => persist("historical-exact"))
+      const future = yield* Effect.promise(() => persist("future-exact"))
+      const secondProvider = yield* Effect.promise(() =>
+        persist("second-provider-exact", {
+          sourceId: SECOND_OVERRIDE_SOURCE_ID,
+          cexAccountId: secondCexAccountId,
+        })
+      )
+
+      for (const result of [replayed, future, secondProvider]) {
+        expect(result.canonicalTransfers[0]).toMatchObject({
+          assetId: OVERRIDE_ASSET_ID,
+          assetRepresentationId: TEST_BTC_REPRESENTATION_ID,
+        })
+        expect(result.legs[0]).toMatchObject({
+          assetId: OVERRIDE_ASSET_ID,
+          assetRepresentationId: TEST_BTC_REPRESENTATION_ID,
+          derivationRule: "exact_override_fixture",
+        })
+        expect(result.providerTransfers[0]).toMatchObject({
+          processingMode: "evidence_only",
+          observedBlockchainId: fixture.bitcoinBlockchainId,
+          observedContractAddress: "sync-engine-btc-fixture",
+        })
+      }
+
+      yield* Effect.promise(() =>
+        runPg(
+          Effect.gen(function* () {
+            const db = yield* drizzle
+            yield* db.insert(schema.principalAssetOverrides).values({
+              principalId: TEST_PRINCIPAL_ID,
+              targetId: activeOverride.targetId,
+              kind: "identity",
+              operation: "withdraw",
+              inspectedSystemRevision: "exact-override-system-v1",
+              inspectedSystemIdentity: "resolved",
+              inspectedSystemAssetId: TEST_BTC_ASSET_ID,
+              actorUserId: fixture.userId,
+              reason: "Return to the system economic identity",
+              supersedesOverrideId: activeOverride.overrideId,
+            })
+          })
+        )
+      )
+      const afterWithdrawal = yield* Effect.promise(() => persist("withdrawn-exact"))
+      expect(afterWithdrawal.canonicalTransfers[0]).toMatchObject({
+        assetId: TEST_BTC_ASSET_ID,
+        assetRepresentationId: TEST_BTC_REPRESENTATION_ID,
+      })
+      expect(afterWithdrawal.legs[0]?.assetId).toBe(TEST_BTC_ASSET_ID)
+
+      const transactions = yield* Effect.promise(() =>
+        runPg(
+          Effect.gen(function* () {
+            const db = yield* drizzle
+            return yield* db
+              .select({
+                transactionType: schema.transactions.transactionType,
+                metadata: schema.transactions.metadata,
+              })
+              .from(schema.transactions)
+              .where(eq(schema.transactions.principalId, TEST_PRINCIPAL_ID))
+          })
+        )
+      )
+      expect(transactions).toEqual(
+        expect.arrayContaining([
+          {
+            transactionType: "buy_fiat",
+            metadata: { evidence: "historical-exact" },
+          },
+          {
+            transactionType: "buy_fiat",
+            metadata: { evidence: "future-exact" },
+          },
+          {
+            transactionType: "buy_fiat",
+            metadata: { evidence: "second-provider-exact" },
+          },
+        ])
+      )
     })
   )
 

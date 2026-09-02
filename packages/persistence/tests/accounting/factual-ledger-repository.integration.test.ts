@@ -11,6 +11,8 @@ import { schema } from "../../src/schema/index.ts"
 import { FactualLedgerRepository } from "../../src/services/FactualLedgerRepository.ts"
 import {
   TEST_BTC_ASSET_ID,
+  TEST_BTC_REPRESENTATION_ID,
+  TEST_USER_ID,
   makeIntegrationTestDatabaseContext,
   seedSyncEngineAssets,
   seedSyncEngineRepositoryFixture,
@@ -22,6 +24,7 @@ const TEST_PRINCIPAL_ID = PrincipalId.make("00000000-0000-4000-8000-000000000183
 const OTHER_USER_ID = "00000000-0000-4000-8000-000000000184"
 const OTHER_PRINCIPAL_ID = PrincipalId.make("00000000-0000-4000-8000-000000000185")
 const OTHER_SOURCE_ID = "00000000-0000-4000-8000-000000000283"
+const OVERRIDE_ASSET_ID = "00000000-0000-4000-8000-000000000482"
 
 const context = makeIntegrationTestDatabaseContext({
   databaseNamePrefix: "taxmaxi_factual_ledger_repo",
@@ -388,6 +391,216 @@ describe("FactualLedgerRepositoryLive", () => {
         )
       ).toBe(true)
       expect(result.valuationFacts).toEqual([])
+    })
+  )
+
+  it.effect("applies exact identity overrides at read time without crossing principals", () =>
+    Effect.gen(function* () {
+      const occurredAt = DateTime.toDateUtc(DateTime.makeUnsafe("2025-02-04T10:00:00.000Z"))
+
+      const activeOverride = yield* Effect.promise(() =>
+        runPg(
+          Effect.gen(function* () {
+            const db = yield* drizzle
+            yield* seedCexSource({
+              sourceId: TEST_DESTINATION_SOURCE_ID,
+              fixtureName: "second-provider-source",
+            })
+            yield* db
+              .update(schema.sources)
+              .set({ providerKey: "second-exact-provider" })
+              .where(eq(schema.sources.id, TEST_DESTINATION_SOURCE_ID))
+            yield* seedSyncEngineRepositoryFixture({
+              userId: OTHER_USER_ID,
+              principalId: OTHER_PRINCIPAL_ID,
+              sourceId: OTHER_SOURCE_ID,
+            })
+            yield* db.insert(schema.assets).values({
+              id: OVERRIDE_ASSET_ID,
+              name: "Principal-selected asset",
+              symbol: "SELECTED",
+              type: "fungible",
+            })
+
+            const [representation] = yield* db
+              .select({
+                blockchainId: schema.assetRepresentations.blockchainId,
+                type: schema.assetRepresentations.type,
+                contractAddress: schema.assetRepresentations.contractAddress,
+                mintAddress: schema.assetRepresentations.mintAddress,
+              })
+              .from(schema.assetRepresentations)
+              .where(eq(schema.assetRepresentations.id, TEST_BTC_REPRESENTATION_ID))
+            if (representation === undefined) {
+              return yield* Effect.die("Missing exact representation fixture")
+            }
+
+            const [target] = yield* db
+              .insert(schema.principalAssetOverrideTargets)
+              .values({
+                principalId: TEST_PRINCIPAL_ID,
+                targetKind: "representation",
+                blockchainId: representation.blockchainId,
+                representationType: representation.type,
+                contractAddress: representation.contractAddress,
+                mintAddress: representation.mintAddress,
+              })
+              .returning({ id: schema.principalAssetOverrideTargets.id })
+            if (target === undefined) return yield* Effect.die("Failed to create override target")
+
+            const [override] = yield* db
+              .insert(schema.principalAssetOverrides)
+              .values({
+                principalId: TEST_PRINCIPAL_ID,
+                targetId: target.id,
+                kind: "identity",
+                operation: "create",
+                inspectedSystemRevision: "adapter-system-v1",
+                inspectedSystemIdentity: "resolved",
+                inspectedSystemAssetId: TEST_BTC_ASSET_ID,
+                replacementAssetId: OVERRIDE_ASSET_ID,
+                actorUserId: TEST_USER_ID,
+                reason: "Use a principal-local economic identity",
+              })
+              .returning({ id: schema.principalAssetOverrides.id })
+            if (override === undefined) return yield* Effect.die("Failed to create override")
+
+            const transactions = yield* db
+              .insert(schema.transactions)
+              .values([
+                {
+                  sourceId: TEST_CUSTODY_SOURCE_ID,
+                  externalId: "adapter-first-provider",
+                  timestamp: occurredAt,
+                  transactionType: "buy_fiat",
+                  principalId: TEST_PRINCIPAL_ID,
+                },
+                {
+                  sourceId: TEST_DESTINATION_SOURCE_ID,
+                  externalId: "adapter-second-provider",
+                  timestamp: occurredAt,
+                  transactionType: "buy_fiat",
+                  principalId: TEST_PRINCIPAL_ID,
+                },
+                {
+                  sourceId: OTHER_SOURCE_ID,
+                  externalId: "adapter-other-principal",
+                  timestamp: occurredAt,
+                  transactionType: "buy_fiat",
+                  principalId: OTHER_PRINCIPAL_ID,
+                },
+              ])
+              .returning({ id: schema.transactions.id })
+            const [firstTransaction, secondTransaction, otherTransaction] = transactions
+            if (
+              firstTransaction === undefined ||
+              secondTransaction === undefined ||
+              otherTransaction === undefined
+            ) {
+              return yield* Effect.die("Failed to create facts")
+            }
+            const factTransactions = [firstTransaction, secondTransaction, otherTransaction]
+
+            yield* db.insert(schema.transactionLegs).values(
+              factTransactions.map((transaction, index) => ({
+                sourceId:
+                  index === 0
+                    ? TEST_CUSTODY_SOURCE_ID
+                    : index === 1
+                      ? TEST_DESTINATION_SOURCE_ID
+                      : OTHER_SOURCE_ID,
+                externalId: `adapter-exact-leg-${index}`,
+                timestamp: occurredAt,
+                principalId: index === 2 ? OTHER_PRINCIPAL_ID : TEST_PRINCIPAL_ID,
+                assetId: TEST_BTC_ASSET_ID,
+                assetRepresentationId: TEST_BTC_REPRESENTATION_ID,
+                amount: "1",
+                kind: "acquisition" as const,
+                provenance: "deterministic" as const,
+                transactionId: transaction.id,
+              }))
+            )
+
+            // Evidence-only observations stay as evidence and never become accounting events.
+            yield* db.insert(schema.providerTransfers).values({
+              sourceId: TEST_CUSTODY_SOURCE_ID,
+              transactionId: firstTransaction.id,
+              externalId: "adapter-evidence-only",
+              timestamp: occurredAt,
+              direction: "inbound",
+              processingMode: "evidence_only",
+              fromAccountRef: "external",
+              toAccountRef: "owned",
+              observedBlockchainId: representation.blockchainId,
+              observedRepresentationType: representation.type,
+              observedContractAddress: representation.contractAddress,
+              observedMintAddress: representation.mintAddress,
+              amount: "7",
+            })
+            return { targetId: target.id, overrideId: override.id }
+          })
+        )
+      )
+
+      const principalLedger = yield* Effect.promise(loadFactualLedger)
+      const otherLedger = yield* Effect.promise(() =>
+        runRepository(
+          Effect.flatMap(FactualLedgerRepository, (repository) =>
+            repository.load({
+              principalId: OTHER_PRINCIPAL_ID,
+              reportingCurrency: CurrencyCode.make("EUR"),
+            })
+          )
+        )
+      )
+      const [representation] = yield* Effect.promise(() =>
+        runPg(
+          Effect.gen(function* () {
+            const db = yield* drizzle
+            return yield* db
+              .select({ assetId: schema.assetRepresentations.assetId })
+              .from(schema.assetRepresentations)
+              .where(eq(schema.assetRepresentations.id, TEST_BTC_REPRESENTATION_ID))
+          })
+        )
+      )
+
+      expect(principalLedger.events).toHaveLength(2)
+      expect(principalLedger.events.map(({ assetId }) => assetId)).toEqual([
+        OVERRIDE_ASSET_ID,
+        OVERRIDE_ASSET_ID,
+      ])
+      expect(principalLedger.principalAssetOverrideRevision).toHaveLength(1)
+      expect(otherLedger.events).toHaveLength(1)
+      expect(otherLedger.events[0]?.assetId).toBe(TEST_BTC_ASSET_ID)
+      expect(otherLedger.principalAssetOverrideRevision).toEqual([])
+      expect(representation?.assetId).toBe(TEST_BTC_ASSET_ID)
+
+      yield* Effect.promise(() =>
+        runPg(
+          Effect.gen(function* () {
+            const db = yield* drizzle
+            yield* db.insert(schema.principalAssetOverrides).values({
+              principalId: TEST_PRINCIPAL_ID,
+              targetId: activeOverride.targetId,
+              kind: "identity",
+              operation: "withdraw",
+              inspectedSystemRevision: "adapter-system-v1",
+              inspectedSystemIdentity: "resolved",
+              inspectedSystemAssetId: TEST_BTC_ASSET_ID,
+              actorUserId: TEST_USER_ID,
+              reason: "Return adapted events to the system identity",
+              supersedesOverrideId: activeOverride.overrideId,
+            })
+          })
+        )
+      )
+      const withdrawnLedger = yield* Effect.promise(loadFactualLedger)
+      expect(withdrawnLedger.events.map(({ assetId }) => assetId)).toEqual([
+        TEST_BTC_ASSET_ID,
+        TEST_BTC_ASSET_ID,
+      ])
+      expect(withdrawnLedger.principalAssetOverrideRevision[0]?.[6]).toBe("withdraw")
     })
   )
 
