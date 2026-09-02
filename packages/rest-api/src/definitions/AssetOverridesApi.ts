@@ -39,12 +39,39 @@ export const AssetOverrideIdentityValidationQuery = Schema.Struct({
   assetId: Uuid,
 })
 
-/** One recomputation state derivable before target-linked scheduling exists. */
-export class AssetOverrideRecomputationResponse extends Schema.Class<AssetOverrideRecomputationResponse>(
-  "AssetOverrideRecomputationResponse"
+/** No durable target-linked work exists for this override stream. */
+export class AssetOverrideNotScheduledRecomputationResponse extends Schema.Class<AssetOverrideNotScheduledRecomputationResponse>(
+  "AssetOverrideNotScheduledRecomputationResponse"
 )({
   status: Schema.Literal("not_scheduled"),
 }) {}
+
+/** One durable source replay selected for an override record. */
+export class AssetOverrideReplayJobResponse extends Schema.Class<AssetOverrideReplayJobResponse>(
+  "AssetOverrideReplayJobResponse"
+)({
+  overrideId: Uuid,
+  sourceId: Uuid,
+  requestedJobId: Schema.NullOr(Uuid),
+  jobId: Schema.NullOr(Uuid),
+  status: Schema.Literals(["pending", "running", "complete", "failed", "credit_required"]),
+  failureCode: Schema.NullOr(Schema.String),
+}) {}
+
+/** Durable replay work is in progress or has stopped with a machine-readable failure. */
+export class AssetOverrideScheduledRecomputationResponse extends Schema.Class<AssetOverrideScheduledRecomputationResponse>(
+  "AssetOverrideScheduledRecomputationResponse"
+)({
+  status: Schema.Literals(["updating", "failed"]),
+  overrideIds: Schema.Array(Uuid),
+  sourceJobs: Schema.Array(AssetOverrideReplayJobResponse),
+}) {}
+
+/** Current durable recomputation state for one override target. */
+export const AssetOverrideRecomputationResponse = Schema.Union([
+  AssetOverrideNotScheduledRecomputationResponse,
+  AssetOverrideScheduledRecomputationResponse,
+])
 
 /** Machine-readable rejection of a target that cannot be canonicalized. */
 export class AssetOverrideCanonicalTargetError extends Schema.TaggedError<AssetOverrideCanonicalTargetError>()(
@@ -201,6 +228,35 @@ const MutationCompareAndSetFields = {
   reason: Reason,
 }
 
+const CreateMutationFields = {
+  expectedSystemRevision: Schema.String,
+  reason: Reason,
+}
+
+/** Create an identity override selecting an existing economic asset. */
+export class AssetOverrideIdentityCreateRequest extends Schema.TaggedClass<AssetOverrideIdentityCreateRequest>()(
+  "identity",
+  {
+    ...CreateMutationFields,
+    assetId: Uuid,
+  }
+) {}
+
+/** Create an inclusion override selecting included or excluded. */
+export class AssetOverrideInclusionCreateRequest extends Schema.TaggedClass<AssetOverrideInclusionCreateRequest>()(
+  "inclusion",
+  {
+    ...CreateMutationFields,
+    inclusion: PrincipalAssetInclusion,
+  }
+) {}
+
+/** Typed initial override payload; create expects no active override ID. */
+export const AssetOverrideCreateRequest = Schema.Union([
+  AssetOverrideIdentityCreateRequest,
+  AssetOverrideInclusionCreateRequest,
+])
+
 /** Replace an active identity override with another existing economic asset. */
 export class AssetOverrideIdentityReplaceRequest extends Schema.TaggedClass<AssetOverrideIdentityReplaceRequest>()(
   "identity",
@@ -242,7 +298,7 @@ export class AssetOverrideMutationConflictError extends Schema.TaggedError<Asset
     currentProjection: AssetOverrideCurrentResponse,
     currentActiveOverrideId: Schema.NullOr(Uuid),
     currentSystemRevision: Schema.String,
-    expectedActiveOverrideId: Uuid,
+    expectedActiveOverrideId: Schema.NullOr(Uuid),
     expectedSystemRevision: Schema.String,
   },
   { httpApiStatus: 409 }
@@ -311,6 +367,26 @@ const MutationErrors = [
   InternalServerError,
 ] as const
 
+const create = HttpApiEndpoint.post("createAssetOverride", "/create", {
+  query: AssetOverrideTargetQuery,
+  payload: AssetOverrideCreateRequest,
+  success: AssetOverrideCurrentResponse,
+  error: [
+    AssetOverrideCanonicalTargetError,
+    AssetOverrideTargetNotFoundError,
+    AssetOverrideMutationConflictError,
+    AssetOverrideReplacementValidationError,
+    AssetOverrideReadonlyError,
+    InternalServerError,
+  ],
+}).annotateMerge(
+  OpenApi.annotations({
+    summary: "Create a principal asset override",
+    description:
+      "Appends an initial identity or inclusion override after checking TaxMaxi's revision, schedules durable source replay work, and returns the updating projection.",
+  })
+)
+
 const replace = HttpApiEndpoint.post("replaceAssetOverride", "/replace", {
   query: AssetOverrideTargetQuery,
   payload: AssetOverrideReplaceRequest,
@@ -349,6 +425,7 @@ export class AssetOverridesApi extends HttpApiGroup.make("assetOverrides")
   .add(getCurrent)
   .add(getHistory)
   .add(validateIdentity)
+  .add(create)
   .add(replace)
   .add(withdraw)
   .middleware(AuthMiddleware)
@@ -357,6 +434,6 @@ export class AssetOverridesApi extends HttpApiGroup.make("assetOverrides")
     OpenApi.annotations({
       title: "Principal Asset Overrides",
       description:
-        "Principal-scoped current, history, validation, replacement, and withdrawal operations.",
+        "Principal-scoped current, history, validation, creation, replacement, and withdrawal operations.",
     })
   ) {}

@@ -18,10 +18,11 @@ import {
 import * as Chunk from "effect/Chunk"
 import * as ConfigProvider from "effect/ConfigProvider"
 import * as Effect from "effect/Effect"
+import * as Fiber from "effect/Fiber"
 import * as Layer from "effect/Layer"
 import * as Schema from "effect/Schema"
 import { beforeEach, describe, expect, it } from "@effect/vitest"
-import { eq } from "../../persistence/src/query/index.ts"
+import { eq, sql } from "../../persistence/src/query/index.ts"
 import { RepositoriesLive } from "../../persistence/src/layers/RepositoriesLive.ts"
 import { drizzle } from "../../persistence/src/layers/PgClientLive.ts"
 import { schema } from "../../persistence/src/schema/index.ts"
@@ -374,10 +375,244 @@ const inclusionReplacementPayload = ({ systemRevision }: { readonly systemRevisi
   reason: "Include this asset in my calculation.",
 })
 
+const identityCreatePayload = ({
+  assetId = TEST_BTC_ASSET_ID,
+  systemRevision,
+}: {
+  readonly assetId?: string
+  readonly systemRevision: string
+}) => ({
+  _tag: "identity",
+  assetId,
+  expectedSystemRevision: systemRevision,
+  reason: "Use TaxMaxi's existing BTC economic asset for this representation.",
+})
+
+const inclusionCreatePayload = ({ systemRevision }: { readonly systemRevision: string }) => ({
+  _tag: "inclusion",
+  inclusion: "excluded",
+  expectedSystemRevision: systemRevision,
+  reason: "Exclude this asset from my calculation.",
+})
+
+const installCreateRacePause = Effect.gen(function* () {
+  const db = yield* drizzle
+  yield* db.execute(sql`
+    create function pause_override_target_insert() returns trigger
+    language plpgsql as $trigger$
+    begin
+      perform pg_sleep(0.5);
+      return new;
+    end
+    $trigger$
+  `)
+  yield* db.execute(sql`
+    create trigger pause_override_target_insert
+    before insert on principal_asset_override_targets
+    for each row execute function pause_override_target_insert()
+  `)
+})
+
+const waitForCreateRacePause = Effect.gen(function* () {
+  const db = yield* drizzle
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    const [activity] = yield* db
+      .select({
+        isPaused: sql<boolean>`exists (
+        select 1
+        from pg_stat_activity
+        where datname = current_database()
+          and pid <> pg_backend_pid()
+          and wait_event = 'PgSleep'
+          and query like 'insert into "principal_asset_override_targets"%'
+      )`,
+      })
+      .from(schema.principals)
+      .limit(1)
+    if (activity?.isPaused === true) return
+    yield* db.execute(sql`select pg_sleep(0.01)`)
+  }
+  return yield* Effect.die("Timed out waiting for the REST create race pause.")
+})
+
+const removeCreateRacePause = Effect.gen(function* () {
+  const db = yield* drizzle
+  yield* db.execute(
+    sql`drop trigger pause_override_target_insert on principal_asset_override_targets`
+  )
+  yield* db.execute(sql`drop function pause_override_target_insert()`)
+})
+
 await Effect.runPromise(context.recreateTestDatabase())
 
 describe("AssetOverridesApiLive", () => {
   beforeEach(() => Effect.runPromise(context.recreateTestDatabase()))
+
+  it.effect("creates identity and inclusion overrides with durable recomputation work", () =>
+    Effect.gen(function* () {
+      yield* seedOwnedRepresentation.pipe(Effect.provide(TestPgClientLive), Effect.scoped)
+      const initial = yield* get({
+        path: `/v1/asset-overrides/current?${representationQuery()}`,
+      }).pipe(Effect.provide(HttpLive), Effect.scoped)
+      const initialProjection = yield* Schema.decodeUnknownEffect(AssetOverrideCurrentResponse)(
+        initial.body
+      )
+
+      const identity = yield* post({
+        path: `/v1/asset-overrides/create?${representationQuery()}`,
+        payload: identityCreatePayload({
+          systemRevision: initialProjection.system.identityRevision,
+        }),
+      }).pipe(Effect.provide(HttpLive), Effect.scoped)
+      const inclusion = yield* post({
+        path: `/v1/asset-overrides/create?${representationQuery()}`,
+        payload: inclusionCreatePayload({
+          systemRevision: initialProjection.system.inclusionRevision,
+        }),
+      }).pipe(Effect.provide(HttpLive), Effect.scoped)
+
+      expect(identity).toMatchObject({
+        status: 200,
+        body: {
+          activeIdentityOverride: {
+            kind: "identity",
+            operation: "create",
+            replacementIdentity: { _tag: "resolved", assetId: TEST_BTC_ASSET_ID },
+            supersedesOverrideId: null,
+          },
+          recomputation: {
+            status: "updating",
+            sourceJobs: [
+              {
+                overrideId: expect.any(String),
+                sourceId: ids.sourceId,
+                status: "pending",
+                failureCode: null,
+              },
+            ],
+          },
+        },
+      })
+      expect(inclusion).toMatchObject({
+        status: 200,
+        body: {
+          activeInclusionOverride: {
+            kind: "inclusion",
+            operation: "create",
+            replacementInclusion: "excluded",
+            supersedesOverrideId: null,
+          },
+          effectiveDecision: { _tag: "excluded" },
+          recomputation: {
+            status: "updating",
+            sourceJobs: [{ sourceId: ids.sourceId, status: "pending" }],
+          },
+        },
+      })
+    })
+  )
+
+  it.effect("maps durable replay pending, running, failed, and credit-required states", () =>
+    Effect.gen(function* () {
+      yield* seedOwnedRepresentation.pipe(Effect.provide(TestPgClientLive), Effect.scoped)
+      const initial = yield* get({
+        path: `/v1/asset-overrides/current?${representationQuery()}`,
+      }).pipe(Effect.provide(HttpLive), Effect.scoped)
+      const initialProjection = yield* Schema.decodeUnknownEffect(AssetOverrideCurrentResponse)(
+        initial.body
+      )
+      const created = yield* post({
+        path: `/v1/asset-overrides/create?${representationQuery()}`,
+        payload: identityCreatePayload({
+          systemRevision: initialProjection.system.identityRevision,
+        }),
+      }).pipe(Effect.provide(HttpLive), Effect.scoped)
+      const createdProjection = yield* Schema.decodeUnknownEffect(AssetOverrideCurrentResponse)(
+        created.body
+      )
+      if (createdProjection.recomputation.status === "not_scheduled") {
+        return yield* Effect.die("Create did not expose durable replay work.")
+      }
+      const [sourceJob] = createdProjection.recomputation.sourceJobs
+      if (sourceJob === undefined || sourceJob.jobId === null) {
+        return yield* Effect.die("Create did not expose the selected replay job.")
+      }
+      const jobId = sourceJob.jobId
+      const rejectedValidation = yield* get({
+        path: `/v1/asset-overrides/validation?assetId=00000000-0000-4000-8000-000000000899&${representationQuery()}`,
+      }).pipe(Effect.provide(HttpLive), Effect.scoped)
+      expect(rejectedValidation).toMatchObject({
+        status: 200,
+        body: {
+          _tag: "asset_not_found",
+          recomputation: {
+            status: "updating",
+            overrideIds: [sourceJob.overrideId],
+            sourceJobs: [{ overrideId: sourceJob.overrideId, status: "pending" }],
+          },
+        },
+      })
+
+      const setJobStatus = (
+        status: "credit_required" | "failed" | "processing",
+        creditReasonCode: string | null = null
+      ) =>
+        Effect.gen(function* () {
+          const db = yield* drizzle
+          yield* db
+            .update(schema.processingJobs)
+            .set({ status, creditReasonCode })
+            .where(eq(schema.processingJobs.id, jobId))
+        }).pipe(Effect.provide(TestPgClientLive), Effect.scoped)
+      const readCurrent = () =>
+        get({ path: `/v1/asset-overrides/current?${representationQuery()}` }).pipe(
+          Effect.provide(HttpLive),
+          Effect.scoped
+        )
+
+      yield* setJobStatus("processing")
+      expect(yield* readCurrent()).toMatchObject({
+        status: 200,
+        body: {
+          recomputation: {
+            status: "updating",
+            overrideIds: [sourceJob.overrideId],
+            sourceJobs: [
+              {
+                overrideId: sourceJob.overrideId,
+                requestedJobId: sourceJob.requestedJobId,
+                jobId: sourceJob.jobId,
+                status: "running",
+                failureCode: null,
+              },
+            ],
+          },
+        },
+      })
+
+      yield* setJobStatus("failed")
+      expect(yield* readCurrent()).toMatchObject({
+        status: 200,
+        body: {
+          recomputation: {
+            status: "failed",
+            sourceJobs: [{ status: "failed", failureCode: "source_replay_failed" }],
+          },
+        },
+      })
+
+      yield* setJobStatus("credit_required", "credits_exhausted")
+      expect(yield* readCurrent()).toMatchObject({
+        status: 200,
+        body: {
+          recomputation: {
+            status: "failed",
+            sourceJobs: [{ status: "credit_required", failureCode: "credits_exhausted" }],
+          },
+        },
+      })
+    })
+  )
 
   it.effect("returns canonical current and append-only history reads with stale state", () =>
     Effect.gen(function* () {
@@ -580,7 +815,10 @@ describe("AssetOverridesApiLive", () => {
             supersedesOverrideId: ids.overrideId,
           },
           history: [{ id: ids.overrideId, operation: "create" }, { operation: "replace" }],
-          recomputation: { status: "not_scheduled" },
+          recomputation: {
+            status: "updating",
+            sourceJobs: [{ sourceId: ids.sourceId, status: "pending" }],
+          },
         },
       })
     })
@@ -600,7 +838,10 @@ describe("AssetOverridesApiLive", () => {
           activeIdentityOverride: null,
           effectiveDecision: { _tag: "included", assetId: ids.systemAssetId },
           history: [{ id: ids.overrideId, operation: "create" }, { operation: "withdraw" }],
-          recomputation: { status: "not_scheduled" },
+          recomputation: {
+            status: "updating",
+            sourceJobs: [{ sourceId: ids.sourceId, status: "pending" }],
+          },
         },
       })
     })
@@ -627,7 +868,10 @@ describe("AssetOverridesApiLive", () => {
             supersedesOverrideId: ids.inclusionOverrideId,
           },
           effectiveDecision: { _tag: "included", assetId: TEST_BTC_ASSET_ID },
-          recomputation: { status: "not_scheduled" },
+          recomputation: {
+            status: "updating",
+            sourceJobs: [{ sourceId: ids.sourceId, status: "pending" }],
+          },
         },
       })
 
@@ -653,7 +897,10 @@ describe("AssetOverridesApiLive", () => {
           activeIdentityOverride: { id: ids.overrideId },
           activeInclusionOverride: null,
           effectiveDecision: { _tag: "included", assetId: TEST_BTC_ASSET_ID },
-          recomputation: { status: "not_scheduled" },
+          recomputation: {
+            status: "updating",
+            sourceJobs: [{ sourceId: ids.sourceId, status: "pending" }],
+          },
         },
       })
       const withdrawnProjection = yield* Schema.decodeUnknownEffect(AssetOverrideCurrentResponse)(
@@ -846,7 +1093,172 @@ describe("AssetOverridesApiLive", () => {
         conflictKinds: ["active_override"],
         currentProjection: {
           history: [{ id: ids.overrideId, operation: "create" }, { operation: "replace" }],
-          recomputation: { status: "not_scheduled" },
+          recomputation: {
+            status: "updating",
+            sourceJobs: [{ sourceId: ids.sourceId, status: "pending" }],
+          },
+        },
+      })
+    })
+  )
+
+  it.effect("keeps absent and unowned create targets indistinguishable", () =>
+    Effect.gen(function* () {
+      yield* seedOwnedRepresentation.pipe(Effect.provide(TestPgClientLive), Effect.scoped)
+      const initial = yield* get({
+        path: `/v1/asset-overrides/current?${representationQuery()}`,
+      }).pipe(Effect.provide(HttpLive), Effect.scoped)
+      const projection = yield* Schema.decodeUnknownEffect(AssetOverrideCurrentResponse)(
+        initial.body
+      )
+      const payload = identityCreatePayload({
+        systemRevision: projection.system.identityRevision,
+      })
+      const absent = yield* post({
+        path: `/v1/asset-overrides/create?${representationQuery(absentAddress)}`,
+        payload,
+      }).pipe(Effect.provide(HttpLive), Effect.scoped)
+      const unowned = yield* post({
+        path: `/v1/asset-overrides/create?${representationQuery()}`,
+        payload,
+        userId: ids.otherUserId,
+      }).pipe(Effect.provide(HttpLive), Effect.scoped)
+
+      expect(absent).toEqual(unowned)
+      expect(absent).toEqual({
+        status: 404,
+        body: { _tag: "AssetOverrideTargetNotFoundError", code: "target_not_found" },
+      })
+    })
+  )
+
+  it.effect("rejects readonly and invalid create requests without writing", () =>
+    Effect.gen(function* () {
+      yield* seedOwnedRepresentation.pipe(Effect.provide(TestPgClientLive), Effect.scoped)
+      const initial = yield* get({
+        path: `/v1/asset-overrides/current?${representationQuery()}`,
+      }).pipe(Effect.provide(HttpLive), Effect.scoped)
+      const projection = yield* Schema.decodeUnknownEffect(AssetOverrideCurrentResponse)(
+        initial.body
+      )
+      const payload = identityCreatePayload({
+        systemRevision: projection.system.identityRevision,
+      })
+      const readonly = yield* post({
+        path: `/v1/asset-overrides/create?${representationQuery()}`,
+        payload,
+        role: "readonly",
+      }).pipe(Effect.provide(HttpLive), Effect.scoped)
+      const invalidTarget = yield* post({
+        path: `/v1/asset-overrides/create?${representationQuery("not-an-address")}`,
+        payload,
+      }).pipe(Effect.provide(HttpLive), Effect.scoped)
+      const invalidReplacement = yield* post({
+        path: `/v1/asset-overrides/create?${representationQuery()}`,
+        payload: identityCreatePayload({
+          assetId: "00000000-0000-4000-8000-000000000899",
+          systemRevision: projection.system.identityRevision,
+        }),
+      }).pipe(Effect.provide(HttpLive), Effect.scoped)
+
+      expect(readonly).toMatchObject({
+        status: 403,
+        body: { _tag: "AssetOverrideReadonlyError", code: "readonly_user" },
+      })
+      expect(invalidTarget).toMatchObject({
+        status: 400,
+        body: {
+          _tag: "AssetOverrideCanonicalTargetError",
+          reason: "invalid_evm_address",
+        },
+      })
+      expect(invalidReplacement).toMatchObject({
+        status: 422,
+        body: {
+          _tag: "AssetOverrideReplacementValidationError",
+          validation: { _tag: "asset_not_found" },
+        },
+      })
+      const current = yield* get({
+        path: `/v1/asset-overrides/current?${representationQuery()}`,
+      }).pipe(Effect.provide(HttpLive), Effect.scoped)
+      expect(current).toMatchObject({ status: 200, body: { history: [] } })
+    })
+  )
+
+  it.effect("returns a typed conflict for a stale create revision", () =>
+    Effect.gen(function* () {
+      yield* seedOwnedRepresentation.pipe(Effect.provide(TestPgClientLive), Effect.scoped)
+      const initial = yield* get({
+        path: `/v1/asset-overrides/current?${representationQuery()}`,
+      }).pipe(Effect.provide(HttpLive), Effect.scoped)
+      const projection = yield* Schema.decodeUnknownEffect(AssetOverrideCurrentResponse)(
+        initial.body
+      )
+      const response = yield* post({
+        path: `/v1/asset-overrides/create?${representationQuery()}`,
+        payload: identityCreatePayload({
+          systemRevision: `${projection.system.identityRevision}:stale`,
+        }),
+      }).pipe(Effect.provide(HttpLive), Effect.scoped)
+
+      expect(response).toMatchObject({
+        status: 409,
+        body: {
+          _tag: "AssetOverrideMutationConflictError",
+          code: "override_conflict",
+          conflictKinds: ["system_revision"],
+          currentActiveOverrideId: null,
+          expectedActiveOverrideId: null,
+        },
+      })
+    })
+  )
+
+  it.effect("serializes racing REST creates so only one appends", () =>
+    Effect.gen(function* () {
+      yield* seedOwnedRepresentation.pipe(Effect.provide(TestPgClientLive), Effect.scoped)
+      const initial = yield* get({
+        path: `/v1/asset-overrides/current?${representationQuery()}`,
+      }).pipe(Effect.provide(HttpLive), Effect.scoped)
+      const projection = yield* Schema.decodeUnknownEffect(AssetOverrideCurrentResponse)(
+        initial.body
+      )
+      const request = {
+        path: `/v1/asset-overrides/create?${representationQuery()}`,
+        payload: identityCreatePayload({
+          systemRevision: projection.system.identityRevision,
+        }),
+      }
+      yield* installCreateRacePause.pipe(Effect.provide(TestPgClientLive), Effect.scoped)
+      const first = yield* post(request).pipe(
+        Effect.provide(HttpLive),
+        Effect.scoped,
+        Effect.forkScoped
+      )
+      yield* waitForCreateRacePause.pipe(Effect.provide(TestPgClientLive), Effect.scoped)
+      const attempts = yield* Effect.all(
+        [Fiber.join(first), post(request).pipe(Effect.provide(HttpLive), Effect.scoped)],
+        { concurrency: "unbounded" }
+      )
+      yield* removeCreateRacePause.pipe(Effect.provide(TestPgClientLive), Effect.scoped)
+
+      expect(attempts.map(({ status }) => status).sort((left, right) => left - right)).toEqual([
+        200, 409,
+      ])
+      const conflict = attempts.find(({ status }) => status === 409)
+      expect(conflict?.body).toMatchObject({
+        _tag: "AssetOverrideMutationConflictError",
+        code: "override_conflict",
+        conflictKinds: ["active_override"],
+        currentActiveOverrideId: expect.any(String),
+        expectedActiveOverrideId: null,
+        currentProjection: {
+          history: [{ operation: "create" }],
+          recomputation: {
+            status: "updating",
+            sourceJobs: [{ sourceId: ids.sourceId, status: "pending" }],
+          },
         },
       })
     })
