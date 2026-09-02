@@ -30,11 +30,19 @@ export class PortfolioSummary extends Schema.Class<PortfolioSummary>("PortfolioS
   profitLossPercentage: Schema.NullOr(Schema.BigDecimalFromString),
 }) {}
 
+export class PortfolioBlockerCountResponse extends Schema.Class<PortfolioBlockerCountResponse>(
+  "PortfolioBlockerCountResponse"
+)({
+  code: Schema.String,
+  count: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+}) {}
+
 export class PortfolioActiveRunResponse extends Schema.Class<PortfolioActiveRunResponse>(
   "PortfolioActiveRunResponse"
 )({
   runId: Schema.String,
   status: Schema.Literals(["complete", "partial"]),
+  blockerCounts: Schema.Array(PortfolioBlockerCountResponse),
 }) {}
 
 export class PortfolioLatestRunResponse extends Schema.Class<PortfolioLatestRunResponse>(

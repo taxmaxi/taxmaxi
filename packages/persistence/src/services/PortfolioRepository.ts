@@ -29,10 +29,17 @@ export interface ActiveRunPortfolioScope {
   readonly reportingCurrency: CurrencyCode
 }
 
+/** Count of one machine-readable blocker code in the active run. */
+export interface CalculationRunBlockerCount {
+  readonly code: string
+  readonly count: number
+}
+
 /** Successful run whose immutable lots back one portfolio response. */
 export interface PortfolioActiveRun {
   readonly runId: CalculationRunId
   readonly status: "complete" | "partial"
+  readonly blockerCounts: ReadonlyArray<CalculationRunBlockerCount>
 }
 
 /** Open asset position before current market valuation. */

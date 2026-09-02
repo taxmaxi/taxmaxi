@@ -168,6 +168,7 @@ export const PortfolioApiLive = HttpApiBuilder.group(TaxMaxiApi, "portfolio", (h
               : PortfolioActiveRunResponse.make({
                   runId: portfolio.activeRun.runId,
                   status: portfolio.activeRun.status,
+                  blockerCounts: portfolio.activeRun.blockerCounts,
                 }),
           latestRun:
             latestRun === null

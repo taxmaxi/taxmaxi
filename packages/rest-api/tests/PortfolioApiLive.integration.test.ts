@@ -211,6 +211,35 @@ const seedActivePortfolioRun = Effect.gen(function* () {
     remainingQuantity: "2",
     costBasisPerUnit: "10",
   })
+  yield* db.insert(schema.calculationRunBlockers).values([
+    {
+      runId: fixtureIds.activeRunId,
+      principalId: fixture.principalId,
+      sequence: 0,
+      code: "missing_valuation",
+      eventId: fixtureIds.acquisitionEventId,
+      assetId: TEST_BTC_ASSET_ID,
+      custodyUnitId: fixture.sourceId,
+    },
+    {
+      runId: fixtureIds.activeRunId,
+      principalId: fixture.principalId,
+      sequence: 1,
+      code: "missing_valuation",
+      eventId: fixtureIds.factualLegId,
+      assetId: TEST_BTC_ASSET_ID,
+      custodyUnitId: fixture.sourceId,
+    },
+    {
+      runId: fixtureIds.activeRunId,
+      principalId: fixture.principalId,
+      sequence: 2,
+      code: "unknown_cause",
+      eventId: fixtureIds.factualLegId,
+      assetId: TEST_BTC_ASSET_ID,
+      custodyUnitId: fixture.sourceId,
+    },
+  ])
   yield* db.insert(schema.activeCalculationRuns).values({
     principalId: fixture.principalId,
     jurisdiction: "DE",
@@ -303,7 +332,14 @@ describe("PortfolioApiLive", () => {
 
       expect(response.status).toBe(200)
       expect(response.body).toMatchObject({
-        activeRun: { runId: fixtureIds.activeRunId, status: "partial" },
+        activeRun: {
+          runId: fixtureIds.activeRunId,
+          status: "partial",
+          blockerCounts: [
+            { code: "missing_valuation", count: 2 },
+            { code: "unknown_cause", count: 1 },
+          ],
+        },
         latestRun: { runId: fixtureIds.latestRunId, status: "running", failureCode: null },
         assets: [
           {
