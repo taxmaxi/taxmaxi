@@ -55,6 +55,7 @@ export interface PrincipalAssetOverrideSystemState {
 
 /** Current state of one durable source replay selected for an override record. */
 export interface PrincipalAssetOverrideReplayJob {
+  readonly overrideId: string
   readonly sourceId: string
   readonly requestedJobId: string | null
   readonly jobId: string | null
@@ -67,7 +68,7 @@ export type PrincipalAssetOverrideRecomputation =
   | { readonly status: "not_scheduled" }
   | {
       readonly status: "updating" | "failed"
-      readonly overrideId: string
+      readonly overrideIds: ReadonlyArray<string>
       readonly sourceJobs: ReadonlyArray<PrincipalAssetOverrideReplayJob>
     }
 
