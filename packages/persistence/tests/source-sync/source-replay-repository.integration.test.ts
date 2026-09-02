@@ -7,7 +7,6 @@ import { drizzle } from "../../src/layers/PgClientLive.ts"
 import { SourceNormalizationRepositoryLive } from "../../src/layers/SourceNormalizationRepositoryLive.ts"
 import { SourceRawRecordRepositoryLive } from "../../src/layers/SourceRawRecordRepositoryLive.ts"
 import { SourceReplayRepositoryLive } from "../../src/layers/SourceReplayRepositoryLive.ts"
-import { SourceSyncJobRepositoryLive } from "../../src/layers/SourceSyncJobRepositoryLive.ts"
 import { schema } from "../../src/schema/index.ts"
 import {
   TEST_BTC_ASSET_ID,
@@ -22,9 +21,7 @@ import {
 import {
   SourceNormalizationRepository,
   SourceRawRecordRepository,
-  SourceReplayPlanRepository,
   SourceReplayRepository,
-  SourceSyncJobRepository,
 } from "@my/sync-engine/services"
 
 const context = makeIntegrationTestDatabaseContext({
@@ -43,12 +40,6 @@ const runRawRepository = <A, E>(effect: Effect.Effect<A, E, SourceRawRecordRepos
 
 const runReplayRepository = <A, E>(effect: Effect.Effect<A, E, SourceReplayRepository>) =>
   Effect.runPromise(context.runWithLayer({ effect, layer: SourceReplayRepositoryLive }))
-
-const runReplayPlanRepository = <A, E>(effect: Effect.Effect<A, E, SourceReplayPlanRepository>) =>
-  Effect.runPromise(context.runWithLayer({ effect, layer: SourceReplayRepositoryLive }))
-
-const runSyncJobRepository = <A, E>(effect: Effect.Effect<A, E, SourceSyncJobRepository>) =>
-  Effect.runPromise(context.runWithLayer({ effect, layer: SourceSyncJobRepositoryLive }))
 
 const seedReplayRawRecord = () =>
   Effect.gen(function* () {
@@ -460,210 +451,9 @@ describe("SourceReplayRepositoryLive", () => {
     )
   )
 
-  it.effect("persists replay prerequisites and keeps the earliest rebuild boundary", () =>
+  it.effect("resets factual rows without waiting for legacy FIFO owner locks", () =>
     Effect.gen(function* () {
-      const [firstPrerequisiteJob, secondPrerequisiteJob, replayJob] = yield* Effect.promise(() =>
-        runPg(
-          Effect.gen(function* () {
-            const db = yield* drizzle
-            return yield* db
-              .insert(schema.processingJobs)
-              .values([
-                {
-                  sourceId: TEST_SOURCE_ID,
-                  principalId: TEST_PRINCIPAL_ID,
-                  mode: "replay",
-                  status: "completed",
-                },
-                {
-                  sourceId: TEST_SOURCE_ID,
-                  principalId: TEST_PRINCIPAL_ID,
-                  mode: "replay",
-                  status: "completed",
-                },
-                {
-                  sourceId: TEST_SOURCE_ID,
-                  principalId: TEST_PRINCIPAL_ID,
-                  mode: "replay",
-                  status: "pending",
-                },
-              ])
-              .returning({ id: schema.processingJobs.id })
-          })
-        )
-      )
-
-      if (
-        firstPrerequisiteJob === undefined ||
-        secondPrerequisiteJob === undefined ||
-        replayJob === undefined
-      ) {
-        throw new Error("Failed to create replay plan jobs")
-      }
-
-      const earliestBoundary = DateTime.toDateUtc(DateTime.makeUnsafe("2025-01-01T00:00:00.000Z"))
-      yield* Effect.promise(() =>
-        runReplayPlanRepository(
-          Effect.flatMap(SourceReplayPlanRepository, (repository) =>
-            repository.recordReplayPlan({
-              jobId: replayJob.id,
-              prerequisiteJobIds: [firstPrerequisiteJob.id],
-              rebuildFrom: earliestBoundary,
-            })
-          )
-        )
-      )
-
-      const plan = yield* Effect.promise(() =>
-        runReplayPlanRepository(
-          Effect.flatMap(SourceReplayPlanRepository, (repository) =>
-            repository.recordReplayPlan({
-              jobId: replayJob.id,
-              prerequisiteJobIds: [secondPrerequisiteJob.id],
-              rebuildFrom: DateTime.toDateUtc(DateTime.makeUnsafe("2025-01-03T00:00:00.000Z")),
-            })
-          )
-        )
-      )
-
-      expect(plan).toEqual({
-        jobId: replayJob.id,
-        prerequisiteJobIds: [firstPrerequisiteJob.id, secondPrerequisiteJob.id].sort(),
-        rebuildFrom: earliestBoundary,
-      })
-    })
-  )
-
-  it.effect(
-    "returns a typed error for a missing prerequisite without changing the replay plan",
-    () =>
-      Effect.gen(function* () {
-        const existingPrerequisiteJobId = "00000000-0000-0000-0000-000000000403"
-        const missingPrerequisiteJobId = "00000000-0000-0000-0000-000000000404"
-        const replayJobId = "00000000-0000-0000-0000-000000000405"
-        yield* Effect.promise(() =>
-          runPg(
-            Effect.gen(function* () {
-              const db = yield* drizzle
-              yield* db.insert(schema.processingJobs).values([
-                {
-                  id: existingPrerequisiteJobId,
-                  sourceId: TEST_SOURCE_ID,
-                  principalId: TEST_PRINCIPAL_ID,
-                  mode: "replay",
-                  status: "completed",
-                },
-                {
-                  id: replayJobId,
-                  sourceId: TEST_SOURCE_ID,
-                  principalId: TEST_PRINCIPAL_ID,
-                  mode: "replay",
-                  status: "pending",
-                },
-              ])
-            })
-          )
-        )
-
-        const failedPlan = yield* Effect.promise(() =>
-          runReplayPlanRepository(
-            Effect.flatMap(SourceReplayPlanRepository, (repository) =>
-              repository
-                .recordReplayPlan({
-                  jobId: replayJobId,
-                  prerequisiteJobIds: [missingPrerequisiteJobId],
-                  rebuildFrom: DateTime.toDateUtc(DateTime.makeUnsafe("2025-01-01T00:00:00.000Z")),
-                })
-                .pipe(Effect.result)
-            )
-          )
-        )
-
-        expect(failedPlan).toMatchObject({
-          _tag: "Failure",
-          failure: {
-            _tag: "SourceReplayPlanJobNotFoundError",
-            jobId: missingPrerequisiteJobId,
-          },
-        })
-
-        const acceptedBoundary = DateTime.toDateUtc(DateTime.makeUnsafe("2025-01-03T00:00:00.000Z"))
-        const acceptedPlan = yield* Effect.promise(() =>
-          runReplayPlanRepository(
-            Effect.flatMap(SourceReplayPlanRepository, (repository) =>
-              repository.recordReplayPlan({
-                jobId: replayJobId,
-                prerequisiteJobIds: [existingPrerequisiteJobId],
-                rebuildFrom: acceptedBoundary,
-              })
-            )
-          )
-        )
-
-        expect(acceptedPlan).toEqual({
-          jobId: replayJobId,
-          prerequisiteJobIds: [existingPrerequisiteJobId],
-          rebuildFrom: acceptedBoundary,
-        })
-      })
-  )
-
-  it.effect("rejects replay plans that attach an unsuccessful terminal prerequisite", () =>
-    Effect.gen(function* () {
-      const failedPrerequisiteJobId = "00000000-0000-0000-0000-000000000406"
-      const replayJobId = "00000000-0000-0000-0000-000000000407"
-      yield* Effect.promise(() =>
-        runPg(
-          Effect.flatMap(drizzle, (db) =>
-            db.insert(schema.processingJobs).values([
-              {
-                id: failedPrerequisiteJobId,
-                sourceId: TEST_SOURCE_ID,
-                principalId: TEST_PRINCIPAL_ID,
-                mode: "replay",
-                status: "failed",
-              },
-              {
-                id: replayJobId,
-                sourceId: TEST_SOURCE_ID,
-                principalId: TEST_PRINCIPAL_ID,
-                mode: "replay",
-                status: "pending",
-              },
-            ])
-          )
-        )
-      )
-
-      const result = yield* Effect.promise(() =>
-        runReplayPlanRepository(
-          Effect.flatMap(SourceReplayPlanRepository, (repository) =>
-            repository
-              .recordReplayPlan({
-                jobId: replayJobId,
-                prerequisiteJobIds: [failedPrerequisiteJobId],
-                rebuildFrom: DateTime.toDateUtc(DateTime.makeUnsafe("2025-01-01T00:00:00.000Z")),
-              })
-              .pipe(Effect.result)
-          )
-        )
-      )
-
-      expect(result).toMatchObject({
-        _tag: "Failure",
-        failure: {
-          _tag: "SourceReplayPlanConflictError",
-          jobId: replayJobId,
-        },
-      })
-    })
-  )
-
-  it.effect("waits for FIFO owner inventory locks before resetting replay state", () =>
-    Effect.gen(function* () {
-      const { ownerSourceId, replayJobId } = yield* Effect.promise(() =>
-        seedFifoOwnerLockScenario()
-      )
+      const { ownerSourceId } = yield* Effect.promise(() => seedFifoOwnerLockScenario())
 
       const sourceLockAcquired = yield* Deferred.make<void>()
       const releaseSourceLock = yield* Deferred.make<void>()
@@ -686,28 +476,21 @@ describe("SourceReplayRepositoryLive", () => {
 
       yield* Deferred.await(sourceLockAcquired)
 
-      const replayWaitingForSource = runReplayRepository(
+      const replayWhileSourceLocked = runReplayRepository(
         Effect.flatMap(SourceReplayRepository, (repository) =>
-          repository.resetSourceDerivedState({ jobId: replayJobId, sourceId: TEST_SOURCE_ID })
+          repository.resetSourceDerivedState({ sourceId: TEST_SOURCE_ID })
         )
       ).then(() => "completed" as const)
 
-      // Phase 1: replay must remain blocked while another transaction owns the source lock.
-      const replayBeforeSourceRelease = yield* Effect.promise(() =>
-        context
-          .waitForQueryBlockedOnLock({ queryIncludes: "sources" })
-          .then(() => "blocked" as const)
+      const replayBeforeSourceRelease = yield* Effect.raceFirst(
+        Effect.promise(() => replayWhileSourceLocked),
+        Effect.sleep(500).pipe(Effect.as("blocked" as const))
       )
 
-      expect(replayBeforeSourceRelease).toBe("blocked")
+      expect(replayBeforeSourceRelease).toBe("completed")
 
-      // Phase 2: replay must finish after the source lock is released.
       yield* Deferred.succeed(releaseSourceLock, undefined)
-      const [, laterOutcome] = yield* Effect.promise(() =>
-        Promise.all([heldSourceLock, replayWaitingForSource])
-      )
-
-      expect(laterOutcome).toBe("completed")
+      yield* Effect.promise(() => heldSourceLock)
     })
   )
 
@@ -818,7 +601,6 @@ describe("SourceReplayRepositoryLive", () => {
         runReplayRepository(
           Effect.flatMap(SourceReplayRepository, (repository) =>
             repository.resetSourceDerivedState({
-              jobId: "00000000-0000-0000-0000-000000000270",
               sourceId: TEST_SOURCE_ID,
             })
           )
@@ -852,10 +634,6 @@ describe("SourceReplayRepositoryLive", () => {
               .from(schema.transactionLegs)
               .where(eq(schema.transactionLegs.sourceId, TEST_SOURCE_ID))
             const reviews = yield* db.select().from(schema.transactionReviews)
-            const fifoLots = yield* db
-              .select()
-              .from(schema.fifoLots)
-              .where(eq(schema.fifoLots.sourceId, TEST_SOURCE_ID))
             const rawRows = yield* db
               .select()
               .from(schema.sourceRecordsRaw)
@@ -865,7 +643,6 @@ describe("SourceReplayRepositoryLive", () => {
               transfers,
               legs,
               reviews,
-              fifoLots,
               rawRows,
             }
           })
@@ -876,7 +653,6 @@ describe("SourceReplayRepositoryLive", () => {
       expect(snapshot.transfers).toHaveLength(0)
       expect(snapshot.legs).toHaveLength(0)
       expect(snapshot.reviews).toHaveLength(0)
-      expect(snapshot.fifoLots).toHaveLength(0)
       expect(snapshot.rawRows).toHaveLength(1)
       expect(snapshot.rawRows[0]?.externalRecordId).toBe("raw-replay-1")
       expect(snapshot.rawRows[0]?.normalizedAt).toBeNull()
@@ -888,86 +664,42 @@ describe("SourceReplayRepositoryLive", () => {
     { dependencyKind: "inventory allocation", dependentLegKind: "fee" },
     { dependencyKind: "disposal match", dependentLegKind: "disposal" },
   ] as const)(
-    "plans and gates dependent replay when another source has a $dependencyKind consuming one of its FIFO lots",
+    "ignores legacy $dependencyKind projections when resetting factual source rows",
     ({ dependencyKind, dependentLegKind }) =>
       Effect.gen(function* () {
-        const { dependentSourceId, downstreamSourceId, replayJobId } = yield* Effect.promise(() =>
+        const { dependentSourceId, downstreamSourceId } = yield* Effect.promise(() =>
           seedReplayDependencyScenario({ dependencyKind, dependentLegKind })
         )
 
-        const replayResult = yield* Effect.promise(() =>
+        yield* Effect.promise(() =>
           runReplayRepository(
             Effect.flatMap(SourceReplayRepository, (repository) =>
-              repository.resetSourceDerivedState({ sourceId: TEST_SOURCE_ID, jobId: replayJobId })
+              repository.resetSourceDerivedState({ sourceId: TEST_SOURCE_ID })
             )
           )
         )
-
-        const dependentReplay = replayResult.dependentReplays.find(
-          (replay) => replay.sourceId === dependentSourceId
-        )
-        const downstreamReplay = replayResult.dependentReplays.find(
-          (replay) => replay.sourceId === downstreamSourceId
-        )
-
-        expect(dependentReplay).toMatchObject({
-          sourceId: dependentSourceId,
-          prerequisiteJobIds: [replayJobId],
-          rebuildFrom: DateTime.toDateUtc(DateTime.makeUnsafe("2025-01-01T10:00:00.000Z")),
-        })
-        expect(downstreamReplay).toMatchObject({
-          sourceId: downstreamSourceId,
-          prerequisiteJobIds: [dependentReplay?.jobId],
-          rebuildFrom: DateTime.toDateUtc(DateTime.makeUnsafe("2025-01-02T10:00:00.000Z")),
-        })
-
-        expect(dependentReplay).toBeDefined()
-        if (dependentReplay === undefined) return
-
-        const blockedDispatch = yield* Effect.promise(() =>
-          runSyncJobRepository(
-            Effect.flatMap(SourceSyncJobRepository, (repository) =>
-              repository.getExecutionJob({ jobId: dependentReplay.jobId }).pipe(Effect.result)
-            )
-          )
-        )
-        expect(blockedDispatch).toMatchObject({
-          _tag: "Failure",
-          failure: { _tag: "SourceSyncJobPrerequisitesPendingError" },
-        })
-
-        yield* Effect.promise(() =>
-          runPg(
-            Effect.flatMap(drizzle, (db) =>
-              db
-                .update(schema.processingJobs)
-                .set({ status: "completed", progressDetails: { failedRecords: 0 } })
-                .where(eq(schema.processingJobs.id, replayJobId))
-            )
-          )
-        )
-        const readyDispatch = yield* Effect.promise(() =>
-          runSyncJobRepository(
-            Effect.flatMap(SourceSyncJobRepository, (repository) =>
-              repository.getExecutionJob({ jobId: dependentReplay.jobId })
-            )
-          )
-        )
-        expect(readyDispatch).toMatchObject({ id: dependentReplay.jobId, status: "pending" })
 
         const state = yield* Effect.promise(() =>
           runPg(
             Effect.gen(function* () {
               const db = yield* drizzle
+              const processingJobs = yield* db
+                .select({ sourceId: schema.processingJobs.sourceId })
+                .from(schema.processingJobs)
               const lots = yield* db.select().from(schema.fifoLots)
               const movements = yield* db.select().from(schema.inventoryMovements)
               const allocations = yield* db.select().from(schema.inventoryMovementAllocations)
               const matches = yield* db.select().from(schema.disposalMatches)
-              return { lots, movements, allocations, matches }
+              return { processingJobs, lots, movements, allocations, matches }
             })
           )
         )
 
+        expect(
+          state.processingJobs.filter(
+            ({ sourceId }) => sourceId === dependentSourceId || sourceId === downstreamSourceId
+          )
+        ).toEqual([])
         expect(state.lots).toHaveLength(1)
         expect(state.movements).toHaveLength(dependencyKind === "inventory allocation" ? 2 : 1)
         expect(state.allocations).toHaveLength(1)

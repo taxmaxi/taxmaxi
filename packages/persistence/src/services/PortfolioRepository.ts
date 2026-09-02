@@ -20,11 +20,6 @@ export class PortfolioSourceNotFoundError extends Schema.TaggedError<PortfolioSo
   { sourceId: Schema.String }
 ) {}
 
-export interface PortfolioAssetScope {
-  readonly principalId: string
-  readonly sourceId: string | null
-}
-
 /** Active calculation scope and optional source view requested by the portfolio reader. */
 export interface ActiveRunPortfolioScope {
   readonly principalId: PrincipalId
@@ -64,14 +59,6 @@ export interface PortfolioRepositoryShape {
   readonly getActiveRunPortfolio: (
     scope: ActiveRunPortfolioScope
   ) => Effect.Effect<ActiveRunPortfolio, PortfolioSourceNotFoundError | PersistenceError>
-
-  /** List open positions across all owned sources or one owned source. */
-  readonly listAssetPositions: (
-    scope: PortfolioAssetScope
-  ) => Effect.Effect<
-    ReadonlyArray<PortfolioAssetPosition>,
-    PortfolioSourceNotFoundError | PersistenceError
-  >
 }
 
 export class PortfolioRepository extends Context.Service<

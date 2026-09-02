@@ -2081,11 +2081,6 @@ const make = Effect.gen(function* () {
                 .where(eq(schema.inventoryMovements.assetRepresentationId, representationId))
 
               yield* tx
-                .update(schema.fifoLots)
-                .set({ assetId, updatedAt: now })
-                .where(eq(schema.fifoLots.assetRepresentationId, representationId))
-
-              yield* tx
                 .update(schema.providerAssetMappings)
                 .set({ canonicalAssetId: assetId, updatedAt: now })
                 .where(eq(schema.providerAssetMappings.assetRepresentationId, representationId))

@@ -2315,18 +2315,6 @@ describe("AssetExceptionRepositoryLive", () => {
             if (leg === undefined) {
               return yield* Effect.die("Failed to seed ownership correction leg")
             }
-            yield* db.insert(schema.fifoLots).values({
-              principalId: TEST_PRINCIPAL_ID,
-              sourceId: TEST_SOURCE_ID,
-              assetId: owner.id,
-              assetRepresentationId: representation.id,
-              acquiredAt: DateTime.toDateUtc(DateTime.makeUnsafe("2025-01-02T00:00:00.000Z")),
-              originalAmount: "10",
-              remainingAmount: "10",
-              costBasisPerToken: "1",
-              costBasisCurrency: "EUR",
-              sourceLegId: leg.id,
-            })
             yield* db.insert(schema.inventoryMovements).values({
               principalId: TEST_PRINCIPAL_ID,
               sourceId: TEST_SOURCE_ID,
@@ -2615,10 +2603,6 @@ describe("AssetExceptionRepositoryLive", () => {
               .select({ decisionId: schema.assetDecisionRematerializations.decisionId })
               .from(schema.assetDecisionRematerializations)
             const dependentAssetIds = yield* Effect.all({
-              fifoLots: db
-                .select({ assetId: schema.fifoLots.assetId })
-                .from(schema.fifoLots)
-                .where(eq(schema.fifoLots.assetRepresentationId, seeded.representationId)),
               inventoryMovements: db
                 .select({ assetId: schema.inventoryMovements.assetId })
                 .from(schema.inventoryMovements)
@@ -2660,7 +2644,6 @@ describe("AssetExceptionRepositoryLive", () => {
       ).toBe(true)
       expect(persisted.work).toHaveLength(6)
       expect(persisted.dependentAssetIds).toEqual({
-        fifoLots: [{ assetId: seeded.replacementAssetId }],
         inventoryMovements: [{ assetId: seeded.replacementAssetId }],
         transactionLegs: [{ assetId: seeded.replacementAssetId }],
         transfers: [{ assetId: seeded.replacementAssetId }],

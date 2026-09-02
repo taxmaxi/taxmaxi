@@ -5,6 +5,8 @@
  */
 
 import { HttpApiBuilder } from "effect/unstable/httpapi"
+import { JurisdictionCode } from "@my/core/accounting"
+import { EUR } from "@my/core/currency"
 import { TransactionListRepository } from "@my/persistence/services"
 import * as Effect from "effect/Effect"
 import * as Option from "effect/Option"
@@ -21,6 +23,7 @@ import {
 import { PrincipalResolutionService } from "../services/PrincipalResolutionService.ts"
 
 const defaultPageLimit = 25
+const GERMAN_JURISDICTION = JurisdictionCode.make("DE")
 const internalError = (message: string) =>
   new InternalServerError({ requestId: Option.none(), message })
 
@@ -37,6 +40,8 @@ export const TransactionsApiLive = HttpApiBuilder.group(TaxMaxiApi, "transaction
         const page = yield* repository
           .list({
             principalId: principal.id,
+            jurisdiction: GERMAN_JURISDICTION,
+            reportingCurrency: EUR,
             cursor: query.cursor ?? null,
             limit: query.limit ?? defaultPageLimit,
           })
