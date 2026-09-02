@@ -4,7 +4,7 @@
  * @module TransactionListRepositoryLive
  */
 
-import { and, asc, count, desc, eq, exists, inArray, lt, or, sql } from "drizzle-orm"
+import { aliasedTable, and, asc, count, desc, eq, exists, inArray, lt, or, sql } from "drizzle-orm"
 import type { JurisdictionCode } from "@my/core/accounting"
 import type { CurrencyCode } from "@my/core/currency"
 import * as BigDecimal from "effect/BigDecimal"
@@ -45,8 +45,14 @@ interface CalculationReadScope {
   readonly reportingCurrency: CurrencyCode
 }
 
+interface CalculationEventCandidate {
+  readonly eventId: string
+  readonly taxYear: number
+  readonly isCustodyMovement: boolean
+}
+
 const eventTaxYear = sql<number>`extract(
-  year from ${schema.transactionLegs.timestamp} at time zone 'Europe/Berlin'
+  year from (${schema.transactionLegs.timestamp} at time zone 'UTC') at time zone 'Europe/Berlin'
 )::integer`
 
 const activeRunScope = (scope: CalculationReadScope) =>
@@ -98,6 +104,8 @@ const decodeDecimal = ({
 
 const make = Effect.gen(function* () {
   const db = yield* drizzle
+  const providerTransactionTable = aliasedTable(schema.transactions, "list_provider_transaction")
+  const canonicalTransactionTable = aliasedTable(schema.transactions, "list_canonical_transaction")
   type TransactionListExecutor = Pick<typeof db, "execute" | "select" | "selectDistinct">
 
   const ownedScope = (executor: TransactionListExecutor, principalId: string) =>
@@ -343,6 +351,173 @@ const make = Effect.gen(function* () {
             )
           )
 
+  const loadPageReconciliations = ({
+    executor,
+    principalId,
+    sourceTransferIds,
+    transactionIds,
+  }: {
+    readonly executor: TransactionListExecutor
+    readonly principalId: string
+    readonly sourceTransferIds: ReadonlyArray<string>
+    readonly transactionIds: ReadonlyArray<string>
+  }) => {
+    const pageScope =
+      sourceTransferIds.length === 0
+        ? inArray(providerTransactionTable.id, transactionIds)
+        : or(
+            inArray(providerTransactionTable.id, transactionIds),
+            inArray(schema.transferReconciliations.canonicalTransferId, sourceTransferIds)
+          )
+
+    return executor
+      .select({
+        id: schema.transferReconciliations.id,
+        providerTransactionId: providerTransactionTable.id,
+        canonicalTransferId: schema.transferReconciliations.canonicalTransferId,
+        taxYear: sql<number>`extract(
+          year from (${canonicalTransactionTable.timestamp} at time zone 'UTC')
+            at time zone 'Europe/Berlin'
+        )::integer`,
+      })
+      .from(schema.transferReconciliations)
+      .innerJoin(
+        schema.providerTransfers,
+        eq(schema.transferReconciliations.providerTransferId, schema.providerTransfers.id)
+      )
+      .innerJoin(
+        providerTransactionTable,
+        and(
+          eq(schema.providerTransfers.transactionId, providerTransactionTable.id),
+          eq(schema.providerTransfers.sourceId, providerTransactionTable.sourceId)
+        )
+      )
+      .innerJoin(
+        schema.inventoryMovements,
+        and(
+          eq(schema.inventoryMovements.providerTransferId, schema.providerTransfers.id),
+          eq(schema.inventoryMovements.transactionId, providerTransactionTable.id),
+          eq(schema.inventoryMovements.sourceId, schema.providerTransfers.sourceId)
+        )
+      )
+      .innerJoin(
+        schema.transfers,
+        eq(schema.transferReconciliations.canonicalTransferId, schema.transfers.id)
+      )
+      .innerJoin(
+        canonicalTransactionTable,
+        and(
+          eq(schema.transferReconciliations.canonicalTransactionId, canonicalTransactionTable.id),
+          eq(schema.transfers.sourceId, canonicalTransactionTable.sourceId)
+        )
+      )
+      .where(
+        and(
+          eq(schema.transferReconciliations.principalId, principalId),
+          eq(schema.inventoryMovements.principalId, principalId),
+          eq(providerTransactionTable.principalId, principalId),
+          eq(canonicalTransactionTable.principalId, principalId),
+          eq(schema.transfers.principalId, principalId),
+          eq(schema.inventoryMovements.purpose, "principal"),
+          eq(schema.inventoryMovements.reconciliationStatus, "matched"),
+          or(
+            eq(schema.transferReconciliations.status, "approved"),
+            and(
+              eq(schema.transferReconciliations.status, "auto_applied"),
+              eq(schema.transferReconciliations.deterministic, true)
+            )
+          ),
+          pageScope
+        )
+      )
+      .pipe(wrapSqlError("transactionListRepository.list.pageReconciliations"))
+  }
+
+  const loadProcessedEventKeys = ({
+    candidates,
+    executor,
+    scope,
+  }: {
+    readonly candidates: ReadonlyArray<CalculationEventCandidate>
+    readonly executor: TransactionListExecutor
+    readonly scope: CalculationReadScope
+  }) => {
+    const eventIds = [...new Set(candidates.map(({ eventId }) => eventId))]
+    const taxYears = [...new Set(candidates.map(({ taxYear }) => taxYear))]
+    if (eventIds.length === 0 || taxYears.length === 0) {
+      return Effect.succeed(new Set<string>())
+    }
+
+    return executor
+      .select({
+        taxYear: schema.activeCalculationRuns.taxYear,
+        eventIds: sql<ReadonlyArray<string>>`array(
+          select page_candidate.event_id
+          from unnest(array[${sql.join(
+            eventIds.map((eventId) => sql`${eventId}`),
+            sql`, `
+          )}]::text[])
+            as page_candidate(event_id)
+          where ${schema.calculationRuns.processedEventIds} ? page_candidate.event_id
+        )`,
+      })
+      .from(schema.activeCalculationRuns)
+      .innerJoin(
+        schema.calculationRuns,
+        eq(schema.activeCalculationRuns.runId, schema.calculationRuns.id)
+      )
+      .where(and(activeRunScope(scope), inArray(schema.activeCalculationRuns.taxYear, taxYears)))
+      .pipe(
+        wrapSqlError("transactionListRepository.list.processedPageEvents"),
+        Effect.map(
+          (rows) =>
+            new Set(
+              rows.flatMap(({ eventIds: processedEventIds, taxYear }) =>
+                processedEventIds.map((eventId) => `${taxYear}:${eventId}`)
+              )
+            )
+        )
+      )
+  }
+
+  const loadBlockedEventKeys = ({
+    candidates,
+    executor,
+    scope,
+  }: {
+    readonly candidates: ReadonlyArray<CalculationEventCandidate>
+    readonly executor: TransactionListExecutor
+    readonly scope: CalculationReadScope
+  }) => {
+    const eventIds = [...new Set(candidates.map(({ eventId }) => eventId))]
+    const taxYears = [...new Set(candidates.map(({ taxYear }) => taxYear))]
+    if (eventIds.length === 0 || taxYears.length === 0) {
+      return Effect.succeed(new Set<string>())
+    }
+
+    return executor
+      .select({
+        eventId: schema.calculationRunBlockers.eventId,
+        taxYear: schema.activeCalculationRuns.taxYear,
+      })
+      .from(schema.activeCalculationRuns)
+      .innerJoin(
+        schema.calculationRunBlockers,
+        eq(schema.activeCalculationRuns.runId, schema.calculationRunBlockers.runId)
+      )
+      .where(
+        and(
+          activeRunScope(scope),
+          inArray(schema.activeCalculationRuns.taxYear, taxYears),
+          inArray(schema.calculationRunBlockers.eventId, eventIds)
+        )
+      )
+      .pipe(
+        wrapSqlError("transactionListRepository.list.blockedPageEvents"),
+        Effect.map((rows) => new Set(rows.map(({ eventId, taxYear }) => `${taxYear}:${eventId}`)))
+      )
+  }
+
   const loadPartialTransactionIds = ({
     executor,
     scope,
@@ -366,44 +541,81 @@ const make = Effect.gen(function* () {
           amount: schema.transactionLegs.amount,
           kind: schema.transactionLegs.kind,
           derivationRule: schema.transactionLegs.derivationRule,
+          sourceTransferId: schema.transactionLegs.sourceTransferId,
           taxYear: eventTaxYear,
         })
         .from(schema.transactionLegs)
         .where(inArray(schema.transactionLegs.transactionId, transactionIds))
         .pipe(wrapSqlError("transactionListRepository.list.calculationStateEvents"))
 
-      const activeRuns = yield* executor
-        .select({
-          taxYear: schema.activeCalculationRuns.taxYear,
-          processedEventIds: schema.calculationRuns.processedEventIds,
-        })
-        .from(schema.activeCalculationRuns)
-        .innerJoin(
-          schema.calculationRuns,
-          eq(schema.activeCalculationRuns.runId, schema.calculationRuns.id)
-        )
-        .where(activeRunScope(scope))
-        .pipe(wrapSqlError("transactionListRepository.list.activeRuns"))
-      const processedEventIdsByTaxYear = new Map(
-        activeRuns.map(
-          ({ taxYear, processedEventIds }) => [taxYear, new Set(processedEventIds)] as const
-        )
+      const sourceTransferIds = rows.flatMap(({ sourceTransferId }) =>
+        sourceTransferId === null ? [] : [sourceTransferId]
       )
+      const reconciliations = yield* loadPageReconciliations({
+        executor,
+        principalId: scope.principalId,
+        sourceTransferIds,
+        transactionIds,
+      })
+      const reconciliationsByProviderTransaction = new Map<
+        string,
+        Array<CalculationEventCandidate>
+      >()
+      const reconciliationsByCanonicalTransfer = new Map<string, Array<CalculationEventCandidate>>()
+      for (const reconciliation of reconciliations) {
+        const candidate = {
+          eventId: reconciliation.id,
+          taxYear: reconciliation.taxYear,
+          isCustodyMovement: true,
+        } satisfies CalculationEventCandidate
+        const providerCandidates =
+          reconciliationsByProviderTransaction.get(reconciliation.providerTransactionId) ?? []
+        providerCandidates.push(candidate)
+        reconciliationsByProviderTransaction.set(
+          reconciliation.providerTransactionId,
+          providerCandidates
+        )
+        if (reconciliation.canonicalTransferId !== null) {
+          const canonicalCandidates =
+            reconciliationsByCanonicalTransfer.get(reconciliation.canonicalTransferId) ?? []
+          canonicalCandidates.push(candidate)
+          reconciliationsByCanonicalTransfer.set(
+            reconciliation.canonicalTransferId,
+            canonicalCandidates
+          )
+        }
+      }
 
-      const blockers = yield* executor
-        .select({ eventId: schema.calculationRunBlockers.eventId })
-        .from(schema.activeCalculationRuns)
-        .innerJoin(
-          schema.calculationRunBlockers,
-          eq(schema.activeCalculationRuns.runId, schema.calculationRunBlockers.runId)
+      const candidatesByEventId = new Map<string, ReadonlyArray<CalculationEventCandidate>>()
+      for (const row of rows) {
+        const reconciledCandidates =
+          row.kind === "fee"
+            ? undefined
+            : row.sourceTransferId === null
+              ? row.transactionId === null
+                ? undefined
+                : reconciliationsByProviderTransaction.get(row.transactionId)
+              : reconciliationsByCanonicalTransfer.get(row.sourceTransferId)
+        candidatesByEventId.set(
+          row.eventId,
+          reconciledCandidates ?? [
+            { eventId: row.eventId, taxYear: row.taxYear, isCustodyMovement: false },
+          ]
         )
-        .innerJoin(
-          schema.transactionLegs,
-          eq(schema.calculationRunBlockers.eventId, schema.transactionLegs.id)
-        )
-        .where(and(activeRunScope(scope), matchingEventTaxYear))
-        .pipe(wrapSqlError("transactionListRepository.list.blockers"))
-      const blockedEventIds = new Set(blockers.map(({ eventId }) => eventId))
+      }
+      const candidates = [...candidatesByEventId.values()].flat()
+      const [processedEventKeys, blockedEventKeys] = yield* Effect.all([
+        loadProcessedEventKeys({
+          candidates,
+          executor,
+          scope,
+        }),
+        loadBlockedEventKeys({
+          candidates,
+          executor,
+          scope,
+        }),
+      ])
 
       const partialTransactionIds = new Set<string>()
       for (const row of rows) {
@@ -414,11 +626,19 @@ const make = Effect.gen(function* () {
         ) {
           continue
         }
-        const processedEventIds = processedEventIdsByTaxYear.get(row.taxYear)
-        if (processedEventIds?.has(row.eventId) !== true || blockedEventIds.has(row.eventId)) {
+        const eventCandidates = candidatesByEventId.get(row.eventId) ?? []
+        const isReconciled = eventCandidates.some(({ isCustodyMovement }) => isCustodyMovement)
+        const isProcessed = eventCandidates.every(({ eventId, taxYear }) =>
+          processedEventKeys.has(`${taxYear}:${eventId}`)
+        )
+        const isBlocked = eventCandidates.some(({ eventId, taxYear }) =>
+          blockedEventKeys.has(`${taxYear}:${eventId}`)
+        )
+        if (!isProcessed || isBlocked) {
           partialTransactionIds.add(row.transactionId)
           continue
         }
+        if (isReconciled) continue
         if (row.kind !== "disposal" && row.kind !== "fee") continue
 
         const disposedQuantity = yield* decodeDecimal({
