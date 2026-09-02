@@ -177,8 +177,8 @@ const fixtureIds = {
     "00000000-0000-4000-8000-000000046212",
     "00000000-0000-4000-8000-000000046213",
   ],
-  buyLotId: "00000000-0000-4000-8000-000000046301",
-  pendingBasisLotId: "00000000-0000-4000-8000-000000046302",
+  calculationRunId: "00000000-0000-4000-8000-000000046301",
+  competingCalculationRunId: "00000000-0000-4000-8000-000000046302",
   hiddenTransactionId: "00000000-0000-4000-8000-000000046901",
 } as const
 
@@ -296,25 +296,151 @@ const seedTransactions = Effect.gen(function* () {
       fiatCurrency: null,
     },
   ])
-  yield* db.insert(schema.fifoLots).values({
-    id: fixtureIds.buyLotId,
-    sourceId: fixture.sourceId,
+  const completedAt = DateTime.toDateUtc(DateTime.makeUnsafe("2026-01-02T00:00:00.000Z"))
+  yield* db.insert(schema.calculationRuns).values({
+    id: fixtureIds.calculationRunId,
     principalId: fixture.principalId,
+    jurisdiction: "DE",
+    taxYear: 2025,
+    reportingCurrency: "EUR",
+    engineVersion: "test-engine-v1",
+    ruleSetVersion: "de-crypto-income-tax-v2025-03-06",
+    inputLedgerRevision: `v2:1:1.1.1:${"a".repeat(64)}`,
+    valuationRevision: `sha256:${"b".repeat(64)}`,
+    status: "partial",
+    accountingMethod: "fifo",
+    inventoryScope: "per_custody_unit",
+    appliedChoiceIds: [],
+    appliedRules: [],
+    processedEventIds: [fixtureIds.buyLegId, fixtureIds.partialLegId, fixtureIds.sellLegId],
+    startedAt: completedAt,
+    completedAt,
+  })
+  yield* db.insert(schema.calculationRunCustodyUnits).values({
+    runId: fixtureIds.calculationRunId,
+    principalId: fixture.principalId,
+    custodyUnitId: fixture.sourceId,
+  })
+  yield* db.insert(schema.calculationRunCustodyUnitSources).values({
+    runId: fixtureIds.calculationRunId,
+    principalId: fixture.principalId,
+    custodyUnitId: fixture.sourceId,
+    sourceId: fixture.sourceId,
+  })
+  yield* db.insert(schema.calculationRunAllocations).values({
+    runId: fixtureIds.calculationRunId,
+    principalId: fixture.principalId,
+    sequence: 0,
+    acquisitionEventId: fixtureIds.buyLegId,
+    dispositionEventId: fixtureIds.sellLegId,
+    assetId: TEST_BTC_ASSET_ID,
+    custodyUnitId: fixture.sourceId,
+    acquiredAt: DateTime.toDateUtc(DateTime.makeUnsafe("2025-03-01T12:00:00.000Z")),
+    disposedAt: DateTime.toDateUtc(DateTime.makeUnsafe("2025-03-10T12:00:00.000Z")),
+    quantity: "0.4",
+    costBasis: "4000",
+  })
+  yield* db.insert(schema.calculationRunRealizedResults).values({
+    runId: fixtureIds.calculationRunId,
+    sequence: 0,
+    sourceId: fixture.sourceId,
+    allocationSequence: 0,
+    acquisitionEventId: fixtureIds.buyLegId,
+    dispositionEventId: fixtureIds.sellLegId,
     assetId: TEST_BTC_ASSET_ID,
     acquiredAt: DateTime.toDateUtc(DateTime.makeUnsafe("2025-03-01T12:00:00.000Z")),
-    originalAmount: "0.5",
-    remainingAmount: "0.1",
-    costBasisPerToken: "10000",
-    costBasisCurrency: "EUR",
-    sourceLegId: fixtureIds.buyLegId,
-  })
-  yield* db.insert(schema.disposalMatches).values({
-    disposalLegId: fixtureIds.sellLegId,
-    fifoLotId: fixtureIds.buyLotId,
-    matchedAmount: "0.4",
+    disposedAt: DateTime.toDateUtc(DateTime.makeUnsafe("2025-03-10T12:00:00.000Z")),
+    quantity: "0.4",
     costBasis: "4000",
     proceeds: "6000",
     gainLoss: "2000",
+    treatmentCodes: ["de.taxable_private_disposal"],
+  })
+  yield* db.insert(schema.calculationRunBlockers).values({
+    runId: fixtureIds.calculationRunId,
+    principalId: fixture.principalId,
+    sequence: 0,
+    code: "missing_valuation",
+    eventId: fixtureIds.partialLegId,
+    assetId: TEST_BTC_ASSET_ID,
+    custodyUnitId: fixture.sourceId,
+    missingQuantity: null,
+  })
+  yield* db.insert(schema.activeCalculationRuns).values({
+    principalId: fixture.principalId,
+    jurisdiction: "DE",
+    taxYear: 2025,
+    reportingCurrency: "EUR",
+    runId: fixtureIds.calculationRunId,
+    minimumActivationRevision: "0",
+  })
+
+  yield* db.insert(schema.calculationRuns).values({
+    id: fixtureIds.competingCalculationRunId,
+    principalId: fixture.principalId,
+    jurisdiction: "US",
+    taxYear: 2025,
+    reportingCurrency: "USD",
+    engineVersion: "test-engine-v1",
+    ruleSetVersion: "us-test-only",
+    inputLedgerRevision: `v2:1:1.1.1:${"c".repeat(64)}`,
+    valuationRevision: `sha256:${"d".repeat(64)}`,
+    status: "complete",
+    accountingMethod: "fifo",
+    inventoryScope: "per_custody_unit",
+    appliedChoiceIds: [],
+    appliedRules: [],
+    processedEventIds: [fixtureIds.sellLegId],
+    startedAt: completedAt,
+    completedAt,
+  })
+  yield* db.insert(schema.calculationRunCustodyUnits).values({
+    runId: fixtureIds.competingCalculationRunId,
+    principalId: fixture.principalId,
+    custodyUnitId: fixture.sourceId,
+  })
+  yield* db.insert(schema.calculationRunCustodyUnitSources).values({
+    runId: fixtureIds.competingCalculationRunId,
+    principalId: fixture.principalId,
+    custodyUnitId: fixture.sourceId,
+    sourceId: fixture.sourceId,
+  })
+  yield* db.insert(schema.calculationRunAllocations).values({
+    runId: fixtureIds.competingCalculationRunId,
+    principalId: fixture.principalId,
+    sequence: 0,
+    acquisitionEventId: fixtureIds.buyLegId,
+    dispositionEventId: fixtureIds.sellLegId,
+    assetId: TEST_BTC_ASSET_ID,
+    custodyUnitId: fixture.sourceId,
+    acquiredAt: DateTime.toDateUtc(DateTime.makeUnsafe("2025-03-01T12:00:00.000Z")),
+    disposedAt: DateTime.toDateUtc(DateTime.makeUnsafe("2025-03-10T12:00:00.000Z")),
+    quantity: "0.4",
+    costBasis: "1000",
+  })
+  yield* db.insert(schema.calculationRunRealizedResults).values({
+    runId: fixtureIds.competingCalculationRunId,
+    sequence: 0,
+    sourceId: fixture.sourceId,
+    allocationSequence: 0,
+    acquisitionEventId: fixtureIds.buyLegId,
+    dispositionEventId: fixtureIds.sellLegId,
+    assetId: TEST_BTC_ASSET_ID,
+    acquiredAt: DateTime.toDateUtc(DateTime.makeUnsafe("2025-03-01T12:00:00.000Z")),
+    disposedAt: DateTime.toDateUtc(DateTime.makeUnsafe("2025-03-10T12:00:00.000Z")),
+    quantity: "0.4",
+    costBasis: "1000",
+    proceeds: "9000",
+    gainLoss: "8000",
+    treatmentCodes: ["us.test-only"],
+  })
+  yield* db.insert(schema.activeCalculationRuns).values({
+    principalId: fixture.principalId,
+    jurisdiction: "US",
+    taxYear: 2025,
+    reportingCurrency: "USD",
+    runId: fixtureIds.competingCalculationRunId,
+    minimumActivationRevision: "0",
   })
 
   return fixture
@@ -719,62 +845,6 @@ describe("TransactionsApiLive", () => {
             fiatCurrency: "EUR",
           },
         ])
-        yield* db.insert(schema.fifoLots).values({
-          id: fixtureIds.pendingBasisLotId,
-          sourceId: fixture.sourceId,
-          principalId: fixture.principalId,
-          assetId: TEST_BTC_ASSET_ID,
-          acquiredAt: DateTime.toDateUtc(DateTime.makeUnsafe("2025-03-02T12:00:00.000Z")),
-          originalAmount: "0.1",
-          remainingAmount: "0",
-          costBasisPerToken: "0",
-          costBasisCurrency: "EUR",
-          costBasisStatus: "pending_review",
-          sourceLegId: fixtureIds.pendingBasisAcquisitionLegId,
-        })
-        yield* db.insert(schema.disposalMatches).values([
-          {
-            disposalLegId: fixtureIds.pendingBasisDisposalLegId,
-            fifoLotId: fixtureIds.pendingBasisLotId,
-            matchedAmount: "0.1",
-            costBasis: "0",
-            proceeds: "1500",
-            gainLoss: "1500",
-          },
-          {
-            disposalLegId: fixtureIds.internalTransferOutLegId,
-            fifoLotId: fixtureIds.buyLotId,
-            matchedAmount: "0.1",
-            costBasis: "1000",
-            proceeds: "1000",
-            gainLoss: "0",
-          },
-          {
-            disposalLegId: fixtureIds.mixedCurrencyUsdLegId,
-            fifoLotId: fixtureIds.buyLotId,
-            matchedAmount: "0.1",
-            costBasis: "1000",
-            proceeds: "1600",
-            gainLoss: "600",
-          },
-          {
-            disposalLegId: fixtureIds.missingProceedsLegId,
-            fifoLotId: fixtureIds.buyLotId,
-            matchedAmount: "0.1",
-            costBasis: "1000",
-            proceeds: "0",
-            gainLoss: "-1000",
-          },
-          {
-            disposalLegId: fixtureIds.partialMatchLegId,
-            fifoLotId: fixtureIds.buyLotId,
-            matchedAmount: "0.05",
-            costBasis: "500",
-            proceeds: "750",
-            gainLoss: "250",
-          },
-        ])
-
         const client = yield* makeAuthenticatedClient({ userId: fixture.userId })
         const response = yield* client.transactions.listTransactions({ query: { limit: 20 } })
         const internalTransfer = response.transactions.find(

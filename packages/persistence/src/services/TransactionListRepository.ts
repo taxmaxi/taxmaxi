@@ -7,6 +7,8 @@
 import * as Context from "effect/Context"
 import type * as Effect from "effect/Effect"
 import * as Schema from "effect/Schema"
+import type { JurisdictionCode } from "@my/core/accounting"
+import type { CurrencyCode } from "@my/core/currency"
 import type { PersistenceError } from "../errors/RepositoryError.ts"
 
 /** The supplied transaction cursor is malformed. */
@@ -60,6 +62,8 @@ export interface TransactionListPage {
 
 export interface TransactionListParams {
   readonly principalId: string
+  readonly jurisdiction: JurisdictionCode
+  readonly reportingCurrency: CurrencyCode
   readonly cursor: string | null
   readonly limit: number
 }
