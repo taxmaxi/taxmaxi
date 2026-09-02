@@ -35,6 +35,7 @@ import * as Layer from "effect/Layer"
 import * as Option from "effect/Option"
 import * as Schema from "effect/Schema"
 import { drizzle } from "./PgClientLive.ts"
+import { scheduleSourceReplays } from "./SourceReplayScheduling.ts"
 import { nowDate } from "./SyncEngineRepositorySupport.ts"
 import { getAssetCatalogSearchPatterns } from "../query/AssetCatalogSearch.ts"
 import { schema } from "../schema/index.ts"
@@ -1649,91 +1650,31 @@ const make = Effect.gen(function* () {
         .where(inArray(schema.sources.id, affectedSourceIdsSubquerySql(providerAssetRowIds)))
         .orderBy(asc(schema.sources.id))
 
-      yield* Effect.forEach(sourceRows, ({ sourceId, principalId }) =>
-        Effect.gen(function* () {
-          const requestReplay = (attemptsRemaining: number): Effect.Effect<string, unknown> =>
-            Effect.gen(function* () {
-              // A pending replay has not started, so it already rebuilds
-              // everything this decision changed once it runs; reuse it
-              // directly. Marking it for a follow-up instead would skip
-              // settling its rebuild rows on completion and park them on a
-              // redundant second replay. The row update locks it against a
-              // concurrent worker claim inside this transaction.
-              const [pendingReplay] = yield* tx
-                .update(schema.processingJobs)
-                .set({ updatedAt: now })
-                .where(
-                  and(
-                    eq(schema.processingJobs.sourceId, sourceId),
-                    eq(schema.processingJobs.principalId, principalId),
-                    eq(schema.processingJobs.mode, "replay"),
-                    eq(schema.processingJobs.status, "pending")
-                  )
-                )
-                .returning({ id: schema.processingJobs.id })
-              if (pendingReplay !== undefined) {
-                return pendingReplay.id
-              }
+      const scheduledReplays = yield* scheduleSourceReplays({
+        tx,
+        sources: sourceRows,
+        now,
+        progressDetails: {
+          mode: "replay",
+          reason: "asset_exception_decision",
+          decisionId,
+        },
+        errorOperation: () => "assetExceptionRepository.scheduleRematerialization",
+        pendingReplayPolicy: "reuse",
+      })
 
-              // Any other active job either already runs (its replay may have
-              // passed this decision's data) or is a pending sync, so a
-              // follow-up replay after it is required.
-              const [activeJob] = yield* tx
-                .update(schema.processingJobs)
-                .set({ followUpMode: "replay", updatedAt: now })
-                .where(
-                  and(
-                    eq(schema.processingJobs.sourceId, sourceId),
-                    eq(schema.processingJobs.principalId, principalId),
-                    inArray(schema.processingJobs.status, ["pending", "processing"])
-                  )
-                )
-                .returning({ id: schema.processingJobs.id })
-              if (activeJob !== undefined) {
-                return activeJob.id
-              }
-
-              const [createdJob] = yield* tx
-                .insert(schema.processingJobs)
-                .values({
-                  sourceId,
-                  principalId,
-                  mode: "replay",
-                  status: "pending",
-                  progressDetails: {
-                    mode: "replay",
-                    reason: "asset_exception_decision",
-                    decisionId,
-                  },
-                  createdAt: now,
-                  updatedAt: now,
-                })
-                .onConflictDoNothing()
-                .returning({ id: schema.processingJobs.id })
-              if (createdJob !== undefined) {
-                return createdJob.id
-              }
-              if (attemptsRemaining > 1) {
-                return yield* Effect.suspend(() => requestReplay(attemptsRemaining - 1))
-              }
-
-              return yield* toStorageError("assetExceptionRepository.scheduleRematerialization", {
-                sourceId,
-                message: "Active replay owner changed repeatedly.",
-              })
-            })
-
-          const processingJobId = yield* requestReplay(3)
-
-          yield* tx.insert(schema.assetDecisionRematerializations).values({
+      yield* Effect.forEach(
+        scheduledReplays,
+        ({ sourceId, processingJobId }) =>
+          tx.insert(schema.assetDecisionRematerializations).values({
             decisionId,
             sourceId,
             processingJobId,
             status: "pending",
             createdAt: now,
             updatedAt: now,
-          })
-        })
+          }),
+        { discard: true }
       )
     }).pipe(
       Effect.mapError((cause) =>

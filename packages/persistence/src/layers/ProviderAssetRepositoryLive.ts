@@ -26,6 +26,7 @@ import {
   wrapSyncEngineSqlError,
   wrapSyncEngineStorageError,
 } from "./SyncEngineRepositorySupport.ts"
+import { scheduleSourceReplays } from "./SourceReplayScheduling.ts"
 import { schema } from "../schema/index.ts"
 
 class ApprovalObservationSourceSetChanged extends Data.TaggedError(
@@ -102,83 +103,39 @@ const make = Effect.gen(function* () {
     readonly decisionIds: ReadonlyArray<string>
   }): Effect.Effect<void, SyncEngineStorageError> =>
     Effect.gen(function* () {
-      const requestReplay = (
-        attemptsRemaining: number
-      ): Effect.Effect<string, SyncEngineStorageError> =>
-        Effect.gen(function* () {
-          const [activeJob] = yield* tx
-            .update(schema.processingJobs)
-            .set({ followUpMode: "replay", updatedAt: now })
-            .where(
-              and(
-                eq(schema.processingJobs.sourceId, sourceId),
-                eq(schema.processingJobs.principalId, principalId),
-                inArray(schema.processingJobs.status, ["pending", "processing"])
-              )
-            )
-            .returning({ id: schema.processingJobs.id })
-            .pipe(wrapSyncEngineSqlError(`${operation}.requestActiveReplay`))
-
-          if (activeJob !== undefined) {
-            return activeJob.id
-          }
-
-          const [createdJob] = yield* tx
-            .insert(schema.processingJobs)
-            .values({
-              sourceId,
-              principalId,
-              mode: "replay",
-              status: "pending",
-              attemptCount: 0,
-              maxAttempts: 3,
-              progressDetails: { mode: "replay", reason },
-              createdAt: now,
-              updatedAt: now,
-            })
-            .onConflictDoNothing()
-            .returning({ id: schema.processingJobs.id })
-            .pipe(wrapSyncEngineSqlError(`${operation}.createReplay`))
-
-          if (createdJob !== undefined) {
-            return createdJob.id
-          }
-
-          if (attemptsRemaining > 1) {
-            return yield* Effect.suspend(() => requestReplay(attemptsRemaining - 1))
-          }
-
-          return yield* new SyncEngineStorageError({
-            operation: `${operation}.requestReplay`,
-            cause: {
-              principalId,
-              sourceId,
-              message: "Active replay owner changed repeatedly.",
-            },
-          })
-        })
-
-      const processingJobId = yield* requestReplay(3)
+      const scheduledReplays = yield* scheduleSourceReplays({
+        tx,
+        sources: [{ sourceId, principalId }],
+        now,
+        progressDetails: { mode: "replay", reason },
+        errorOperation: (step) => `${operation}.${step}`,
+        pendingReplayPolicy: "request_follow_up",
+      })
       yield* Effect.forEach(
-        decisionIds,
-        (decisionId) =>
-          tx
-            .insert(schema.assetDecisionRematerializations)
-            .values({
-              decisionId,
-              sourceId,
-              processingJobId,
-              status: "pending",
-              createdAt: now,
-              updatedAt: now,
-            })
-            .onConflictDoNothing({
-              target: [
-                schema.assetDecisionRematerializations.decisionId,
-                schema.assetDecisionRematerializations.sourceId,
-              ],
-            })
-            .pipe(wrapSyncEngineSqlError(`${operation}.trackReplay`)),
+        scheduledReplays,
+        ({ processingJobId }) =>
+          Effect.forEach(
+            decisionIds,
+            (decisionId) =>
+              tx
+                .insert(schema.assetDecisionRematerializations)
+                .values({
+                  decisionId,
+                  sourceId,
+                  processingJobId,
+                  status: "pending",
+                  createdAt: now,
+                  updatedAt: now,
+                })
+                .onConflictDoNothing({
+                  target: [
+                    schema.assetDecisionRematerializations.decisionId,
+                    schema.assetDecisionRematerializations.sourceId,
+                  ],
+                })
+                .pipe(wrapSyncEngineSqlError(`${operation}.trackReplay`)),
+            { discard: true }
+          ),
         { discard: true }
       )
     })

@@ -1214,6 +1214,184 @@ describe("ProviderAssetRepositoryLive", () => {
       })
     )
 
+    it.effect.each(["pending", "processing"] as const)(
+      "selects the existing %s replay job and remains idempotent on retry",
+      (status) =>
+        Effect.gen(function* () {
+          const providerAsset = yield* Effect.promise(() =>
+            seedPendingApprovalAsset(`existing-${status}-replay`)
+          )
+          const replayJobId = yield* Effect.promise(() =>
+            runPg(
+              Effect.gen(function* () {
+                const db = yield* drizzle
+                const [job] = yield* db
+                  .insert(schema.processingJobs)
+                  .values({
+                    sourceId: TEST_SOURCE_ID,
+                    principalId: TEST_PRINCIPAL_ID,
+                    mode: "replay",
+                    status,
+                    attemptCount: status === "processing" ? 1 : 0,
+                    maxAttempts: 3,
+                    progressDetails: { mode: "replay", reason: "existing_replay" },
+                  })
+                  .returning({ id: schema.processingJobs.id })
+                if (job === undefined) {
+                  return yield* Effect.die("Expected existing replay job")
+                }
+                return job.id
+              })
+            )
+          )
+
+          const approve = () =>
+            runRepository(
+              Effect.flatMap(ProviderAssetRepository, (repository) =>
+                repository.approveProviderAssetMappingAndRequestReplay({
+                  mapping: {
+                    providerAssetRowId: providerAsset.id,
+                    mappingKind: "asset",
+                    canonicalAssetId: TEST_BTC_ASSET_ID,
+                    assetRepresentationId: null,
+                    canonicalFiatCurrency: null,
+                    mappingStatus: "approved",
+                    reviewerNotes: "Reuse the existing replay owner",
+                    sourceNotes: "Reuse the existing replay owner",
+                  },
+                  conclusion: makeApprovalConclusion({
+                    providerAsset,
+                    assetRepresentationId: null,
+                  }),
+                  expectedObservedRepresentations: [],
+                  expectedProviderAssetRetrievedAt: providerAsset.retrievedAt,
+                })
+              )
+            )
+
+          const first = yield* Effect.promise(() => approve())
+          const retry = yield* Effect.promise(() => approve())
+          const state = yield* Effect.promise(() =>
+            runPg(
+              Effect.gen(function* () {
+                const db = yield* drizzle
+                const jobs = yield* db
+                  .select({
+                    id: schema.processingJobs.id,
+                    followUpMode: schema.processingJobs.followUpMode,
+                    mode: schema.processingJobs.mode,
+                    status: schema.processingJobs.status,
+                  })
+                  .from(schema.processingJobs)
+                  .where(eq(schema.processingJobs.sourceId, TEST_SOURCE_ID))
+                const rematerializations = yield* db
+                  .select({
+                    processingJobId: schema.assetDecisionRematerializations.processingJobId,
+                  })
+                  .from(schema.assetDecisionRematerializations)
+                const calculationRuns = yield* db
+                  .select({ id: schema.calculationRuns.id })
+                  .from(schema.calculationRuns)
+                return { calculationRuns, jobs, rematerializations }
+              })
+            )
+          )
+
+          expect(first).toEqual({ mappingChanged: true })
+          expect(retry).toEqual({ mappingChanged: false })
+          expect(state.jobs).toEqual([
+            {
+              id: replayJobId,
+              followUpMode: "replay",
+              mode: "replay",
+              status,
+            },
+          ])
+          expect(state.rematerializations).toEqual([{ processingJobId: replayJobId }])
+          expect(state.calculationRuns).toEqual([])
+        })
+    )
+
+    it.effect("preserves the active replay request error operation", () =>
+      Effect.gen(function* () {
+        const providerAsset = yield* Effect.promise(() =>
+          seedPendingApprovalAsset("replay-error-operation")
+        )
+        yield* Effect.promise(() =>
+          runPg(
+            Effect.gen(function* () {
+              const db = yield* drizzle
+              yield* db.insert(schema.processingJobs).values({
+                sourceId: TEST_SOURCE_ID,
+                principalId: TEST_PRINCIPAL_ID,
+                mode: "replay",
+                status: "pending",
+              })
+              yield* db.execute(sql`
+                create function fail_provider_asset_replay_update() returns trigger
+                language plpgsql as $trigger$
+                begin
+                  raise exception 'injected replay update failure';
+                end
+                $trigger$
+              `)
+              yield* db.execute(sql`
+                create trigger fail_provider_asset_replay_update
+                before update on processing_jobs
+                for each row execute function fail_provider_asset_replay_update()
+              `)
+            })
+          )
+        )
+
+        const result = yield* Effect.promise(() =>
+          runRepository(
+            Effect.result(
+              Effect.flatMap(ProviderAssetRepository, (repository) =>
+                repository.approveProviderAssetMappingAndRequestReplay({
+                  mapping: {
+                    providerAssetRowId: providerAsset.id,
+                    mappingKind: "asset",
+                    canonicalAssetId: TEST_BTC_ASSET_ID,
+                    assetRepresentationId: null,
+                    canonicalFiatCurrency: null,
+                    mappingStatus: "approved",
+                    reviewerNotes: "Preserve replay error operation",
+                    sourceNotes: "Preserve replay error operation",
+                  },
+                  conclusion: makeApprovalConclusion({
+                    providerAsset,
+                    assetRepresentationId: null,
+                  }),
+                  expectedObservedRepresentations: [],
+                  expectedProviderAssetRetrievedAt: providerAsset.retrievedAt,
+                })
+              )
+            )
+          )
+        )
+        yield* Effect.promise(() =>
+          runPg(
+            Effect.gen(function* () {
+              const db = yield* drizzle
+              yield* db.execute(
+                sql`drop trigger fail_provider_asset_replay_update on processing_jobs`
+              )
+              yield* db.execute(sql`drop function fail_provider_asset_replay_update()`)
+            })
+          )
+        )
+
+        expect(result).toMatchObject({
+          _tag: "Failure",
+          failure: {
+            operation:
+              "providerAssetRepository.approveProviderAssetMappingAndRequestReplay.requestActiveReplay",
+          },
+        })
+      })
+    )
+
     it.effect("rejects approval when no current conclusion owns the target", () =>
       Effect.gen(function* () {
         const providerAsset = yield* Effect.promise(() =>
