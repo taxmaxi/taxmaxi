@@ -39,6 +39,10 @@ import {
 import { drizzle } from "./PgClientLive.ts"
 import { nowDate, wrapSyncEngineSqlError } from "./SyncEngineRepositorySupport.ts"
 import { schema } from "../schema/index.ts"
+import {
+  makePrincipalAssetOverrideDecisionLoader,
+  resolvePrincipalAssetId,
+} from "./PrincipalAssetOverrideDecisionLoader.ts"
 
 const isUniformCaseBitcoinBech32Address = (address: SQLWrapper) => sql`
   (${address} = lower(${address}) or ${address} = upper(${address}))
@@ -72,6 +76,7 @@ class ReconciliationSourceSetChanged extends Schema.TaggedError<ReconciliationSo
 
 const make = Effect.gen(function* () {
   const db = yield* drizzle
+  const principalAssetOverrideDecisionLoader = yield* makePrincipalAssetOverrideDecisionLoader
   type TransferReconciliationExecutor = Pick<typeof db, "select">
   type ReconciliationMutationExecutor = Pick<typeof db, "delete" | "select" | "update">
   const providerTransactionTable = aliasedTable(schema.transactions, "provider_transaction")
@@ -187,56 +192,87 @@ const make = Effect.gen(function* () {
 
   const listProviderTransfersForReconciliation: TransferReconciliationRepositoryShape["listProviderTransfersForReconciliation"] =
     ({ principalId, sourceId }: ListProviderTransfersForReconciliationParams) =>
-      db
-        .select({
-          principalId: schema.sources.principalId,
-          providerTransferId: schema.providerTransfers.id,
-          providerSourceId: schema.providerTransfers.sourceId,
-          providerTransactionId: schema.providerTransfers.transactionId,
-          providerAssetId: schema.providerTransfers.providerAssetId,
-          canonicalAssetId: schema.providerAssetMappings.canonicalAssetId,
-          assetRepresentationId: schema.providerAssetMappings.assetRepresentationId,
-          timestamp: schema.providerTransfers.timestamp,
-          direction: schema.providerTransfers.direction,
-          fromAddress: schema.providerTransfers.fromAddress,
-          toAddress: schema.providerTransfers.toAddress,
-          networkName: schema.providerTransfers.networkName,
-          networkHash: schema.providerTransfers.networkHash,
-          amount: schema.providerTransfers.amount,
-        })
-        .from(schema.providerTransfers)
-        .innerJoin(schema.sources, eq(schema.sources.id, schema.providerTransfers.sourceId))
-        .innerJoin(
-          schema.transactions,
-          eq(schema.transactions.id, schema.providerTransfers.transactionId)
-        )
-        .leftJoin(
-          schema.providerAssetMappings,
-          and(
-            sql`${schema.providerAssetMappings.providerAssetRowId} = ${schema.providerTransfers.providerAssetId}`,
-            eq(schema.providerAssetMappings.mappingStatus, "approved"),
-            eq(schema.providerAssetMappings.mappingKind, "asset")
+      Effect.gen(function* () {
+        const rows = yield* db
+          .select({
+            principalId: schema.sources.principalId,
+            providerTransferId: schema.providerTransfers.id,
+            providerSourceId: schema.providerTransfers.sourceId,
+            providerTransactionId: schema.providerTransfers.transactionId,
+            providerAssetId: schema.providerTransfers.providerAssetId,
+            canonicalAssetId: schema.providerAssetMappings.canonicalAssetId,
+            assetRepresentationId: schema.providerAssetMappings.assetRepresentationId,
+            timestamp: schema.providerTransfers.timestamp,
+            direction: schema.providerTransfers.direction,
+            fromAddress: schema.providerTransfers.fromAddress,
+            toAddress: schema.providerTransfers.toAddress,
+            networkName: schema.providerTransfers.networkName,
+            networkHash: schema.providerTransfers.networkHash,
+            amount: schema.providerTransfers.amount,
+          })
+          .from(schema.providerTransfers)
+          .innerJoin(schema.sources, eq(schema.sources.id, schema.providerTransfers.sourceId))
+          .innerJoin(
+            schema.transactions,
+            eq(schema.transactions.id, schema.providerTransfers.transactionId)
           )
-        )
-        .where(
-          and(
-            eq(schema.sources.principalId, principalId),
-            eq(schema.sources.sourceableType, "cex"),
-            eq(schema.providerTransfers.sourceId, sourceId),
-            sql`lower(coalesce(${schema.transactions.providerStatus}, '')) in ('completed', 'succeeded')`,
-            sql`coalesce(${schema.providerTransfers.metadata}->>'role', 'principal') = 'principal'`,
-            inArray(schema.providerTransfers.processingMode, [
-              "accounting_and_evidence",
-              "accounting_only",
-            ])
+          .leftJoin(
+            schema.providerAssetMappings,
+            and(
+              sql`${schema.providerAssetMappings.providerAssetRowId} = ${schema.providerTransfers.providerAssetId}`,
+              eq(schema.providerAssetMappings.mappingStatus, "approved"),
+              eq(schema.providerAssetMappings.mappingKind, "asset")
+            )
           )
-        )
-        .orderBy(asc(schema.providerTransfers.timestamp))
-        .pipe(
-          wrapSyncEngineSqlError(
-            "transferReconciliationRepository.listProviderTransfersForReconciliation"
+          .where(
+            and(
+              eq(schema.sources.principalId, principalId),
+              eq(schema.sources.sourceableType, "cex"),
+              eq(schema.providerTransfers.sourceId, sourceId),
+              sql`lower(coalesce(${schema.transactions.providerStatus}, '')) in ('completed', 'succeeded')`,
+              sql`coalesce(${schema.providerTransfers.metadata}->>'role', 'principal') = 'principal'`,
+              inArray(schema.providerTransfers.processingMode, [
+                "accounting_and_evidence",
+                "accounting_only",
+              ])
+            )
           )
-        )
+          .orderBy(asc(schema.providerTransfers.timestamp))
+          .pipe(
+            wrapSyncEngineSqlError(
+              "transferReconciliationRepository.listProviderTransfersForReconciliation"
+            )
+          )
+        const decisions = yield* principalAssetOverrideDecisionLoader
+          .load({
+            principalId,
+            assetRepresentationIds: rows.flatMap(({ assetRepresentationId }) =>
+              assetRepresentationId === null ? [] : [assetRepresentationId]
+            ),
+          })
+          .pipe(
+            Effect.mapError(
+              (cause) =>
+                new SyncEngineStorageError({
+                  operation:
+                    "transferReconciliationRepository.listProviderTransfersForReconciliation.loadOverrides",
+                  cause,
+                })
+            )
+          )
+
+        return rows.map((row) => ({
+          ...row,
+          canonicalAssetId:
+            row.canonicalAssetId === null
+              ? null
+              : resolvePrincipalAssetId({
+                  decisions,
+                  systemAssetId: row.canonicalAssetId,
+                  assetRepresentationId: row.assetRepresentationId,
+                }),
+        }))
+      })
 
   const findOnchainTransferCandidatesWithExecutor = ({
     executor,
@@ -453,10 +489,46 @@ const make = Effect.gen(function* () {
       )
       .orderBy(asc(onchainProviderTransferTable.timestamp), asc(onchainProviderTransferTable.id))
 
-    return Effect.all([canonicalCandidates, observedCandidates]).pipe(
-      Effect.map(([canonical, observed]) => [...canonical, ...observed]),
-      wrapSyncEngineSqlError("transferReconciliationRepository.findOnchainTransferCandidates")
-    )
+    return Effect.gen(function* () {
+      const [canonical, observed] = yield* Effect.all([
+        canonicalCandidates,
+        observedCandidates,
+      ]).pipe(
+        wrapSyncEngineSqlError("transferReconciliationRepository.findOnchainTransferCandidates")
+      )
+      const decisions = yield* principalAssetOverrideDecisionLoader
+        .load({
+          principalId,
+          assetRepresentationIds: observed.flatMap(({ assetRepresentationId }) =>
+            assetRepresentationId === null ? [] : [assetRepresentationId]
+          ),
+        })
+        .pipe(
+          Effect.mapError(
+            (cause) =>
+              new SyncEngineStorageError({
+                operation:
+                  "transferReconciliationRepository.findOnchainTransferCandidates.loadOverrides",
+                cause,
+              })
+          )
+        )
+
+      return [
+        ...canonical,
+        ...observed.map((candidate) => ({
+          ...candidate,
+          assetId:
+            candidate.assetId === null
+              ? null
+              : resolvePrincipalAssetId({
+                  decisions,
+                  systemAssetId: candidate.assetId,
+                  assetRepresentationId: candidate.assetRepresentationId,
+                }),
+        })),
+      ]
+    })
   }
 
   const findOnchainTransferCandidates: TransferReconciliationRepositoryShape["findOnchainTransferCandidates"] =

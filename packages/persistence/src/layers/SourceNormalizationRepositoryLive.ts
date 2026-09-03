@@ -40,6 +40,12 @@ import {
   wrapSyncEngineSqlError,
   wrapSyncEngineStorageError,
 } from "./SyncEngineRepositorySupport.ts"
+import {
+  makePrincipalAssetOverrideDecisionLoader,
+  type PrincipalAssetOverrideDecisions,
+  resolvePrincipalAssetId,
+  resolveSystemAssetId,
+} from "./PrincipalAssetOverrideDecisionLoader.ts"
 
 interface PersistedSourceLegRecord {
   readonly id: string
@@ -106,6 +112,21 @@ const stableTransactionId = ({
   return `${digest.slice(0, 8)}-${digest.slice(8, 12)}-8${digest.slice(13, 16)}-${variant}${digest.slice(17, 20)}-${digest.slice(20, 32)}`
 }
 
+const sourceRepresentationUseKey = ({
+  sourceId,
+  blockchainId,
+  representationType,
+  contractAddress,
+  mintAddress,
+}: {
+  readonly sourceId: string
+  readonly blockchainId: string
+  readonly representationType: "native" | "token" | "nft"
+  readonly contractAddress: string | null
+  readonly mintAddress: string | null
+}): string =>
+  JSON.stringify([sourceId, blockchainId, representationType, contractAddress, mintAddress])
+
 const ProviderTransferMetadataSchema = Schema.Struct({
   role: Schema.optional(Schema.Literals(["principal", "fee", "rent"])),
 })
@@ -171,6 +192,7 @@ const compareDecimalStrings = ({
 
 const make = Effect.gen(function* () {
   const db = yield* drizzle
+  const principalAssetOverrideDecisionLoader = yield* makePrincipalAssetOverrideDecisionLoader
 
   type SourceNormalizationExecutor = Pick<typeof db, "delete" | "insert" | "select" | "update">
 
@@ -1163,67 +1185,92 @@ const make = Effect.gen(function* () {
   const recordSourceRepresentationUses = ({
     executor,
     providerTransfers,
+    assetRepresentationIds,
     sourceId,
   }: {
     readonly executor: SourceNormalizationExecutor
     readonly providerTransfers: ReadonlyArray<SourceProviderTransferDraft>
+    readonly assetRepresentationIds: ReadonlyArray<string>
     readonly sourceId: string
-  }) => {
-    const observedRepresentations = new Map<
-      string,
-      {
-        readonly sourceId: string
-        readonly blockchainId: string
-        readonly representationType: "native" | "token" | "nft"
-        readonly contractAddress: string | null
-        readonly mintAddress: string | null
+  }) =>
+    Effect.gen(function* () {
+      const observedRepresentations = new Map<
+        string,
+        {
+          readonly sourceId: string
+          readonly blockchainId: string
+          readonly representationType: "native" | "token" | "nft"
+          readonly contractAddress: string | null
+          readonly mintAddress: string | null
+        }
+      >()
+
+      for (const transfer of providerTransfers) {
+        if (
+          transfer.observedBlockchainId === null ||
+          transfer.observedBlockchainId === undefined ||
+          transfer.observedRepresentationType === null ||
+          transfer.observedRepresentationType === undefined
+        ) {
+          continue
+        }
+
+        const representation = {
+          sourceId,
+          blockchainId: transfer.observedBlockchainId,
+          representationType: transfer.observedRepresentationType,
+          contractAddress: canonicalizeAddress(transfer.observedContractAddress ?? null),
+          mintAddress: canonicalizeAddress(transfer.observedMintAddress ?? null),
+        } as const
+        observedRepresentations.set(sourceRepresentationUseKey(representation), representation)
       }
-    >()
 
-    for (const transfer of providerTransfers) {
-      if (
-        transfer.observedBlockchainId === null ||
-        transfer.observedBlockchainId === undefined ||
-        transfer.observedRepresentationType === null ||
-        transfer.observedRepresentationType === undefined
-      ) {
-        continue
+      const uniqueRepresentationIds = [...new Set(assetRepresentationIds)]
+      const storedRepresentations =
+        uniqueRepresentationIds.length === 0
+          ? []
+          : yield* executor
+              .select({
+                blockchainId: schema.assetRepresentations.blockchainId,
+                representationType: schema.assetRepresentations.type,
+                contractAddress: schema.assetRepresentations.contractAddress,
+                mintAddress: schema.assetRepresentations.mintAddress,
+              })
+              .from(schema.assetRepresentations)
+              .where(inArray(schema.assetRepresentations.id, uniqueRepresentationIds))
+              .pipe(
+                wrapSyncEngineSqlError(
+                  "sourceNormalizationRepository.recordSourceRepresentationUses.loadRepresentations"
+                )
+              )
+
+      for (const storedRepresentation of storedRepresentations) {
+        const representation = {
+          sourceId,
+          ...storedRepresentation,
+        } as const
+        observedRepresentations.set(sourceRepresentationUseKey(representation), representation)
       }
 
-      const representation = {
-        sourceId,
-        blockchainId: transfer.observedBlockchainId,
-        representationType: transfer.observedRepresentationType,
-        contractAddress: canonicalizeAddress(transfer.observedContractAddress ?? null),
-        mintAddress: canonicalizeAddress(transfer.observedMintAddress ?? null),
-      } as const
-      const key = JSON.stringify([
-        representation.sourceId,
-        representation.blockchainId,
-        representation.representationType,
-        representation.contractAddress,
-        representation.mintAddress,
-      ])
-      observedRepresentations.set(key, representation)
-    }
+      if (observedRepresentations.size === 0) {
+        return yield* Effect.void
+      }
 
-    if (observedRepresentations.size === 0) {
-      return Effect.void
-    }
-
-    const now = nowDate()
-    return executor
-      .insert(schema.sourceRepresentationUses)
-      .values(
-        Array.from(observedRepresentations.values(), (representation) => ({
-          ...representation,
-          createdAt: now,
-          updatedAt: now,
-        }))
-      )
-      .onConflictDoNothing()
-      .pipe(wrapSyncEngineSqlError("sourceNormalizationRepository.recordSourceRepresentationUses"))
-  }
+      const now = nowDate()
+      return yield* executor
+        .insert(schema.sourceRepresentationUses)
+        .values(
+          Array.from(observedRepresentations.values(), (representation) => ({
+            ...representation,
+            createdAt: now,
+            updatedAt: now,
+          }))
+        )
+        .onConflictDoNothing()
+        .pipe(
+          wrapSyncEngineSqlError("sourceNormalizationRepository.recordSourceRepresentationUses")
+        )
+    })
 
   const removeInventoryMovementsForTransaction = ({
     executor,
@@ -1500,9 +1547,11 @@ const make = Effect.gen(function* () {
   }
 
   const persistFeeInventoryMovements = ({
+    decisions,
     executor,
     legs,
   }: {
+    readonly decisions: PrincipalAssetOverrideDecisions
     readonly executor: SourceNormalizationExecutor
     readonly legs: ReadonlyArray<PersistedSourceLegRecord>
   }) =>
@@ -1544,7 +1593,11 @@ const make = Effect.gen(function* () {
               transactionId: leg.transactionId,
               providerTransferId: null,
               transactionLegId: leg.id,
-              assetId: leg.assetId,
+              assetId: resolveSystemAssetId({
+                decisions,
+                assetId: leg.assetId,
+                assetRepresentationId: leg.assetRepresentationId,
+              }),
               assetRepresentationId: leg.assetRepresentationId,
               timestamp: leg.timestamp,
               direction: "outbound",
@@ -1632,6 +1685,26 @@ const make = Effect.gen(function* () {
             { concurrency: 1, discard: true }
           )
 
+          // The write changes no value, but advances the tuple version. A concurrent override
+          // mutation with an older SERIALIZABLE snapshot must then use its existing retry path.
+          const [ownedPrincipal] = yield* tx
+            .update(schema.principals)
+            .set({ updatedAt: sql`${schema.principals.updatedAt}` })
+            .where(eq(schema.principals.id, params.transaction.principalId))
+            .returning({ id: schema.principals.id })
+            .pipe(
+              wrapSyncEngineSqlError(
+                "sourceNormalizationRepository.persistNormalizedArtifacts.lockPrincipal"
+              )
+            )
+
+          if (ownedPrincipal === undefined) {
+            return yield* toSyncEngineStorageError({
+              operation: "sourceNormalizationRepository.persistNormalizedArtifacts.lockPrincipal",
+              error: `Principal ${params.transaction.principalId} no longer exists`,
+            })
+          }
+
           const [ownedSource] = yield* tx
             .select({ id: schema.sources.id })
             .from(schema.sources)
@@ -1661,6 +1734,26 @@ const make = Effect.gen(function* () {
             yield* params.beforePersist
           }
 
+          const decisions = yield* principalAssetOverrideDecisionLoader.load({
+            principalId: params.transaction.principalId,
+            assetRepresentationIds: [
+              ...params.canonicalTransfers,
+              ...("legs" in params ? params.legs : []),
+            ].flatMap(({ assetRepresentationId }) =>
+              assetRepresentationId === null || assetRepresentationId === undefined
+                ? []
+                : [assetRepresentationId]
+            ),
+          })
+          const canonicalTransfers = params.canonicalTransfers.map((transfer) => ({
+            ...transfer,
+            assetId: resolvePrincipalAssetId({
+              decisions,
+              systemAssetId: transfer.assetId,
+              assetRepresentationId: transfer.assetRepresentationId,
+            }),
+          }))
+
           const persistedTransaction = yield* upsertTransaction({
             executor: tx,
             transaction: params.transaction,
@@ -1686,11 +1779,6 @@ const make = Effect.gen(function* () {
             transactionId: persistedTransaction.id,
             onchainContext: params.onchainContext,
           })
-          yield* recordSourceRepresentationUses({
-            executor: tx,
-            providerTransfers: params.providerTransfers,
-            sourceId: persistedTransaction.sourceId,
-          })
           yield* syncProviderAssetTransactionUses({
             executor: tx,
             transactionId: persistedTransaction.id,
@@ -1704,20 +1792,56 @@ const make = Effect.gen(function* () {
           })
           const persistedCanonicalTransfers = yield* upsertCanonicalTransfers({
             executor: tx,
-            canonicalTransfers: params.canonicalTransfers,
+            canonicalTransfers,
           })
+          const systemCanonicalTransfers = persistedCanonicalTransfers.map((transfer) => ({
+            ...transfer,
+            assetId: resolveSystemAssetId({
+              decisions,
+              assetId: transfer.assetId,
+              assetRepresentationId: transfer.assetRepresentationId,
+            }),
+          }))
           const derivedLegs =
             "deriveLegs" in params
               ? yield* params.deriveLegs({
                   transaction: persistedTransaction,
                   venueContext: persistedVenueContext,
                   providerTransfers: persistedProviderTransfers,
-                  canonicalTransfers: persistedCanonicalTransfers,
+                  canonicalTransfers: systemCanonicalTransfers,
                 })
               : params.legs
+          yield* recordSourceRepresentationUses({
+            executor: tx,
+            providerTransfers: params.providerTransfers,
+            assetRepresentationIds: [...canonicalTransfers, ...derivedLegs].flatMap(
+              ({ assetRepresentationId }) =>
+                assetRepresentationId === null || assetRepresentationId === undefined
+                  ? []
+                  : [assetRepresentationId]
+            ),
+            sourceId: persistedTransaction.sourceId,
+          })
+          const completeDecisions =
+            yield* principalAssetOverrideDecisionLoader.includeSystemRepresentations({
+              decisions,
+              assetRepresentationIds: derivedLegs.flatMap(({ assetRepresentationId }) =>
+                assetRepresentationId === null || assetRepresentationId === undefined
+                  ? []
+                  : [assetRepresentationId]
+              ),
+            })
+          const effectiveLegs = derivedLegs.map((leg) => ({
+            ...leg,
+            assetId: resolvePrincipalAssetId({
+              decisions: completeDecisions,
+              systemAssetId: leg.assetId,
+              assetRepresentationId: leg.assetRepresentationId,
+            }),
+          }))
           const persistedLegs = yield* upsertTransactionLegs({
             executor: tx,
-            legs: derivedLegs,
+            legs: effectiveLegs,
           })
 
           const hasCompletedStatus = hasCompletedProviderStatus(params.transaction.providerStatus)
@@ -1746,6 +1870,7 @@ const make = Effect.gen(function* () {
               feesOnly: hasFailedStatus,
             })
             yield* persistFeeInventoryMovements({
+              decisions: completeDecisions,
               executor: tx,
               legs: persistedLegs,
             })

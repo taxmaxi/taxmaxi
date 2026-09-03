@@ -24,11 +24,31 @@ export interface CustodyUnitMembership {
   readonly custodyUnitId: CustodyUnitId
 }
 
+/**
+ * Canonical identity-override stream leaf read while adapting factual rows.
+ *
+ * Tuple order is part of the calculation input revision contract:
+ * target ID, blockchain, representation type, contract, mint, override record ID,
+ * operation, superseded record ID, and selected economic asset.
+ */
+export type PrincipalAssetOverrideRevisionRecord = readonly [
+  targetId: string,
+  blockchainId: string,
+  representationType: "native" | "token" | "nft",
+  contractAddress: string | null,
+  mintAddress: string | null,
+  overrideId: string,
+  operation: "create" | "replace" | "withdraw",
+  supersedesOverrideId: string | null,
+  replacementAssetId: string | null,
+]
+
 /** Stored accounting facts ready for the pure tax-accounting engine. */
 export interface FactualLedger {
   readonly events: ReadonlyArray<AccountingEvent>
   readonly valuationFacts: ReadonlyArray<ValuationFact>
   readonly custodyUnitMembership: ReadonlyArray<CustodyUnitMembership>
+  readonly principalAssetOverrideRevision: ReadonlyArray<PrincipalAssetOverrideRevisionRecord>
 }
 
 /** Persistence contract for adapting stored rows to a factual ledger. */

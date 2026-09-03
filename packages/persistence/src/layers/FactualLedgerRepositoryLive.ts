@@ -32,6 +32,11 @@ import {
   type FactualLedgerRepositoryShape,
 } from "../services/FactualLedgerRepository.ts"
 import { drizzle } from "./PgClientLive.ts"
+import {
+  makePrincipalAssetOverrideDecisionLoader,
+  type PrincipalAssetOverrideDecisions,
+  resolvePrincipalAssetId,
+} from "./PrincipalAssetOverrideDecisionLoader.ts"
 
 const EXCHANGE_TYPES = new Set([
   "buy_fiat",
@@ -144,6 +149,7 @@ const compareValuationFacts = (left: ValuationFact, right: ValuationFact): numbe
 
 const make = Effect.gen(function* () {
   const db = yield* drizzle
+  const principalAssetOverrideDecisionLoader = yield* makePrincipalAssetOverrideDecisionLoader
   const feeTransactionTable = aliasedTable(schema.transactions, "fee_transaction")
   const providerTransactionTable = aliasedTable(schema.transactions, "provider_transaction")
   const canonicalTransactionTable = aliasedTable(schema.transactions, "canonical_transaction")
@@ -152,10 +158,12 @@ const make = Effect.gen(function* () {
   type LoadParams = Parameters<FactualLedgerRepositoryShape["load"]>[0]
 
   const loadLegEvents = ({
+    decisions,
     principalId,
     reconciledCanonicalTransferIds,
     reconciledProviderTransactionIds,
   }: Pick<LoadParams, "principalId"> & {
+    readonly decisions: PrincipalAssetOverrideDecisions
     readonly reconciledCanonicalTransferIds: ReadonlySet<string>
     readonly reconciledProviderTransactionIds: ReadonlySet<string>
   }) =>
@@ -166,6 +174,7 @@ const make = Effect.gen(function* () {
           sourceId: schema.transactionLegs.sourceId,
           timestamp: schema.transactionLegs.timestamp,
           assetId: schema.transactionLegs.assetId,
+          assetRepresentationId: schema.transactionLegs.assetRepresentationId,
           amount: schema.transactionLegs.amount,
           kind: schema.transactionLegs.kind,
           derivationRule: schema.transactionLegs.derivationRule,
@@ -259,7 +268,11 @@ const make = Effect.gen(function* () {
         const common = {
           id: row.id,
           occurredAt: { epochMillis: row.timestamp.getTime() },
-          assetId: row.assetId,
+          assetId: resolvePrincipalAssetId({
+            decisions,
+            systemAssetId: row.assetId,
+            assetRepresentationId: row.assetRepresentationId,
+          }),
           quantity: row.amount,
           ...(reference === undefined ? {} : { transactionReference: reference }),
         }
@@ -299,7 +312,12 @@ const make = Effect.gen(function* () {
 
   type LoadedLegEvents = Effect.Success<ReturnType<typeof loadLegEvents>>
 
-  const loadCustodyMovementEvents = ({ principalId }: Pick<LoadParams, "principalId">) =>
+  const loadCustodyMovementEvents = ({
+    decisions,
+    principalId,
+  }: Pick<LoadParams, "principalId"> & {
+    readonly decisions: PrincipalAssetOverrideDecisions
+  }) =>
     Effect.gen(function* () {
       const rows = yield* db
         .select({
@@ -314,6 +332,7 @@ const make = Effect.gen(function* () {
           canonicalExternalId: canonicalTransactionTable.externalId,
           canonicalExternalGroupId: canonicalTransactionTable.externalGroupId,
           assetId: schema.transfers.assetId,
+          assetRepresentationId: schema.transfers.assetRepresentationId,
           amount: schema.transfers.amount,
         })
         .from(schema.transferReconciliations)
@@ -415,7 +434,11 @@ const make = Effect.gen(function* () {
               _tag: "custody_movement",
               id: row.id,
               occurredAt: { epochMillis: row.canonicalTimestamp.getTime() },
-              assetId: row.assetId,
+              assetId: resolvePrincipalAssetId({
+                decisions,
+                systemAssetId: row.assetId,
+                assetRepresentationId: row.assetRepresentationId,
+              }),
               quantity: row.amount,
               ...(reference === undefined ? {} : { transactionReference: reference }),
               fromCustodySourceId,
@@ -585,6 +608,7 @@ const make = Effect.gen(function* () {
   const load: FactualLedgerRepositoryShape["load"] = ({ principalId, reportingCurrency }) =>
     Effect.gen(function* () {
       const supportedReportingCurrency = yield* validateReportingCurrency(reportingCurrency)
+      const decisions = yield* principalAssetOverrideDecisionLoader.load({ principalId })
       const membershipRows = yield* db
         .select({
           custodyUnitId: schema.custodyUnitSources.custodyUnitId,
@@ -597,8 +621,9 @@ const make = Effect.gen(function* () {
           asc(schema.custodyUnitSources.sourceId)
         )
         .pipe(wrapSqlError("factualLedgerRepository.load.custodyUnitMembership"))
-      const custodyMovementEvents = yield* loadCustodyMovementEvents({ principalId })
+      const custodyMovementEvents = yield* loadCustodyMovementEvents({ decisions, principalId })
       const legEvents = yield* loadLegEvents({
+        decisions,
         principalId,
         reconciledCanonicalTransferIds: custodyMovementEvents.reconciledCanonicalTransferIds,
         reconciledProviderTransactionIds: custodyMovementEvents.reconciledProviderTransactionIds,
@@ -628,7 +653,12 @@ const make = Effect.gen(function* () {
         sourceId: SourceId.make(sourceId),
       }))
 
-      return { events, valuationFacts, custodyUnitMembership }
+      return {
+        events,
+        valuationFacts,
+        custodyUnitMembership,
+        principalAssetOverrideRevision: decisions.revision,
+      }
     })
 
   return FactualLedgerRepository.of({ load })

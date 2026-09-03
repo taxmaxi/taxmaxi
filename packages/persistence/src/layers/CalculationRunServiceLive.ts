@@ -38,6 +38,7 @@ import {
 import {
   FactualLedgerRepository,
   type CustodyUnitMembership,
+  type PrincipalAssetOverrideRevisionRecord,
 } from "../services/FactualLedgerRepository.ts"
 import { drizzle } from "./PgClientLive.ts"
 
@@ -85,19 +86,22 @@ const makeLedgerRevision = ({
   snapshotVisibility,
   events,
   custodyUnitMembership,
+  principalAssetOverrideRevision,
 }: {
   readonly snapshotTransactionId: string
   readonly snapshotVisibility: string
   readonly events: ReadonlyArray<AccountingEvent>
   readonly custodyUnitMembership: ReadonlyArray<CustodyUnitMembership>
+  readonly principalAssetOverrideRevision: ReadonlyArray<PrincipalAssetOverrideRevisionRecord>
 }): InputLedgerRevision =>
   InputLedgerRevision.make(
-    `v2:${snapshotTransactionId}:${snapshotVisibility}:${sha256("taxmaxi:factual-ledger:v1", {
+    `v2:${snapshotTransactionId}:${snapshotVisibility}:${sha256("taxmaxi:factual-ledger:v2", {
       events: events.map(canonicalEvent),
       custodyUnitMembership: custodyUnitMembership.map(({ sourceId, custodyUnitId }) => [
         sourceId,
         custodyUnitId,
       ]),
+      principalAssetOverrideRevision,
     })}`
   )
 
@@ -143,6 +147,7 @@ const make = Effect.gen(function* () {
             snapshotVisibility,
             events: factualLedger.events,
             custodyUnitMembership: factualLedger.custodyUnitMembership,
+            principalAssetOverrideRevision: factualLedger.principalAssetOverrideRevision,
           })
           const valuationRevision = makeValuationRevision(factualLedger.valuationFacts)
           return { factualLedger, inputLedgerRevision, valuationRevision }

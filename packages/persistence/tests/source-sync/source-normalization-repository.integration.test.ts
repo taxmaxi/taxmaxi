@@ -2,15 +2,20 @@ import * as DateTime from "effect/DateTime"
 import { asc, eq, sql } from "drizzle-orm"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
+import * as Option from "effect/Option"
 import { beforeEach, describe, expect, it } from "@effect/vitest"
+import { AuthUserId } from "@my/core/authentication"
+import { PrincipalId } from "@my/core/ownership"
 import { AssetRepositoryLive } from "../../src/layers/AssetRepositoryLive.ts"
 import { drizzle } from "../../src/layers/PgClientLive.ts"
 import { AssetResolutionJobRepositoryLive } from "../../src/layers/AssetResolutionJobRepositoryLive.ts"
 import { ProviderAssetRepositoryLive } from "../../src/layers/ProviderAssetRepositoryLive.ts"
 import { ProviderReferenceRepositoryLive } from "../../src/layers/ProviderReferenceRepositoryLive.ts"
+import { PrincipalAssetOverrideRepositoryLive } from "../../src/layers/PrincipalAssetOverrideRepositoryLive.ts"
 import { SourceNormalizationRepositoryLive } from "../../src/layers/SourceNormalizationRepositoryLive.ts"
 import { SourceRawRecordRepositoryLive } from "../../src/layers/SourceRawRecordRepositoryLive.ts"
 import { schema } from "../../src/schema/index.ts"
+import { PrincipalAssetOverrideRepository } from "../../src/services/PrincipalAssetOverrideRepository.ts"
 import {
   TEST_BTC_ASSET_ID,
   TEST_BTC_REPRESENTATION_ID,
@@ -67,6 +72,16 @@ const loadSourceRepresentationUses = (sourceId: string) =>
 
 const runRepository = <A, E>(effect: Effect.Effect<A, E, SourceNormalizationRepository>) =>
   Effect.runPromise(context.runWithLayer({ effect, layer: SourceNormalizationRepositoryLive }))
+
+const SourceAndOverrideRepositoryTestLayer = Layer.mergeAll(
+  SourceNormalizationRepositoryLive,
+  PrincipalAssetOverrideRepositoryLive
+)
+
+const runSourceAndOverrideRepositories = <A, E>(
+  effect: Effect.Effect<A, E, SourceNormalizationRepository | PrincipalAssetOverrideRepository>
+) =>
+  Effect.runPromise(context.runWithLayer({ effect, layer: SourceAndOverrideRepositoryTestLayer }))
 
 const CoinbaseSyncClientTestLive = Layer.succeed(CoinbaseSyncClient, {
   fetchAccountsPage: () => Effect.die("CoinbaseSyncClient test stub: fetchAccountsPage"),
@@ -164,6 +179,401 @@ const APPROVED_MAPPING = {
   pairedRecordRequired: false,
   mappingStatus: "approved",
 } as const
+
+const OVERRIDE_ASSET_ID = "00000000-0000-4000-8000-000000000482"
+const SECOND_OVERRIDE_SOURCE_ID = "00000000-0000-4000-8000-000000000282"
+const CONCURRENT_USER_ID = "00000000-0000-4000-8000-000000000483"
+const CONCURRENT_PRINCIPAL_ID = "00000000-0000-4000-8000-000000000484"
+const CONCURRENT_SOURCE_A_ID = "00000000-0000-4000-8000-000000000485"
+const CONCURRENT_SOURCE_B_ID = "00000000-0000-4000-8000-000000000486"
+const SECOND_PRINCIPAL_USER_ID = "00000000-0000-4000-8000-000000000487"
+const SECOND_PRINCIPAL_ID = "00000000-0000-4000-8000-000000000488"
+const SECOND_PRINCIPAL_SOURCE_ID = "00000000-0000-4000-8000-000000000489"
+
+const seedExactIdentityOverride = ({
+  fixture,
+  reason,
+}: {
+  readonly fixture: SyncEngineRepositoryFixture
+  readonly reason: string
+}) =>
+  Effect.gen(function* () {
+    const db = yield* drizzle
+    yield* db
+      .insert(schema.assets)
+      .values({
+        id: OVERRIDE_ASSET_ID,
+        name: "Principal-selected asset",
+        symbol: "SELECTED",
+        type: "fungible",
+      })
+      .onConflictDoNothing({ target: schema.assets.id })
+    const [target] = yield* db
+      .insert(schema.principalAssetOverrideTargets)
+      .values({
+        principalId: TEST_PRINCIPAL_ID,
+        targetKind: "representation",
+        blockchainId: fixture.bitcoinBlockchainId,
+        representationType: "token",
+        contractAddress: "sync-engine-btc-fixture",
+      })
+      .returning({ id: schema.principalAssetOverrideTargets.id })
+    if (target === undefined) return yield* Effect.die("Failed to create override target")
+
+    const [override] = yield* db
+      .insert(schema.principalAssetOverrides)
+      .values({
+        principalId: TEST_PRINCIPAL_ID,
+        targetId: target.id,
+        kind: "identity",
+        operation: "create",
+        inspectedSystemRevision: "exact-override-system-v1",
+        inspectedSystemIdentity: "resolved",
+        inspectedSystemAssetId: TEST_BTC_ASSET_ID,
+        replacementAssetId: OVERRIDE_ASSET_ID,
+        actorUserId: fixture.userId,
+        reason,
+      })
+      .returning({ id: schema.principalAssetOverrides.id })
+    if (override === undefined) return yield* Effect.die("Failed to create override")
+    return { targetId: target.id, overrideId: override.id }
+  })
+
+const seedAdditionalOverrideSource = ({
+  fixture,
+  sourceId = SECOND_OVERRIDE_SOURCE_ID,
+  principalId = TEST_PRINCIPAL_ID,
+}: {
+  readonly fixture: SyncEngineRepositoryFixture
+  readonly sourceId?: string
+  readonly principalId?: string
+}) =>
+  Effect.gen(function* () {
+    const db = yield* drizzle
+    const [firstAccount] = yield* db
+      .select({ cexId: schema.cexAccount.cexId })
+      .from(schema.cexAccount)
+      .where(eq(schema.cexAccount.id, fixture.cexAccountId))
+    if (firstAccount === undefined) return yield* Effect.die("Missing first CEX account")
+
+    const [secondAccount] = yield* db
+      .insert(schema.cexAccount)
+      .values({
+        cexId: firstAccount.cexId,
+        principalId,
+        providerUserId: `override-provider-user-${sourceId}`,
+        providerAccountId: `override-provider-account-${sourceId}`,
+      })
+      .returning({ id: schema.cexAccount.id })
+    if (secondAccount === undefined) return yield* Effect.die("Failed to create provider account")
+
+    yield* db.insert(schema.sources).values({
+      id: sourceId,
+      principalId,
+      name: "Additional exact representation provider",
+      providerKey: `exact-provider-${sourceId}`,
+      sourceableType: "cex",
+      cexAccountId: secondAccount.id,
+    })
+    return secondAccount.id
+  })
+
+interface ExactOverrideArtifactOptions {
+  readonly sourceId?: string
+  readonly cexAccountId?: string
+  readonly includeCanonicalTransfer?: boolean
+  readonly inputAssetId?: string
+  readonly principalId?: string
+  readonly sourceRawRecordId?: string | null
+}
+
+const persistExactOverrideArtifact = ({
+  externalId,
+  fixture,
+  occurredAt,
+  sourceId = TEST_SOURCE_ID,
+  cexAccountId = fixture.cexAccountId,
+  includeCanonicalTransfer = true,
+  inputAssetId = TEST_BTC_ASSET_ID,
+  principalId = TEST_PRINCIPAL_ID,
+  sourceRawRecordId = null,
+}: ExactOverrideArtifactOptions & {
+  readonly externalId: string
+  readonly fixture: SyncEngineRepositoryFixture
+  readonly occurredAt: Date
+}) =>
+  runRepository(
+    Effect.flatMap(SourceNormalizationRepository, (repository) =>
+      repository.persistNormalizedArtifacts({
+        transaction: {
+          sourceId,
+          sourceRawRecordId,
+          externalId: `${externalId}-transaction`,
+          externalGroupId: externalId,
+          timestamp: occurredAt,
+          transactionType: "buy_fiat",
+          providerTransactionType: "buy",
+          providerStatus: "completed",
+          providerResourcePath: `/test/${externalId}`,
+          providerDescription: "Exact representation override fixture",
+          providerCreatedAt: occurredAt,
+          providerUpdatedAt: occurredAt,
+          metadata: { evidence: externalId },
+          providerFiatAmount: null,
+          providerFiatCurrency: null,
+          principalId,
+        },
+        venueContext: {
+          venueType: "cex",
+          cexAccountId,
+          externalAccountId: "coinbase-account-1",
+          externalOrderId: null,
+          externalFillId: null,
+          side: "buy",
+          instrument: "BTC-EUR",
+          fillPrice: "10000",
+          commissionAmount: null,
+          commissionCurrency: null,
+          metadata: { evidence: externalId },
+        },
+        providerTransfers: [
+          {
+            sourceId,
+            sourceRawRecordId,
+            externalId: `${externalId}-evidence`,
+            externalGroupId: externalId,
+            providerAssetId: null,
+            timestamp: occurredAt,
+            direction: "inbound",
+            processingMode: "evidence_only",
+            fromAccountRef: "external",
+            toAccountRef: "owned",
+            fromAddress: null,
+            toAddress: null,
+            networkName: "bitcoin",
+            networkHash: `${externalId}-hash`,
+            observedBlockchainId: fixture.bitcoinBlockchainId,
+            observedRepresentationType: "token",
+            observedContractAddress: "sync-engine-btc-fixture",
+            observedMintAddress: null,
+            observedDecimals: 8,
+            amount: "1",
+            metadata: { evidence: externalId },
+          },
+        ],
+        canonicalTransfers: includeCanonicalTransfer
+          ? [
+              {
+                sourceId,
+                principalId,
+                sourceRawRecordId,
+                externalId: `${externalId}-transfer`,
+                externalGroupId: externalId,
+                addressId: null,
+                blockchainId: fixture.bitcoinBlockchainId,
+                txHash: null,
+                timestamp: occurredAt,
+                type: "cex",
+                fromAddress: null,
+                toAddress: null,
+                fromAccountRef: "external",
+                toAccountRef: "owned",
+                fromPartyType: null,
+                fromPartyResourcePath: null,
+                toPartyType: null,
+                toPartyResourcePath: null,
+                assetId: inputAssetId,
+                assetRepresentationId: TEST_BTC_REPRESENTATION_ID,
+                amount: "1",
+                tokenId: null,
+                notes: null,
+                metadata: { evidence: externalId },
+              },
+            ]
+          : [],
+        providerAssetRowIds: [],
+        legs: [
+          {
+            sourceId,
+            sourceRawRecordId,
+            externalId: `${externalId}-leg`,
+            txHash: null,
+            timestamp: occurredAt,
+            principalId,
+            addressId: null,
+            assetId: inputAssetId,
+            assetRepresentationId: TEST_BTC_REPRESENTATION_ID,
+            amount: "1",
+            kind: "acquisition",
+            provenance: "deterministic",
+            derivationRule: "exact_override_fixture",
+            metadata: { evidence: externalId },
+            transactionId: null,
+            sourceTransferId: null,
+            fiatAmount: null,
+            fiatCurrency: null,
+            feeForTransactionId: null,
+          },
+        ],
+        transactionReview: null,
+        resolvedTransactionType: APPROVED_MAPPING,
+      })
+    )
+  )
+
+const persistExactOverrideCallbackArtifact = ({
+  externalId,
+  fixture,
+  kind,
+  occurredAt,
+  providerStatus,
+  sourceId = TEST_SOURCE_ID,
+  cexAccountId = fixture.cexAccountId,
+  principalId = TEST_PRINCIPAL_ID,
+}: {
+  readonly externalId: string
+  readonly fixture: SyncEngineRepositoryFixture
+  readonly kind: "acquisition" | "fee"
+  readonly occurredAt: Date
+  readonly providerStatus: "pending" | "completed"
+  readonly sourceId?: string
+  readonly cexAccountId?: string
+  readonly principalId?: string
+}) =>
+  runRepository(
+    Effect.flatMap(SourceNormalizationRepository, (repository) =>
+      repository.persistNormalizedArtifacts({
+        transaction: {
+          sourceId,
+          sourceRawRecordId: null,
+          externalId: `${externalId}-transaction`,
+          externalGroupId: externalId,
+          timestamp: occurredAt,
+          transactionType: "buy_fiat",
+          providerTransactionType: "buy",
+          providerStatus,
+          providerResourcePath: `/test/${externalId}`,
+          providerDescription: "Callback-derived exact override fixture",
+          providerCreatedAt: occurredAt,
+          providerUpdatedAt: occurredAt,
+          metadata: { evidence: externalId },
+          providerFiatAmount: null,
+          providerFiatCurrency: null,
+          principalId,
+        },
+        venueContext: {
+          venueType: "cex",
+          cexAccountId,
+          externalAccountId: "coinbase-account-1",
+          externalOrderId: null,
+          externalFillId: null,
+          side: "buy",
+          instrument: "BTC-EUR",
+          fillPrice: "10000",
+          commissionAmount: null,
+          commissionCurrency: null,
+          metadata: { evidence: externalId },
+        },
+        providerTransfers: [],
+        canonicalTransfers: [
+          {
+            sourceId,
+            principalId,
+            sourceRawRecordId: null,
+            externalId: `${externalId}-transfer`,
+            externalGroupId: externalId,
+            addressId: null,
+            blockchainId: fixture.bitcoinBlockchainId,
+            txHash: null,
+            timestamp: occurredAt,
+            type: "cex",
+            fromAddress: null,
+            toAddress: null,
+            fromAccountRef: "external",
+            toAccountRef: "owned",
+            fromPartyType: null,
+            fromPartyResourcePath: null,
+            toPartyType: null,
+            toPartyResourcePath: null,
+            assetId: TEST_BTC_ASSET_ID,
+            assetRepresentationId: TEST_BTC_REPRESENTATION_ID,
+            amount: "1",
+            tokenId: null,
+            notes: null,
+            metadata: { evidence: externalId },
+          },
+        ],
+        providerAssetRowIds: [],
+        deriveLegs: ({ transaction, canonicalTransfers }) => {
+          const [transfer] = canonicalTransfers
+          if (transfer === undefined) return Effect.die("Missing callback transfer")
+
+          return Effect.succeed([
+            {
+              sourceId,
+              sourceRawRecordId: null,
+              externalId: `${externalId}-leg`,
+              txHash: null,
+              timestamp: occurredAt,
+              principalId,
+              addressId: null,
+              assetId: transfer.assetId,
+              assetRepresentationId: transfer.assetRepresentationId,
+              amount: "1",
+              kind,
+              provenance: "deterministic" as const,
+              derivationRule: "callback_exact_override_fixture",
+              metadata: { derivedFromAssetId: transfer.assetId },
+              transactionId: transaction.id,
+              sourceTransferId: transfer.id,
+              fiatAmount: null,
+              fiatCurrency: null,
+              feeForTransactionId: kind === "fee" ? transaction.id : null,
+            },
+          ])
+        },
+        transactionReview: null,
+        resolvedTransactionType: APPROVED_MAPPING,
+      })
+    )
+  )
+
+const loadExactOverrideEvidenceSnapshot = () =>
+  runPg(
+    Effect.gen(function* () {
+      const db = yield* drizzle
+      const [rawRecord] = yield* db
+        .select({
+          sourceId: schema.sourceRecordsRaw.sourceId,
+          externalRecordId: schema.sourceRecordsRaw.externalRecordId,
+          payload: schema.sourceRecordsRaw.payload,
+        })
+        .from(schema.sourceRecordsRaw)
+        .where(eq(schema.sourceRecordsRaw.id, TEST_RAW_RECORD_ID))
+      const [providerTransfer] = yield* db
+        .select({
+          processingMode: schema.providerTransfers.processingMode,
+          observedBlockchainId: schema.providerTransfers.observedBlockchainId,
+          observedRepresentationType: schema.providerTransfers.observedRepresentationType,
+          observedContractAddress: schema.providerTransfers.observedContractAddress,
+          observedDecimals: schema.providerTransfers.observedDecimals,
+          metadata: schema.providerTransfers.metadata,
+        })
+        .from(schema.providerTransfers)
+        .where(eq(schema.providerTransfers.externalId, "historical-exact-evidence"))
+      const [globalRepresentation] = yield* db
+        .select({
+          assetId: schema.assetRepresentations.assetId,
+          blockchainId: schema.assetRepresentations.blockchainId,
+          type: schema.assetRepresentations.type,
+          contractAddress: schema.assetRepresentations.contractAddress,
+        })
+        .from(schema.assetRepresentations)
+        .where(eq(schema.assetRepresentations.id, TEST_BTC_REPRESENTATION_ID))
+
+      return { rawRecord, providerTransfer, globalRepresentation }
+    })
+  )
 
 const seedRawRecord = ({
   rawRecordId,
@@ -474,6 +884,595 @@ describe("SourceNormalizationRepositoryLive", () => {
       const recreated = yield* Effect.promise(() => persist("corrected-stable-external-id"))
 
       expect(recreated.transaction.id).toBe(first.transaction.id)
+    })
+  )
+
+  it.effect("applies one exact identity override to replayed and future accounting facts", () =>
+    Effect.gen(function* () {
+      const occurredAt = DateTime.toDateUtc(DateTime.makeUnsafe("2025-02-01T10:00:00.000Z"))
+      const secondCexAccountId = yield* Effect.promise(() =>
+        runPg(seedAdditionalOverrideSource({ fixture }))
+      )
+      const secondPrincipalFixture = yield* Effect.promise(() =>
+        runPg(
+          seedSyncEngineRepositoryFixture({
+            userId: SECOND_PRINCIPAL_USER_ID,
+            principalId: SECOND_PRINCIPAL_ID,
+            sourceId: SECOND_PRINCIPAL_SOURCE_ID,
+          })
+        )
+      )
+      const persist = (externalId: string, options: ExactOverrideArtifactOptions = {}) =>
+        persistExactOverrideArtifact({ externalId, fixture, occurredAt, ...options })
+
+      const catalogCorrected = yield* Effect.promise(() =>
+        persist("catalog-leg-only", {
+          includeCanonicalTransfer: false,
+          inputAssetId: OVERRIDE_ASSET_ID,
+        })
+      )
+      expect(catalogCorrected.legs[0]?.assetId).toBe(TEST_BTC_ASSET_ID)
+
+      const beforeOverride = yield* Effect.promise(() =>
+        persist("historical-exact", { sourceRawRecordId: TEST_RAW_RECORD_ID })
+      )
+      expect(beforeOverride.canonicalTransfers[0]).toMatchObject({
+        assetId: TEST_BTC_ASSET_ID,
+        assetRepresentationId: TEST_BTC_REPRESENTATION_ID,
+      })
+      const evidenceBeforeOverride = yield* Effect.promise(loadExactOverrideEvidenceSnapshot)
+
+      const activeOverride = yield* Effect.promise(() =>
+        runPg(
+          seedExactIdentityOverride({
+            fixture,
+            reason: "Use the selected economic asset in this principal's facts",
+          })
+        )
+      )
+
+      const replayed = yield* Effect.promise(() =>
+        persist("historical-exact", { sourceRawRecordId: TEST_RAW_RECORD_ID })
+      )
+      const future = yield* Effect.promise(() => persist("future-exact"))
+      const secondProvider = yield* Effect.promise(() =>
+        persist("second-provider-exact", {
+          sourceId: SECOND_OVERRIDE_SOURCE_ID,
+          cexAccountId: secondCexAccountId,
+        })
+      )
+      const secondPrincipal = yield* Effect.promise(() =>
+        persist("second-principal-exact", {
+          sourceId: SECOND_PRINCIPAL_SOURCE_ID,
+          cexAccountId: secondPrincipalFixture.cexAccountId,
+          principalId: SECOND_PRINCIPAL_ID,
+        })
+      )
+
+      for (const result of [replayed, future, secondProvider]) {
+        expect(result.canonicalTransfers[0]).toMatchObject({
+          assetId: OVERRIDE_ASSET_ID,
+          assetRepresentationId: TEST_BTC_REPRESENTATION_ID,
+        })
+        expect(result.legs[0]).toMatchObject({
+          assetId: OVERRIDE_ASSET_ID,
+          assetRepresentationId: TEST_BTC_REPRESENTATION_ID,
+          derivationRule: "exact_override_fixture",
+        })
+        expect(result.providerTransfers[0]).toMatchObject({
+          processingMode: "evidence_only",
+          observedBlockchainId: fixture.bitcoinBlockchainId,
+          observedContractAddress: "sync-engine-btc-fixture",
+        })
+      }
+      expect(secondPrincipal.canonicalTransfers[0]).toMatchObject({
+        assetId: TEST_BTC_ASSET_ID,
+        assetRepresentationId: TEST_BTC_REPRESENTATION_ID,
+      })
+      expect(secondPrincipal.legs[0]?.assetId).toBe(TEST_BTC_ASSET_ID)
+      expect(yield* Effect.promise(loadExactOverrideEvidenceSnapshot)).toEqual(
+        evidenceBeforeOverride
+      )
+
+      yield* Effect.promise(() =>
+        runPg(
+          Effect.gen(function* () {
+            const db = yield* drizzle
+            yield* db.insert(schema.principalAssetOverrides).values({
+              principalId: TEST_PRINCIPAL_ID,
+              targetId: activeOverride.targetId,
+              kind: "identity",
+              operation: "withdraw",
+              inspectedSystemRevision: "exact-override-system-v1",
+              inspectedSystemIdentity: "resolved",
+              inspectedSystemAssetId: TEST_BTC_ASSET_ID,
+              actorUserId: fixture.userId,
+              reason: "Return to the system economic identity",
+              supersedesOverrideId: activeOverride.overrideId,
+            })
+          })
+        )
+      )
+      const afterWithdrawal = yield* Effect.promise(() => persist("withdrawn-exact"))
+      expect(afterWithdrawal.canonicalTransfers[0]).toMatchObject({
+        assetId: TEST_BTC_ASSET_ID,
+        assetRepresentationId: TEST_BTC_REPRESENTATION_ID,
+      })
+      expect(afterWithdrawal.legs[0]?.assetId).toBe(TEST_BTC_ASSET_ID)
+
+      const transactions = yield* Effect.promise(() =>
+        runPg(
+          Effect.gen(function* () {
+            const db = yield* drizzle
+            return yield* db
+              .select({
+                transactionType: schema.transactions.transactionType,
+                metadata: schema.transactions.metadata,
+              })
+              .from(schema.transactions)
+              .where(eq(schema.transactions.principalId, TEST_PRINCIPAL_ID))
+          })
+        )
+      )
+      expect(transactions).toEqual(
+        expect.arrayContaining([
+          {
+            transactionType: "buy_fiat",
+            metadata: { evidence: "historical-exact" },
+          },
+          {
+            transactionType: "buy_fiat",
+            metadata: { evidence: "future-exact" },
+          },
+          {
+            transactionType: "buy_fiat",
+            metadata: { evidence: "second-provider-exact" },
+          },
+        ])
+      )
+    })
+  )
+
+  it.effect("tracks callback-derived representations for later override replay", () =>
+    Effect.gen(function* () {
+      const occurredAt = DateTime.toDateUtc(DateTime.makeUnsafe("2025-02-01T10:30:00.000Z"))
+      const overrideFixture = yield* Effect.promise(() =>
+        runPg(
+          seedSyncEngineRepositoryFixture({
+            userId: CONCURRENT_USER_ID,
+            principalId: CONCURRENT_PRINCIPAL_ID,
+            sourceId: CONCURRENT_SOURCE_A_ID,
+          })
+        )
+      )
+      const secondCexAccountId = yield* Effect.promise(() =>
+        runPg(
+          seedAdditionalOverrideSource({
+            fixture: overrideFixture,
+            sourceId: CONCURRENT_SOURCE_B_ID,
+            principalId: CONCURRENT_PRINCIPAL_ID,
+          })
+        )
+      )
+      yield* Effect.promise(() =>
+        persistExactOverrideArtifact({
+          externalId: "override-origin-source",
+          fixture: overrideFixture,
+          occurredAt,
+          sourceId: CONCURRENT_SOURCE_A_ID,
+          cexAccountId: overrideFixture.cexAccountId,
+          principalId: CONCURRENT_PRINCIPAL_ID,
+        })
+      )
+      const historical = yield* Effect.promise(() =>
+        persistExactOverrideCallbackArtifact({
+          externalId: "historical-callback-source",
+          fixture: overrideFixture,
+          kind: "acquisition",
+          occurredAt,
+          providerStatus: "pending",
+          sourceId: CONCURRENT_SOURCE_B_ID,
+          cexAccountId: secondCexAccountId,
+          principalId: CONCURRENT_PRINCIPAL_ID,
+        })
+      )
+      expect(historical.canonicalTransfers[0]?.assetId).toBe(TEST_BTC_ASSET_ID)
+      expect(historical.legs[0]?.assetId).toBe(TEST_BTC_ASSET_ID)
+
+      yield* Effect.promise(() =>
+        runPg(
+          Effect.gen(function* () {
+            const db = yield* drizzle
+            yield* db.insert(schema.assets).values({
+              id: OVERRIDE_ASSET_ID,
+              name: "Principal-selected asset",
+              symbol: "SELECTED",
+              type: "fungible",
+            })
+          })
+        )
+      )
+      const target = {
+        _tag: "representation" as const,
+        blockchain: "bitcoin",
+        type: "token" as const,
+        contractAddress: "sync-engine-btc-fixture",
+        mintAddress: null,
+      }
+      const createdProjection = Option.getOrThrow(
+        yield* Effect.promise(() =>
+          runSourceAndOverrideRepositories(
+            Effect.gen(function* () {
+              const overrideRepository = yield* PrincipalAssetOverrideRepository
+              const projection = Option.getOrThrow(
+                yield* overrideRepository.findProjection({
+                  principalId: PrincipalId.make(CONCURRENT_PRINCIPAL_ID),
+                  target,
+                })
+              )
+              return yield* overrideRepository.create({
+                actorUserId: AuthUserId.make(CONCURRENT_USER_ID),
+                expectedSystemRevision: projection.system.identityRevision,
+                principalId: PrincipalId.make(CONCURRENT_PRINCIPAL_ID),
+                reason: "Replay every source that stored the exact representation",
+                replacement: { _tag: "identity", assetId: OVERRIDE_ASSET_ID },
+                target,
+              })
+            })
+          )
+        )
+      )
+      const activeOverrideId = createdProjection.activeIdentityOverride?.id
+      expect(activeOverrideId).toBeDefined()
+      const applicationSources = yield* Effect.promise(() =>
+        runPg(
+          Effect.gen(function* () {
+            const db = yield* drizzle
+            return yield* db
+              .select({ sourceId: schema.principalAssetOverrideApplications.sourceId })
+              .from(schema.principalAssetOverrideApplications)
+              .where(
+                eq(schema.principalAssetOverrideApplications.overrideId, activeOverrideId ?? "")
+              )
+          })
+        )
+      )
+      expect(applicationSources.map(({ sourceId }) => sourceId)).toEqual(
+        expect.arrayContaining([CONCURRENT_SOURCE_A_ID, CONCURRENT_SOURCE_B_ID])
+      )
+
+      const replayed = yield* Effect.promise(() =>
+        persistExactOverrideCallbackArtifact({
+          externalId: "historical-callback-source",
+          fixture: overrideFixture,
+          kind: "acquisition",
+          occurredAt,
+          providerStatus: "pending",
+          sourceId: CONCURRENT_SOURCE_B_ID,
+          cexAccountId: secondCexAccountId,
+          principalId: CONCURRENT_PRINCIPAL_ID,
+        })
+      )
+      expect(replayed.canonicalTransfers[0]?.assetId).toBe(OVERRIDE_ASSET_ID)
+      expect(replayed.legs[0]?.assetId).toBe(OVERRIDE_ASSET_ID)
+    })
+  )
+
+  it.effect("keeps callback evidence and fee inventory on the system asset", () =>
+    Effect.gen(function* () {
+      const occurredAt = DateTime.toDateUtc(DateTime.makeUnsafe("2025-02-01T11:00:00.000Z"))
+      yield* Effect.promise(() =>
+        runPg(
+          seedExactIdentityOverride({
+            fixture,
+            reason: "Apply the selected asset after callback derivation",
+          })
+        )
+      )
+
+      const callbackDerived = yield* Effect.promise(() =>
+        persistExactOverrideCallbackArtifact({
+          externalId: "callback-derived",
+          fixture,
+          kind: "acquisition",
+          occurredAt,
+          providerStatus: "pending",
+        })
+      )
+      expect(callbackDerived.canonicalTransfers[0]?.assetId).toBe(OVERRIDE_ASSET_ID)
+      expect(callbackDerived.legs[0]).toMatchObject({
+        assetId: OVERRIDE_ASSET_ID,
+        assetRepresentationId: TEST_BTC_REPRESENTATION_ID,
+      })
+
+      const [callbackDerivedLeg] = yield* Effect.promise(() =>
+        runPg(
+          Effect.gen(function* () {
+            const db = yield* drizzle
+            return yield* db
+              .select({ metadata: schema.transactionLegs.metadata })
+              .from(schema.transactionLegs)
+              .where(eq(schema.transactionLegs.externalId, "callback-derived-leg"))
+          })
+        )
+      )
+      expect(callbackDerivedLeg?.metadata).toEqual({ derivedFromAssetId: TEST_BTC_ASSET_ID })
+
+      const feeDerived = yield* Effect.promise(() =>
+        persistExactOverrideCallbackArtifact({
+          externalId: "callback-derived-fee",
+          fixture,
+          kind: "fee",
+          occurredAt,
+          providerStatus: "completed",
+        })
+      )
+      expect(feeDerived.legs[0]).toMatchObject({
+        assetId: OVERRIDE_ASSET_ID,
+        assetRepresentationId: TEST_BTC_REPRESENTATION_ID,
+        kind: "fee",
+      })
+
+      const [feeInventoryMovement] = yield* Effect.promise(() =>
+        runPg(
+          Effect.gen(function* () {
+            const db = yield* drizzle
+            return yield* db
+              .select({
+                assetId: schema.inventoryMovements.assetId,
+                assetRepresentationId: schema.inventoryMovements.assetRepresentationId,
+              })
+              .from(schema.inventoryMovements)
+              .innerJoin(
+                schema.transactionLegs,
+                eq(schema.transactionLegs.id, schema.inventoryMovements.transactionLegId)
+              )
+              .where(eq(schema.transactionLegs.externalId, "callback-derived-fee-leg"))
+          })
+        )
+      )
+      expect(feeInventoryMovement).toEqual({
+        assetId: TEST_BTC_ASSET_ID,
+        assetRepresentationId: TEST_BTC_REPRESENTATION_ID,
+      })
+    })
+  )
+
+  it.effect("serializes a source's first representation use with override scheduling", () =>
+    Effect.gen(function* () {
+      const occurredAt = DateTime.toDateUtc(DateTime.makeUnsafe("2025-02-02T10:00:00.000Z"))
+      const concurrentFixture = yield* Effect.promise(() =>
+        runPg(
+          seedSyncEngineRepositoryFixture({
+            userId: CONCURRENT_USER_ID,
+            principalId: CONCURRENT_PRINCIPAL_ID,
+            sourceId: CONCURRENT_SOURCE_A_ID,
+          })
+        )
+      )
+      const secondCexAccountId = yield* Effect.promise(() =>
+        runPg(
+          Effect.gen(function* () {
+            const db = yield* drizzle
+            yield* db.insert(schema.assets).values({
+              id: OVERRIDE_ASSET_ID,
+              name: "Principal-selected asset",
+              symbol: "SELECTED",
+              type: "fungible",
+            })
+            const [firstAccount] = yield* db
+              .select({ cexId: schema.cexAccount.cexId })
+              .from(schema.cexAccount)
+              .where(eq(schema.cexAccount.id, concurrentFixture.cexAccountId))
+            if (firstAccount === undefined) return yield* Effect.die("Missing first CEX account")
+            const [secondAccount] = yield* db
+              .insert(schema.cexAccount)
+              .values({
+                cexId: firstAccount.cexId,
+                principalId: CONCURRENT_PRINCIPAL_ID,
+                providerUserId: "concurrent-provider-user",
+                providerAccountId: "concurrent-provider-account",
+              })
+              .returning({ id: schema.cexAccount.id })
+            if (secondAccount === undefined) {
+              return yield* Effect.die("Failed to create concurrent provider account")
+            }
+            yield* db.insert(schema.sources).values({
+              id: CONCURRENT_SOURCE_B_ID,
+              principalId: CONCURRENT_PRINCIPAL_ID,
+              name: "Concurrent exact representation provider",
+              providerKey: "concurrent-exact-provider",
+              sourceableType: "cex",
+              cexAccountId: secondAccount.id,
+            })
+            yield* db.insert(schema.sourceRepresentationUses).values({
+              sourceId: CONCURRENT_SOURCE_A_ID,
+              blockchainId: fixture.bitcoinBlockchainId,
+              representationType: "token",
+              contractAddress: "sync-engine-btc-fixture",
+              mintAddress: null,
+            })
+            yield* db.execute(sql`
+              create function delay_concurrent_representation_use() returns trigger
+              language plpgsql as $trigger$
+              begin
+                perform pg_sleep(0.5);
+                return new;
+              end
+              $trigger$
+            `)
+            yield* db.execute(sql`
+              create trigger delay_concurrent_representation_use
+              before insert on source_representation_uses
+              for each row execute function delay_concurrent_representation_use()
+            `)
+            return secondAccount.id
+          })
+        )
+      )
+
+      const [stored, created] = yield* Effect.promise(() =>
+        runSourceAndOverrideRepositories(
+          Effect.gen(function* () {
+            const sourceRepository = yield* SourceNormalizationRepository
+            const overrideRepository = yield* PrincipalAssetOverrideRepository
+            const projection = Option.getOrThrow(
+              yield* overrideRepository.findProjection({
+                principalId: PrincipalId.make(CONCURRENT_PRINCIPAL_ID),
+                target: {
+                  _tag: "representation",
+                  blockchain: "bitcoin",
+                  type: "token",
+                  contractAddress: "sync-engine-btc-fixture",
+                  mintAddress: null,
+                },
+              })
+            )
+            return yield* Effect.all(
+              [
+                sourceRepository.persistNormalizedArtifacts({
+                  transaction: {
+                    sourceId: CONCURRENT_SOURCE_B_ID,
+                    sourceRawRecordId: null,
+                    externalId: "concurrent-first-use-transaction",
+                    externalGroupId: "concurrent-first-use",
+                    timestamp: occurredAt,
+                    transactionType: "buy_fiat",
+                    providerTransactionType: "buy",
+                    providerStatus: "pending",
+                    providerResourcePath: "/test/concurrent-first-use",
+                    providerDescription: "Concurrent first representation use",
+                    providerCreatedAt: occurredAt,
+                    providerUpdatedAt: occurredAt,
+                    metadata: null,
+                    providerFiatAmount: null,
+                    providerFiatCurrency: null,
+                    principalId: CONCURRENT_PRINCIPAL_ID,
+                  },
+                  venueContext: {
+                    venueType: "cex",
+                    cexAccountId: secondCexAccountId,
+                    externalAccountId: "concurrent-provider-account",
+                    externalOrderId: null,
+                    externalFillId: null,
+                    side: "buy",
+                    instrument: "BTC-EUR",
+                    fillPrice: "10000",
+                    commissionAmount: null,
+                    commissionCurrency: null,
+                    metadata: null,
+                  },
+                  providerTransfers: [
+                    {
+                      sourceId: CONCURRENT_SOURCE_B_ID,
+                      sourceRawRecordId: null,
+                      externalId: "concurrent-first-use-evidence",
+                      externalGroupId: "concurrent-first-use",
+                      providerAssetId: null,
+                      timestamp: occurredAt,
+                      direction: "inbound",
+                      processingMode: "evidence_only",
+                      fromAccountRef: "external",
+                      toAccountRef: "owned",
+                      fromAddress: null,
+                      toAddress: null,
+                      networkName: "bitcoin",
+                      networkHash: "concurrent-first-use-hash",
+                      observedBlockchainId: fixture.bitcoinBlockchainId,
+                      observedRepresentationType: "token",
+                      observedContractAddress: "sync-engine-btc-fixture",
+                      observedMintAddress: null,
+                      observedDecimals: 8,
+                      amount: "1",
+                      metadata: null,
+                    },
+                  ],
+                  canonicalTransfers: [
+                    {
+                      sourceId: CONCURRENT_SOURCE_B_ID,
+                      principalId: CONCURRENT_PRINCIPAL_ID,
+                      sourceRawRecordId: null,
+                      externalId: "concurrent-first-use-transfer",
+                      externalGroupId: "concurrent-first-use",
+                      addressId: null,
+                      blockchainId: fixture.bitcoinBlockchainId,
+                      txHash: null,
+                      timestamp: occurredAt,
+                      type: "cex",
+                      fromAddress: null,
+                      toAddress: null,
+                      fromAccountRef: "external",
+                      toAccountRef: "owned",
+                      fromPartyType: null,
+                      fromPartyResourcePath: null,
+                      toPartyType: null,
+                      toPartyResourcePath: null,
+                      assetId: TEST_BTC_ASSET_ID,
+                      assetRepresentationId: TEST_BTC_REPRESENTATION_ID,
+                      amount: "1",
+                      tokenId: null,
+                      notes: null,
+                      metadata: null,
+                    },
+                  ],
+                  providerAssetRowIds: [],
+                  legs: [],
+                  transactionReview: null,
+                  resolvedTransactionType: APPROVED_MAPPING,
+                }),
+                Effect.sleep("100 millis").pipe(
+                  Effect.andThen(
+                    overrideRepository.create({
+                      actorUserId: AuthUserId.make(CONCURRENT_USER_ID),
+                      expectedSystemRevision: projection.system.identityRevision,
+                      principalId: PrincipalId.make(CONCURRENT_PRINCIPAL_ID),
+                      reason: "Use the selected asset for every matching source",
+                      replacement: { _tag: "identity", assetId: OVERRIDE_ASSET_ID },
+                      target: {
+                        _tag: "representation",
+                        blockchain: "bitcoin",
+                        type: "token",
+                        contractAddress: "sync-engine-btc-fixture",
+                        mintAddress: null,
+                      },
+                    })
+                  )
+                ),
+              ],
+              { concurrency: "unbounded" }
+            )
+          })
+        ).finally(() =>
+          runPg(
+            Effect.gen(function* () {
+              const db = yield* drizzle
+              yield* db.execute(
+                sql`drop trigger delay_concurrent_representation_use on source_representation_uses`
+              )
+              yield* db.execute(sql`drop function delay_concurrent_representation_use()`)
+            })
+          )
+        )
+      )
+
+      const createdProjection = Option.getOrThrow(created)
+      const activeOverrideId = createdProjection.activeIdentityOverride?.id
+      expect(stored.canonicalTransfers[0]?.assetId).toBe(TEST_BTC_ASSET_ID)
+      expect(activeOverrideId).toBeDefined()
+      const applicationSources = yield* Effect.promise(() =>
+        runPg(
+          Effect.gen(function* () {
+            const db = yield* drizzle
+            return yield* db
+              .select({ sourceId: schema.principalAssetOverrideApplications.sourceId })
+              .from(schema.principalAssetOverrideApplications)
+              .where(
+                eq(schema.principalAssetOverrideApplications.overrideId, activeOverrideId ?? "")
+              )
+          })
+        )
+      )
+      expect(applicationSources.map(({ sourceId }) => sourceId)).toContain(CONCURRENT_SOURCE_B_ID)
     })
   )
 
