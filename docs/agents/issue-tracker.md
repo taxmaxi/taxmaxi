@@ -15,6 +15,8 @@ Do not create an issue for every implementation task. Keep short-lived subtasks 
 
 GitHub issues are public by default. Keep vulnerabilities, credentials, private partner details, and other sensitive work in a private channel.
 
+Real user data is sensitive work. Test and comparison runs use the maintainer's real wallets and exchange accounts, so a report can contain personal financial data: asset names held, quantities, amounts, timestamps, provider account details. Never post those to an issue or PR. Post a redacted summary (aggregate counts, parity conclusions, decision links) and keep the full report in a local file. When in doubt, ask before posting.
+
 ## Conventions
 
 - **Create an issue**: `gh issue create --title "..." --body "..."`
