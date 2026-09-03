@@ -1,5 +1,5 @@
 import * as DateTime from "effect/DateTime"
-import { asc, eq, sql } from "drizzle-orm"
+import { asc, eq, inArray, sql } from "drizzle-orm"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import * as Option from "effect/Option"
@@ -290,6 +290,7 @@ interface ExactOverrideArtifactOptions {
   readonly includeCanonicalTransfer?: boolean
   readonly inputAssetId?: string
   readonly principalId?: string
+  readonly providerObservedRepresentationType?: "native" | "token" | "nft" | null
   readonly sourceRawRecordId?: string | null
 }
 
@@ -302,6 +303,7 @@ const persistExactOverrideArtifact = ({
   includeCanonicalTransfer = true,
   inputAssetId = TEST_BTC_ASSET_ID,
   principalId = TEST_PRINCIPAL_ID,
+  providerObservedRepresentationType = "token",
   sourceRawRecordId = null,
 }: ExactOverrideArtifactOptions & {
   readonly externalId: string
@@ -359,7 +361,7 @@ const persistExactOverrideArtifact = ({
             networkName: "bitcoin",
             networkHash: `${externalId}-hash`,
             observedBlockchainId: fixture.bitcoinBlockchainId,
-            observedRepresentationType: "token",
+            observedRepresentationType: providerObservedRepresentationType,
             observedContractAddress: "sync-engine-btc-fixture",
             observedMintAddress: null,
             observedDecimals: 8,
@@ -436,6 +438,8 @@ const persistExactOverrideCallbackArtifact = ({
   sourceId = TEST_SOURCE_ID,
   cexAccountId = fixture.cexAccountId,
   principalId = TEST_PRINCIPAL_ID,
+  providerAssetRowId = null,
+  legUsesSourceTransferTargetOnly = false,
 }: {
   readonly externalId: string
   readonly fixture: SyncEngineRepositoryFixture
@@ -445,6 +449,8 @@ const persistExactOverrideCallbackArtifact = ({
   readonly sourceId?: string
   readonly cexAccountId?: string
   readonly principalId?: string
+  readonly providerAssetRowId?: string | null
+  readonly legUsesSourceTransferTargetOnly?: boolean
 }) =>
   runRepository(
     Effect.flatMap(SourceNormalizationRepository, (repository) =>
@@ -503,13 +509,14 @@ const persistExactOverrideCallbackArtifact = ({
             toPartyResourcePath: null,
             assetId: TEST_BTC_ASSET_ID,
             assetRepresentationId: TEST_BTC_REPRESENTATION_ID,
+            providerAssetRowId,
             amount: "1",
             tokenId: null,
             notes: null,
             metadata: { evidence: externalId },
           },
         ],
-        providerAssetRowIds: [],
+        providerAssetRowIds: providerAssetRowId === null ? [] : [providerAssetRowId],
         deriveLegs: ({ transaction, canonicalTransfers }) => {
           const [transfer] = canonicalTransfers
           if (transfer === undefined) return Effect.die("Missing callback transfer")
@@ -524,7 +531,9 @@ const persistExactOverrideCallbackArtifact = ({
               principalId,
               addressId: null,
               assetId: transfer.assetId,
-              assetRepresentationId: transfer.assetRepresentationId,
+              assetRepresentationId: legUsesSourceTransferTargetOnly
+                ? null
+                : transfer.assetRepresentationId,
               amount: "1",
               kind,
               provenance: "deterministic" as const,
@@ -1172,6 +1181,184 @@ describe("SourceNormalizationRepositoryLive", () => {
         )
       })
     )
+  )
+
+  it.effect("records exact and provider targets again on replay", () =>
+    Effect.gen(function* () {
+      const occurredAt = DateTime.toDateUtc(DateTime.makeUnsafe("2025-02-01T09:45:00.000Z"))
+      yield* Effect.promise(() =>
+        runPg(
+          Effect.gen(function* () {
+            yield* seedProviderDecisionAssets(occurredAt)
+            yield* seedProviderDecisionMappings
+          })
+        )
+      )
+
+      const providerArtifact = yield* Effect.promise(() =>
+        persistExactOverrideArtifact({
+          externalId: "recorded-provider-target",
+          fixture,
+          occurredAt,
+        })
+      )
+      const transferArtifact = yield* Effect.promise(() =>
+        persistExactOverrideCallbackArtifact({
+          externalId: "recorded-transfer-target",
+          fixture,
+          kind: "acquisition",
+          occurredAt,
+          providerStatus: "pending",
+          providerAssetRowId: PROVIDER_ASSET_ROW_A_ID,
+          legUsesSourceTransferTargetOnly: true,
+        })
+      )
+
+      const loadStoredTargets = () =>
+        runPg(
+          Effect.gen(function* () {
+            const db = yield* drizzle
+            const [providerTransfer] = yield* db
+              .select({
+                id: schema.providerTransfers.id,
+                sourceRepresentationUseId: schema.providerTransfers.sourceRepresentationUseId,
+              })
+              .from(schema.providerTransfers)
+              .where(eq(schema.providerTransfers.externalId, "recorded-provider-target-evidence"))
+            const canonicalTransfers = yield* db
+              .select({
+                id: schema.transfers.id,
+                externalId: schema.transfers.externalId,
+                sourceRepresentationUseId: schema.transfers.sourceRepresentationUseId,
+                providerAssetRowId: schema.transfers.providerAssetRowId,
+              })
+              .from(schema.transfers)
+              .where(
+                inArray(schema.transfers.externalId, [
+                  "recorded-provider-target-transfer",
+                  "recorded-transfer-target-transfer",
+                ])
+              )
+              .orderBy(asc(schema.transfers.externalId))
+            const legs = yield* db
+              .select({
+                id: schema.transactionLegs.id,
+                externalId: schema.transactionLegs.externalId,
+                assetRepresentationId: schema.transactionLegs.assetRepresentationId,
+                sourceRepresentationUseId: schema.transactionLegs.sourceRepresentationUseId,
+                providerAssetRowId: schema.transactionLegs.providerAssetRowId,
+                metadata: schema.transactionLegs.metadata,
+              })
+              .from(schema.transactionLegs)
+              .where(
+                inArray(schema.transactionLegs.externalId, [
+                  "recorded-provider-target-leg",
+                  "recorded-transfer-target-leg",
+                ])
+              )
+              .orderBy(asc(schema.transactionLegs.externalId))
+            return { providerTransfer, canonicalTransfers, legs }
+          })
+        )
+      const storedTargets = yield* Effect.promise(loadStoredTargets)
+      const providerCanonicalTransfer = storedTargets.canonicalTransfers.find(
+        ({ externalId }) => externalId === "recorded-provider-target-transfer"
+      )
+      const linkedCanonicalTransfer = storedTargets.canonicalTransfers.find(
+        ({ externalId }) => externalId === "recorded-transfer-target-transfer"
+      )
+      const providerLeg = storedTargets.legs.find(
+        ({ externalId }) => externalId === "recorded-provider-target-leg"
+      )
+      const linkedLeg = storedTargets.legs.find(
+        ({ externalId }) => externalId === "recorded-transfer-target-leg"
+      )
+      const providerUseId = storedTargets.providerTransfer?.sourceRepresentationUseId
+      const transferUseId = linkedCanonicalTransfer?.sourceRepresentationUseId
+      expect(providerUseId).toBeTruthy()
+      expect(transferUseId).toBeTruthy()
+      expect(providerCanonicalTransfer?.sourceRepresentationUseId).toBe(providerUseId)
+      expect(providerLeg?.sourceRepresentationUseId).toBe(providerUseId)
+      expect(linkedCanonicalTransfer?.providerAssetRowId).toBe(PROVIDER_ASSET_ROW_A_ID)
+      expect(linkedLeg).toMatchObject({
+        assetRepresentationId: null,
+        sourceRepresentationUseId: transferUseId,
+        providerAssetRowId: PROVIDER_ASSET_ROW_A_ID,
+      })
+
+      const partialProviderReplay = yield* Effect.promise(() =>
+        persistExactOverrideArtifact({
+          externalId: "recorded-provider-target",
+          fixture,
+          occurredAt,
+          providerObservedRepresentationType: null,
+        })
+      )
+      expect(partialProviderReplay.providerTransfers[0]).toMatchObject({
+        id: providerArtifact.providerTransfers[0]?.id,
+        observedRepresentationType: "token",
+        sourceRepresentationUseId: providerUseId,
+      })
+
+      yield* Effect.promise(() =>
+        runPg(
+          Effect.gen(function* () {
+            const db = yield* drizzle
+            yield* db
+              .update(schema.providerTransfers)
+              .set({ sourceRepresentationUseId: null })
+              .where(eq(schema.providerTransfers.externalId, "recorded-provider-target-evidence"))
+            yield* db
+              .update(schema.transfers)
+              .set({ sourceRepresentationUseId: null, providerAssetRowId: null })
+              .where(
+                inArray(schema.transfers.externalId, [
+                  "recorded-provider-target-transfer",
+                  "recorded-transfer-target-transfer",
+                ])
+              )
+            yield* db
+              .update(schema.transactionLegs)
+              .set({ sourceRepresentationUseId: null, providerAssetRowId: null })
+              .where(
+                inArray(schema.transactionLegs.externalId, [
+                  "recorded-provider-target-leg",
+                  "recorded-transfer-target-leg",
+                ])
+              )
+          })
+        )
+      )
+
+      const replayedProviderArtifact = yield* Effect.promise(() =>
+        persistExactOverrideArtifact({
+          externalId: "recorded-provider-target",
+          fixture,
+          occurredAt,
+        })
+      )
+      const replayedTransferArtifact = yield* Effect.promise(() =>
+        persistExactOverrideCallbackArtifact({
+          externalId: "recorded-transfer-target",
+          fixture,
+          kind: "acquisition",
+          occurredAt,
+          providerStatus: "pending",
+          providerAssetRowId: PROVIDER_ASSET_ROW_A_ID,
+          legUsesSourceTransferTargetOnly: true,
+        })
+      )
+
+      expect(replayedProviderArtifact.providerTransfers[0]?.id).toBe(
+        providerArtifact.providerTransfers[0]?.id
+      )
+      expect(replayedTransferArtifact.canonicalTransfers[0]?.id).toBe(
+        transferArtifact.canonicalTransfers[0]?.id
+      )
+      expect(replayedTransferArtifact.legs[0]?.id).toBe(transferArtifact.legs[0]?.id)
+      expect(yield* Effect.promise(loadStoredTargets)).toEqual(storedTargets)
+      expect(linkedLeg?.metadata).toEqual({ derivedFromAssetId: TEST_BTC_ASSET_ID })
+    })
   )
 
   it.effect("keeps the canonical transaction ID stable after deletion and re-creation", () =>

@@ -1037,6 +1037,7 @@ const buildTransferDraft = ({
     toPartyResourcePath: null,
     assetId,
     assetRepresentationId: movement.asset.assetRepresentationId,
+    providerAssetRowId: movement.asset.providerAssetRowId,
     amount: movement.amount,
     tokenId: null,
     notes: movement.role === "rent" ? "Solana account close or rent refund balance effect" : null,
@@ -1046,7 +1047,6 @@ const buildTransferDraft = ({
       evidenceKind: movement.evidenceKind,
       rawUnits: movement.rawUnits,
       mintAddress: movement.asset.mintAddress,
-      providerAssetRowId: movement.asset.providerAssetRowId,
       supplementalTransferRow: movement.supplementalTransferRow,
     },
   }

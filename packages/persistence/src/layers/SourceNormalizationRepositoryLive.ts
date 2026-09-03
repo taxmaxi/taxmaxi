@@ -56,6 +56,8 @@ interface PersistedSourceLegRecord {
   readonly principalId: string
   readonly assetId: string
   readonly assetRepresentationId: string | null
+  readonly sourceRepresentationUseId: string | null
+  readonly providerAssetRowId: string | null
   readonly amount: string
   readonly kind: "acquisition" | "disposal" | "income" | "fee"
   readonly fiatAmount: string | null
@@ -63,7 +65,32 @@ interface PersistedSourceLegRecord {
   readonly derivationRule: string | null
 }
 
-type StoredSourceTransactionLegDraft = Omit<SourceTransactionLegDraft, "providerAssetRowId">
+interface SourceRepresentationUseTarget {
+  readonly sourceId: string
+  readonly blockchainId: string
+  readonly representationType: "native" | "token" | "nft"
+  readonly contractAddress: string | null
+  readonly mintAddress: string | null
+}
+
+interface RecordedSourceRepresentationUses {
+  readonly idByAssetRepresentationId: ReadonlyMap<string, string>
+  readonly idByTargetKey: ReadonlyMap<string, string>
+}
+
+type LinkedSourceProviderTransferDraft = SourceProviderTransferDraft & {
+  readonly sourceRepresentationUseId: string | null
+}
+
+type LinkedSourceTransferDraft = SourceTransferDraft & {
+  readonly sourceRepresentationUseId: string | null
+  readonly providerAssetRowId: string | null
+}
+
+type LinkedSourceTransactionLegDraft = SourceTransactionLegDraft & {
+  readonly sourceRepresentationUseId: string | null
+  readonly providerAssetRowId: string | null
+}
 
 /**
  * Wrap residual errors in `SyncEngineStorageError`, but let a typed credit-exhaustion
@@ -132,8 +159,6 @@ const sourceRepresentationUseKey = ({
 const ProviderTransferMetadataSchema = Schema.Struct({
   role: Schema.optional(Schema.Literals(["principal", "fee", "rent"])),
 })
-
-const SourceTransactionLegMetadataSchema = Schema.Record(Schema.String, Schema.Unknown)
 
 const PRINCIPAL_OVERRIDE_REVIEW_LAYER = "principal_asset_override"
 
@@ -353,6 +378,8 @@ const make = Effect.gen(function* () {
     addressId: schema.transfers.addressId,
     assetId: schema.transfers.assetId,
     assetRepresentationId: schema.transfers.assetRepresentationId,
+    sourceRepresentationUseId: schema.transfers.sourceRepresentationUseId,
+    providerAssetRowId: schema.transfers.providerAssetRowId,
     amount: schema.transfers.amount,
     type: schema.transfers.type,
     metadata: schema.transfers.metadata,
@@ -366,6 +393,7 @@ const make = Effect.gen(function* () {
     externalId: schema.providerTransfers.externalId,
     externalGroupId: schema.providerTransfers.externalGroupId,
     providerAssetId: schema.providerTransfers.providerAssetId,
+    sourceRepresentationUseId: schema.providerTransfers.sourceRepresentationUseId,
     timestamp: schema.providerTransfers.timestamp,
     direction: schema.providerTransfers.direction,
     processingMode: schema.providerTransfers.processingMode,
@@ -393,6 +421,8 @@ const make = Effect.gen(function* () {
     principalId: schema.transactionLegs.principalId,
     assetId: schema.transactionLegs.assetId,
     assetRepresentationId: schema.transactionLegs.assetRepresentationId,
+    sourceRepresentationUseId: schema.transactionLegs.sourceRepresentationUseId,
+    providerAssetRowId: schema.transactionLegs.providerAssetRowId,
     amount: schema.transactionLegs.amount,
     kind: schema.transactionLegs.kind,
     fiatAmount: schema.transactionLegs.fiatAmount,
@@ -918,7 +948,7 @@ const make = Effect.gen(function* () {
     canonicalTransfers,
   }: {
     readonly executor: SourceNormalizationExecutor
-    readonly canonicalTransfers: ReadonlyArray<SourceTransferDraft>
+    readonly canonicalTransfers: ReadonlyArray<LinkedSourceTransferDraft>
   }) =>
     Effect.forEach(canonicalTransfers, (transfer) =>
       Effect.gen(function* () {
@@ -951,6 +981,8 @@ const make = Effect.gen(function* () {
               toPartyResourcePath: sql.raw("excluded.to_party_resource_path"),
               assetId: sql.raw("excluded.asset_id"),
               assetRepresentationId: sql.raw("excluded.asset_representation_id"),
+              sourceRepresentationUseId: sql.raw("excluded.source_representation_use_id"),
+              providerAssetRowId: sql.raw("excluded.provider_asset_row_id"),
               amount: sql.raw("excluded.amount"),
               tokenId: sql.raw("excluded.token_id"),
               notes: sql.raw("excluded.notes"),
@@ -1055,7 +1087,7 @@ const make = Effect.gen(function* () {
   }: {
     readonly executor: SourceNormalizationExecutor
     readonly transactionId: string
-    readonly providerTransfers: ReadonlyArray<SourceProviderTransferDraft>
+    readonly providerTransfers: ReadonlyArray<LinkedSourceProviderTransferDraft>
   }) =>
     Effect.forEach(providerTransfers, (providerTransfer) =>
       Effect.gen(function* () {
@@ -1097,6 +1129,15 @@ const make = Effect.gen(function* () {
               transactionId: sql.raw("excluded.transaction_id"),
               externalGroupId: sql.raw("excluded.external_group_id"),
               providerAssetId: sql.raw("excluded.provider_asset_id"),
+              sourceRepresentationUseId: sql`case
+                when ${incomingTransferIsAccountingOnly} then null
+                when ${incomingObservedRepresentationIsAbsent} or (
+                  ${incomingObservedRepresentationMatchesStoredIdentity}
+                  and excluded.observed_representation_type is null
+                )
+                then ${schema.providerTransfers.sourceRepresentationUseId}
+                else excluded.source_representation_use_id
+              end`,
               timestamp: sql.raw("excluded.timestamp"),
               direction: sql.raw("excluded.direction"),
               processingMode: sql.raw("excluded.processing_mode"),
@@ -1187,7 +1228,7 @@ const make = Effect.gen(function* () {
     legs,
   }: {
     readonly executor: SourceNormalizationExecutor
-    readonly legs: ReadonlyArray<StoredSourceTransactionLegDraft>
+    readonly legs: ReadonlyArray<LinkedSourceTransactionLegDraft>
   }) =>
     Effect.forEach(legs, (leg) =>
       Effect.gen(function* () {
@@ -1210,6 +1251,8 @@ const make = Effect.gen(function* () {
               addressId: sql.raw("excluded.address_id"),
               assetId: sql.raw("excluded.asset_id"),
               assetRepresentationId: sql.raw("excluded.asset_representation_id"),
+              sourceRepresentationUseId: sql.raw("excluded.source_representation_use_id"),
+              providerAssetRowId: sql.raw("excluded.provider_asset_row_id"),
               amount: sql.raw("excluded.amount"),
               kind: sql.raw("excluded.kind"),
               provenance: sql.raw("excluded.provenance"),
@@ -1323,16 +1366,8 @@ const make = Effect.gen(function* () {
     readonly sourceId: string
   }) =>
     Effect.gen(function* () {
-      const observedRepresentations = new Map<
-        string,
-        {
-          readonly sourceId: string
-          readonly blockchainId: string
-          readonly representationType: "native" | "token" | "nft"
-          readonly contractAddress: string | null
-          readonly mintAddress: string | null
-        }
-      >()
+      const observedRepresentations = new Map<string, SourceRepresentationUseTarget>()
+      const targetKeyByAssetRepresentationId = new Map<string, string>()
 
       for (const transfer of providerTransfers) {
         if (
@@ -1360,6 +1395,7 @@ const make = Effect.gen(function* () {
           ? []
           : yield* executor
               .select({
+                id: schema.assetRepresentations.id,
                 blockchainId: schema.assetRepresentations.blockchainId,
                 representationType: schema.assetRepresentations.type,
                 contractAddress: schema.assetRepresentations.contractAddress,
@@ -1376,17 +1412,25 @@ const make = Effect.gen(function* () {
       for (const storedRepresentation of storedRepresentations) {
         const representation = {
           sourceId,
-          ...storedRepresentation,
+          blockchainId: storedRepresentation.blockchainId,
+          representationType: storedRepresentation.representationType,
+          contractAddress: storedRepresentation.contractAddress,
+          mintAddress: storedRepresentation.mintAddress,
         } as const
-        observedRepresentations.set(sourceRepresentationUseKey(representation), representation)
+        const targetKey = sourceRepresentationUseKey(representation)
+        observedRepresentations.set(targetKey, representation)
+        targetKeyByAssetRepresentationId.set(storedRepresentation.id, targetKey)
       }
 
       if (observedRepresentations.size === 0) {
-        return yield* Effect.void
+        return {
+          idByAssetRepresentationId: new Map(),
+          idByTargetKey: new Map(),
+        } satisfies RecordedSourceRepresentationUses
       }
 
       const now = nowDate()
-      return yield* executor
+      yield* executor
         .insert(schema.sourceRepresentationUses)
         .values(
           Array.from(observedRepresentations.values(), (representation) => ({
@@ -1399,7 +1443,121 @@ const make = Effect.gen(function* () {
         .pipe(
           wrapSyncEngineSqlError("sourceNormalizationRepository.recordSourceRepresentationUses")
         )
+
+      const recordedUses = yield* executor
+        .select({
+          id: schema.sourceRepresentationUses.id,
+          sourceId: schema.sourceRepresentationUses.sourceId,
+          blockchainId: schema.sourceRepresentationUses.blockchainId,
+          representationType: schema.sourceRepresentationUses.representationType,
+          contractAddress: schema.sourceRepresentationUses.contractAddress,
+          mintAddress: schema.sourceRepresentationUses.mintAddress,
+        })
+        .from(schema.sourceRepresentationUses)
+        .where(
+          and(
+            eq(schema.sourceRepresentationUses.sourceId, sourceId),
+            or(
+              ...Array.from(observedRepresentations.values(), (representation) =>
+                and(
+                  eq(schema.sourceRepresentationUses.blockchainId, representation.blockchainId),
+                  eq(
+                    schema.sourceRepresentationUses.representationType,
+                    representation.representationType
+                  ),
+                  representation.contractAddress === null
+                    ? isNull(schema.sourceRepresentationUses.contractAddress)
+                    : eq(
+                        schema.sourceRepresentationUses.contractAddress,
+                        representation.contractAddress
+                      ),
+                  representation.mintAddress === null
+                    ? isNull(schema.sourceRepresentationUses.mintAddress)
+                    : eq(schema.sourceRepresentationUses.mintAddress, representation.mintAddress)
+                )
+              )
+            )
+          )
+        )
+        .pipe(
+          wrapSyncEngineSqlError(
+            "sourceNormalizationRepository.recordSourceRepresentationUses.loadRecordedUses"
+          )
+        )
+      const idByTargetKey = new Map(
+        recordedUses.map((recordedUse) => [sourceRepresentationUseKey(recordedUse), recordedUse.id])
+      )
+      const idByAssetRepresentationId = new Map<string, string>()
+      for (const [assetRepresentationId, targetKey] of targetKeyByAssetRepresentationId) {
+        const sourceRepresentationUseId = idByTargetKey.get(targetKey)
+        if (sourceRepresentationUseId !== undefined) {
+          idByAssetRepresentationId.set(assetRepresentationId, sourceRepresentationUseId)
+        }
+      }
+
+      return {
+        idByAssetRepresentationId,
+        idByTargetKey,
+      } satisfies RecordedSourceRepresentationUses
     })
+
+  const sourceRepresentationUseIdForAssetRepresentation = ({
+    assetRepresentationId,
+    recordedUses,
+    operation,
+  }: {
+    readonly assetRepresentationId: string | null | undefined
+    readonly recordedUses: RecordedSourceRepresentationUses
+    readonly operation: string
+  }) => {
+    if (assetRepresentationId === null || assetRepresentationId === undefined) {
+      return Effect.succeed(null)
+    }
+
+    const sourceRepresentationUseId =
+      recordedUses.idByAssetRepresentationId.get(assetRepresentationId)
+    return sourceRepresentationUseId === undefined
+      ? toSyncEngineStorageError({
+          operation,
+          error: `No source representation use was recorded for asset representation ${assetRepresentationId}`,
+        })
+      : Effect.succeed(sourceRepresentationUseId)
+  }
+
+  const sourceRepresentationUseIdForProviderTransfer = ({
+    sourceId,
+    transfer,
+    recordedUses,
+  }: {
+    readonly sourceId: string
+    readonly transfer: SourceProviderTransferDraft
+    readonly recordedUses: RecordedSourceRepresentationUses
+  }) => {
+    if (
+      transfer.observedBlockchainId === null ||
+      transfer.observedBlockchainId === undefined ||
+      transfer.observedRepresentationType === null ||
+      transfer.observedRepresentationType === undefined
+    ) {
+      return Effect.succeed(null)
+    }
+
+    const targetKey = sourceRepresentationUseKey({
+      sourceId,
+      blockchainId: transfer.observedBlockchainId,
+      representationType: transfer.observedRepresentationType,
+      contractAddress: canonicalizeAddress(transfer.observedContractAddress ?? null),
+      mintAddress: canonicalizeAddress(transfer.observedMintAddress ?? null),
+    })
+    const sourceRepresentationUseId = recordedUses.idByTargetKey.get(targetKey)
+    return sourceRepresentationUseId === undefined
+      ? toSyncEngineStorageError({
+          operation:
+            "sourceNormalizationRepository.persistNormalizedArtifacts.providerTransferTarget",
+          error: `No source representation use was recorded for provider transfer ${transfer.externalId ?? transfer.networkHash ?? "without identity"}`,
+        })
+      : Effect.succeed(sourceRepresentationUseId)
+  }
 
   const removeInventoryMovementsForTransaction = ({
     executor,
@@ -1524,6 +1682,7 @@ const make = Effect.gen(function* () {
                 observedContractAddress: null,
                 observedMintAddress: null,
                 observedDecimals: null,
+                sourceRepresentationUseId: null,
                 processingMode: "stale",
                 updatedAt: nowDate(),
               })
@@ -1912,14 +2071,57 @@ const make = Effect.gen(function* () {
             sourceId: persistedTransaction.sourceId,
             providerAssetRowIds: params.providerAssetRowIds,
           })
+          const recordedUses = yield* recordSourceRepresentationUses({
+            executor: tx,
+            providerTransfers: params.providerTransfers,
+            assetRepresentationIds: [
+              ...canonicalTransfers,
+              ...("legs" in params ? params.legs : []),
+            ].flatMap(({ assetRepresentationId }) =>
+              assetRepresentationId === null || assetRepresentationId === undefined
+                ? []
+                : [assetRepresentationId]
+            ),
+            sourceId: persistedTransaction.sourceId,
+          })
+          const linkedProviderTransfers = yield* Effect.forEach(
+            params.providerTransfers,
+            (providerTransfer) =>
+              Effect.map(
+                sourceRepresentationUseIdForProviderTransfer({
+                  sourceId: persistedTransaction.sourceId,
+                  transfer: providerTransfer,
+                  recordedUses,
+                }),
+                (sourceRepresentationUseId) => ({
+                  ...providerTransfer,
+                  sourceRepresentationUseId,
+                })
+              )
+          )
+          const linkedCanonicalTransfers = yield* Effect.forEach(canonicalTransfers, (transfer) =>
+            Effect.map(
+              sourceRepresentationUseIdForAssetRepresentation({
+                assetRepresentationId: transfer.assetRepresentationId,
+                recordedUses,
+                operation:
+                  "sourceNormalizationRepository.persistNormalizedArtifacts.canonicalTransferTarget",
+              }),
+              (sourceRepresentationUseId) => ({
+                ...transfer,
+                sourceRepresentationUseId,
+                providerAssetRowId: transfer.providerAssetRowId ?? null,
+              })
+            )
+          )
           const persistedProviderTransfers = yield* upsertProviderTransfers({
             executor: tx,
             transactionId: persistedTransaction.id,
-            providerTransfers: params.providerTransfers,
+            providerTransfers: linkedProviderTransfers,
           })
           const persistedCanonicalTransfers = yield* upsertCanonicalTransfers({
             executor: tx,
-            canonicalTransfers,
+            canonicalTransfers: linkedCanonicalTransfers,
           })
           const systemCanonicalTransfers = persistedCanonicalTransfers.map((transfer) => ({
             ...transfer,
@@ -1938,25 +2140,22 @@ const make = Effect.gen(function* () {
                   canonicalTransfers: systemCanonicalTransfers,
                 })
               : params.legs
-          yield* recordSourceRepresentationUses({
+          const derivedLegAssetRepresentationIds = derivedLegs.flatMap(
+            ({ assetRepresentationId }) =>
+              assetRepresentationId === null || assetRepresentationId === undefined
+                ? []
+                : [assetRepresentationId]
+          )
+          const derivedLegRecordedUses = yield* recordSourceRepresentationUses({
             executor: tx,
-            providerTransfers: params.providerTransfers,
-            assetRepresentationIds: [...canonicalTransfers, ...derivedLegs].flatMap(
-              ({ assetRepresentationId }) =>
-                assetRepresentationId === null || assetRepresentationId === undefined
-                  ? []
-                  : [assetRepresentationId]
-            ),
+            providerTransfers: [],
+            assetRepresentationIds: derivedLegAssetRepresentationIds,
             sourceId: persistedTransaction.sourceId,
           })
           const completeDecisions =
             yield* principalAssetOverrideDecisionLoader.includeSystemRepresentations({
               decisions,
-              assetRepresentationIds: derivedLegs.flatMap(({ assetRepresentationId }) =>
-                assetRepresentationId === null || assetRepresentationId === undefined
-                  ? []
-                  : [assetRepresentationId]
-              ),
+              assetRepresentationIds: derivedLegAssetRepresentationIds,
             })
           const providerDecisionResult = applyPrincipalProviderAssetDecisions({
             decisions: completeDecisions,
@@ -1964,32 +2163,59 @@ const make = Effect.gen(function* () {
             providerTransfers: persistedProviderTransfers,
           })
           const effectiveLegs = providerDecisionResult.legs
-          const storedLegs = yield* Effect.forEach(effectiveLegs, (leg) =>
-            Effect.gen(function* () {
-              const { providerAssetRowId, ...storedLeg } = leg
-              if (providerAssetRowId === null || providerAssetRowId === undefined) {
-                return storedLeg
-              }
-              const metadata = yield* Schema.decodeUnknownEffect(
-                SourceTransactionLegMetadataSchema
-              )(leg.metadata).pipe(
-                Effect.mapError((cause) =>
-                  toSyncEngineStorageError({
-                    operation:
-                      "sourceNormalizationRepository.persistNormalizedArtifacts.legProviderAssetMetadata",
-                    error: cause,
-                  })
-                )
+          const sourceTransferIds = [
+            ...new Set(
+              effectiveLegs.flatMap(({ sourceTransferId }) =>
+                sourceTransferId === null ? [] : [sourceTransferId]
               )
+            ),
+          ]
+          const sourceTransferTargets =
+            sourceTransferIds.length === 0
+              ? []
+              : yield* tx
+                  .select({
+                    id: schema.transfers.id,
+                    sourceRepresentationUseId: schema.transfers.sourceRepresentationUseId,
+                    providerAssetRowId: schema.transfers.providerAssetRowId,
+                  })
+                  .from(schema.transfers)
+                  .where(inArray(schema.transfers.id, sourceTransferIds))
+                  .pipe(
+                    wrapSyncEngineSqlError(
+                      "sourceNormalizationRepository.persistNormalizedArtifacts.loadSourceTransferTargets"
+                    )
+                  )
+          const sourceTransferTargetById = new Map(
+            sourceTransferTargets.map((target) => [target.id, target])
+          )
+          const linkedLegs = yield* Effect.forEach(effectiveLegs, (leg) =>
+            Effect.gen(function* () {
+              const sourceTransferTarget =
+                leg.sourceTransferId === null
+                  ? undefined
+                  : sourceTransferTargetById.get(leg.sourceTransferId)
+              const sourceRepresentationUseId =
+                leg.assetRepresentationId === null || leg.assetRepresentationId === undefined
+                  ? (sourceTransferTarget?.sourceRepresentationUseId ?? null)
+                  : yield* sourceRepresentationUseIdForAssetRepresentation({
+                      assetRepresentationId: leg.assetRepresentationId,
+                      recordedUses: derivedLegRecordedUses,
+                      operation:
+                        "sourceNormalizationRepository.persistNormalizedArtifacts.legTarget",
+                    })
+
               return {
-                ...storedLeg,
-                metadata: { ...metadata, providerAssetRowId },
+                ...leg,
+                sourceRepresentationUseId,
+                providerAssetRowId:
+                  leg.providerAssetRowId ?? sourceTransferTarget?.providerAssetRowId ?? null,
               }
             })
           )
           const persistedLegs = yield* upsertTransactionLegs({
             executor: tx,
-            legs: storedLegs,
+            legs: linkedLegs,
           })
           const persistedLegsWithSystemAssets = yield* Effect.forEach(persistedLegs, (leg, index) =>
             Effect.gen(function* () {

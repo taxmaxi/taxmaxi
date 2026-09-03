@@ -2,7 +2,6 @@ import { expect, it } from "@effect/vitest"
 import * as DateTime from "effect/DateTime"
 import * as Effect from "effect/Effect"
 import * as Option from "effect/Option"
-import * as Schema from "effect/Schema"
 import { CoinbaseRecordNormalizerLive } from "../../src/providers/coinbase/layers/CoinbaseRecordNormalizerLive.ts"
 import { CoinbaseRecordNormalizer } from "../../src/providers/coinbase/services/CoinbaseRecordNormalizer.ts"
 import type { SourceRawRecord, SourceSyncSource } from "../../src/services/SourceSyncModels.ts"
@@ -160,16 +159,10 @@ it.effect("keeps each same-currency fee paired with its resolved provider row", 
         }),
       resolveBlockchainId: () => Option.none(),
     })
-    const pairs = yield* Effect.forEach(result.canonicalTransfers, (transfer) =>
-      Schema.decodeUnknownEffect(
-        Schema.Struct({ providerAssetRowId: Schema.String.check(Schema.isUUID()) })
-      )(transfer.metadata).pipe(
-        Effect.map((metadata) => ({
-          assetId: transfer.assetId,
-          providerAssetRowId: String(metadata.providerAssetRowId),
-        }))
-      )
-    )
+    const pairs = result.canonicalTransfers.map((transfer) => ({
+      assetId: transfer.assetId,
+      providerAssetRowId: transfer.providerAssetRowId,
+    }))
 
     expect(pairs).toEqual(
       expect.arrayContaining([
