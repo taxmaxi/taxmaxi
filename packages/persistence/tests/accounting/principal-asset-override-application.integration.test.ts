@@ -621,6 +621,89 @@ describe("principal asset override application", () => {
     })
   )
 
+  it.effect("blocks a fiat-linked accounting leg and its sibling", () =>
+    Effect.gen(function* () {
+      const fiatLegId = "10000000-0000-4000-8000-000000000116"
+      yield* Effect.promise(() =>
+        runPg(
+          Effect.gen(function* () {
+            const db = yield* drizzle
+            const occurredAt = DateTime.toDateUtc(DateTime.makeUnsafe("2025-02-10T11:05:00.000Z"))
+            yield* db.insert(schema.providerAssets).values({
+              id: INCLUDED_PROVIDER_ASSET_ID,
+              provider: "coinbase",
+              providerAssetId: "fiat-linked-accounting-leg",
+              currencyCode: "EUR",
+              name: "Euro",
+              exponent: 2,
+              providerType: "fiat",
+              rawProviderPayload: { asset_id: "fiat-linked-accounting-leg" },
+              evidenceRevision: 1,
+              discoveredAt: occurredAt,
+              retrievedAt: occurredAt,
+            })
+            yield* db.insert(schema.providerAssetMappings).values({
+              providerAssetRowId: INCLUDED_PROVIDER_ASSET_ID,
+              mappingKind: "fiat",
+              canonicalFiatCurrency: "EUR",
+              mappingStatus: "approved",
+            })
+            const [transaction] = yield* db
+              .insert(schema.transactions)
+              .values({
+                sourceId: SOURCE_ID,
+                externalId: "fiat-linked-accounting-transaction",
+                timestamp: occurredAt,
+                transactionType: "trade_other",
+                principalId: PRINCIPAL_ID,
+              })
+              .returning({ id: schema.transactions.id })
+            if (transaction === undefined) return yield* Effect.die("Failed to create transaction")
+            yield* db.insert(schema.transactionLegs).values([
+              {
+                id: fiatLegId,
+                sourceId: SOURCE_ID,
+                externalId: "fiat-linked-accounting-leg",
+                timestamp: occurredAt,
+                principalId: PRINCIPAL_ID,
+                assetId: TEST_BTC_ASSET_ID,
+                providerAssetRowId: INCLUDED_PROVIDER_ASSET_ID,
+                amount: "1",
+                kind: "disposal" as const,
+                provenance: "deterministic" as const,
+                transactionId: transaction.id,
+              },
+              {
+                id: "10000000-0000-4000-8000-000000000117",
+                sourceId: SOURCE_ID,
+                externalId: "fiat-linked-crypto-sibling",
+                timestamp: occurredAt,
+                principalId: PRINCIPAL_ID,
+                assetId: TEST_BTC_ASSET_ID,
+                sourceRepresentationUseId: SOURCE_USE_ID,
+                amount: "1",
+                kind: "acquisition" as const,
+                provenance: "deterministic" as const,
+                transactionId: transaction.id,
+              },
+            ])
+          })
+        )
+      )
+
+      const ledger = yield* Effect.promise(loadLedger)
+      expect(ledger.events).toEqual([])
+      expect(ledger.inputBlockers).toEqual([
+        expect.objectContaining({
+          code: "malformed_movement",
+          eventId: fiatLegId,
+          assetId: TEST_BTC_ASSET_ID,
+          providerAssetRowId: INCLUDED_PROVIDER_ASSET_ID,
+        }),
+      ])
+    })
+  )
+
   it.effect("withholds a fee transaction and the operation it paid for together", () =>
     Effect.gen(function* () {
       yield* Effect.promise(() =>

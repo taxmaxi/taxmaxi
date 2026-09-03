@@ -536,7 +536,18 @@ const make = Effect.gen(function* () {
           continue
         }
         if (outcome._tag === "ignored") {
-          withheldLegIds.add(row.id)
+          const blockerError = recordOutcomeBlockers({
+            blockers: inputBlockerByKey,
+            custodyUnitIdBySource,
+            eventId: row.id,
+            outcome: { _tag: "malformed", assetId: row.assetId },
+            providerAssetRowId: row.providerAssetRowId,
+            sourceId: row.sourceId,
+          })
+          if (blockerError !== undefined) return yield* blockerError
+          if (row.transactionId === null) withheldLegIds.add(row.id)
+          else withheldTransactionIds.add(row.transactionId)
+          if (row.feeTransactionId !== null) withheldTransactionIds.add(row.feeTransactionId)
           continue
         }
         if (outcome._tag === "blocked" || outcome._tag === "malformed") {
