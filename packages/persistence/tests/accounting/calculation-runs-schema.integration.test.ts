@@ -1,12 +1,31 @@
 import { NodeServices } from "@effect/platform-node"
 import { beforeEach, describe, expect, it } from "@effect/vitest"
-import { and, eq, sql } from "drizzle-orm"
+import {
+  AccountingEventId,
+  AccountingMethodId,
+  AccountingQuantity,
+  CustodyUnitId,
+  JurisdictionCode,
+  TaxYear,
+} from "@my/core/accounting"
+import { CurrencyCode } from "@my/core/currency"
+import { PrincipalId } from "@my/core/ownership"
+import { and, asc, eq, sql } from "drizzle-orm"
+import * as BigDecimal from "effect/BigDecimal"
 import * as DateTime from "effect/DateTime"
 import * as Effect from "effect/Effect"
 import * as FileSystem from "effect/FileSystem"
 import * as Path from "effect/Path"
+import { CalculationRunRepositoryLive } from "../../src/layers/CalculationRunRepositoryLive.ts"
 import { drizzle } from "../../src/layers/PgClientLive.ts"
 import { schema } from "../../src/schema/index.ts"
+import {
+  CalculationRunId,
+  CalculationRunRepository,
+  type CalculationRunResult,
+  InputLedgerRevision,
+  ValuationRevision,
+} from "../../src/services/CalculationRunRepository.ts"
 import {
   TEST_BTC_ASSET_ID,
   TEST_PRINCIPAL_ID,
@@ -24,12 +43,18 @@ const CLAIMING_USER_ID = "00000000-0000-4000-8000-000000000705"
 const CLAIMING_PRINCIPAL_ID = "00000000-0000-4000-8000-000000000706"
 const GROUPED_CUSTODY_UNIT_ID = "00000000-0000-4000-8000-000000000707"
 const MISSING_SOURCE_ID = "00000000-0000-4000-8000-000000000708"
+const PROVIDER_ASSET_ROW_ID = "00000000-0000-4000-8000-000000000709"
+const WRITER_USER_ID = "00000000-0000-4000-8000-000000000710"
+const WRITER_PRINCIPAL_ID = "00000000-0000-4000-8000-000000000711"
+const WRITER_SOURCE_ID = "00000000-0000-4000-8000-000000000712"
 
 const context = makeIntegrationTestDatabaseContext({
   databaseNamePrefix: "taxmaxi_calculation_runs_schema",
 })
 
 const runPg = context.runPg
+const runRepository = <A, E>(effect: Effect.Effect<A, E, CalculationRunRepository>) =>
+  context.runWithLayer({ effect, layer: CalculationRunRepositoryLive })
 
 await Effect.runPromise(context.recreateTestDatabase())
 
@@ -182,6 +207,224 @@ describe("calculation-runs schema", () => {
           expect(storedRun?.status).toBe("complete")
           expect(storedLot?.custodyUnitId).toBe(TEST_SOURCE_ID)
           expect(activeRun?.runId).toBe(CALCULATION_RUN_ID)
+        })
+      )
+    )
+  )
+
+  it.effect("stores existing engine blockers and provider-only fact blockers", () =>
+    Effect.gen(function* () {
+      const observedAt = DateTime.toDateUtc(DateTime.makeUnsafe("2025-01-02T10:00:00.000Z"))
+
+      yield* Effect.promise(() =>
+        runPg(
+          Effect.gen(function* () {
+            const fixture = yield* seedSyncEngineRepositoryFixture({
+              userId: WRITER_USER_ID,
+              principalId: WRITER_PRINCIPAL_ID,
+              sourceId: WRITER_SOURCE_ID,
+            })
+            yield* seedSyncEngineAssets(fixture)
+            const db = yield* drizzle
+
+            yield* db.insert(schema.providerAssets).values({
+              id: PROVIDER_ASSET_ROW_ID,
+              provider: "coinbase",
+              providerAssetId: "unresolved-run-blocker",
+              currencyCode: "UNKNOWN",
+              providerType: "crypto",
+              retrievedAt: observedAt,
+            })
+          })
+        )
+      )
+
+      const result: CalculationRunResult = {
+        status: "partial",
+        jurisdiction: JurisdictionCode.make("DE"),
+        taxYear: TaxYear.make(2025),
+        engineVersion: "1",
+        ruleSetVersion: "de-crypto-income-tax-v2025-03-06",
+        accountingMethod: AccountingMethodId.make("fifo"),
+        inventoryScope: "per_custody_unit",
+        appliedChoiceIds: [],
+        appliedRules: ["de.private.section23.wallet-fifo-method"],
+        processedEventIds: [AccountingEventId.make(DISPOSITION_EVENT_ID)],
+        allocations: [],
+        realizedResults: [],
+        incomeResults: [],
+        derivedLots: [],
+        blockers: [
+          {
+            code: "inventory_shortage",
+            eventId: AccountingEventId.make(ACQUISITION_EVENT_ID),
+            assetId: TEST_BTC_ASSET_ID,
+            custodyUnitId: CustodyUnitId.make(WRITER_SOURCE_ID),
+            missingQuantity: AccountingQuantity.make(BigDecimal.fromStringUnsafe("1")),
+          },
+          {
+            code: "unresolved_identity",
+            eventId: AccountingEventId.make(DISPOSITION_EVENT_ID),
+            assetId: null,
+            providerAssetRowId: PROVIDER_ASSET_ROW_ID,
+            custodyUnitId: CustodyUnitId.make(WRITER_SOURCE_ID),
+            missingQuantity: null,
+          },
+          {
+            code: "missing_decimals",
+            eventId: AccountingEventId.make(DISPOSITION_EVENT_ID),
+            assetId: TEST_BTC_ASSET_ID,
+            providerAssetRowId: PROVIDER_ASSET_ROW_ID,
+            custodyUnitId: CustodyUnitId.make(WRITER_SOURCE_ID),
+            missingQuantity: null,
+          },
+        ],
+        explanationTrace: [],
+      }
+
+      yield* runRepository(
+        Effect.flatMap(CalculationRunRepository, (repository) =>
+          repository.persist({
+            id: CalculationRunId.make(CALCULATION_RUN_ID),
+            principalId: PrincipalId.make(WRITER_PRINCIPAL_ID),
+            reportingCurrency: CurrencyCode.make("EUR"),
+            inputLedgerRevision: InputLedgerRevision.make(`v2:1:1.2.:${"a".repeat(64)}`),
+            valuationRevision: ValuationRevision.make(`sha256:${"b".repeat(64)}`),
+            result,
+          })
+        )
+      )
+
+      const stored = yield* Effect.promise(() =>
+        runPg(
+          Effect.gen(function* () {
+            const db = yield* drizzle
+            return yield* db
+              .select({
+                code: schema.calculationRunBlockers.code,
+                assetId: schema.calculationRunBlockers.assetId,
+                providerAssetRowId: schema.calculationRunBlockers.providerAssetRowId,
+              })
+              .from(schema.calculationRunBlockers)
+              .orderBy(asc(schema.calculationRunBlockers.sequence))
+          })
+        )
+      )
+
+      expect(stored).toEqual([
+        {
+          code: "inventory_shortage",
+          assetId: TEST_BTC_ASSET_ID,
+          providerAssetRowId: null,
+        },
+        {
+          code: "unresolved_identity",
+          assetId: null,
+          providerAssetRowId: PROVIDER_ASSET_ROW_ID,
+        },
+        {
+          code: "missing_decimals",
+          assetId: TEST_BTC_ASSET_ID,
+          providerAssetRowId: PROVIDER_ASSET_ROW_ID,
+        },
+      ])
+    })
+  )
+
+  it.effect("requires at least one blocker target and permits both target links", () =>
+    Effect.promise(() =>
+      runPg(
+        Effect.gen(function* () {
+          const fixture = yield* seedSyncEngineRepositoryFixture()
+          yield* seedSyncEngineAssets(fixture)
+          const db = yield* drizzle
+          const observedAt = DateTime.toDateUtc(DateTime.makeUnsafe("2025-01-02T10:00:00.000Z"))
+
+          yield* db.insert(schema.providerAssets).values({
+            id: PROVIDER_ASSET_ROW_ID,
+            provider: "coinbase",
+            providerAssetId: "unresolved-run-blocker",
+            currencyCode: "UNKNOWN",
+            providerType: "crypto",
+            retrievedAt: observedAt,
+          })
+          yield* insertRun({ id: CALCULATION_RUN_ID })
+          yield* db.insert(schema.calculationRunCustodyUnits).values({
+            runId: CALCULATION_RUN_ID,
+            principalId: TEST_PRINCIPAL_ID,
+            custodyUnitId: TEST_SOURCE_ID,
+          })
+
+          const missingTarget = yield* Effect.result(
+            db.insert(schema.calculationRunBlockers).values({
+              runId: CALCULATION_RUN_ID,
+              principalId: TEST_PRINCIPAL_ID,
+              sequence: 0,
+              code: "unresolved_identity",
+              eventId: DISPOSITION_EVENT_ID,
+              assetId: null,
+              providerAssetRowId: null,
+              custodyUnitId: TEST_SOURCE_ID,
+              missingQuantity: null,
+            })
+          )
+          yield* db.insert(schema.calculationRunBlockers).values({
+            runId: CALCULATION_RUN_ID,
+            principalId: TEST_PRINCIPAL_ID,
+            sequence: 1,
+            code: "missing_decimals",
+            eventId: DISPOSITION_EVENT_ID,
+            assetId: TEST_BTC_ASSET_ID,
+            providerAssetRowId: PROVIDER_ASSET_ROW_ID,
+            custodyUnitId: TEST_SOURCE_ID,
+            missingQuantity: null,
+          })
+
+          const [stored] = yield* db
+            .select({
+              assetId: schema.calculationRunBlockers.assetId,
+              providerAssetRowId: schema.calculationRunBlockers.providerAssetRowId,
+            })
+            .from(schema.calculationRunBlockers)
+
+          expect(missingTarget._tag).toBe("Failure")
+          expect(stored).toEqual({
+            assetId: TEST_BTC_ASSET_ID,
+            providerAssetRowId: PROVIDER_ASSET_ROW_ID,
+          })
+        })
+      )
+    )
+  )
+
+  it.effect("rejects a blocker linked to an unknown provider asset row", () =>
+    Effect.promise(() =>
+      runPg(
+        Effect.gen(function* () {
+          yield* seedSyncEngineRepositoryFixture()
+          const db = yield* drizzle
+          yield* insertRun({ id: CALCULATION_RUN_ID })
+          yield* db.insert(schema.calculationRunCustodyUnits).values({
+            runId: CALCULATION_RUN_ID,
+            principalId: TEST_PRINCIPAL_ID,
+            custodyUnitId: TEST_SOURCE_ID,
+          })
+
+          const failure = yield* Effect.result(
+            db.insert(schema.calculationRunBlockers).values({
+              runId: CALCULATION_RUN_ID,
+              principalId: TEST_PRINCIPAL_ID,
+              sequence: 0,
+              code: "unresolved_identity",
+              eventId: DISPOSITION_EVENT_ID,
+              assetId: null,
+              providerAssetRowId: "00000000-0000-4000-8000-000000000799",
+              custodyUnitId: TEST_SOURCE_ID,
+              missingQuantity: null,
+            })
+          )
+
+          expect(failure._tag).toBe("Failure")
         })
       )
     )

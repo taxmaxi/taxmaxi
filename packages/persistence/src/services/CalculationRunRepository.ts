@@ -4,8 +4,15 @@
  * @module CalculationRunRepository
  */
 
-import type { TaxAccountingResult } from "@my/accounting"
-import type { JurisdictionCode, TaxYear } from "@my/core/accounting"
+import type { TaxAccountingBlocker, TaxAccountingResult } from "@my/accounting"
+import type {
+  AccountingEventId,
+  AccountingQuantity,
+  CustodyUnitId,
+  JurisdictionCode,
+  TaxYear,
+} from "@my/core/accounting"
+import type { PrincipalAssetTechnicalBlocker } from "@my/core/assets"
 import { CurrencyCode } from "@my/core/currency"
 import type { PrincipalId } from "@my/core/ownership"
 import * as Context from "effect/Context"
@@ -61,6 +68,36 @@ export class CalculationRunCurrencyMismatchError extends Schema.TaggedError<Calc
   }
 ) {}
 
+/** Fact-layer blocker codes that remain outside the pure accounting engine. */
+export type CalculationRunFactBlockerCode = PrincipalAssetTechnicalBlocker | "unresolved_identity"
+
+/** At least one stored target that tells the principal which fact must be fixed. */
+export type CalculationRunFactBlockerTarget =
+  | {
+      readonly assetId: string
+      readonly providerAssetRowId?: string | null
+    }
+  | {
+      readonly assetId?: null
+      readonly providerAssetRowId: string
+    }
+
+/** A blocker found while stored facts are adapted into accounting events. */
+export type CalculationRunFactBlocker = {
+  readonly code: CalculationRunFactBlockerCode
+  readonly eventId: AccountingEventId
+  readonly custodyUnitId: CustodyUnitId
+  readonly missingQuantity: AccountingQuantity | null
+} & CalculationRunFactBlockerTarget
+
+/** Engine and fact-layer blockers accepted by calculation-run persistence. */
+export type CalculationRunResultBlocker = TaxAccountingBlocker | CalculationRunFactBlocker
+
+/** Combined result stored by persistence without widening the pure engine contract. */
+export type CalculationRunResult = Omit<TaxAccountingResult, "blockers"> & {
+  readonly blockers: ReadonlyArray<CalculationRunResultBlocker>
+}
+
 /** Input required to write one terminal calculation run and compare it for activation. */
 export interface PersistCalculationRunParams {
   readonly id: CalculationRunId
@@ -68,7 +105,7 @@ export interface PersistCalculationRunParams {
   readonly reportingCurrency: CurrencyCode
   readonly inputLedgerRevision: InputLedgerRevision
   readonly valuationRevision: ValuationRevision
-  readonly result: TaxAccountingResult
+  readonly result: CalculationRunResult
 }
 
 /** Input metadata committed before the pure engine starts. */

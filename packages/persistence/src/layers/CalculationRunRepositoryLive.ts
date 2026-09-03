@@ -4,7 +4,6 @@
  * @module CalculationRunRepositoryLive
  */
 
-import type { TaxAccountingResult } from "@my/accounting"
 import { format as formatQuantity } from "@my/core/accounting"
 import type { CurrencyCode } from "@my/core/currency"
 import {
@@ -34,6 +33,7 @@ import {
   CalculationRunId,
   CalculationRunRepository,
   type CalculationRunRepositoryShape,
+  type CalculationRunResult,
   type ExposedCalculationRunStatus,
   type FailCalculationRunParams,
   type MaintainCalculationRunsParams,
@@ -59,7 +59,7 @@ const writeBatches = <Row, Error, Requirements>(
     }
   })
 
-const resultCurrencies = (result: TaxAccountingResult): ReadonlyArray<CurrencyCode> => [
+const resultCurrencies = (result: CalculationRunResult): ReadonlyArray<CurrencyCode> => [
   ...result.allocations.flatMap(({ costBasis }) =>
     costBasis === null ? [] : [costBasis.currency]
   ),
@@ -100,7 +100,7 @@ const make = Effect.gen(function* () {
   interface WriteContext {
     readonly tx: CalculationTransaction
     readonly params: PersistCalculationRunParams
-    readonly result: TaxAccountingResult
+    readonly result: CalculationRunResult
     readonly startedAt: Date
   }
   interface CustodyMembershipRow {
@@ -564,7 +564,9 @@ const make = Effect.gen(function* () {
       sequence,
       code: blocker.code,
       eventId: blocker.eventId,
-      assetId: blocker.assetId,
+      assetId: blocker.assetId ?? null,
+      providerAssetRowId:
+        "providerAssetRowId" in blocker ? (blocker.providerAssetRowId ?? null) : null,
       custodyUnitId: blocker.custodyUnitId,
       missingQuantity:
         blocker.missingQuantity === null ? null : formatQuantity(blocker.missingQuantity),

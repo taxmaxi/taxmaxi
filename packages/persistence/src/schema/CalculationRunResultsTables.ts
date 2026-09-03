@@ -15,6 +15,7 @@ import {
 import { assets } from "./AssetsTable.ts"
 import { calculationRuns } from "./CalculationRunsTables.ts"
 import { custodyUnits } from "./CustodyUnitsTables.ts"
+import { providerAssets } from "./ProviderAssetsTable.ts"
 
 const quantity = (name: string) => numeric(name, { precision: 355, scale: 255 })
 const money = (name: string) => numeric(name, { precision: 355, scale: 255 })
@@ -231,9 +232,8 @@ export const calculationRunBlockers = pgTable(
     sequence: integer("sequence").notNull(),
     code: text("code").notNull(),
     eventId: uuid("event_id").notNull(),
-    assetId: uuid("asset_id")
-      .notNull()
-      .references(() => assets.id),
+    assetId: uuid("asset_id").references(() => assets.id),
+    providerAssetRowId: uuid("provider_asset_row_id").references(() => providerAssets.id),
     custodyUnitId: uuid("custody_unit_id").notNull(),
     missingQuantity: quantity("missing_quantity"),
   },
@@ -250,6 +250,10 @@ export const calculationRunBlockers = pgTable(
     }).onDelete("cascade"),
     index("idx_calculation_run_blockers_code").on(table.runId, table.code),
     check("calculation_run_blockers_sequence_non_negative", sql`${table.sequence} >= 0`),
+    check(
+      "calculation_run_blockers_target_link_required",
+      sql`${table.assetId} is not null or ${table.providerAssetRowId} is not null`
+    ),
     check(
       "calculation_run_blockers_missing_quantity_positive",
       sql`${table.missingQuantity} is null or ${table.missingQuantity} > 0`
