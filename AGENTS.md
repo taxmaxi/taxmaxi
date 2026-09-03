@@ -210,6 +210,10 @@ Reviewers:
 
 ## Agent skills
 
+### Delivery process
+
+Work moves through capture, triage, definition, execution, and harvest. The issue body is the plan; comments are events. See `docs/agents/delivery-process.md`.
+
 ### Issue tracker
 
 Durable product work is tracked in GitHub Issues and is public by default. See `docs/agents/issue-tracker.md`.
