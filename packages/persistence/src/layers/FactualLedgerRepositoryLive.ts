@@ -260,10 +260,13 @@ const make = Effect.gen(function* () {
         const mayUseProviderFallback =
           row.assetRepresentationId === null && !row.hasExactProviderObservation
         const providerDecision =
-          mayUseProviderFallback && providerAssetRowId !== null
+          providerAssetRowId !== null
             ? decisions.providerAssetDecisionById.get(providerAssetRowId)
             : undefined
-        if (providerDecision?.inclusion === "excluded") {
+        const providerInclusion = mayUseProviderFallback
+          ? providerDecision?.inclusion
+          : providerDecision?.systemInclusion
+        if (providerDecision?.systemInclusion === "excluded" || providerInclusion === "excluded") {
           withheldLegIds.add(row.id)
           continue
         }
@@ -275,7 +278,9 @@ const make = Effect.gen(function* () {
           assetId: row.assetId,
           assetRepresentationId: row.assetRepresentationId,
         })
-        const systemAssetId = providerDecision?.systemAssetId ?? representationSystemAssetId
+        const systemAssetId = mayUseProviderFallback
+          ? (providerDecision?.systemAssetId ?? representationSystemAssetId)
+          : representationSystemAssetId
         const effectiveAssetId = resolvePrincipalAssetId({
           decisions,
           systemAssetId,

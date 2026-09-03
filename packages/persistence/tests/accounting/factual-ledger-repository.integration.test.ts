@@ -1222,7 +1222,7 @@ describe("FactualLedgerRepositoryLive", () => {
     })
   )
 
-  it.effect("uses an excluded current provider conclusion over an approved mapping", () =>
+  it.effect("does not reverse an excluded provider conclusion before T12", () =>
     Effect.gen(function* () {
       yield* Effect.promise(() =>
         runPg(
@@ -1233,12 +1233,29 @@ describe("FactualLedgerRepositoryLive", () => {
               canonicalAssetId: TEST_BTC_ASSET_ID,
               currentConclusion: { outcome: "excluded" },
             })
+            yield* createProviderOverride({
+              providerAssetRowId: EXCLUDED_PROVIDER_ASSET_ROW_ID,
+              kind: "inclusion",
+              replacementInclusion: "included",
+            })
             yield* seedProviderBoundaryTransaction({
               externalId: "provider-boundary-current-exclusion",
               legs: [
                 {
                   externalId: "provider-boundary-current-exclusion-leg",
                   assetId: TEST_BTC_ASSET_ID,
+                  kind: "acquisition",
+                  providerAssetRowId: EXCLUDED_PROVIDER_ASSET_ROW_ID,
+                },
+              ],
+            })
+            yield* seedProviderBoundaryTransaction({
+              externalId: "provider-boundary-exact-current-exclusion",
+              legs: [
+                {
+                  externalId: "provider-boundary-exact-current-exclusion-leg",
+                  assetId: TEST_BTC_ASSET_ID,
+                  assetRepresentationId: TEST_BTC_REPRESENTATION_ID,
                   kind: "acquisition",
                   providerAssetRowId: EXCLUDED_PROVIDER_ASSET_ROW_ID,
                 },

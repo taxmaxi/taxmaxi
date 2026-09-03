@@ -78,6 +78,7 @@ interface ProviderMappingRow {
 /** Effective decision for one exact chainless provider-asset row. */
 export interface PrincipalProviderAssetDecision {
   readonly systemAssetId: string | null
+  readonly systemInclusion: "included" | "excluded"
   readonly effectiveAssetId: string | null
   readonly inclusion: "included" | "excluded"
 }
@@ -256,14 +257,20 @@ const makeProviderAssetDecisionMap = ({
         identityLeaf === undefined || identityLeaf.operation === "withdraw"
           ? catalogAssetId
           : identityLeaf.replacementAssetId
+      const catalogInclusion = systemInclusion(providerMapping)
       const inclusion =
         inclusionLeaf === undefined || inclusionLeaf.operation === "withdraw"
-          ? systemInclusion(providerMapping)
+          ? catalogInclusion
           : (inclusionLeaf.replacementInclusion ?? "included")
 
       return [
         providerAssetRowId,
-        { systemAssetId: catalogAssetId, effectiveAssetId, inclusion },
+        {
+          systemAssetId: catalogAssetId,
+          systemInclusion: catalogInclusion,
+          effectiveAssetId,
+          inclusion,
+        },
       ] as const
     })
   )
