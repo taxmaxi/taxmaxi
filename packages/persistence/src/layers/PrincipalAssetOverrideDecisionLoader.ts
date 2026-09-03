@@ -7,7 +7,7 @@
  * @module PrincipalAssetOverrideDecisionLoader
  */
 
-import { and, asc, eq, inArray, isNull, or } from "drizzle-orm"
+import { aliasedTable, and, asc, eq, inArray, isNull, or } from "drizzle-orm"
 import * as Effect from "effect/Effect"
 import { PersistenceError, wrapSqlError } from "../errors/RepositoryError.ts"
 import { schema } from "../schema/index.ts"
@@ -63,6 +63,16 @@ interface ProviderMappingRow {
   readonly providerAssetRowId: string
   readonly canonicalAssetId: string | null
   readonly mappingStatus: "approved" | "pending_review" | "rejected" | "excluded" | null
+  readonly currentConclusionId: string | null
+  readonly currentConclusionOutcome:
+    | "attach"
+    | "create_standalone"
+    | "identity"
+    | "excluded"
+    | "pending"
+    | "fail_closed"
+    | null
+  readonly currentConclusionAssetId: string | null
 }
 
 /** Effective decision for one exact chainless provider-asset row. */
@@ -216,24 +226,44 @@ const makeProviderAssetDecisionMap = ({
     )
   )
 
+  const systemAssetId = (row: ProviderMappingRow): string | null => {
+    if (row.currentConclusionId === null) {
+      return row.mappingStatus === "approved" ? row.canonicalAssetId : null
+    }
+    return row.currentConclusionOutcome === "attach" ||
+      row.currentConclusionOutcome === "create_standalone" ||
+      row.currentConclusionOutcome === "identity"
+      ? row.currentConclusionAssetId
+      : null
+  }
+
+  const systemInclusion = (row: ProviderMappingRow): "included" | "excluded" =>
+    row.currentConclusionId === null
+      ? row.mappingStatus === "excluded"
+        ? "excluded"
+        : "included"
+      : row.currentConclusionOutcome === "excluded"
+        ? "excluded"
+        : "included"
+
   return new Map(
-    providerMappings.map(({ providerAssetRowId, canonicalAssetId, mappingStatus }) => {
+    providerMappings.map((providerMapping) => {
+      const { providerAssetRowId } = providerMapping
       const identityLeaf = leavesByStream.get(`${providerAssetRowId}\0identity`)
       const inclusionLeaf = leavesByStream.get(`${providerAssetRowId}\0inclusion`)
+      const catalogAssetId = systemAssetId(providerMapping)
       const effectiveAssetId =
         identityLeaf === undefined || identityLeaf.operation === "withdraw"
-          ? canonicalAssetId
+          ? catalogAssetId
           : identityLeaf.replacementAssetId
       const inclusion =
         inclusionLeaf === undefined || inclusionLeaf.operation === "withdraw"
-          ? mappingStatus === "excluded"
-            ? "excluded"
-            : "included"
+          ? systemInclusion(providerMapping)
           : (inclusionLeaf.replacementInclusion ?? "included")
 
       return [
         providerAssetRowId,
-        { systemAssetId: canonicalAssetId, effectiveAssetId, inclusion },
+        { systemAssetId: catalogAssetId, effectiveAssetId, inclusion },
       ] as const
     })
   )
@@ -281,6 +311,10 @@ const makeRevision = (
 /** Build the principal-scoped loader against the current SQL transaction context. */
 export const makePrincipalAssetOverrideDecisionLoader = Effect.gen(function* () {
   const db = yield* drizzle
+  const currentConclusion = aliasedTable(
+    schema.assetResolutionDecisions,
+    "override_loader_current_conclusion"
+  )
 
   const load = ({
     principalId,
@@ -392,11 +426,22 @@ export const makePrincipalAssetOverrideDecisionLoader = Effect.gen(function* () 
                 providerAssetRowId: schema.providerAssets.id,
                 canonicalAssetId: schema.providerAssetMappings.canonicalAssetId,
                 mappingStatus: schema.providerAssetMappings.mappingStatus,
+                currentConclusionId: schema.assetResolutionCurrentState.currentConclusionId,
+                currentConclusionOutcome: currentConclusion.outcome,
+                currentConclusionAssetId: currentConclusion.assetId,
               })
               .from(schema.providerAssets)
               .leftJoin(
                 schema.providerAssetMappings,
                 eq(schema.providerAssetMappings.providerAssetRowId, schema.providerAssets.id)
+              )
+              .leftJoin(
+                schema.assetResolutionCurrentState,
+                eq(schema.assetResolutionCurrentState.providerAssetRowId, schema.providerAssets.id)
+              )
+              .leftJoin(
+                currentConclusion,
+                eq(currentConclusion.id, schema.assetResolutionCurrentState.currentConclusionId)
               )
               .where(inArray(schema.providerAssets.id, requestedProviderAssetIds))
               .orderBy(asc(schema.providerAssets.id))

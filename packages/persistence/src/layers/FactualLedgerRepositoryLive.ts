@@ -36,6 +36,7 @@ import {
   makePrincipalAssetOverrideDecisionLoader,
   type PrincipalAssetOverrideDecisions,
   resolvePrincipalAssetId,
+  resolveSystemAssetId,
 } from "./PrincipalAssetOverrideDecisionLoader.ts"
 
 const EXCHANGE_TYPES = new Set([
@@ -255,20 +256,33 @@ const make = Effect.gen(function* () {
             reconciledProviderTransactionIds.has(row.transactionId)))
 
       for (const row of rows) {
-        if (row.assetRepresentationId !== null || row.hasExactProviderObservation) continue
         const providerAssetRowId = providerAssetRowIdFromMetadata(row.metadata)
-        if (providerAssetRowId === null) continue
-        const providerDecision = decisions.providerAssetDecisionById.get(providerAssetRowId)
+        const mayUseProviderFallback =
+          row.assetRepresentationId === null && !row.hasExactProviderObservation
+        const providerDecision =
+          mayUseProviderFallback && providerAssetRowId !== null
+            ? decisions.providerAssetDecisionById.get(providerAssetRowId)
+            : undefined
         if (providerDecision?.inclusion === "excluded") {
-          if (row.transactionId === null) withheldLegIds.add(row.id)
-          else withheldTransactionIds.add(row.transactionId)
+          withheldLegIds.add(row.id)
           continue
         }
-        const effectiveAssetId = providerDecision?.effectiveAssetId ?? row.assetId
         if (row.transactionId === null) {
           continue
         }
-        const identityKey = `${row.transactionId}\0${row.assetId}`
+        const representationSystemAssetId = resolveSystemAssetId({
+          decisions,
+          assetId: row.assetId,
+          assetRepresentationId: row.assetRepresentationId,
+        })
+        const systemAssetId = providerDecision?.systemAssetId ?? representationSystemAssetId
+        const effectiveAssetId = resolvePrincipalAssetId({
+          decisions,
+          systemAssetId,
+          assetRepresentationId: row.assetRepresentationId,
+          providerAssetRowId: mayUseProviderFallback ? providerAssetRowId : null,
+        })
+        const identityKey = `${row.transactionId}\0${systemAssetId}`
         const earlierAssetId = effectiveAssetByTransactionSystemAsset.get(identityKey)
         if (earlierAssetId !== undefined && earlierAssetId !== effectiveAssetId) {
           withheldTransactionIds.add(row.transactionId)
@@ -664,7 +678,26 @@ const make = Effect.gen(function* () {
   const load: FactualLedgerRepositoryShape["load"] = ({ principalId, reportingCurrency }) =>
     Effect.gen(function* () {
       const supportedReportingCurrency = yield* validateReportingCurrency(reportingCurrency)
-      const decisions = yield* principalAssetOverrideDecisionLoader.load({ principalId })
+      const providerAssetMetadataRows = yield* db
+        .select({ metadata: schema.transactionLegs.metadata })
+        .from(schema.transactionLegs)
+        .innerJoin(
+          schema.sources,
+          and(
+            eq(schema.transactionLegs.sourceId, schema.sources.id),
+            eq(schema.sources.principalId, principalId)
+          )
+        )
+        .where(eq(schema.transactionLegs.principalId, principalId))
+        .pipe(wrapSqlError("factualLedgerRepository.load.providerAssetRows"))
+      const providerAssetRowIds = providerAssetMetadataRows.flatMap(({ metadata }) => {
+        const providerAssetRowId = providerAssetRowIdFromMetadata(metadata)
+        return providerAssetRowId === null ? [] : [providerAssetRowId]
+      })
+      const decisions = yield* principalAssetOverrideDecisionLoader.load({
+        principalId,
+        providerAssetRowIds,
+      })
       const membershipRows = yield* db
         .select({
           custodyUnitId: schema.custodyUnitSources.custodyUnitId,
