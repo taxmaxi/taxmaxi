@@ -326,6 +326,7 @@ const seedCustodyReconciliation = ({
   status,
   deterministic,
   providerTransferSourceId,
+  providerAssetRowId,
   inventorySourceId,
   canonicalTransferSourceId,
 }: {
@@ -342,6 +343,7 @@ const seedCustodyReconciliation = ({
   readonly status: "approved" | "auto_applied" | "pending"
   readonly deterministic: boolean
   readonly providerTransferSourceId?: string
+  readonly providerAssetRowId?: string
   readonly inventorySourceId?: string
   readonly canonicalTransferSourceId?: string
 }) =>
@@ -377,6 +379,7 @@ const seedCustodyReconciliation = ({
         sourceId: providerTransferSourceId ?? providerSourceId,
         transactionId: providerTransaction.id,
         externalId: `${fixtureName}-provider-transfer`,
+        providerAssetId: providerAssetRowId,
         timestamp: providerTimestamp,
         direction,
         processingMode: "accounting_only",
@@ -2379,6 +2382,117 @@ describe("FactualLedgerRepositoryLive", () => {
         _tag: "market_quote",
         eventId: "10000000-0000-4000-8000-000000000015",
       })
+    })
+  )
+
+  it.effect("withholds globally excluded custody movements without leaking their legs", () =>
+    Effect.gen(function* () {
+      const providerTimestamp = DateTime.toDateUtc(DateTime.makeUnsafe("2025-03-05T10:00:00.000Z"))
+      const canonicalTimestamp = DateTime.toDateUtc(DateTime.makeUnsafe("2025-03-05T10:02:00.000Z"))
+
+      yield* Effect.promise(() =>
+        runPg(
+          Effect.gen(function* () {
+            const db = yield* drizzle
+            yield* seedCexSource({
+              sourceId: TEST_DESTINATION_SOURCE_ID,
+              fixtureName: "Excluded reconciliation destination",
+            })
+            yield* seedProviderBoundaryAsset({
+              providerAssetRowId: EXCLUDED_PROVIDER_ASSET_ROW_ID,
+              providerAssetId: "excluded-reconciliation",
+              canonicalAssetId: TEST_BTC_ASSET_ID,
+              currentConclusion: { outcome: "excluded" },
+            })
+            yield* seedProviderBoundaryAsset({
+              providerAssetRowId: MIXED_OTHER_PROVIDER_ASSET_ROW_ID,
+              providerAssetId: "included-reconciliation",
+              canonicalAssetId: TEST_BTC_ASSET_ID,
+            })
+            const excluded = yield* seedCustodyReconciliation({
+              reconciliationId: "10000000-0000-4000-8000-000000000030",
+              fixtureName: "excluded-custody",
+              providerSourceId: TEST_CUSTODY_SOURCE_ID,
+              canonicalSourceId: TEST_DESTINATION_SOURCE_ID,
+              providerAssetRowId: EXCLUDED_PROVIDER_ASSET_ROW_ID,
+              providerTimestamp,
+              canonicalTimestamp,
+              direction: "outbound",
+              amount: "0.75",
+              reconciliationStatus: "matched",
+              status: "approved",
+              deterministic: false,
+            })
+            yield* seedCustodyReconciliation({
+              reconciliationId: "10000000-0000-4000-8000-000000000031",
+              fixtureName: "included-custody",
+              providerSourceId: TEST_CUSTODY_SOURCE_ID,
+              canonicalSourceId: TEST_DESTINATION_SOURCE_ID,
+              providerAssetRowId: MIXED_OTHER_PROVIDER_ASSET_ROW_ID,
+              providerTimestamp,
+              canonicalTimestamp,
+              direction: "outbound",
+              amount: "0.5",
+              reconciliationStatus: "matched",
+              status: "auto_applied",
+              deterministic: true,
+            })
+            yield* db.insert(schema.transactionLegs).values([
+              {
+                sourceId: TEST_CUSTODY_SOURCE_ID,
+                externalId: "excluded-custody-provider-leg",
+                timestamp: providerTimestamp,
+                principalId: TEST_PRINCIPAL_ID,
+                assetId: TEST_BTC_ASSET_ID,
+                amount: "0.75",
+                kind: "disposal",
+                provenance: "deterministic",
+                transactionId: excluded.providerTransactionId,
+              },
+              {
+                sourceId: TEST_DESTINATION_SOURCE_ID,
+                externalId: "excluded-custody-canonical-leg",
+                timestamp: canonicalTimestamp,
+                principalId: TEST_PRINCIPAL_ID,
+                assetId: TEST_BTC_ASSET_ID,
+                amount: "0.75",
+                kind: "acquisition",
+                provenance: "deterministic",
+                transactionId: excluded.canonicalTransactionId,
+                sourceTransferId: excluded.canonicalTransferId,
+              },
+              {
+                sourceId: TEST_CUSTODY_SOURCE_ID,
+                externalId: "excluded-custody-synthetic-out",
+                timestamp: providerTimestamp,
+                principalId: TEST_PRINCIPAL_ID,
+                assetId: TEST_BTC_ASSET_ID,
+                amount: "0.75",
+                kind: "disposal",
+                provenance: "deterministic",
+                derivationRule: "internal_transfer_out",
+                transactionId: excluded.providerTransactionId,
+              },
+              {
+                sourceId: TEST_DESTINATION_SOURCE_ID,
+                externalId: "excluded-custody-synthetic-in",
+                timestamp: canonicalTimestamp,
+                principalId: TEST_PRINCIPAL_ID,
+                assetId: TEST_BTC_ASSET_ID,
+                amount: "0.75",
+                kind: "acquisition",
+                provenance: "deterministic",
+                derivationRule: "internal_transfer_in",
+                transactionId: excluded.canonicalTransactionId,
+              },
+            ])
+          })
+        )
+      )
+
+      const result = yield* Effect.promise(loadFactualLedger)
+      expect(result.events.map(({ id }) => id)).toEqual(["10000000-0000-4000-8000-000000000031"])
+      expect(result.events[0]?._tag).toBe("custody_movement")
     })
   )
 })

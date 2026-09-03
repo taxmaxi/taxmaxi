@@ -406,6 +406,7 @@ const make = Effect.gen(function* () {
           canonicalTimestamp: canonicalTransactionTable.timestamp,
           canonicalExternalId: canonicalTransactionTable.externalId,
           canonicalExternalGroupId: canonicalTransactionTable.externalGroupId,
+          providerAssetRowId: schema.providerTransfers.providerAssetId,
           assetId: schema.transfers.assetId,
           assetRepresentationId: schema.transfers.assetRepresentationId,
           amount: schema.transfers.amount,
@@ -491,6 +492,11 @@ const make = Effect.gen(function* () {
         seenCanonicalTransferIds.add(row.canonicalTransferId)
         reconciledCanonicalTransferIds.add(row.canonicalTransferId)
         reconciledProviderTransactionIds.add(row.providerTransactionId)
+        const providerDecision =
+          row.providerAssetRowId === null
+            ? undefined
+            : decisions.providerAssetDecisionById.get(row.providerAssetRowId)
+        if (providerDecision?.systemInclusion === "excluded") continue
 
         const reference = transactionReference({
           externalGroupId: row.canonicalExternalGroupId,
@@ -695,10 +701,26 @@ const make = Effect.gen(function* () {
         )
         .where(eq(schema.transactionLegs.principalId, principalId))
         .pipe(wrapSqlError("factualLedgerRepository.load.providerAssetRows"))
-      const providerAssetRowIds = providerAssetMetadataRows.flatMap(({ metadata }) => {
-        const providerAssetRowId = providerAssetRowIdFromMetadata(metadata)
-        return providerAssetRowId === null ? [] : [providerAssetRowId]
-      })
+      const providerTransferAssetRows = yield* db
+        .select({ providerAssetRowId: schema.providerTransfers.providerAssetId })
+        .from(schema.providerTransfers)
+        .innerJoin(
+          schema.sources,
+          and(
+            eq(schema.providerTransfers.sourceId, schema.sources.id),
+            eq(schema.sources.principalId, principalId)
+          )
+        )
+        .pipe(wrapSqlError("factualLedgerRepository.load.providerTransferAssets"))
+      const providerAssetRowIds = [
+        ...providerAssetMetadataRows.flatMap(({ metadata }) => {
+          const providerAssetRowId = providerAssetRowIdFromMetadata(metadata)
+          return providerAssetRowId === null ? [] : [providerAssetRowId]
+        }),
+        ...providerTransferAssetRows.flatMap(({ providerAssetRowId }) =>
+          providerAssetRowId === null ? [] : [providerAssetRowId]
+        ),
+      ]
       const decisions = yield* principalAssetOverrideDecisionLoader.load({
         principalId,
         providerAssetRowIds,
