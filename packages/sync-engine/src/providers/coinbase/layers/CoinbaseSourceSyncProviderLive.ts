@@ -72,19 +72,9 @@ const CoinbaseNormalizedMetadataSchema = Schema.Struct({
   to: Schema.NullOr(Schema.Unknown),
 })
 
-const CoinbaseNetworkFeeMetadataSchema = Schema.Struct({
-  transaction_fee: Schema.optional(
-    Schema.Struct({
-      currency: Schema.String,
-    })
-  ),
-})
-
 const CoinbaseFeeTransferMetadataSchema = Schema.Struct({
   providerAssetRowId: Schema.String.check(Schema.isUUID()),
 })
-
-const MetadataRecordSchema = Schema.Record(Schema.String, Schema.Unknown)
 
 type CoinbaseNormalizedMetadata = Schema.Schema.Type<typeof CoinbaseNormalizedMetadataSchema>
 
@@ -1053,25 +1043,23 @@ const make = Effect.gen(function* () {
   }) =>
     Effect.gen(function* () {
       const excludedAssetCurrencies = new Set<string>()
-      const feeProviderAssetIdByCurrency = new Map<string, string>()
       const normalized = yield* coinbaseRecordNormalizer.normalize({
         source,
         sourceRecord,
-        resolveAssetId: (currencyCode) =>
+        resolveAsset: (currencyCode) =>
           resolveOptionalAssetForReviewableNormalization({
             currencyCode,
             rawSourcePayload: sourceRecord.payload,
           }).pipe(
             Effect.map((resolution) => {
               const normalizedCurrencyCode = currencyCode.toUpperCase()
-              feeProviderAssetIdByCurrency.set(
-                normalizedCurrencyCode,
-                resolution.providerAssetRowId
-              )
               if (resolution.excluded) {
                 excludedAssetCurrencies.add(normalizedCurrencyCode)
               }
-              return resolution.assetId
+              return {
+                assetId: resolution.assetId,
+                providerAssetRowId: resolution.providerAssetRowId,
+              }
             }),
             Effect.mapError(
               (cause) =>
@@ -1121,41 +1109,19 @@ const make = Effect.gen(function* () {
           }).pipe(Effect.map(Option.some)),
       })
       const primaryProviderAssetId = primaryAssetResolution.providerAssetRowId
-      const networkFeeCurrency = Option.getOrNull(
-        Option.map(
-          Schema.decodeUnknownOption(CoinbaseNetworkFeeMetadataSchema)(
-            normalizedMetadata.network ?? undefined
-          ),
-          (network) => network.transaction_fee?.currency.toUpperCase() ?? null
-        )
-      )
-      const canonicalTransfers = yield* Effect.forEach(normalized.canonicalTransfers, (transfer) =>
-        Effect.gen(function* () {
-          const feeCurrency = transfer.externalId?.endsWith(":network_fee")
-            ? networkFeeCurrency
-            : transfer.externalId?.endsWith(":commission")
-              ? (normalized.venueContext.commissionCurrency?.toUpperCase() ?? null)
-              : null
-          const providerAssetRowId =
-            feeCurrency === null ? null : (feeProviderAssetIdByCurrency.get(feeCurrency) ?? null)
-          if (providerAssetRowId === null) return transfer
-
-          const metadata = yield* Schema.decodeUnknownEffect(MetadataRecordSchema)(
-            transfer.metadata
-          ).pipe(
+      const feeProviderAssetRowIds = yield* Effect.forEach(
+        normalized.canonicalTransfers,
+        (transfer) =>
+          Schema.decodeUnknownEffect(CoinbaseFeeTransferMetadataSchema)(transfer.metadata).pipe(
+            Effect.map((metadata) => String(metadata.providerAssetRowId)),
             Effect.mapError(
               (cause) =>
                 new CoinbaseRecordNormalizationError({
-                  message: "Failed to attach Coinbase provider asset identity to fee metadata",
+                  message: "Coinbase fee transfer is missing its provider asset identity",
                   cause,
                 })
             )
           )
-          return {
-            ...transfer,
-            metadata: { ...metadata, providerAssetRowId },
-          }
-        })
       )
       const baseTransactionReview = determineCoinbaseReview({
         providerTransactionType: normalized.transaction.providerTransactionType,
@@ -1178,7 +1144,7 @@ const make = Effect.gen(function* () {
               affectedCurrencies: unresolvedAssetCurrencies,
             })
       const providerAssetRowIds = Array.from(
-        new Set([primaryProviderAssetId, ...feeProviderAssetIdByCurrency.values()])
+        new Set([primaryProviderAssetId, ...feeProviderAssetRowIds])
       )
       const shouldDeriveLegs =
         normalized.transaction.providerTransactionType !== "tx" ||
@@ -1208,7 +1174,7 @@ const make = Effect.gen(function* () {
           ...providerTransfer,
           providerAssetId: providerTransfer.providerAssetId ?? primaryProviderAssetId,
         })),
-        canonicalTransfers,
+        canonicalTransfers: normalized.canonicalTransfers,
         transactionReview,
         resolvedTransactionType,
         primaryAsset: Option.getOrNull(maybePrimaryAsset),

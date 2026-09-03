@@ -17,14 +17,22 @@ import type {
 } from "../../../services/SourceNormalizationRepository.ts"
 
 /**
+ * CoinbaseResolvedAssetObservation - Exact provider observation and its optional economic asset.
+ */
+export interface CoinbaseResolvedAssetObservation {
+  readonly assetId: Option.Option<string>
+  readonly providerAssetRowId: string
+}
+
+/**
  * NormalizeCoinbaseRecordParams - Input required to normalize one Coinbase raw row.
  */
 export interface NormalizeCoinbaseRecordParams {
   readonly sourceRecord: SourceRawRecord
   readonly source: SourceSyncSource
-  readonly resolveAssetId: (
+  readonly resolveAsset: (
     currencyCode: string
-  ) => Effect.Effect<Option.Option<string>, CoinbaseRecordNormalizationError>
+  ) => Effect.Effect<CoinbaseResolvedAssetObservation, CoinbaseRecordNormalizationError>
   readonly resolveBlockchainId: (networkName: string) => Option.Option<string>
 }
 

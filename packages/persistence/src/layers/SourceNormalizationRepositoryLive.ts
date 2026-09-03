@@ -193,14 +193,18 @@ const applyPrincipalProviderAssetDecisions = ({
   readonly providerTransfers: ReadonlyArray<PersistedSourceProviderTransfer>
 }): {
   readonly hasIdentityConflict: boolean
+  readonly hasExcludedLeg: boolean
   readonly legs: ReadonlyArray<SourceTransactionLegDraft>
+  readonly systemAssetIds: ReadonlyArray<string>
 } => {
   const hasExactTransactionObservation = providerTransfers.some(
     ({ observedBlockchainId }) => observedBlockchainId !== null
   )
   const effectiveAssetBySystemAsset = new Map<string, string>()
   const effectiveLegs: SourceTransactionLegDraft[] = []
+  const systemAssetIds: string[] = []
   let hasIdentityConflict = false
+  let hasExcludedLeg = false
 
   for (const leg of legs) {
     const providerAssetRowId = leg.providerAssetRowId ?? null
@@ -219,6 +223,7 @@ const applyPrincipalProviderAssetDecisions = ({
     // A principal inclusion cannot reverse a system exclusion until T12 has the
     // blocker semantics needed to decide whether that movement is sound.
     if (providerDecision?.systemInclusion === "excluded" || inclusion === "excluded") {
+      hasExcludedLeg = true
       continue
     }
 
@@ -243,11 +248,14 @@ const applyPrincipalProviderAssetDecisions = ({
       effectiveAssetBySystemAsset.set(systemAssetId, assetId)
     }
     effectiveLegs.push({ ...leg, assetId })
+    systemAssetIds.push(systemAssetId)
   }
 
   return {
     hasIdentityConflict,
-    legs: hasIdentityConflict ? [] : effectiveLegs,
+    hasExcludedLeg,
+    legs: hasIdentityConflict || hasExcludedLeg ? [] : effectiveLegs,
+    systemAssetIds: hasIdentityConflict || hasExcludedLeg ? [] : systemAssetIds,
   }
 }
 
@@ -1668,17 +1676,18 @@ const make = Effect.gen(function* () {
   }
 
   const persistFeeInventoryMovements = ({
-    decisions,
     executor,
     legs,
   }: {
-    readonly decisions: PrincipalAssetOverrideDecisions
     readonly executor: SourceNormalizationExecutor
-    readonly legs: ReadonlyArray<PersistedSourceLegRecord>
+    readonly legs: ReadonlyArray<{
+      readonly leg: PersistedSourceLegRecord
+      readonly systemAssetId: string
+    }>
   }) =>
     Effect.forEach(
-      legs.filter((leg) => leg.kind === "fee"),
-      (leg) =>
+      legs.filter(({ leg }) => leg.kind === "fee"),
+      ({ leg, systemAssetId }) =>
         Effect.gen(function* () {
           const amountComparison = yield* compareDecimalStrings({
             left: leg.amount,
@@ -1714,11 +1723,7 @@ const make = Effect.gen(function* () {
               transactionId: leg.transactionId,
               providerTransferId: null,
               transactionLegId: leg.id,
-              assetId: resolveSystemAssetId({
-                decisions,
-                assetId: leg.assetId,
-                assetRepresentationId: leg.assetRepresentationId,
-              }),
+              assetId: systemAssetId,
               assetRepresentationId: leg.assetRepresentationId,
               timestamp: leg.timestamp,
               direction: "outbound",
@@ -1986,6 +1991,19 @@ const make = Effect.gen(function* () {
             executor: tx,
             legs: storedLegs,
           })
+          const persistedLegsWithSystemAssets = yield* Effect.forEach(persistedLegs, (leg, index) =>
+            Effect.gen(function* () {
+              const systemAssetId = providerDecisionResult.systemAssetIds[index]
+              if (systemAssetId === undefined) {
+                return yield* toSyncEngineStorageError({
+                  operation:
+                    "sourceNormalizationRepository.persistNormalizedArtifacts.legSystemAsset",
+                  error: "persisted leg has no matching system asset",
+                })
+              }
+              return { leg, systemAssetId }
+            })
+          )
 
           const hasCompletedStatus = hasCompletedProviderStatus(params.transaction.providerStatus)
           const hasFailedStatus = hasFailedProviderStatus(params.transaction.providerStatus)
@@ -2013,9 +2031,8 @@ const make = Effect.gen(function* () {
               feesOnly: hasFailedStatus,
             })
             yield* persistFeeInventoryMovements({
-              decisions: completeDecisions,
               executor: tx,
-              legs: persistedLegs,
+              legs: persistedLegsWithSystemAssets,
             })
           } else {
             yield* removeInventoryMovementsForTransaction({

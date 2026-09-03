@@ -14,6 +14,10 @@ import { SourceProviderRegistryLive } from "../../src/layers/SourceProviderRegis
 import { HeliusSolanaSourceSyncProviderLive } from "../../src/providers/helius-solana/layers/HeliusSolanaSourceSyncProviderLive.ts"
 import { CoinbaseLegDerivationServiceLive } from "../../src/providers/coinbase/layers/CoinbaseLegDerivationServiceLive.ts"
 import { CoinbaseRecordNormalizerLive } from "../../src/providers/coinbase/layers/CoinbaseRecordNormalizerLive.ts"
+import {
+  CoinbaseRecordNormalizer,
+  type CoinbaseRecordNormalizationResult,
+} from "../../src/providers/coinbase/services/CoinbaseRecordNormalizer.ts"
 import { CoinbaseReferenceDataServiceLive } from "../../src/providers/coinbase/layers/CoinbaseReferenceDataServiceLive.ts"
 import { CoinbaseReferenceMappingServiceLive } from "../../src/providers/coinbase/layers/CoinbaseReferenceMappingServiceLive.ts"
 import { CoinbaseSourceSyncProviderLive } from "../../src/providers/coinbase/layers/CoinbaseSourceSyncProviderLive.ts"
@@ -23,7 +27,11 @@ import {
   type CoinbaseCryptoCurrencyRecord,
   type CoinbaseFiatCurrencyRecord,
 } from "../../src/providers/coinbase/services/CoinbaseSyncClient.ts"
-import { AssetExceptionRepository, SourceSyncService } from "@my/sync-engine/services"
+import {
+  AssetExceptionRepository,
+  SourceNormalizationRepository,
+  SourceSyncService,
+} from "@my/sync-engine/services"
 import { AssetRepositoryLive } from "../../../persistence/src/layers/AssetRepositoryLive.ts"
 import { AssetExceptionRepositoryLive } from "../../../persistence/src/layers/AssetExceptionRepositoryLive.ts"
 import { ProviderAssetRepositoryLive } from "../../../persistence/src/layers/ProviderAssetRepositoryLive.ts"
@@ -420,6 +428,41 @@ const TestLayer = SourceSyncLayer.pipe(
 const userId = "00000000-0000-4000-8000-000000000101"
 const principalId = "00000000-0000-4000-8000-000000000102"
 const sourceId = "00000000-0000-0000-0000-000000000201"
+const DUAL_FEE_RAW_RECORD_ID = "00000000-0000-4000-8000-000000000546"
+const DUAL_FEE_FIRST_PROVIDER_ASSET_ROW_ID = "00000000-0000-4000-8000-000000000547"
+const DUAL_FEE_SECOND_PROVIDER_ASSET_ROW_ID = "00000000-0000-4000-8000-000000000548"
+const DUAL_FEE_OCCURRED_AT = DateTime.toDateUtc(DateTime.makeUnsafe("2025-06-03T10:00:00.000Z"))
+const DUAL_FEE_PAYLOAD = {
+  id: "tx-dual-same-currency-fee",
+  type: "advanced_trade_fill",
+  status: "completed",
+  amount: { amount: "-0.40000000", currency: "BTC" },
+  native_amount: { amount: "-6000.00", currency: "EUR" },
+  created_at: DUAL_FEE_OCCURRED_AT.toISOString(),
+  resource_path: "/v2/accounts/coinbase-account-1/transactions/tx-dual-same-currency-fee",
+  network: {
+    status: "confirmed",
+    hash: "dual-same-currency-fee-hash",
+    network_name: "bitcoin",
+    transaction_fee: { amount: "0.00010000", currency: "BTC" },
+  },
+  advanced_trade_fill: {
+    commission: { amount: "0.00020000", currency: "BTC" },
+    fill_price: "15000.00",
+    order_id: "dual-same-currency-fee-order",
+    order_side: "sell",
+    product_id: "BTC-EUR",
+  },
+} as const
+const DUAL_FEE_RESOLVED_TRANSACTION_TYPE = {
+  providerTransactionType: "advanced_trade_fill",
+  transactionType: "sell_fiat",
+  inventoryEffect: "disposal",
+  taxTreatment: "taxable_by_default",
+  resolutionStrategy: "venue_side",
+  pairedRecordRequired: false,
+  mappingStatus: "approved",
+} as const
 const seedCoinbaseSource = () =>
   Effect.gen(function* () {
     const db = yield* drizzle
@@ -497,6 +540,181 @@ const replaySource = () =>
       jobId: summary.jobId,
     })
   }).pipe(Effect.provide(TestLayer))
+
+const dualFeeSourceRecord = (): SourceRawRecord => ({
+  id: DUAL_FEE_RAW_RECORD_ID,
+  sourceId,
+  provider: "coinbase",
+  recordType: "coinbase_transaction",
+  externalAccountId: "coinbase-account-1",
+  externalRecordId: DUAL_FEE_PAYLOAD.id,
+  externalParentId: null,
+  occurredAt: DUAL_FEE_OCCURRED_AT,
+  payload: DUAL_FEE_PAYLOAD,
+  importedAt: DUAL_FEE_OCCURRED_AT,
+  normalizedAt: null,
+  normalizationError: null,
+  createdAt: DUAL_FEE_OCCURRED_AT,
+  updatedAt: DUAL_FEE_OCCURRED_AT,
+})
+
+const seedDualFeeProviderRows = () =>
+  Effect.gen(function* () {
+    const db = yield* drizzle
+    yield* db.insert(schema.providerAssets).values([
+      {
+        id: DUAL_FEE_FIRST_PROVIDER_ASSET_ROW_ID,
+        provider: "coinbase",
+        providerAssetId: "btc-dual-fee-a",
+        currencyCode: "BTC",
+        name: "Bitcoin dual fee A",
+        providerType: "crypto",
+        rawProviderPayload: { row: "dual-fee-a" },
+        retrievedAt: DUAL_FEE_OCCURRED_AT,
+      },
+      {
+        id: DUAL_FEE_SECOND_PROVIDER_ASSET_ROW_ID,
+        provider: "coinbase",
+        providerAssetId: "btc-dual-fee-b",
+        currencyCode: "BTC",
+        name: "Bitcoin dual fee B",
+        providerType: "crypto",
+        rawProviderPayload: { row: "dual-fee-b" },
+        retrievedAt: DUAL_FEE_OCCURRED_AT,
+      },
+    ])
+    yield* db.insert(schema.providerAssetMappings).values([
+      {
+        providerAssetRowId: DUAL_FEE_FIRST_PROVIDER_ASSET_ROW_ID,
+        mappingKind: "asset",
+        canonicalAssetId: BTC_ASSET_ID,
+        mappingStatus: "approved",
+      },
+      {
+        providerAssetRowId: DUAL_FEE_SECOND_PROVIDER_ASSET_ROW_ID,
+        mappingKind: "asset",
+        canonicalAssetId: DOT_ASSET_ID,
+        mappingStatus: "approved",
+      },
+    ])
+    yield* db.insert(schema.sourceRecordsRaw).values({
+      id: DUAL_FEE_RAW_RECORD_ID,
+      sourceId,
+      provider: "coinbase",
+      recordType: "coinbase_transaction",
+      externalAccountId: "coinbase-account-1",
+      externalRecordId: DUAL_FEE_PAYLOAD.id,
+      externalParentId: null,
+      occurredAt: DUAL_FEE_OCCURRED_AT,
+      payload: DUAL_FEE_PAYLOAD,
+      importedAt: DUAL_FEE_OCCURRED_AT,
+      createdAt: DUAL_FEE_OCCURRED_AT,
+      updatedAt: DUAL_FEE_OCCURRED_AT,
+    })
+  }).pipe(Effect.provide(TestPgClientLive))
+
+const normalizeDualFeeRecord = () =>
+  Effect.gen(function* () {
+    const resolutions = [
+      {
+        assetId: BTC_ASSET_ID,
+        providerAssetRowId: DUAL_FEE_FIRST_PROVIDER_ASSET_ROW_ID,
+      },
+      {
+        assetId: DOT_ASSET_ID,
+        providerAssetRowId: DUAL_FEE_SECOND_PROVIDER_ASSET_ROW_ID,
+      },
+    ] as const
+    let resolutionIndex = 0
+    const normalizer = yield* CoinbaseRecordNormalizer
+    return yield* normalizer.normalize({
+      source: {
+        id: sourceId,
+        principalId,
+        providerKey: "coinbase",
+        cexAccountId: null,
+        addressId: null,
+        walletAddress: null,
+      },
+      sourceRecord: dualFeeSourceRecord(),
+      resolveAsset: () =>
+        Effect.gen(function* () {
+          const resolution = resolutions[resolutionIndex]
+          resolutionIndex += 1
+          if (resolution === undefined) {
+            return yield* Effect.die("Unexpected extra Coinbase fee asset resolution")
+          }
+          return {
+            assetId: Option.some(resolution.assetId),
+            providerAssetRowId: resolution.providerAssetRowId,
+          }
+        }),
+      resolveBlockchainId: () => Option.none(),
+    })
+  }).pipe(Effect.provide(CoinbaseRecordNormalizerLive))
+
+const persistDualFeeNormalization = (normalized: CoinbaseRecordNormalizationResult) =>
+  Effect.gen(function* () {
+    const provider = yield* CoinbaseSourceSyncProvider
+    const repository = yield* SourceNormalizationRepository
+    return yield* repository.persistNormalizedArtifacts({
+      transaction: {
+        ...normalized.transaction,
+        transactionType: DUAL_FEE_RESOLVED_TRANSACTION_TYPE.transactionType,
+        metadata: {
+          provider: "coinbase",
+          amount: DUAL_FEE_PAYLOAD.amount,
+          nativeAmount: DUAL_FEE_PAYLOAD.native_amount,
+          network: DUAL_FEE_PAYLOAD.network,
+          from: null,
+          to: null,
+          coinbaseReferenceMapping: DUAL_FEE_RESOLVED_TRANSACTION_TYPE,
+        },
+      },
+      venueContext: normalized.venueContext,
+      providerTransfers: normalized.providerTransfers,
+      canonicalTransfers: normalized.canonicalTransfers,
+      providerAssetRowIds: [
+        DUAL_FEE_FIRST_PROVIDER_ASSET_ROW_ID,
+        DUAL_FEE_SECOND_PROVIDER_ASSET_ROW_ID,
+      ],
+      transactionReview: null,
+      resolvedTransactionType: DUAL_FEE_RESOLVED_TRANSACTION_TYPE,
+      deriveLegs: ({ transaction, venueContext, canonicalTransfers }) =>
+        provider.deriveLegs({
+          transaction,
+          venueContext,
+          primaryAsset: null,
+          canonicalTransfers,
+          deriveMainLeg: false,
+        }),
+    })
+  }).pipe(Effect.provide(TestLayer))
+
+const loadDualFeeAssetPairs = () =>
+  Effect.gen(function* () {
+    const db = yield* drizzle
+    const storedFeeLegs = yield* db
+      .select({
+        assetId: schema.transactionLegs.assetId,
+        metadata: schema.transactionLegs.metadata,
+      })
+      .from(schema.transactionLegs)
+      .where(
+        inArray(schema.transactionLegs.externalId, [
+          `${DUAL_FEE_PAYLOAD.id}:network_fee:fee_leg`,
+          `${DUAL_FEE_PAYLOAD.id}:commission:fee_leg`,
+        ])
+      )
+    return yield* Effect.forEach(storedFeeLegs, (leg) =>
+      Schema.decodeUnknownEffect(ProviderAssetLegMetadata)(leg.metadata).pipe(
+        Effect.map((metadata) => ({
+          assetId: leg.assetId,
+          providerAssetRowId: String(metadata.providerAssetRowId),
+        }))
+      )
+    )
+  }).pipe(Effect.provide(TestPgClientLive))
 
 const prepareLegacyProviderOverrideReplay = () =>
   Effect.gen(function* () {
@@ -1246,6 +1464,28 @@ describe("coinbase normalization persistence", () => {
 
       expect(leg?.assetId).toBe(DOT_ASSET_ID)
       expect(metadata.providerAssetRowId).toBe(duplicateProviderAssetRowId)
+    })
+  )
+
+  it.effect("persists each same-currency fee with its resolved provider row", () =>
+    Effect.gen(function* () {
+      yield* seedDualFeeProviderRows()
+      const normalized = yield* normalizeDualFeeRecord()
+      yield* persistDualFeeNormalization(normalized)
+      const pairs = yield* loadDualFeeAssetPairs()
+
+      expect(pairs).toEqual(
+        expect.arrayContaining([
+          {
+            assetId: BTC_ASSET_ID,
+            providerAssetRowId: DUAL_FEE_FIRST_PROVIDER_ASSET_ROW_ID,
+          },
+          {
+            assetId: DOT_ASSET_ID,
+            providerAssetRowId: DUAL_FEE_SECOND_PROVIDER_ASSET_ROW_ID,
+          },
+        ])
+      )
     })
   )
 

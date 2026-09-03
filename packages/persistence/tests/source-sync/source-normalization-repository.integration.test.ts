@@ -1009,6 +1009,7 @@ describe("SourceNormalizationRepositoryLive", () => {
     readonly legs: ReadonlyArray<{
       readonly externalId: string
       readonly providerAssetRowId: string
+      readonly kind?: "acquisition" | "fee"
     }>
   }) =>
     runRepository(
@@ -1070,28 +1071,31 @@ describe("SourceNormalizationRepositoryLive", () => {
           })),
           canonicalTransfers: [],
           providerAssetRowIds: legs.map(({ providerAssetRowId }) => providerAssetRowId),
-          legs: legs.map((leg) => ({
-            sourceId,
-            sourceRawRecordId: null,
-            externalId: leg.externalId,
-            txHash: null,
-            timestamp: occurredAt,
-            principalId,
-            addressId: null,
-            assetId: TEST_BTC_ASSET_ID,
-            assetRepresentationId: null,
-            amount: "1",
-            kind: "acquisition" as const,
-            provenance: "deterministic" as const,
-            derivationRule: "provider_fallback_fixture",
-            providerAssetRowId: leg.providerAssetRowId,
-            metadata: { evidence: leg.externalId },
-            transactionId: null,
-            sourceTransferId: null,
-            fiatAmount: null,
-            fiatCurrency: null,
-            feeForTransactionId: null,
-          })),
+          deriveLegs: ({ transaction }) =>
+            Effect.succeed(
+              legs.map((leg) => ({
+                sourceId,
+                sourceRawRecordId: null,
+                externalId: leg.externalId,
+                txHash: null,
+                timestamp: occurredAt,
+                principalId,
+                addressId: null,
+                assetId: TEST_BTC_ASSET_ID,
+                assetRepresentationId: null,
+                amount: "1",
+                kind: leg.kind ?? "acquisition",
+                provenance: "deterministic" as const,
+                derivationRule: "provider_fallback_fixture",
+                providerAssetRowId: leg.providerAssetRowId,
+                metadata: { evidence: leg.externalId },
+                transactionId: transaction.id,
+                sourceTransferId: null,
+                fiatAmount: null,
+                fiatCurrency: null,
+                feeForTransactionId: leg.kind === "fee" ? transaction.id : null,
+              }))
+            ),
           transactionReview: null,
           resolvedTransactionType: APPROVED_MAPPING,
         })
@@ -1400,11 +1404,31 @@ describe("SourceNormalizationRepositoryLive", () => {
           externalId: "provider-identity",
           legs: [
             { externalId: "provider-identity-leg", providerAssetRowId: PROVIDER_ASSET_ROW_A_ID },
+            {
+              externalId: "provider-identity-fee",
+              providerAssetRowId: PROVIDER_ASSET_ROW_A_ID,
+              kind: "fee",
+            },
           ],
         })
       )
 
-      expect(result.legs.map(({ assetId }) => assetId)).toEqual([PROVIDER_OVERRIDE_ASSET_ID])
+      const feeInventory = yield* Effect.promise(() =>
+        runPg(
+          Effect.gen(function* () {
+            const db = yield* drizzle
+            return yield* db
+              .select({ assetId: schema.inventoryMovements.assetId })
+              .from(schema.inventoryMovements)
+              .where(eq(schema.inventoryMovements.purpose, "fee"))
+          })
+        )
+      )
+      expect(result.legs.map(({ assetId }) => assetId)).toEqual([
+        PROVIDER_OVERRIDE_ASSET_ID,
+        PROVIDER_OVERRIDE_ASSET_ID,
+      ])
+      expect(feeInventory).toEqual([{ assetId: TEST_BTC_ASSET_ID }])
     })
   )
 
@@ -1458,7 +1482,7 @@ describe("SourceNormalizationRepositoryLive", () => {
     })
   )
 
-  it.effect("omits only the leg selected by a principal exclusion", () =>
+  it.effect("withholds all accounting legs when a principal exclusion applies", () =>
     Effect.gen(function* () {
       const occurredAt = DateTime.toDateUtc(DateTime.makeUnsafe("2025-02-01T10:20:00.000Z"))
       yield* Effect.promise(() => seedProviderDecisionFixture(occurredAt))
@@ -1480,11 +1504,7 @@ describe("SourceNormalizationRepositoryLive", () => {
         })
       )
 
-      expect(result.legs).toEqual([
-        expect.objectContaining({
-          assetId: PROVIDER_OVERRIDE_ASSET_ID,
-        }),
-      ])
+      expect(result.legs).toEqual([])
     })
   )
 

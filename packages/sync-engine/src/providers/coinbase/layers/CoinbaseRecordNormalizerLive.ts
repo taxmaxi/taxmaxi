@@ -459,9 +459,9 @@ const buildFeeTransfer = (params: {
       } satisfies CoinbaseFeeTransferBuildResult
     }
 
-    const assetId = yield* params.normalizeParams.resolveAssetId(params.money.currency)
+    const resolvedAsset = yield* params.normalizeParams.resolveAsset(params.money.currency)
 
-    if (Option.isNone(assetId)) {
+    if (Option.isNone(resolvedAsset.assetId)) {
       return {
         transfer: null,
         unresolvedAssetCurrency: params.money.currency.toUpperCase(),
@@ -498,7 +498,7 @@ const buildFeeTransfer = (params: {
         fromPartyResourcePath: toNullable(params.transaction.from?.resource_path),
         toPartyType: "fee",
         toPartyResourcePath: null,
-        assetId: assetId.value,
+        assetId: resolvedAsset.assetId.value,
         assetRepresentationId: null,
         amount: params.money.amount,
         tokenId: null,
@@ -509,6 +509,7 @@ const buildFeeTransfer = (params: {
           coinbaseTransactionId: params.transaction.id,
           providerStatus: params.transaction.status,
           networkHash: params.transaction.network?.hash ?? null,
+          providerAssetRowId: resolvedAsset.providerAssetRowId,
         },
       },
       unresolvedAssetCurrency: null,
