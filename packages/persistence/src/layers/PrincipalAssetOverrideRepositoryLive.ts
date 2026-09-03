@@ -36,6 +36,7 @@ import {
   type PrincipalAssetOverrideValidationWarning,
 } from "../services/PrincipalAssetOverrideRepository.ts"
 import { drizzle } from "./PgClientLive.ts"
+import { principalProviderAssetTechnicalState } from "./PrincipalAssetOverrideDecisionLoader.ts"
 import { scheduleSourceReplays } from "./SourceReplayScheduling.ts"
 import { nowDate } from "./SyncEngineRepositorySupport.ts"
 
@@ -53,6 +54,7 @@ const MAPPING_ASSET = alias(schema.assets, "principal_override_mapping_asset")
 const REQUESTED_REPLAY_JOB = alias(schema.processingJobs, "principal_override_requested_replay_job")
 const FOLLOW_UP_REPLAY_JOB = alias(schema.processingJobs, "principal_override_follow_up_replay_job")
 const CHECKED_TECHNICAL_BLOCKER_KINDS = [
+  "malformed_movement",
   "missing_decimals",
   "unsupported_asset_type",
 ] as const satisfies ReadonlyArray<PrincipalAssetTechnicalBlocker>
@@ -247,21 +249,6 @@ const representationAddressCondition = ({
         : eq(mintColumn, mintAddress)
   )
 
-const providerAssetType = (providerType: string | null): "fungible" | "nft" | null => {
-  const canonical = providerType?.trim().toLowerCase() ?? null
-  if (canonical === "nft") return "nft"
-  if (
-    canonical === "crypto" ||
-    canonical === "native" ||
-    canonical === "token" ||
-    canonical === "spl-token" ||
-    canonical === "spl-token-2022"
-  ) {
-    return "fungible"
-  }
-  return null
-}
-
 const providerAssetState = (row: ProviderAssetStateRow): LoadedTargetState | null => {
   if (row.mappingKind === "fiat") return null
 
@@ -276,15 +263,14 @@ const providerAssetState = (row: ProviderAssetStateRow): LoadedTargetState | nul
     inclusion,
     targetKey: `provider-asset:${row.providerAssetRowId}`,
   })
-  const type =
-    resolvedAssetId === null
-      ? providerAssetType(row.providerType)
-      : row.currentConclusionId === null
-        ? row.mappingAssetType
-        : row.conclusionAssetType
-  const technicalBlockers: Array<PrincipalAssetTechnicalBlocker> = []
-  if (row.exponent === null) technicalBlockers.push("missing_decimals")
-  if (type === null) technicalBlockers.push("unsupported_asset_type")
+  const technicalState = principalProviderAssetTechnicalState({
+    catalogAssetId: resolvedAssetId,
+    conclusionAssetType: row.conclusionAssetType,
+    currentConclusionId: row.currentConclusionId,
+    exponent: row.exponent,
+    mappingAssetType: row.mappingAssetType,
+    providerType: row.providerType,
+  })
 
   return {
     system: {
@@ -294,12 +280,12 @@ const providerAssetState = (row: ProviderAssetStateRow): LoadedTargetState | nul
       inclusionRevision: revisions.inclusionRevision,
     },
     checkedTechnicalBlockerKinds: CHECKED_TECHNICAL_BLOCKER_KINDS,
-    technicalBlockers,
+    technicalBlockers: technicalState.technicalBlockers,
     confidenceWarnings: confidenceWarningsFor({
       hasIdentityConflict: false,
       policyOutcomes: [row.policyEvaluationOutcome],
     }),
-    targetAssetType: type,
+    targetAssetType: technicalState.assetType,
     evidence: {
       names: distinctEvidence([row.name]),
       symbols: distinctEvidence([row.symbol]),

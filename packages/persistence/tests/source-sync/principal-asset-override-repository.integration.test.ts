@@ -164,10 +164,10 @@ describe("PrincipalAssetOverrideRepository", () => {
       expect(initial.target).toEqual(representationTarget())
       expect(initial.system.identity).toEqual({ _tag: "resolved", assetId: CURRENT_ASSET_ID })
       expect(initial.checkedTechnicalBlockerKinds).toEqual([
+        "malformed_movement",
         "missing_decimals",
         "unsupported_asset_type",
       ])
-      expect(initial.checkedTechnicalBlockerKinds).not.toContain("malformed_movement")
 
       yield* Effect.promise(() =>
         runPg(
@@ -285,10 +285,10 @@ describe("PrincipalAssetOverrideRepository", () => {
       expect(Option.isSome(validation) && validation.value._tag === "ready").toBe(true)
       if (Option.isSome(validation) && validation.value._tag === "ready") {
         expect(validation.value.checkedTechnicalBlockerKinds).toEqual([
+          "malformed_movement",
           "missing_decimals",
           "unsupported_asset_type",
         ])
-        expect(validation.value.checkedTechnicalBlockerKinds).not.toContain("malformed_movement")
         expect(validation.value.warnings.map(({ code }) => code)).toEqual([
           "symbol_mismatch",
           "name_mismatch",
@@ -934,7 +934,11 @@ describe("PrincipalAssetOverrideRepository", () => {
       expect(Option.getOrNull(missingAsset)).toMatchObject({
         _tag: "asset_not_found",
         assetId: "00000000-0000-4000-8000-000000000799",
-        checkedTechnicalBlockerKinds: ["missing_decimals", "unsupported_asset_type"],
+        checkedTechnicalBlockerKinds: [
+          "malformed_movement",
+          "missing_decimals",
+          "unsupported_asset_type",
+        ],
         technicalBlockers: ["missing_decimals", "unsupported_asset_type"],
       })
 
