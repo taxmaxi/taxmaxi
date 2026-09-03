@@ -428,6 +428,33 @@ describe("principal asset override application", () => {
     })
   )
 
+  it.effect("uses exact catalog metadata instead of provider technical metadata", () =>
+    Effect.gen(function* () {
+      yield* Effect.promise(() =>
+        runPg(
+          Effect.gen(function* () {
+            yield* seedProviderAsset({ id: BLOCKED_PROVIDER_ASSET_ID, exponent: null })
+            yield* seedProviderTransaction({
+              externalId: "exact-catalog-metadata",
+              legId: "10000000-0000-4000-8000-000000000115",
+              providerAssetRowId: BLOCKED_PROVIDER_ASSET_ID,
+              sourceRepresentationUseId: SOURCE_USE_ID,
+            })
+          })
+        )
+      )
+
+      const ledger = yield* Effect.promise(loadLedger)
+      expect(ledger.events).toEqual([
+        expect.objectContaining({
+          id: "10000000-0000-4000-8000-000000000115",
+          assetId: TEST_BTC_ASSET_ID,
+        }),
+      ])
+      expect(ledger.inputBlockers).toEqual([])
+    })
+  )
+
   it.effect("keeps a Solana asset review partial until replay creates facts", () =>
     Effect.gen(function* () {
       const providerTransferId = yield* Effect.promise(() =>
@@ -520,14 +547,16 @@ describe("principal asset override application", () => {
 
       const ledger = yield* Effect.promise(loadLedger)
       expect(ledger.events).toEqual([])
-      expect(ledger.inputBlockers).toEqual([
-        expect.objectContaining({
-          code: "malformed_movement",
-          eventId: providerTransferId,
-          assetId: REPLACEMENT_ASSET_ID,
-          providerAssetRowId: INCLUDED_PROVIDER_ASSET_ID,
-        }),
-      ])
+      expect(ledger.inputBlockers).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            code: "malformed_movement",
+            eventId: providerTransferId,
+            assetId: REPLACEMENT_ASSET_ID,
+            providerAssetRowId: INCLUDED_PROVIDER_ASSET_ID,
+          }),
+        ])
+      )
     })
   )
 
@@ -1146,6 +1175,70 @@ describe("principal asset override application", () => {
           eventId: transactionId,
           assetId: null,
           providerAssetRowId: UNRESOLVED_PROVIDER_ASSET_ID,
+        }),
+      ])
+    })
+  )
+
+  it.effect("does not let a sibling leg suppress an open provider use", () =>
+    Effect.gen(function* () {
+      const ids = yield* Effect.promise(() =>
+        runPg(
+          Effect.gen(function* () {
+            yield* seedProviderAsset({ id: INCLUDED_PROVIDER_ASSET_ID })
+            const db = yield* drizzle
+            const occurredAt = DateTime.toDateUtc(DateTime.makeUnsafe("2025-02-10T12:30:00.000Z"))
+            const [transaction] = yield* db
+              .insert(schema.transactions)
+              .values({
+                sourceId: SOURCE_ID,
+                externalId: "open-use-with-sibling-leg",
+                timestamp: occurredAt,
+                transactionType: "trade_other",
+                principalId: PRINCIPAL_ID,
+              })
+              .returning({ id: schema.transactions.id })
+            if (transaction === undefined) return yield* Effect.die("Failed to create transaction")
+            const [leg] = yield* db
+              .insert(schema.transactionLegs)
+              .values({
+                sourceId: SOURCE_ID,
+                externalId: "open-use-sibling-leg",
+                timestamp: occurredAt,
+                principalId: PRINCIPAL_ID,
+                assetId: TEST_BTC_ASSET_ID,
+                providerAssetRowId: INCLUDED_PROVIDER_ASSET_ID,
+                amount: "1",
+                kind: "acquisition",
+                provenance: "deterministic",
+                transactionId: transaction.id,
+              })
+              .returning({ id: schema.transactionLegs.id })
+            if (leg === undefined) return yield* Effect.die("Failed to create sibling leg")
+            yield* db.insert(schema.providerAssetTransactionUses).values({
+              providerAssetRowId: INCLUDED_PROVIDER_ASSET_ID,
+              transactionId: transaction.id,
+              sourceId: SOURCE_ID,
+            })
+            yield* db.insert(schema.transactionReviews).values({
+              principalId: PRINCIPAL_ID,
+              transactionId: transaction.id,
+              needsReview: true,
+              matchedLayer: "provider_asset_mapping",
+            })
+            return { legId: leg.id, transactionId: transaction.id }
+          })
+        )
+      )
+
+      const ledger = yield* Effect.promise(loadLedger)
+      expect(ledger.events.some(({ id }) => id === ids.legId)).toBe(false)
+      expect(ledger.inputBlockers).toEqual([
+        expect.objectContaining({
+          code: "malformed_movement",
+          eventId: ids.transactionId,
+          assetId: TEST_BTC_ASSET_ID,
+          providerAssetRowId: INCLUDED_PROVIDER_ASSET_ID,
         }),
       ])
     })

@@ -388,6 +388,7 @@ const seedCustodyReconciliation = ({
   deterministic,
   providerTransferSourceId,
   providerAssetRowId,
+  providerHasExactUse = true,
   inventorySourceId,
   canonicalTransferSourceId,
 }: {
@@ -405,6 +406,7 @@ const seedCustodyReconciliation = ({
   readonly deterministic: boolean
   readonly providerTransferSourceId?: string
   readonly providerAssetRowId?: string
+  readonly providerHasExactUse?: boolean
   readonly inventorySourceId?: string
   readonly canonicalTransferSourceId?: string
 }) =>
@@ -434,10 +436,12 @@ const seedCustodyReconciliation = ({
       return yield* Effect.die(`Failed to create transactions for ${fixtureName}`)
     }
 
-    const providerSourceRepresentationUseId = yield* recordRepresentationUse({
-      assetRepresentationId: TEST_BTC_REPRESENTATION_ID,
-      sourceId: providerTransferSourceId ?? providerSourceId,
-    })
+    const providerSourceRepresentationUseId = providerHasExactUse
+      ? yield* recordRepresentationUse({
+          assetRepresentationId: TEST_BTC_REPRESENTATION_ID,
+          sourceId: providerTransferSourceId ?? providerSourceId,
+        })
+      : undefined
     const [providerTransfer] = yield* db
       .insert(schema.providerTransfers)
       .values({
@@ -2595,6 +2599,7 @@ describe("FactualLedgerRepositoryLive", () => {
               providerSourceId: TEST_CUSTODY_SOURCE_ID,
               canonicalSourceId: TEST_DESTINATION_SOURCE_ID,
               providerAssetRowId: MIXED_PROVIDER_ASSET_ROW_ID,
+              providerHasExactUse: false,
               providerTimestamp,
               canonicalTimestamp,
               direction: "outbound",

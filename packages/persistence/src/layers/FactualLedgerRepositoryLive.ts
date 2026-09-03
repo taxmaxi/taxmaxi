@@ -20,7 +20,7 @@ import {
 import { decidePrincipalAssetOverride, type PrincipalAssetEffectiveDecision } from "@my/core/assets"
 import { CURRENCIES_BY_CODE, type CurrencyCode } from "@my/core/currency"
 import { SourceId } from "@my/core/source"
-import { aliasedTable, and, asc, eq, inArray, notExists, or } from "drizzle-orm"
+import { aliasedTable, and, asc, eq, inArray, or } from "drizzle-orm"
 import * as BigDecimal from "effect/BigDecimal"
 import * as DateTime from "effect/DateTime"
 import * as Effect from "effect/Effect"
@@ -232,7 +232,8 @@ const exactFactDecision = ({
         ? null
         : { _tag: "resolved", assetId: exactDecision.identityReplacementAssetId },
     inclusionReplacement: exactDecision.inclusionReplacement,
-    technicalBlockers: providerDecision?.technicalBlockers ?? [],
+    technicalBlockers:
+      exactDecision.systemAssetId === null ? (providerDecision?.technicalBlockers ?? []) : [],
   })
 
   const outcome = includedOutcome({ decision, systemAssetId })
@@ -836,49 +837,6 @@ const make = Effect.gen(function* () {
               schema.providerAssetTransactionUses.transactionId
             ),
             eq(schema.transactionReviews.principalId, principalId)
-          )
-        )
-        .where(
-          and(
-            notExists(
-              db
-                .select({ id: schema.providerTransfers.id })
-                .from(schema.providerTransfers)
-                .where(
-                  and(
-                    eq(
-                      schema.providerTransfers.transactionId,
-                      schema.providerAssetTransactionUses.transactionId
-                    ),
-                    eq(
-                      schema.providerTransfers.providerAssetId,
-                      schema.providerAssetTransactionUses.providerAssetRowId
-                    ),
-                    inArray(schema.providerTransfers.processingMode, [
-                      "accounting_and_evidence",
-                      "accounting_only",
-                    ])
-                  )
-                )
-            ),
-            notExists(
-              db
-                .select({ id: schema.transactionLegs.id })
-                .from(schema.transactionLegs)
-                .where(
-                  and(
-                    eq(
-                      schema.transactionLegs.transactionId,
-                      schema.providerAssetTransactionUses.transactionId
-                    ),
-                    eq(
-                      schema.transactionLegs.providerAssetRowId,
-                      schema.providerAssetTransactionUses.providerAssetRowId
-                    ),
-                    eq(schema.transactionLegs.principalId, principalId)
-                  )
-                )
-            )
           )
         )
         .orderBy(
