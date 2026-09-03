@@ -4,7 +4,6 @@ import * as BigDecimal from "effect/BigDecimal"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import * as Option from "effect/Option"
-import * as Schema from "effect/Schema"
 import { beforeEach, describe, expect, it } from "@effect/vitest"
 import { SourceSyncServiceLive, TransferReconciliationServiceLive } from "@my/sync-engine/layers"
 import { AuthUserId } from "@my/core/authentication"
@@ -57,10 +56,6 @@ const BTC_ASSET_ID = "00000000-0000-0000-0000-000000000541"
 const BTC_BASE_REPRESENTATION_ID = "00000000-0000-0000-0000-000000000543"
 const DOT_ASSET_ID = "00000000-0000-0000-0000-000000000542"
 const PROVIDER_OVERRIDE_ASSET_ID = "00000000-0000-4000-8000-000000000544"
-
-const ProviderAssetLegMetadata = Schema.Struct({
-  providerAssetRowId: Schema.String.check(Schema.isUUID()),
-})
 
 const expectDecimalAmount = (actual: string, expected: string) => {
   const actualDecimal = BigDecimal.fromString(actual)
@@ -729,7 +724,7 @@ const loadDualFeeAssetPairs = () =>
     const storedFeeLegs = yield* db
       .select({
         assetId: schema.transactionLegs.assetId,
-        metadata: schema.transactionLegs.metadata,
+        providerAssetRowId: schema.transactionLegs.providerAssetRowId,
       })
       .from(schema.transactionLegs)
       .where(
@@ -738,14 +733,7 @@ const loadDualFeeAssetPairs = () =>
           `${DUAL_FEE_PAYLOAD.id}:commission:fee_leg`,
         ])
       )
-    return yield* Effect.forEach(storedFeeLegs, (leg) =>
-      Schema.decodeUnknownEffect(ProviderAssetLegMetadata)(leg.metadata).pipe(
-        Effect.map((metadata) => ({
-          assetId: leg.assetId,
-          providerAssetRowId: String(metadata.providerAssetRowId),
-        }))
-      )
-    )
+    return storedFeeLegs
   }).pipe(Effect.provide(TestPgClientLive))
 
 const prepareLegacyProviderOverrideReplay = () =>
@@ -848,7 +836,7 @@ const loadProviderOverrideLegs = () =>
         id: schema.transactionLegs.id,
         externalId: schema.transactionLegs.externalId,
         assetId: schema.transactionLegs.assetId,
-        metadata: schema.transactionLegs.metadata,
+        providerAssetRowId: schema.transactionLegs.providerAssetRowId,
       })
       .from(schema.transactionLegs)
       .where(eq(schema.transactionLegs.sourceId, sourceId))
@@ -882,7 +870,7 @@ const loadFutureProviderOverrideState = (providerAssetRowId: string) =>
     const [futureLeg] = yield* db
       .select({
         assetId: schema.transactionLegs.assetId,
-        metadata: schema.transactionLegs.metadata,
+        providerAssetRowId: schema.transactionLegs.providerAssetRowId,
       })
       .from(schema.transactionLegs)
       .where(eq(schema.transactionLegs.externalId, "tx-buy-after-provider-override:main"))
@@ -1409,7 +1397,7 @@ describe("coinbase normalization persistence", () => {
           .select({
             externalId: schema.transactionLegs.externalId,
             sourceTransferId: schema.transactionLegs.sourceTransferId,
-            metadata: schema.transactionLegs.metadata,
+            providerAssetRowId: schema.transactionLegs.providerAssetRowId,
           })
           .from(schema.transactionLegs)
           .where(eq(schema.transactionLegs.sourceId, sourceId))
@@ -1419,20 +1407,10 @@ describe("coinbase normalization persistence", () => {
 
       const mainLeg = state.legs.find((leg) => leg.externalId === "tx-buy-1:main")
       const feeLeg = state.legs.find((leg) => leg.externalId === "tx-send-1:network_fee:fee_leg")
-      const mainLegMetadata = yield* Schema.decodeUnknownEffect(ProviderAssetLegMetadata)(
-        mainLeg?.metadata
-      )
-      const feeLegMetadata = yield* Schema.decodeUnknownEffect(ProviderAssetLegMetadata)(
-        feeLeg?.metadata
-      )
       expect(mainLeg?.sourceTransferId).toBeNull()
       expect(feeLeg?.sourceTransferId).not.toBeNull()
-      expect(mainLegMetadata).toEqual({
-        providerAssetRowId: state.btcProviderAsset.id,
-      })
-      expect(feeLegMetadata).toEqual({
-        providerAssetRowId: state.btcProviderAsset.id,
-      })
+      expect(mainLeg?.providerAssetRowId).toBe(state.btcProviderAsset.id)
+      expect(feeLeg?.providerAssetRowId).toBe(state.btcProviderAsset.id)
     })
   )
 
@@ -1486,16 +1464,14 @@ describe("coinbase normalization persistence", () => {
         return yield* db
           .select({
             assetId: schema.transactionLegs.assetId,
-            metadata: schema.transactionLegs.metadata,
+            providerAssetRowId: schema.transactionLegs.providerAssetRowId,
           })
           .from(schema.transactionLegs)
           .where(eq(schema.transactionLegs.externalId, "tx-buy-duplicate-btc-row:main"))
           .limit(1)
       }).pipe(Effect.provide(TestPgClientLive))
-      const metadata = yield* Schema.decodeUnknownEffect(ProviderAssetLegMetadata)(leg?.metadata)
-
       expect(leg?.assetId).toBe(DOT_ASSET_ID)
-      expect(metadata.providerAssetRowId).toBe(duplicateProviderAssetRowId)
+      expect(leg?.providerAssetRowId).toBe(duplicateProviderAssetRowId)
     })
   )
 
@@ -1549,12 +1525,12 @@ describe("coinbase normalization persistence", () => {
         expect(replay.status).toBe("completed")
         expect(historicalMainLeg).toMatchObject({
           assetId: PROVIDER_OVERRIDE_ASSET_ID,
-          metadata: expect.objectContaining({ providerAssetRowId: before.providerAsset.id }),
+          providerAssetRowId: before.providerAsset.id,
         })
         expect(historicalMainLeg?.id).not.toBe(before.historicalMainLeg.id)
         expect(historicalFeeLeg).toMatchObject({
           assetId: PROVIDER_OVERRIDE_ASSET_ID,
-          metadata: expect.objectContaining({ providerAssetRowId: before.providerAsset.id }),
+          providerAssetRowId: before.providerAsset.id,
         })
 
         useFutureProviderOverrideSyncRecord()
@@ -1563,7 +1539,7 @@ describe("coinbase normalization persistence", () => {
 
         expect(after.futureLeg).toMatchObject({
           assetId: PROVIDER_OVERRIDE_ASSET_ID,
-          metadata: expect.objectContaining({ providerAssetRowId: before.providerAsset.id }),
+          providerAssetRowId: before.providerAsset.id,
         })
         expect(after.providerAsset?.rawProviderPayload).toEqual(
           before.providerAsset.rawProviderPayload

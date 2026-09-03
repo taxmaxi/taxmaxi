@@ -162,6 +162,8 @@ export interface SourceTransferDraft {
   readonly toPartyResourcePath: string | null
   readonly assetId: string
   readonly assetRepresentationId?: string | null
+  /** Exact provider asset row used to derive this transfer, when present. */
+  readonly providerAssetRowId?: string | null
   readonly amount: string
   readonly tokenId: string | null
   readonly notes: string | null
@@ -277,6 +279,7 @@ export interface PersistedSourceTransfer {
   readonly addressId: string | null
   readonly assetId: string
   readonly assetRepresentationId: string | null
+  readonly providerAssetRowId?: string | null
   readonly amount: string
   readonly type: SourceTransferType
   readonly metadata?: unknown

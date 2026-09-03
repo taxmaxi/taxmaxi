@@ -72,10 +72,6 @@ const CoinbaseNormalizedMetadataSchema = Schema.Struct({
   to: Schema.NullOr(Schema.Unknown),
 })
 
-const CoinbaseFeeTransferMetadataSchema = Schema.Struct({
-  providerAssetRowId: Schema.String.check(Schema.isUUID()),
-})
-
 type CoinbaseNormalizedMetadata = Schema.Schema.Type<typeof CoinbaseNormalizedMetadataSchema>
 
 const CoinbasePairedSpreadPayloadSchema = Schema.Struct({
@@ -1189,21 +1185,16 @@ const make = Effect.gen(function* () {
             assetId: transfer.assetId,
             message: `Missing asset row for fee transfer asset ${transfer.assetId}`,
           })
-          const metadata = yield* Schema.decodeUnknownEffect(CoinbaseFeeTransferMetadataSchema)(
-            transfer.metadata
-          ).pipe(
-            Effect.mapError(
-              (cause) =>
-                new CoinbaseLegDerivationError({
-                  message: "Coinbase fee transfer is missing its provider asset identity",
-                  cause,
-                })
-            )
-          )
+          if (transfer.providerAssetRowId === null || transfer.providerAssetRowId === undefined) {
+            return yield* new CoinbaseLegDerivationError({
+              message: "Coinbase fee transfer is missing its provider asset identity",
+              cause: { transferId: transfer.id },
+            })
+          }
           return {
             transfer,
             asset,
-            providerAssetRowId: String(metadata.providerAssetRowId),
+            providerAssetRowId: transfer.providerAssetRowId,
           }
         })
       )
