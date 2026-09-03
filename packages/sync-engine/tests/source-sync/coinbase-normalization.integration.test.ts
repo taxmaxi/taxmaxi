@@ -1756,7 +1756,7 @@ describe("coinbase normalization persistence", () => {
     })
   )
 
-  it.effect("omits an excluded primary leg while preserving approved fee accounting", () =>
+  it.effect("withholds the whole transaction when its primary provider asset is excluded", () =>
     Effect.gen(function* () {
       activeSyncRecords = makeHypeWithBtcFeeSyncRecords()
       activeCryptoCurrencies = [...defaultCryptoCurrencies, hypeCryptoCurrency]
@@ -1792,12 +1792,7 @@ describe("coinbase normalization persistence", () => {
         expect(counts.transactions).toEqual([
           expect.objectContaining({ externalId: "tx-hype-buy-with-btc-fee" }),
         ])
-        expect(counts.legs).toEqual([
-          expect.objectContaining({
-            kind: "fee",
-            derivationRule: "coinbase_network_fee",
-          }),
-        ])
+        expect(counts.legs).toHaveLength(0)
         expect(
           counts.transactionReviews.some(
             (review) => review.matchedLayer?.includes("provider_asset_mapping") === true
@@ -1921,7 +1916,7 @@ describe("coinbase normalization persistence", () => {
     })
   )
 
-  it.effect("reevaluates an excluded secondary currency without reopening mapping review", () =>
+  it.effect("withholds all legs for an excluded fee without reopening mapping review", () =>
     Effect.gen(function* () {
       activeSyncRecords = [
         makeCoinbaseRecord({
@@ -1987,7 +1982,7 @@ describe("coinbase normalization persistence", () => {
           counts.rawRows.find((row) => row.externalRecordId === "tx-btc-with-excluded-fee")
             ?.normalizationError
         ).toBeNull()
-        expect(counts.legs.length).toBeGreaterThan(0)
+        expect(counts.legs).toHaveLength(0)
         expect(jobsAfter).toHaveLength(jobsBefore.length + 1)
       })
     })

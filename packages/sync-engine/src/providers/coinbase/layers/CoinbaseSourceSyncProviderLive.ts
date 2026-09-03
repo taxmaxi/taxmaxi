@@ -1179,7 +1179,12 @@ const make = Effect.gen(function* () {
         resolvedTransactionType,
         primaryAsset: Option.getOrNull(maybePrimaryAsset),
         legDerivationStrategy:
-          unresolvedAssetCurrencies.length > 0 || !shouldDeriveLegs ? "skip" : "derive",
+          primaryAssetResolution.excluded ||
+          excludedAssetCurrencies.size > 0 ||
+          unresolvedAssetCurrencies.length > 0 ||
+          !shouldDeriveLegs
+            ? "skip"
+            : "derive",
         deriveMainLeg: shouldDeriveMainLeg,
       }
     })
