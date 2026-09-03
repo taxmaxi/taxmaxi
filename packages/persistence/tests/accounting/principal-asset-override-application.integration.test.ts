@@ -428,6 +428,109 @@ describe("principal asset override application", () => {
     })
   )
 
+  it.effect("keeps a Solana asset review partial until replay creates facts", () =>
+    Effect.gen(function* () {
+      const providerTransferId = yield* Effect.promise(() =>
+        runPg(
+          Effect.gen(function* () {
+            yield* seedProviderAsset({ id: INCLUDED_PROVIDER_ASSET_ID })
+            const db = yield* drizzle
+            const occurredAt = DateTime.toDateUtc(DateTime.makeUnsafe("2025-02-10T10:45:00.000Z"))
+            const [representation] = yield* db
+              .select({ blockchainId: schema.assetRepresentations.blockchainId })
+              .from(schema.assetRepresentations)
+              .where(eq(schema.assetRepresentations.id, TEST_BTC_REPRESENTATION_ID))
+            if (representation === undefined) return yield* Effect.die("Missing blockchain")
+            const exactCoordinates = {
+              blockchainId: representation.blockchainId,
+              representationType: "token" as const,
+              contractAddress: "0x3333333333333333333333333333333333333333",
+            }
+            const [sourceUse] = yield* db
+              .insert(schema.sourceRepresentationUses)
+              .values({ sourceId: SOURCE_ID, ...exactCoordinates })
+              .returning({ id: schema.sourceRepresentationUses.id })
+            const [target] = yield* db
+              .insert(schema.principalAssetOverrideTargets)
+              .values({
+                principalId: PRINCIPAL_ID,
+                targetKind: "representation",
+                ...exactCoordinates,
+              })
+              .returning({ id: schema.principalAssetOverrideTargets.id })
+            if (sourceUse === undefined || target === undefined) {
+              return yield* Effect.die("Failed to create pre-catalog exact target")
+            }
+            yield* db.insert(schema.principalAssetOverrides).values({
+              principalId: PRINCIPAL_ID,
+              targetId: target.id,
+              kind: "identity",
+              operation: "create",
+              inspectedSystemRevision: "solana-review-v1",
+              inspectedSystemIdentity: "unresolved",
+              replacementAssetId: REPLACEMENT_ASSET_ID,
+              actorUserId: TEST_USER_ID,
+              reason: "Resolve the exact Solana representation before replay",
+            })
+            const [transaction] = yield* db
+              .insert(schema.transactions)
+              .values({
+                sourceId: SOURCE_ID,
+                externalId: "solana-review-before-replay",
+                timestamp: occurredAt,
+                transactionType: "trade_other",
+                principalId: PRINCIPAL_ID,
+              })
+              .returning({ id: schema.transactions.id })
+            if (transaction === undefined) return yield* Effect.die("Failed to create transaction")
+            const [providerTransfer] = yield* db
+              .insert(schema.providerTransfers)
+              .values({
+                sourceId: SOURCE_ID,
+                transactionId: transaction.id,
+                externalId: "solana-review-provider-transfer",
+                providerAssetId: INCLUDED_PROVIDER_ASSET_ID,
+                sourceRepresentationUseId: sourceUse.id,
+                timestamp: occurredAt,
+                direction: "inbound",
+                processingMode: "accounting_and_evidence",
+                fromAccountRef: "external",
+                toAccountRef: "principal",
+                amount: "1",
+              })
+              .returning({ id: schema.providerTransfers.id })
+            if (providerTransfer === undefined) {
+              return yield* Effect.die("Failed to create provider transfer")
+            }
+            yield* db.insert(schema.providerAssetTransactionUses).values({
+              providerAssetRowId: INCLUDED_PROVIDER_ASSET_ID,
+              transactionId: transaction.id,
+              sourceId: SOURCE_ID,
+            })
+            yield* db.insert(schema.transactionReviews).values({
+              principalId: PRINCIPAL_ID,
+              transactionId: transaction.id,
+              needsReview: true,
+              matchedLayer: "solana_asset_mapping",
+            })
+            return providerTransfer.id
+          })
+        )
+      )
+
+      const ledger = yield* Effect.promise(loadLedger)
+      expect(ledger.events).toEqual([])
+      expect(ledger.inputBlockers).toEqual([
+        expect.objectContaining({
+          code: "malformed_movement",
+          eventId: providerTransferId,
+          assetId: REPLACEMENT_ASSET_ID,
+          providerAssetRowId: INCLUDED_PROVIDER_ASSET_ID,
+        }),
+      ])
+    })
+  )
+
   it.effect("withholds the whole transaction when one recorded target is excluded", () =>
     Effect.gen(function* () {
       yield* Effect.promise(() =>
@@ -983,7 +1086,7 @@ describe("principal asset override application", () => {
     })
   )
 
-  it.effect("returns a blocker for a review-only recorded provider use", () =>
+  it.effect("returns a blocker for a review-only provider use behind evidence", () =>
     Effect.gen(function* () {
       const transactionId = yield* Effect.promise(() =>
         runPg(
@@ -1011,6 +1114,18 @@ describe("principal asset override application", () => {
               providerAssetRowId: UNRESOLVED_PROVIDER_ASSET_ID,
               transactionId: transaction.id,
               sourceId: SOURCE_ID,
+            })
+            yield* db.insert(schema.providerTransfers).values({
+              sourceId: SOURCE_ID,
+              transactionId: transaction.id,
+              externalId: "review-only-evidence",
+              providerAssetId: UNRESOLVED_PROVIDER_ASSET_ID,
+              timestamp: occurredAt,
+              direction: "inbound",
+              processingMode: "evidence_only",
+              fromAccountRef: "provider",
+              toAccountRef: "principal",
+              amount: "1",
             })
             yield* db.insert(schema.transactionReviews).values({
               principalId: PRINCIPAL_ID,

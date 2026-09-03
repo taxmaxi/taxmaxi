@@ -43,7 +43,11 @@ import {
   type PrincipalSourceRepresentationUseDecision,
 } from "./PrincipalAssetOverrideDecisionLoader.ts"
 
-const ASSET_REVIEW_LAYERS = new Set(["provider_asset_mapping", "principal_asset_override"])
+const ASSET_REVIEW_LAYERS = new Set([
+  "principal_asset_override",
+  "provider_asset_mapping",
+  "solana_asset_mapping",
+])
 
 const EXCHANGE_TYPES = new Set([
   "buy_fiat",
@@ -849,7 +853,11 @@ const make = Effect.gen(function* () {
                     eq(
                       schema.providerTransfers.providerAssetId,
                       schema.providerAssetTransactionUses.providerAssetRowId
-                    )
+                    ),
+                    inArray(schema.providerTransfers.processingMode, [
+                      "accounting_and_evidence",
+                      "accounting_only",
+                    ])
                   )
                 )
             ),
