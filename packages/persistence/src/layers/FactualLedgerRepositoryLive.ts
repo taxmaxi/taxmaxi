@@ -267,7 +267,14 @@ const make = Effect.gen(function* () {
           ? providerDecision?.inclusion
           : providerDecision?.systemInclusion
         if (providerDecision?.systemInclusion === "excluded" || providerInclusion === "excluded") {
-          withheldLegIds.add(row.id)
+          if (
+            row.transactionId !== null &&
+            (mayUseProviderFallback || providerDecision?.systemInclusion === "excluded")
+          ) {
+            withheldTransactionIds.add(row.transactionId)
+          } else {
+            withheldLegIds.add(row.id)
+          }
           continue
         }
         if (row.transactionId === null) {

@@ -1121,7 +1121,6 @@ describe("FactualLedgerRepositoryLive", () => {
           excludedLedger.events.map((event) => [event.transactionReference, event.assetId])
         )
       ).toEqual({
-        "provider-adapter-contradiction": TEST_BTC_ASSET_ID,
         "provider-adapter-duplicate-row": TEST_BTC_ASSET_ID,
         "provider-adapter-exact-wins": TEST_BTC_ASSET_ID,
       })
@@ -1262,6 +1261,12 @@ describe("FactualLedgerRepositoryLive", () => {
                   kind: "acquisition",
                   providerAssetRowId: EXCLUDED_PROVIDER_ASSET_ROW_ID,
                 },
+                {
+                  externalId: "provider-boundary-exact-current-exclusion-kept-leg",
+                  assetId: TEST_BTC_ASSET_ID,
+                  assetRepresentationId: TEST_BTC_REPRESENTATION_ID,
+                  kind: "acquisition",
+                },
               ],
             })
           })
@@ -1273,7 +1278,7 @@ describe("FactualLedgerRepositoryLive", () => {
     })
   )
 
-  it.effect("omits only the provider leg targeted by an inclusion override", () =>
+  it.effect("withholds a whole provider transaction when one leg is excluded", () =>
     Effect.gen(function* () {
       yield* Effect.promise(() =>
         runPg(
@@ -1310,6 +1315,17 @@ describe("FactualLedgerRepositoryLive", () => {
                 },
               ],
             })
+            yield* seedProviderBoundaryTransaction({
+              externalId: "provider-boundary-unrelated",
+              legs: [
+                {
+                  externalId: "provider-boundary-unrelated-leg",
+                  assetId: TEST_BTC_ASSET_ID,
+                  kind: "acquisition",
+                  providerAssetRowId: MIXED_OTHER_PROVIDER_ASSET_ROW_ID,
+                },
+              ],
+            })
           })
         )
       )
@@ -1318,6 +1334,7 @@ describe("FactualLedgerRepositoryLive", () => {
       expect(ledger.events).toHaveLength(1)
       expect(ledger.events[0]?._tag).toBe("acquisition")
       expect(ledger.events[0]?.assetId).toBe(TEST_BTC_ASSET_ID)
+      expect(ledger.events[0]?.transactionReference).toBe("provider-boundary-unrelated")
     })
   )
 
