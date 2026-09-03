@@ -290,6 +290,7 @@ interface ExactOverrideArtifactOptions {
   readonly includeCanonicalTransfer?: boolean
   readonly inputAssetId?: string
   readonly principalId?: string
+  readonly providerObservedRepresentationType?: "native" | "token" | "nft" | null
   readonly sourceRawRecordId?: string | null
 }
 
@@ -302,6 +303,7 @@ const persistExactOverrideArtifact = ({
   includeCanonicalTransfer = true,
   inputAssetId = TEST_BTC_ASSET_ID,
   principalId = TEST_PRINCIPAL_ID,
+  providerObservedRepresentationType = "token",
   sourceRawRecordId = null,
 }: ExactOverrideArtifactOptions & {
   readonly externalId: string
@@ -359,7 +361,7 @@ const persistExactOverrideArtifact = ({
             networkName: "bitcoin",
             networkHash: `${externalId}-hash`,
             observedBlockchainId: fixture.bitcoinBlockchainId,
-            observedRepresentationType: "token",
+            observedRepresentationType: providerObservedRepresentationType,
             observedContractAddress: "sync-engine-btc-fixture",
             observedMintAddress: null,
             observedDecimals: 8,
@@ -1282,6 +1284,20 @@ describe("SourceNormalizationRepositoryLive", () => {
         assetRepresentationId: null,
         sourceRepresentationUseId: transferUseId,
         providerAssetRowId: PROVIDER_ASSET_ROW_A_ID,
+      })
+
+      const partialProviderReplay = yield* Effect.promise(() =>
+        persistExactOverrideArtifact({
+          externalId: "recorded-provider-target",
+          fixture,
+          occurredAt,
+          providerObservedRepresentationType: null,
+        })
+      )
+      expect(partialProviderReplay.providerTransfers[0]).toMatchObject({
+        id: providerArtifact.providerTransfers[0]?.id,
+        observedRepresentationType: "token",
+        sourceRepresentationUseId: providerUseId,
       })
 
       yield* Effect.promise(() =>

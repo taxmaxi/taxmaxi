@@ -1131,7 +1131,10 @@ const make = Effect.gen(function* () {
               providerAssetId: sql.raw("excluded.provider_asset_id"),
               sourceRepresentationUseId: sql`case
                 when ${incomingTransferIsAccountingOnly} then null
-                when ${incomingObservedRepresentationIsAbsent}
+                when ${incomingObservedRepresentationIsAbsent} or (
+                  ${incomingObservedRepresentationMatchesStoredIdentity}
+                  and excluded.observed_representation_type is null
+                )
                 then ${schema.providerTransfers.sourceRepresentationUseId}
                 else excluded.source_representation_use_id
               end`,
