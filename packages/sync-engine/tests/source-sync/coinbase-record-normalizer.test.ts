@@ -177,5 +177,8 @@ it.effect("keeps each same-currency fee paired with its resolved provider row", 
         { assetId: secondAssetId, providerAssetRowId: secondProviderAssetRowId },
       ])
     )
+    expect(result.feeProviderAssetRowIds).toEqual(
+      expect.arrayContaining([firstProviderAssetRowId, secondProviderAssetRowId])
+    )
   }).pipe(Effect.provide(CoinbaseRecordNormalizerLive))
 )

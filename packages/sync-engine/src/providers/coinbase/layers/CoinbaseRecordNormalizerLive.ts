@@ -229,6 +229,7 @@ const partyAddress = (party: CoinbaseTransaction["from"]): string | null =>
 
 interface CoinbaseFeeTransferBuildResult {
   readonly transfer: CoinbaseRecordNormalizationResult["canonicalTransfers"][number] | null
+  readonly providerAssetRowId: string | null
   readonly unresolvedAssetCurrency: string | null
 }
 
@@ -455,6 +456,7 @@ const buildFeeTransfer = (params: {
     ) {
       return {
         transfer: null,
+        providerAssetRowId: null,
         unresolvedAssetCurrency: null,
       } satisfies CoinbaseFeeTransferBuildResult
     }
@@ -464,6 +466,7 @@ const buildFeeTransfer = (params: {
     if (Option.isNone(resolvedAsset.assetId)) {
       return {
         transfer: null,
+        providerAssetRowId: resolvedAsset.providerAssetRowId,
         unresolvedAssetCurrency: params.money.currency.toUpperCase(),
       } satisfies CoinbaseFeeTransferBuildResult
     }
@@ -512,6 +515,7 @@ const buildFeeTransfer = (params: {
           providerAssetRowId: resolvedAsset.providerAssetRowId,
         },
       },
+      providerAssetRowId: resolvedAsset.providerAssetRowId,
       unresolvedAssetCurrency: null,
     } satisfies CoinbaseFeeTransferBuildResult
   })
@@ -579,6 +583,13 @@ const normalizeCoinbaseRecord = (params: NormalizeCoinbaseRecordParams) =>
     const canonicalTransfers = feeTransferResults.flatMap((result) =>
       result.transfer === null ? [] : [result.transfer]
     )
+    const feeProviderAssetRowIds = Array.from(
+      new Set(
+        feeTransferResults.flatMap((result) =>
+          result.providerAssetRowId === null ? [] : [result.providerAssetRowId]
+        )
+      )
+    )
     const providerTransfers = yield* buildPrincipalProviderTransfers({
       normalizeParams: params,
       transaction: transactionPayload,
@@ -643,6 +654,7 @@ const normalizeCoinbaseRecord = (params: NormalizeCoinbaseRecordParams) =>
       },
       providerTransfers,
       canonicalTransfers,
+      feeProviderAssetRowIds,
       unresolvedAssetCurrencies,
       primaryAssetCurrency: transactionPayload.amount.currency,
     }

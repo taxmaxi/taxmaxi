@@ -339,6 +339,38 @@ const makeHypeWithBtcFeeSyncRecords = () =>
     }),
   ] as const
 
+const makeBtcWithHypeFeeSyncRecords = () =>
+  [
+    makeCoinbaseRecord({
+      recordType: "coinbase_account",
+      externalRecordId: "coinbase-account-1",
+      occurredAt: DateTime.toDateUtc(DateTime.makeUnsafe("2025-01-01T00:00:00.000Z")),
+      payload: {
+        id: "coinbase-account-1",
+        created_at: "2025-01-01T00:00:00.000Z",
+        updated_at: "2025-01-01T00:00:00.000Z",
+      },
+    }),
+    makeCoinbaseRecord({
+      externalRecordId: "tx-btc-with-hype-fee",
+      occurredAt: DateTime.toDateUtc(DateTime.makeUnsafe("2025-05-01T10:00:00.000Z")),
+      payload: {
+        id: "tx-btc-with-hype-fee",
+        type: "buy",
+        status: "completed",
+        amount: { amount: "0.01000000", currency: "BTC" },
+        native_amount: { amount: "500.00", currency: "EUR" },
+        network: {
+          status: "confirmed",
+          network_name: "base",
+          transaction_fee: { amount: "0.10000000", currency: "HYPE" },
+        },
+        created_at: "2025-05-01T10:00:00.000Z",
+        resource_path: "/v2/accounts/coinbase-account-1/transactions/tx-btc-with-hype-fee",
+      },
+    }),
+  ] as const
+
 let activeSyncRecords: ReadonlyArray<ProviderRawRecord> = defaultSyncRecords
 let activeFiatCurrencies: ReadonlyArray<CoinbaseFiatCurrencyRecord> = defaultFiatCurrencies
 let activeCryptoCurrencies: ReadonlyArray<CoinbaseCryptoCurrencyRecord> = defaultCryptoCurrencies
@@ -1918,36 +1950,7 @@ describe("coinbase normalization persistence", () => {
 
   it.effect("withholds all legs for an excluded fee without reopening mapping review", () =>
     Effect.gen(function* () {
-      activeSyncRecords = [
-        makeCoinbaseRecord({
-          recordType: "coinbase_account",
-          externalRecordId: "coinbase-account-1",
-          occurredAt: DateTime.toDateUtc(DateTime.makeUnsafe("2025-01-01T00:00:00.000Z")),
-          payload: {
-            id: "coinbase-account-1",
-            created_at: "2025-01-01T00:00:00.000Z",
-            updated_at: "2025-01-01T00:00:00.000Z",
-          },
-        }),
-        makeCoinbaseRecord({
-          externalRecordId: "tx-btc-with-excluded-fee",
-          occurredAt: DateTime.toDateUtc(DateTime.makeUnsafe("2025-05-01T10:00:00.000Z")),
-          payload: {
-            id: "tx-btc-with-excluded-fee",
-            type: "buy",
-            status: "completed",
-            amount: { amount: "0.01000000", currency: "BTC" },
-            native_amount: { amount: "500.00", currency: "EUR" },
-            network: {
-              status: "confirmed",
-              network_name: "base",
-              transaction_fee: { amount: "0.10000000", currency: "HYPE" },
-            },
-            created_at: "2025-05-01T10:00:00.000Z",
-            resource_path: "/v2/accounts/coinbase-account-1/transactions/tx-btc-with-excluded-fee",
-          },
-        }),
-      ]
+      activeSyncRecords = makeBtcWithHypeFeeSyncRecords()
       activeCryptoCurrencies = [...defaultCryptoCurrencies, hypeCryptoCurrency]
 
       yield* Effect.gen(function* () {
@@ -1979,11 +1982,47 @@ describe("coinbase normalization persistence", () => {
           )
         ).toBe(false)
         expect(
-          counts.rawRows.find((row) => row.externalRecordId === "tx-btc-with-excluded-fee")
+          counts.rawRows.find((row) => row.externalRecordId === "tx-btc-with-hype-fee")
             ?.normalizationError
         ).toBeNull()
         expect(counts.legs).toHaveLength(0)
         expect(jobsAfter).toHaveLength(jobsBefore.length + 1)
+      })
+    })
+  )
+
+  it.effect("records source use for a pending fee provider asset", () =>
+    Effect.gen(function* () {
+      activeSyncRecords = makeBtcWithHypeFeeSyncRecords()
+      activeCryptoCurrencies = [...defaultCryptoCurrencies, hypeCryptoCurrency]
+
+      yield* Effect.gen(function* () {
+        yield* seedPendingProviderAssetMapping({
+          currencyCode: "HYPE",
+          providerAssetId: "hype-provider-asset",
+          providerType: "crypto",
+        })
+
+        yield* runSync()
+
+        const providerAssetUses = yield* Effect.gen(function* () {
+          const db = yield* drizzle
+          return yield* db
+            .select({ sourceId: schema.providerAssetSourceUses.sourceId })
+            .from(schema.providerAssetSourceUses)
+            .innerJoin(
+              schema.providerAssets,
+              eq(schema.providerAssets.id, schema.providerAssetSourceUses.providerAssetRowId)
+            )
+            .where(
+              and(
+                eq(schema.providerAssets.provider, "coinbase"),
+                eq(schema.providerAssets.currencyCode, "HYPE")
+              )
+            )
+        }).pipe(Effect.provide(TestPgClientLive))
+
+        expect(providerAssetUses).toEqual([{ sourceId }])
       })
     })
   )

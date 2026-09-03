@@ -1109,20 +1109,6 @@ const make = Effect.gen(function* () {
           }).pipe(Effect.map(Option.some)),
       })
       const primaryProviderAssetId = primaryAssetResolution.providerAssetRowId
-      const feeProviderAssetRowIds = yield* Effect.forEach(
-        normalized.canonicalTransfers,
-        (transfer) =>
-          Schema.decodeUnknownEffect(CoinbaseFeeTransferMetadataSchema)(transfer.metadata).pipe(
-            Effect.map((metadata) => String(metadata.providerAssetRowId)),
-            Effect.mapError(
-              (cause) =>
-                new CoinbaseRecordNormalizationError({
-                  message: "Coinbase fee transfer is missing its provider asset identity",
-                  cause,
-                })
-            )
-          )
-      )
       const baseTransactionReview = determineCoinbaseReview({
         providerTransactionType: normalized.transaction.providerTransactionType,
         resolvedTransactionType,
@@ -1144,7 +1130,7 @@ const make = Effect.gen(function* () {
               affectedCurrencies: unresolvedAssetCurrencies,
             })
       const providerAssetRowIds = Array.from(
-        new Set([primaryProviderAssetId, ...feeProviderAssetRowIds])
+        new Set([primaryProviderAssetId, ...normalized.feeProviderAssetRowIds])
       )
       const shouldDeriveLegs =
         normalized.transaction.providerTransactionType !== "tx" ||
