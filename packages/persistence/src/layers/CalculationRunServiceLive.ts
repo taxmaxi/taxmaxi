@@ -27,6 +27,7 @@ import { schema } from "../schema/index.ts"
 import {
   CalculationRunAlreadyStoredError,
   CalculationRunCurrencyMismatchError,
+  type CalculationRunResult,
   InputLedgerRevision,
   CalculationRunRepository,
   ValuationRevision,
@@ -38,6 +39,7 @@ import {
 import {
   FactualLedgerRepository,
   type CustodyUnitMembership,
+  type FactualLedgerInputBlocker,
   type PrincipalAssetOverrideRevisionRecord,
 } from "../services/FactualLedgerRepository.ts"
 import { drizzle } from "./PgClientLive.ts"
@@ -78,6 +80,16 @@ const canonicalValuationFact = (fact: ValuationFact): ReadonlyArray<string | num
         fact.source,
       ]
 
+const canonicalInputBlocker = (
+  blocker: FactualLedgerInputBlocker
+): ReadonlyArray<string | null> => [
+  blocker.code,
+  blocker.eventId,
+  blocker.assetId ?? null,
+  "providerAssetRowId" in blocker ? (blocker.providerAssetRowId ?? null) : null,
+  blocker.custodyUnitId,
+]
+
 const sha256 = (domain: string, value: unknown): string =>
   createHash("sha256").update(domain).update("\0").update(JSON.stringify(value)).digest("hex")
 
@@ -85,18 +97,23 @@ const makeLedgerRevision = ({
   snapshotTransactionId,
   snapshotVisibility,
   events,
+  inputBlockers,
   custodyUnitMembership,
   principalAssetOverrideRevision,
 }: {
   readonly snapshotTransactionId: string
   readonly snapshotVisibility: string
   readonly events: ReadonlyArray<AccountingEvent>
+  readonly inputBlockers: ReadonlyArray<FactualLedgerInputBlocker>
   readonly custodyUnitMembership: ReadonlyArray<CustodyUnitMembership>
   readonly principalAssetOverrideRevision: ReadonlyArray<PrincipalAssetOverrideRevisionRecord>
 }): InputLedgerRevision =>
   InputLedgerRevision.make(
     `v2:${snapshotTransactionId}:${snapshotVisibility}:${sha256("taxmaxi:factual-ledger:v2", {
       events: events.map(canonicalEvent),
+      inputBlockers: inputBlockers
+        .map(canonicalInputBlocker)
+        .sort((left, right) => JSON.stringify(left).localeCompare(JSON.stringify(right))),
       custodyUnitMembership: custodyUnitMembership.map(({ sourceId, custodyUnitId }) => [
         sourceId,
         custodyUnitId,
@@ -146,6 +163,7 @@ const make = Effect.gen(function* () {
             snapshotTransactionId,
             snapshotVisibility,
             events: factualLedger.events,
+            inputBlockers: factualLedger.inputBlockers,
             custodyUnitMembership: factualLedger.custodyUnitMembership,
             principalAssetOverrideRevision: factualLedger.principalAssetOverrideRevision,
           })
@@ -191,16 +209,25 @@ const make = Effect.gen(function* () {
         accountingChoices: params.accountingChoices,
         valuationFacts: snapshot.factualLedger.valuationFacts,
       }).pipe(
-        Effect.flatMap((result) =>
-          calculationRunRepository.persist({
+        Effect.flatMap((result) => {
+          const combinedResult: CalculationRunResult =
+            snapshot.factualLedger.inputBlockers.length === 0
+              ? result
+              : {
+                  ...result,
+                  status: "partial",
+                  blockers: [...snapshot.factualLedger.inputBlockers, ...result.blockers],
+                }
+
+          return calculationRunRepository.persist({
             id: params.id,
             principalId: params.principalId,
             reportingCurrency: params.reportingCurrency,
             inputLedgerRevision: snapshot.inputLedgerRevision,
             valuationRevision: snapshot.valuationRevision,
-            result,
+            result: combinedResult,
           })
-        ),
+        }),
         Effect.onError((originalCause) =>
           calculationRunRepository
             .fail({

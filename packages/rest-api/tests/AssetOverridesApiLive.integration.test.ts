@@ -632,7 +632,11 @@ describe("AssetOverridesApiLive", () => {
         },
         system: { identity: { _tag: "resolved", assetId: ids.systemAssetId } },
         effectiveDecision: { _tag: "included", assetId: ids.systemAssetId },
-        checkedTechnicalBlockerKinds: ["missing_decimals", "unsupported_asset_type"],
+        checkedTechnicalBlockerKinds: [
+          "malformed_movement",
+          "missing_decimals",
+          "unsupported_asset_type",
+        ],
         technicalBlockers: [],
         history: [],
         recomputation: { status: "not_scheduled" },
@@ -691,7 +695,11 @@ describe("AssetOverridesApiLive", () => {
       expect(validation.body).toMatchObject({
         _tag: "ready",
         asset: { id: TEST_BTC_ASSET_ID, type: "fungible" },
-        checkedTechnicalBlockerKinds: ["missing_decimals", "unsupported_asset_type"],
+        checkedTechnicalBlockerKinds: [
+          "malformed_movement",
+          "missing_decimals",
+          "unsupported_asset_type",
+        ],
         technicalBlockers: [],
         warnings: [
           { code: "symbol_mismatch" },
@@ -1009,7 +1017,11 @@ describe("AssetOverridesApiLive", () => {
           validation: {
             _tag: "asset_not_found",
             assetId: missingAssetId,
-            checkedTechnicalBlockerKinds: ["missing_decimals", "unsupported_asset_type"],
+            checkedTechnicalBlockerKinds: [
+              "malformed_movement",
+              "missing_decimals",
+              "unsupported_asset_type",
+            ],
             technicalBlockers: [],
             recomputation: { status: "not_scheduled" },
           },

@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it } from "@effect/vitest"
 import { CurrencyCode } from "@my/core/currency"
 import { PrincipalId } from "@my/core/ownership"
-import { eq } from "drizzle-orm"
+import { and, eq, sql } from "drizzle-orm"
 import * as BigDecimal from "effect/BigDecimal"
 import * as DateTime from "effect/DateTime"
 import * as Effect from "effect/Effect"
@@ -19,6 +19,7 @@ import {
 } from "../support/integration-test-kit.ts"
 
 const TEST_CUSTODY_SOURCE_ID = "00000000-0000-4000-8000-000000000281"
+const TEST_CUSTODY_SOURCE_USE_ID = "00000000-0000-4000-8000-000000000291"
 const TEST_DESTINATION_SOURCE_ID = "00000000-0000-4000-8000-000000000282"
 const TEST_PRINCIPAL_ID = PrincipalId.make("00000000-0000-4000-8000-000000000183")
 const OTHER_USER_ID = "00000000-0000-4000-8000-000000000184"
@@ -103,6 +104,7 @@ const seedProviderBoundaryAsset = ({
       currencyCode: "BOUNDARY",
       name: providerAssetId,
       providerType: "crypto",
+      exponent: 8,
       rawProviderPayload: { asset_id: providerAssetId },
       evidenceRevision: 1,
       discoveredAt: occurredAt,
@@ -217,6 +219,48 @@ const createExactIdentityOverride = Effect.gen(function* () {
   })
 })
 
+const recordRepresentationUse = ({
+  assetRepresentationId,
+  id,
+  sourceId,
+}: {
+  readonly assetRepresentationId: string
+  readonly id?: string
+  readonly sourceId: string
+}) =>
+  Effect.gen(function* () {
+    const db = yield* drizzle
+    const [representation] = yield* db
+      .select({
+        blockchainId: schema.assetRepresentations.blockchainId,
+        representationType: schema.assetRepresentations.type,
+        contractAddress: schema.assetRepresentations.contractAddress,
+        mintAddress: schema.assetRepresentations.mintAddress,
+      })
+      .from(schema.assetRepresentations)
+      .where(eq(schema.assetRepresentations.id, assetRepresentationId))
+    if (representation === undefined) return yield* Effect.die("Missing representation")
+
+    yield* db
+      .insert(schema.sourceRepresentationUses)
+      .values({ id, sourceId, ...representation })
+      .onConflictDoNothing()
+    const [recordedUse] = yield* db
+      .select({ id: schema.sourceRepresentationUses.id })
+      .from(schema.sourceRepresentationUses)
+      .where(
+        and(
+          eq(schema.sourceRepresentationUses.sourceId, sourceId),
+          eq(schema.sourceRepresentationUses.blockchainId, representation.blockchainId),
+          eq(schema.sourceRepresentationUses.representationType, representation.representationType),
+          sql`${schema.sourceRepresentationUses.contractAddress} is not distinct from ${representation.contractAddress}`,
+          sql`${schema.sourceRepresentationUses.mintAddress} is not distinct from ${representation.mintAddress}`
+        )
+      )
+    if (recordedUse === undefined) return yield* Effect.die("Failed to record representation use")
+    return recordedUse.id
+  })
+
 const seedProviderBoundaryTransaction = ({
   externalId,
   legs,
@@ -245,6 +289,21 @@ const seedProviderBoundaryTransaction = ({
       .returning({ id: schema.transactions.id })
     if (transaction === undefined) return yield* Effect.die("Failed to create transaction")
 
+    const sourceUseByRepresentation = new Map<string, string>()
+    for (const representationId of new Set(
+      legs.flatMap(({ assetRepresentationId }) =>
+        assetRepresentationId === undefined ? [] : [assetRepresentationId]
+      )
+    )) {
+      sourceUseByRepresentation.set(
+        representationId,
+        yield* recordRepresentationUse({
+          assetRepresentationId: representationId,
+          sourceId: TEST_CUSTODY_SOURCE_ID,
+        })
+      )
+    }
+
     yield* db.insert(schema.transactionLegs).values(
       legs.map((leg) => ({
         sourceId: TEST_CUSTODY_SOURCE_ID,
@@ -253,6 +312,10 @@ const seedProviderBoundaryTransaction = ({
         principalId: TEST_PRINCIPAL_ID,
         assetId: leg.assetId,
         assetRepresentationId: leg.assetRepresentationId,
+        sourceRepresentationUseId:
+          leg.assetRepresentationId === undefined
+            ? undefined
+            : sourceUseByRepresentation.get(leg.assetRepresentationId),
         amount: "1",
         kind: leg.kind,
         provenance: "deterministic" as const,
@@ -386,6 +449,10 @@ const seedCustodyReconciliation = ({
         amount,
       })
       .returning({ id: schema.providerTransfers.id })
+    const canonicalSourceRepresentationUseId = yield* recordRepresentationUse({
+      assetRepresentationId: TEST_BTC_REPRESENTATION_ID,
+      sourceId: canonicalTransferSourceId ?? canonicalSourceId,
+    })
     const [canonicalTransfer] = yield* db
       .insert(schema.transfers)
       .values({
@@ -397,6 +464,8 @@ const seedCustodyReconciliation = ({
         fromAccountRef: "own:origin",
         toAccountRef: "own:destination",
         assetId: TEST_BTC_ASSET_ID,
+        assetRepresentationId: TEST_BTC_REPRESENTATION_ID,
+        sourceRepresentationUseId: canonicalSourceRepresentationUseId,
         amount: canonicalAmount ?? amount,
       })
       .returning({ id: schema.transfers.id })
@@ -461,6 +530,15 @@ describe("FactualLedgerRepositoryLive", () => {
             })
           )
         )
+        yield* Effect.promise(() =>
+          runPg(
+            recordRepresentationUse({
+              assetRepresentationId: TEST_BTC_REPRESENTATION_ID,
+              id: TEST_CUSTODY_SOURCE_USE_ID,
+              sourceId: TEST_CUSTODY_SOURCE_ID,
+            })
+          )
+        )
       })
     )
   )
@@ -505,6 +583,7 @@ describe("FactualLedgerRepositoryLive", () => {
                 timestamp: occurredAt,
                 principalId: TEST_PRINCIPAL_ID,
                 assetId: TEST_BTC_ASSET_ID,
+                sourceRepresentationUseId: TEST_CUSTODY_SOURCE_USE_ID,
                 amount: "1.25",
                 kind: "acquisition",
                 provenance: "deterministic",
@@ -518,6 +597,7 @@ describe("FactualLedgerRepositoryLive", () => {
                 timestamp: occurredAt,
                 principalId: TEST_PRINCIPAL_ID,
                 assetId: TEST_BTC_ASSET_ID,
+                sourceRepresentationUseId: TEST_CUSTODY_SOURCE_USE_ID,
                 amount: "0.5",
                 kind: "disposal",
                 provenance: "deterministic",
@@ -531,6 +611,7 @@ describe("FactualLedgerRepositoryLive", () => {
                 timestamp: occurredAt,
                 principalId: TEST_PRINCIPAL_ID,
                 assetId: TEST_BTC_ASSET_ID,
+                sourceRepresentationUseId: TEST_CUSTODY_SOURCE_USE_ID,
                 amount: "0.75",
                 kind: "acquisition",
                 provenance: "deterministic",
@@ -544,6 +625,7 @@ describe("FactualLedgerRepositoryLive", () => {
                 timestamp: occurredAt,
                 principalId: TEST_PRINCIPAL_ID,
                 assetId: TEST_BTC_ASSET_ID,
+                sourceRepresentationUseId: TEST_CUSTODY_SOURCE_USE_ID,
                 amount: "0.25",
                 kind: "disposal",
                 provenance: "deterministic",
@@ -711,6 +793,14 @@ describe("FactualLedgerRepositoryLive", () => {
               return yield* Effect.die("Failed to create facts")
             }
             const factTransactions = [firstTransaction, secondTransaction, otherTransaction]
+            const sourceUseIds = yield* Effect.forEach(
+              [TEST_CUSTODY_SOURCE_ID, TEST_DESTINATION_SOURCE_ID, OTHER_SOURCE_ID],
+              (sourceId) =>
+                recordRepresentationUse({
+                  assetRepresentationId: TEST_BTC_REPRESENTATION_ID,
+                  sourceId,
+                })
+            )
 
             yield* db.insert(schema.transactionLegs).values(
               factTransactions.map((transaction, index) => ({
@@ -725,6 +815,7 @@ describe("FactualLedgerRepositoryLive", () => {
                 principalId: index === 2 ? OTHER_PRINCIPAL_ID : TEST_PRINCIPAL_ID,
                 assetId: TEST_BTC_ASSET_ID,
                 assetRepresentationId: TEST_BTC_REPRESENTATION_ID,
+                sourceRepresentationUseId: sourceUseIds[index],
                 amount: "1",
                 kind: "acquisition" as const,
                 provenance: "deterministic" as const,
@@ -849,6 +940,7 @@ describe("FactualLedgerRepositoryLive", () => {
                 currencyCode: "DUP",
                 name: "Duplicate provider asset",
                 providerType: "crypto",
+                exponent: 8,
                 rawProviderPayload: { asset_id: "duplicate-stable-a" },
                 evidenceRevision: 1,
                 discoveredAt: occurredAt,
@@ -861,6 +953,7 @@ describe("FactualLedgerRepositoryLive", () => {
                 currencyCode: "DUP",
                 name: "Duplicate provider asset",
                 providerType: "crypto",
+                exponent: 8,
                 rawProviderPayload: { asset_id: "duplicate-stable-b" },
                 evidenceRevision: 1,
                 discoveredAt: occurredAt,
@@ -965,6 +1058,10 @@ describe("FactualLedgerRepositoryLive", () => {
             ) {
               return yield* Effect.die("Failed to create provider adapter facts")
             }
+            const exactSourceUseId = yield* recordRepresentationUse({
+              assetRepresentationId: TEST_BTC_REPRESENTATION_ID,
+              sourceId: TEST_CUSTODY_SOURCE_ID,
+            })
 
             yield* db.insert(schema.transactionLegs).values([
               {
@@ -1004,6 +1101,7 @@ describe("FactualLedgerRepositoryLive", () => {
                 provenance: "deterministic",
                 originKind: "none" as const,
                 providerAssetRowId: PROVIDER_ASSET_ROW_ID,
+                sourceRepresentationUseId: exactSourceUseId,
                 transactionId: exactTransaction.id,
               },
               {
@@ -1474,6 +1572,7 @@ describe("FactualLedgerRepositoryLive", () => {
               timestamp: occurredAt,
               principalId: TEST_PRINCIPAL_ID,
               assetId: TEST_BTC_ASSET_ID,
+              sourceRepresentationUseId: TEST_CUSTODY_SOURCE_USE_ID,
               amount: "0.01",
               kind: "fee",
               provenance: "deterministic",
@@ -1516,6 +1615,7 @@ describe("FactualLedgerRepositoryLive", () => {
                 timestamp: occurredAt,
                 principalId: TEST_PRINCIPAL_ID,
                 assetId: TEST_BTC_ASSET_ID,
+                sourceRepresentationUseId: TEST_CUSTODY_SOURCE_USE_ID,
                 amount,
                 kind: "acquisition",
                 provenance: "deterministic",
@@ -1613,6 +1713,7 @@ describe("FactualLedgerRepositoryLive", () => {
               timestamp: occurredAt,
               principalId: TEST_PRINCIPAL_ID,
               assetId: TEST_BTC_ASSET_ID,
+              sourceRepresentationUseId: TEST_CUSTODY_SOURCE_USE_ID,
               amount: "1",
               kind: "acquisition",
               provenance: "deterministic",
@@ -1726,6 +1827,7 @@ describe("FactualLedgerRepositoryLive", () => {
                 timestamp: occurredAt,
                 principalId: TEST_PRINCIPAL_ID,
                 assetId: TEST_BTC_ASSET_ID,
+                sourceRepresentationUseId: TEST_CUSTODY_SOURCE_USE_ID,
                 amount: "2",
                 kind: "disposal",
                 provenance: "deterministic",
@@ -1739,6 +1841,7 @@ describe("FactualLedgerRepositoryLive", () => {
                 timestamp: occurredAt,
                 principalId: TEST_PRINCIPAL_ID,
                 assetId: TEST_BTC_ASSET_ID,
+                sourceRepresentationUseId: TEST_CUSTODY_SOURCE_USE_ID,
                 amount: "3",
                 kind: "acquisition",
                 provenance: "deterministic",
@@ -1752,6 +1855,7 @@ describe("FactualLedgerRepositoryLive", () => {
                 timestamp: occurredAt,
                 principalId: TEST_PRINCIPAL_ID,
                 assetId: TEST_BTC_ASSET_ID,
+                sourceRepresentationUseId: TEST_CUSTODY_SOURCE_USE_ID,
                 amount: "0.01",
                 kind: "fee",
                 provenance: "deterministic",
@@ -1831,6 +1935,7 @@ describe("FactualLedgerRepositoryLive", () => {
               timestamp: occurredAt,
               principalId: TEST_PRINCIPAL_ID,
               assetId: TEST_BTC_ASSET_ID,
+              sourceRepresentationUseId: TEST_CUSTODY_SOURCE_USE_ID,
               amount: "2",
               kind: "acquisition",
               provenance: "deterministic",
@@ -1991,6 +2096,7 @@ describe("FactualLedgerRepositoryLive", () => {
                 timestamp: DateTime.toDateUtc(DateTime.makeUnsafe(`${day}T10:00:00.000Z`)),
                 principalId: TEST_PRINCIPAL_ID,
                 assetId: TEST_BTC_ASSET_ID,
+                sourceRepresentationUseId: TEST_CUSTODY_SOURCE_USE_ID,
                 amount: "1",
                 kind: "acquisition" as const,
                 provenance: "deterministic" as const,
@@ -2081,6 +2187,7 @@ describe("FactualLedgerRepositoryLive", () => {
                 timestamp: negativeAt,
                 principalId: TEST_PRINCIPAL_ID,
                 assetId: TEST_BTC_ASSET_ID,
+                sourceRepresentationUseId: TEST_CUSTODY_SOURCE_USE_ID,
                 amount: "1",
                 kind: "disposal",
                 provenance: "deterministic",
@@ -2094,6 +2201,7 @@ describe("FactualLedgerRepositoryLive", () => {
                 timestamp: ambiguousAt,
                 principalId: TEST_PRINCIPAL_ID,
                 assetId: TEST_BTC_ASSET_ID,
+                sourceRepresentationUseId: TEST_CUSTODY_SOURCE_USE_ID,
                 amount: "1",
                 kind: "disposal",
                 provenance: "deterministic",
@@ -2107,6 +2215,7 @@ describe("FactualLedgerRepositoryLive", () => {
                 timestamp: ambiguousAt,
                 principalId: TEST_PRINCIPAL_ID,
                 assetId: TEST_BTC_ASSET_ID,
+                sourceRepresentationUseId: TEST_CUSTODY_SOURCE_USE_ID,
                 amount: "2",
                 kind: "acquisition",
                 provenance: "deterministic",
@@ -2120,6 +2229,7 @@ describe("FactualLedgerRepositoryLive", () => {
                 timestamp: invalidAt,
                 principalId: TEST_PRINCIPAL_ID,
                 assetId: TEST_BTC_ASSET_ID,
+                sourceRepresentationUseId: TEST_CUSTODY_SOURCE_USE_ID,
                 amount: "1",
                 kind: "acquisition",
                 provenance: "deterministic",
@@ -2179,6 +2289,10 @@ describe("FactualLedgerRepositoryLive", () => {
             yield* seedCexSource({
               sourceId: TEST_DESTINATION_SOURCE_ID,
               fixtureName: "Destination custody source",
+            })
+            const destinationSourceUseId = yield* recordRepresentationUse({
+              assetRepresentationId: TEST_BTC_REPRESENTATION_ID,
+              sourceId: TEST_DESTINATION_SOURCE_ID,
             })
             yield* seedSyncEngineRepositoryFixture({
               userId: OTHER_USER_ID,
@@ -2348,6 +2462,7 @@ describe("FactualLedgerRepositoryLive", () => {
                 timestamp: canonicalTimestamp,
                 principalId: TEST_PRINCIPAL_ID,
                 assetId: TEST_BTC_ASSET_ID,
+                sourceRepresentationUseId: destinationSourceUseId,
                 amount: "0.125",
                 kind: "acquisition",
                 provenance: "deterministic",
@@ -2431,6 +2546,59 @@ describe("FactualLedgerRepositoryLive", () => {
         _tag: "market_quote",
         eventId: "10000000-0000-4000-8000-000000000015",
       })
+    })
+  )
+
+  it.effect("returns a provider blocker for a reconciled custody movement", () =>
+    Effect.gen(function* () {
+      const providerTimestamp = DateTime.toDateUtc(DateTime.makeUnsafe("2025-03-05T10:00:00.000Z"))
+      const canonicalTimestamp = DateTime.toDateUtc(DateTime.makeUnsafe("2025-03-05T10:02:00.000Z"))
+
+      yield* Effect.promise(() =>
+        runPg(
+          Effect.gen(function* () {
+            const db = yield* drizzle
+            yield* seedCexSource({
+              sourceId: TEST_DESTINATION_SOURCE_ID,
+              fixtureName: "Blocked custody destination",
+            })
+            yield* seedProviderBoundaryAsset({
+              providerAssetRowId: MIXED_PROVIDER_ASSET_ROW_ID,
+              providerAssetId: "blocked-reconciliation",
+              canonicalAssetId: TEST_BTC_ASSET_ID,
+            })
+            yield* db
+              .update(schema.providerAssets)
+              .set({ exponent: null })
+              .where(eq(schema.providerAssets.id, MIXED_PROVIDER_ASSET_ROW_ID))
+            yield* seedCustodyReconciliation({
+              reconciliationId: "10000000-0000-4000-8000-000000000032",
+              fixtureName: "blocked-custody",
+              providerSourceId: TEST_CUSTODY_SOURCE_ID,
+              canonicalSourceId: TEST_DESTINATION_SOURCE_ID,
+              providerAssetRowId: MIXED_PROVIDER_ASSET_ROW_ID,
+              providerTimestamp,
+              canonicalTimestamp,
+              direction: "outbound",
+              amount: "0.5",
+              reconciliationStatus: "matched",
+              status: "approved",
+              deterministic: false,
+            })
+          })
+        )
+      )
+
+      const result = yield* Effect.promise(loadFactualLedger)
+      expect(result.events).toEqual([])
+      expect(result.inputBlockers).toEqual([
+        expect.objectContaining({
+          code: "missing_decimals",
+          eventId: "10000000-0000-4000-8000-000000000032",
+          assetId: TEST_BTC_ASSET_ID,
+          providerAssetRowId: MIXED_PROVIDER_ASSET_ROW_ID,
+        }),
+      ])
     })
   )
 

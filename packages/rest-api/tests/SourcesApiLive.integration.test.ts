@@ -70,6 +70,7 @@ import {
   seedSyncEngineAssets,
   seedSyncEngineRepositoryFixture,
   TEST_BTC_ASSET_ID,
+  TEST_BTC_REPRESENTATION_ID,
 } from "../../persistence/tests/support/integration-test-kit.ts"
 import { TaxMaxiApi } from "../src/definitions/TaxMaxiApi.ts"
 import { ANON_CHALLENGE_COOKIE_NAME, ANON_SESSION_COOKIE_NAME } from "../src/layers/AnonApiLive.ts"
@@ -1756,6 +1757,21 @@ const seedDailyQuoteMonetaryRows = ({
     const dispositionTransactionId = nextTestUuid()
     const acquisitionEventId = nextTestUuid()
     const dispositionEventId = nextTestUuid()
+    const [representation] = yield* db
+      .select({
+        blockchainId: schema.assetRepresentations.blockchainId,
+        representationType: schema.assetRepresentations.type,
+        contractAddress: schema.assetRepresentations.contractAddress,
+        mintAddress: schema.assetRepresentations.mintAddress,
+      })
+      .from(schema.assetRepresentations)
+      .where(eq(schema.assetRepresentations.id, TEST_BTC_REPRESENTATION_ID))
+    if (representation === undefined) return yield* Effect.die("Missing BTC representation")
+    const [sourceUse] = yield* db
+      .insert(schema.sourceRepresentationUses)
+      .values({ sourceId, ...representation })
+      .returning({ id: schema.sourceRepresentationUses.id })
+    if (sourceUse === undefined) return yield* Effect.die("Failed to record BTC source use")
 
     yield* db.insert(schema.transactions).values([
       {
@@ -1784,6 +1800,8 @@ const seedDailyQuoteMonetaryRows = ({
         externalId: "daily-quote-acquisition-leg",
         timestamp: acquisitionAt,
         assetId: TEST_BTC_ASSET_ID,
+        assetRepresentationId: TEST_BTC_REPRESENTATION_ID,
+        sourceRepresentationUseId: sourceUse.id,
         amount: "1",
         kind: "acquisition",
         provenance: "deterministic",
@@ -1797,6 +1815,8 @@ const seedDailyQuoteMonetaryRows = ({
         externalId: "daily-quote-disposition-leg",
         timestamp: dispositionAt,
         assetId: TEST_BTC_ASSET_ID,
+        assetRepresentationId: TEST_BTC_REPRESENTATION_ID,
+        sourceRepresentationUseId: sourceUse.id,
         amount: "0.4",
         kind: "disposal",
         provenance: "deterministic",
@@ -1999,7 +2019,7 @@ const makeEndToEndProviderRegistryLive = (taxYear: number) => {
               principalId: source.principalId,
               addressId: null,
               assetId: TEST_BTC_ASSET_ID,
-              assetRepresentationId: null,
+              assetRepresentationId: TEST_BTC_REPRESENTATION_ID,
               amount: event.amount,
               kind: event.legKind,
               provenance: "deterministic",
