@@ -18,7 +18,7 @@ import {
 } from "@my/core/accounting"
 import { CURRENCIES_BY_CODE, type CurrencyCode } from "@my/core/currency"
 import { SourceId } from "@my/core/source"
-import { aliasedTable, and, asc, eq, inArray, or } from "drizzle-orm"
+import { aliasedTable, and, asc, eq, inArray, or, sql } from "drizzle-orm"
 import * as BigDecimal from "effect/BigDecimal"
 import * as DateTime from "effect/DateTime"
 import * as Effect from "effect/Effect"
@@ -36,6 +36,7 @@ import {
   makePrincipalAssetOverrideDecisionLoader,
   type PrincipalAssetOverrideDecisions,
   resolvePrincipalAssetId,
+  resolveSystemAssetId,
 } from "./PrincipalAssetOverrideDecisionLoader.ts"
 
 const EXCHANGE_TYPES = new Set([
@@ -46,6 +47,17 @@ const EXCHANGE_TYPES = new Set([
   "nft_buy",
   "nft_sell",
 ])
+
+const ProviderAssetLegMetadata = Schema.Struct({
+  providerAssetRowId: Schema.String.check(Schema.isUUID()),
+})
+
+const providerAssetRowIdFromMetadata = (metadata: unknown): string | null =>
+  Option.getOrNull(
+    Option.map(Schema.decodeUnknownOption(ProviderAssetLegMetadata)(metadata), (row) =>
+      String(row.providerAssetRowId)
+    )
+  )
 
 const acquisitionCause = (transactionType: string | null): AcquisitionCause => {
   if (transactionType === "gift_received") return "gift"
@@ -178,6 +190,13 @@ const make = Effect.gen(function* () {
           amount: schema.transactionLegs.amount,
           kind: schema.transactionLegs.kind,
           derivationRule: schema.transactionLegs.derivationRule,
+          metadata: schema.transactionLegs.metadata,
+          hasExactProviderObservation: sql<boolean>`exists (
+            select 1
+            from ${schema.providerTransfers} exact_transfer
+            where exact_transfer.transaction_id = ${schema.transactions.id}
+              and exact_transfer.observed_blockchain_id is not null
+          )`,
           sourceTransferId: schema.transactionLegs.sourceTransferId,
           transactionId: schema.transactions.id,
           externalId: schema.transactions.externalId,
@@ -225,6 +244,9 @@ const make = Effect.gen(function* () {
         readonly row: (typeof rows)[number]
       }> = []
       const eventCountByTransactionId = new Map<string, number>()
+      const withheldTransactionIds = new Set<string>()
+      const withheldLegIds = new Set<string>()
+      const effectiveAssetByTransactionSystemAsset = new Map<string, string>()
       const isReconciledEconomicLeg = (row: (typeof rows)[number]) =>
         row.kind !== "fee" &&
         ((row.sourceTransferId !== null &&
@@ -234,6 +256,53 @@ const make = Effect.gen(function* () {
             reconciledProviderTransactionIds.has(row.transactionId)))
 
       for (const row of rows) {
+        const providerAssetRowId = providerAssetRowIdFromMetadata(row.metadata)
+        const mayUseProviderFallback =
+          row.assetRepresentationId === null && !row.hasExactProviderObservation
+        const providerDecision =
+          providerAssetRowId !== null
+            ? decisions.providerAssetDecisionById.get(providerAssetRowId)
+            : undefined
+        const providerInclusion = mayUseProviderFallback
+          ? providerDecision?.inclusion
+          : providerDecision?.systemInclusion
+        if (providerDecision?.systemInclusion === "excluded" || providerInclusion === "excluded") {
+          withheldLegIds.add(row.id)
+          continue
+        }
+        if (row.transactionId === null) {
+          continue
+        }
+        const representationSystemAssetId = resolveSystemAssetId({
+          decisions,
+          assetId: row.assetId,
+          assetRepresentationId: row.assetRepresentationId,
+        })
+        const systemAssetId = mayUseProviderFallback
+          ? (providerDecision?.systemAssetId ?? representationSystemAssetId)
+          : representationSystemAssetId
+        const effectiveAssetId = resolvePrincipalAssetId({
+          decisions,
+          systemAssetId,
+          assetRepresentationId: row.assetRepresentationId,
+          providerAssetRowId: mayUseProviderFallback ? providerAssetRowId : null,
+        })
+        const identityKey = `${row.transactionId}\0${systemAssetId}`
+        const earlierAssetId = effectiveAssetByTransactionSystemAsset.get(identityKey)
+        if (earlierAssetId !== undefined && earlierAssetId !== effectiveAssetId) {
+          withheldTransactionIds.add(row.transactionId)
+        } else {
+          effectiveAssetByTransactionSystemAsset.set(identityKey, effectiveAssetId)
+        }
+      }
+
+      for (const row of rows) {
+        if (
+          withheldLegIds.has(row.id) ||
+          (row.transactionId !== null && withheldTransactionIds.has(row.transactionId))
+        ) {
+          continue
+        }
         if (
           row.transactionId !== null &&
           row.kind !== "fee" &&
@@ -250,6 +319,8 @@ const make = Effect.gen(function* () {
 
       for (const row of rows) {
         if (
+          withheldLegIds.has(row.id) ||
+          (row.transactionId !== null && withheldTransactionIds.has(row.transactionId)) ||
           isReconciledEconomicLeg(row) ||
           row.derivationRule === "internal_transfer_in" ||
           row.derivationRule === "internal_transfer_out"
@@ -272,6 +343,10 @@ const make = Effect.gen(function* () {
             decisions,
             systemAssetId: row.assetId,
             assetRepresentationId: row.assetRepresentationId,
+            providerAssetRowId:
+              row.assetRepresentationId === null && !row.hasExactProviderObservation
+                ? providerAssetRowIdFromMetadata(row.metadata)
+                : null,
           }),
           quantity: row.amount,
           ...(reference === undefined ? {} : { transactionReference: reference }),
@@ -331,6 +406,7 @@ const make = Effect.gen(function* () {
           canonicalTimestamp: canonicalTransactionTable.timestamp,
           canonicalExternalId: canonicalTransactionTable.externalId,
           canonicalExternalGroupId: canonicalTransactionTable.externalGroupId,
+          providerAssetRowId: schema.providerTransfers.providerAssetId,
           assetId: schema.transfers.assetId,
           assetRepresentationId: schema.transfers.assetRepresentationId,
           amount: schema.transfers.amount,
@@ -416,6 +492,11 @@ const make = Effect.gen(function* () {
         seenCanonicalTransferIds.add(row.canonicalTransferId)
         reconciledCanonicalTransferIds.add(row.canonicalTransferId)
         reconciledProviderTransactionIds.add(row.providerTransactionId)
+        const providerDecision =
+          row.providerAssetRowId === null
+            ? undefined
+            : decisions.providerAssetDecisionById.get(row.providerAssetRowId)
+        if (providerDecision?.systemInclusion === "excluded") continue
 
         const reference = transactionReference({
           externalGroupId: row.canonicalExternalGroupId,
@@ -608,7 +689,42 @@ const make = Effect.gen(function* () {
   const load: FactualLedgerRepositoryShape["load"] = ({ principalId, reportingCurrency }) =>
     Effect.gen(function* () {
       const supportedReportingCurrency = yield* validateReportingCurrency(reportingCurrency)
-      const decisions = yield* principalAssetOverrideDecisionLoader.load({ principalId })
+      const providerAssetMetadataRows = yield* db
+        .select({ metadata: schema.transactionLegs.metadata })
+        .from(schema.transactionLegs)
+        .innerJoin(
+          schema.sources,
+          and(
+            eq(schema.transactionLegs.sourceId, schema.sources.id),
+            eq(schema.sources.principalId, principalId)
+          )
+        )
+        .where(eq(schema.transactionLegs.principalId, principalId))
+        .pipe(wrapSqlError("factualLedgerRepository.load.providerAssetRows"))
+      const providerTransferAssetRows = yield* db
+        .select({ providerAssetRowId: schema.providerTransfers.providerAssetId })
+        .from(schema.providerTransfers)
+        .innerJoin(
+          schema.sources,
+          and(
+            eq(schema.providerTransfers.sourceId, schema.sources.id),
+            eq(schema.sources.principalId, principalId)
+          )
+        )
+        .pipe(wrapSqlError("factualLedgerRepository.load.providerTransferAssets"))
+      const providerAssetRowIds = [
+        ...providerAssetMetadataRows.flatMap(({ metadata }) => {
+          const providerAssetRowId = providerAssetRowIdFromMetadata(metadata)
+          return providerAssetRowId === null ? [] : [providerAssetRowId]
+        }),
+        ...providerTransferAssetRows.flatMap(({ providerAssetRowId }) =>
+          providerAssetRowId === null ? [] : [providerAssetRowId]
+        ),
+      ]
+      const decisions = yield* principalAssetOverrideDecisionLoader.load({
+        principalId,
+        providerAssetRowIds,
+      })
       const membershipRows = yield* db
         .select({
           custodyUnitId: schema.custodyUnitSources.custodyUnitId,

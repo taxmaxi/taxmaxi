@@ -25,6 +25,14 @@ const OTHER_USER_ID = "00000000-0000-4000-8000-000000000184"
 const OTHER_PRINCIPAL_ID = PrincipalId.make("00000000-0000-4000-8000-000000000185")
 const OTHER_SOURCE_ID = "00000000-0000-4000-8000-000000000283"
 const OVERRIDE_ASSET_ID = "00000000-0000-4000-8000-000000000482"
+const PROVIDER_ASSET_ROW_ID = "00000000-0000-4000-8000-000000000701"
+const DUPLICATE_PROVIDER_ASSET_ROW_ID = "00000000-0000-4000-8000-000000000702"
+const EXCLUDED_PROVIDER_ASSET_ROW_ID = "00000000-0000-4000-8000-000000000703"
+const CONCLUDED_PROVIDER_ASSET_ROW_ID = "00000000-0000-4000-8000-000000000704"
+const MIXED_PROVIDER_ASSET_ROW_ID = "00000000-0000-4000-8000-000000000705"
+const MIXED_OTHER_PROVIDER_ASSET_ROW_ID = "00000000-0000-4000-8000-000000000706"
+const CONVERGED_PROVIDER_ASSET_ROW_ID = "00000000-0000-4000-8000-000000000707"
+const CONVERGED_OTHER_PROVIDER_ASSET_ROW_ID = "00000000-0000-4000-8000-000000000708"
 
 const context = makeIntegrationTestDatabaseContext({
   databaseNamePrefix: "taxmaxi_factual_ledger_repo",
@@ -58,6 +66,204 @@ const loadFactualLedgerError = (reportingCurrency = CurrencyCode.make("EUR")) =>
       )
     )
   )
+
+const seedOverrideAsset = Effect.gen(function* () {
+  const db = yield* drizzle
+  yield* db.insert(schema.assets).values({
+    id: OVERRIDE_ASSET_ID,
+    name: "Current provider conclusion asset",
+    symbol: "CONCLUDED",
+    type: "fungible",
+  })
+})
+
+const seedProviderBoundaryAsset = ({
+  providerAssetRowId,
+  providerAssetId,
+  canonicalAssetId,
+  mappingStatus = "approved",
+  currentConclusion,
+}: {
+  readonly providerAssetRowId: string
+  readonly providerAssetId: string
+  readonly canonicalAssetId: string
+  readonly mappingStatus?: "approved" | "excluded"
+  readonly currentConclusion?: {
+    readonly outcome: "attach" | "excluded"
+    readonly assetId?: string
+  }
+}) =>
+  Effect.gen(function* () {
+    const db = yield* drizzle
+    const occurredAt = DateTime.toDateUtc(DateTime.makeUnsafe("2025-02-06T10:00:00.000Z"))
+    yield* db.insert(schema.providerAssets).values({
+      id: providerAssetRowId,
+      provider: "coinbase",
+      providerAssetId,
+      currencyCode: "BOUNDARY",
+      name: providerAssetId,
+      providerType: "crypto",
+      rawProviderPayload: { asset_id: providerAssetId },
+      evidenceRevision: 1,
+      discoveredAt: occurredAt,
+      retrievedAt: occurredAt,
+    })
+    yield* db.insert(schema.providerAssetMappings).values({
+      providerAssetRowId,
+      mappingKind: "asset",
+      canonicalAssetId,
+      mappingStatus,
+    })
+    if (currentConclusion === undefined) return
+
+    const [conclusion] = yield* db
+      .insert(schema.assetResolutionDecisions)
+      .values({
+        providerAssetRowId,
+        evidenceRevision: 1,
+        policyRevision: "provider-boundary-v1",
+        outcome: currentConclusion.outcome,
+        assetId: currentConclusion.assetId,
+        actor: "user:provider-review",
+      })
+      .returning({ id: schema.assetResolutionDecisions.id })
+    if (conclusion === undefined) {
+      return yield* Effect.die("Failed to create current provider conclusion")
+    }
+    yield* db.insert(schema.assetResolutionCurrentState).values({
+      providerAssetRowId,
+      currentConclusionId: conclusion.id,
+    })
+  })
+
+const createProviderOverride = ({
+  providerAssetRowId,
+  kind,
+  replacementAssetId,
+  replacementInclusion,
+  inspectedSystemAssetId = TEST_BTC_ASSET_ID,
+}: {
+  readonly providerAssetRowId: string
+  readonly kind: "identity" | "inclusion"
+  readonly replacementAssetId?: string
+  readonly replacementInclusion?: "included" | "excluded"
+  readonly inspectedSystemAssetId?: string
+}) =>
+  Effect.gen(function* () {
+    const db = yield* drizzle
+    const [target] = yield* db
+      .insert(schema.principalAssetOverrideTargets)
+      .values({
+        principalId: TEST_PRINCIPAL_ID,
+        targetKind: "provider_asset",
+        providerAssetRowId,
+      })
+      .returning({ id: schema.principalAssetOverrideTargets.id })
+    if (target === undefined) return yield* Effect.die("Failed to create provider target")
+
+    yield* db.insert(schema.principalAssetOverrides).values({
+      principalId: TEST_PRINCIPAL_ID,
+      targetId: target.id,
+      kind,
+      operation: "create",
+      inspectedSystemRevision: `provider-boundary-${kind}-v1`,
+      inspectedSystemIdentity: kind === "identity" ? "resolved" : undefined,
+      inspectedSystemAssetId: kind === "identity" ? inspectedSystemAssetId : undefined,
+      inspectedSystemInclusion: kind === "inclusion" ? "included" : undefined,
+      replacementAssetId,
+      replacementInclusion,
+      actorUserId: TEST_USER_ID,
+      reason: `Test provider ${kind} boundary`,
+    })
+  })
+
+const createExactIdentityOverride = Effect.gen(function* () {
+  const db = yield* drizzle
+  const [representation] = yield* db
+    .select({
+      blockchainId: schema.assetRepresentations.blockchainId,
+      representationType: schema.assetRepresentations.type,
+      contractAddress: schema.assetRepresentations.contractAddress,
+      mintAddress: schema.assetRepresentations.mintAddress,
+    })
+    .from(schema.assetRepresentations)
+    .where(eq(schema.assetRepresentations.id, TEST_BTC_REPRESENTATION_ID))
+  if (representation === undefined) return yield* Effect.die("Missing exact representation")
+
+  const [target] = yield* db
+    .insert(schema.principalAssetOverrideTargets)
+    .values({
+      principalId: TEST_PRINCIPAL_ID,
+      targetKind: "representation",
+      blockchainId: representation.blockchainId,
+      representationType: representation.representationType,
+      contractAddress: representation.contractAddress,
+      mintAddress: representation.mintAddress,
+    })
+    .returning({ id: schema.principalAssetOverrideTargets.id })
+  if (target === undefined) return yield* Effect.die("Failed to create exact target")
+
+  yield* db.insert(schema.principalAssetOverrides).values({
+    principalId: TEST_PRINCIPAL_ID,
+    targetId: target.id,
+    kind: "identity",
+    operation: "create",
+    inspectedSystemRevision: "exact-provider-boundary-v1",
+    inspectedSystemIdentity: "resolved",
+    inspectedSystemAssetId: TEST_BTC_ASSET_ID,
+    replacementAssetId: OVERRIDE_ASSET_ID,
+    actorUserId: TEST_USER_ID,
+    reason: "Test exact identity boundary",
+  })
+})
+
+const seedProviderBoundaryTransaction = ({
+  externalId,
+  legs,
+}: {
+  readonly externalId: string
+  readonly legs: ReadonlyArray<{
+    readonly externalId: string
+    readonly assetId: string
+    readonly kind: "acquisition" | "fee"
+    readonly providerAssetRowId?: string
+    readonly assetRepresentationId?: string
+  }>
+}) =>
+  Effect.gen(function* () {
+    const db = yield* drizzle
+    const occurredAt = DateTime.toDateUtc(DateTime.makeUnsafe("2025-02-06T10:00:00.000Z"))
+    const [transaction] = yield* db
+      .insert(schema.transactions)
+      .values({
+        sourceId: TEST_CUSTODY_SOURCE_ID,
+        externalId,
+        timestamp: occurredAt,
+        transactionType: "buy_fiat",
+        principalId: TEST_PRINCIPAL_ID,
+      })
+      .returning({ id: schema.transactions.id })
+    if (transaction === undefined) return yield* Effect.die("Failed to create transaction")
+
+    yield* db.insert(schema.transactionLegs).values(
+      legs.map((leg) => ({
+        sourceId: TEST_CUSTODY_SOURCE_ID,
+        externalId: leg.externalId,
+        timestamp: occurredAt,
+        principalId: TEST_PRINCIPAL_ID,
+        assetId: leg.assetId,
+        assetRepresentationId: leg.assetRepresentationId,
+        amount: "1",
+        kind: leg.kind,
+        provenance: "deterministic" as const,
+        metadata:
+          leg.providerAssetRowId === undefined
+            ? undefined
+            : { providerAssetRowId: leg.providerAssetRowId },
+        transactionId: transaction.id,
+      }))
+    )
+  })
 
 const seedCexSource = ({
   sourceId,
@@ -120,6 +326,7 @@ const seedCustodyReconciliation = ({
   status,
   deterministic,
   providerTransferSourceId,
+  providerAssetRowId,
   inventorySourceId,
   canonicalTransferSourceId,
 }: {
@@ -136,6 +343,7 @@ const seedCustodyReconciliation = ({
   readonly status: "approved" | "auto_applied" | "pending"
   readonly deterministic: boolean
   readonly providerTransferSourceId?: string
+  readonly providerAssetRowId?: string
   readonly inventorySourceId?: string
   readonly canonicalTransferSourceId?: string
 }) =>
@@ -171,6 +379,7 @@ const seedCustodyReconciliation = ({
         sourceId: providerTransferSourceId ?? providerSourceId,
         transactionId: providerTransaction.id,
         externalId: `${fixtureName}-provider-transfer`,
+        providerAssetId: providerAssetRowId,
         timestamp: providerTimestamp,
         direction,
         processingMode: "accounting_only",
@@ -421,7 +630,6 @@ describe("FactualLedgerRepositoryLive", () => {
               symbol: "SELECTED",
               type: "fungible",
             })
-
             const [representation] = yield* db
               .select({
                 blockchainId: schema.assetRepresentations.blockchainId,
@@ -600,7 +808,603 @@ describe("FactualLedgerRepositoryLive", () => {
         TEST_BTC_ASSET_ID,
         TEST_BTC_ASSET_ID,
       ])
-      expect(withdrawnLedger.principalAssetOverrideRevision[0]?.[6]).toBe("withdraw")
+      expect(withdrawnLedger.principalAssetOverrideRevision[0]?.operation).toBe("withdraw")
+    })
+  )
+
+  it.effect("applies chainless provider-asset identity by exact row at read time", () =>
+    Effect.gen(function* () {
+      const occurredAt = DateTime.toDateUtc(DateTime.makeUnsafe("2025-02-05T10:00:00.000Z"))
+      const activeOverride = yield* Effect.promise(() =>
+        runPg(
+          Effect.gen(function* () {
+            const db = yield* drizzle
+            yield* seedSyncEngineRepositoryFixture({
+              userId: OTHER_USER_ID,
+              principalId: OTHER_PRINCIPAL_ID,
+              sourceId: OTHER_SOURCE_ID,
+            })
+            yield* db.insert(schema.assets).values({
+              id: OVERRIDE_ASSET_ID,
+              name: "Principal-selected provider asset",
+              symbol: "SELECTED",
+              type: "fungible",
+            })
+            const [representation] = yield* db
+              .select({ blockchainId: schema.assetRepresentations.blockchainId })
+              .from(schema.assetRepresentations)
+              .where(eq(schema.assetRepresentations.id, TEST_BTC_REPRESENTATION_ID))
+            if (representation === undefined) {
+              return yield* Effect.die("Missing exact representation fixture")
+            }
+            yield* db.insert(schema.providerAssets).values([
+              {
+                id: PROVIDER_ASSET_ROW_ID,
+                provider: "coinbase",
+                providerAssetId: "duplicate-stable-a",
+                currencyCode: "DUP",
+                name: "Duplicate provider asset",
+                providerType: "crypto",
+                rawProviderPayload: { asset_id: "duplicate-stable-a" },
+                evidenceRevision: 1,
+                discoveredAt: occurredAt,
+                retrievedAt: occurredAt,
+              },
+              {
+                id: DUPLICATE_PROVIDER_ASSET_ROW_ID,
+                provider: "coinbase",
+                providerAssetId: "duplicate-stable-b",
+                currencyCode: "DUP",
+                name: "Duplicate provider asset",
+                providerType: "crypto",
+                rawProviderPayload: { asset_id: "duplicate-stable-b" },
+                evidenceRevision: 1,
+                discoveredAt: occurredAt,
+                retrievedAt: occurredAt,
+              },
+            ])
+            yield* db.insert(schema.providerAssetMappings).values([
+              {
+                providerAssetRowId: PROVIDER_ASSET_ROW_ID,
+                mappingKind: "asset",
+                canonicalAssetId: TEST_BTC_ASSET_ID,
+                mappingStatus: "approved",
+              },
+              {
+                providerAssetRowId: DUPLICATE_PROVIDER_ASSET_ROW_ID,
+                mappingKind: "asset",
+                canonicalAssetId: TEST_BTC_ASSET_ID,
+                mappingStatus: "approved",
+              },
+            ])
+
+            const [target] = yield* db
+              .insert(schema.principalAssetOverrideTargets)
+              .values({
+                principalId: TEST_PRINCIPAL_ID,
+                targetKind: "provider_asset",
+                providerAssetRowId: PROVIDER_ASSET_ROW_ID,
+              })
+              .returning({ id: schema.principalAssetOverrideTargets.id })
+            if (target === undefined) return yield* Effect.die("Failed to create provider target")
+
+            const [override] = yield* db
+              .insert(schema.principalAssetOverrides)
+              .values({
+                principalId: TEST_PRINCIPAL_ID,
+                targetId: target.id,
+                kind: "identity",
+                operation: "create",
+                inspectedSystemRevision: "provider-adapter-system-v1",
+                inspectedSystemIdentity: "resolved",
+                inspectedSystemAssetId: TEST_BTC_ASSET_ID,
+                replacementAssetId: OVERRIDE_ASSET_ID,
+                actorUserId: TEST_USER_ID,
+                reason: "Use the selected provider-row identity",
+              })
+              .returning({ id: schema.principalAssetOverrides.id })
+            if (override === undefined) return yield* Effect.die("Failed to create override")
+
+            const transactions = yield* db
+              .insert(schema.transactions)
+              .values([
+                {
+                  sourceId: TEST_CUSTODY_SOURCE_ID,
+                  externalId: "provider-adapter-selected-row",
+                  timestamp: occurredAt,
+                  transactionType: "buy_fiat",
+                  principalId: TEST_PRINCIPAL_ID,
+                },
+                {
+                  sourceId: TEST_CUSTODY_SOURCE_ID,
+                  externalId: "provider-adapter-duplicate-row",
+                  timestamp: occurredAt,
+                  transactionType: "buy_fiat",
+                  principalId: TEST_PRINCIPAL_ID,
+                },
+                {
+                  sourceId: TEST_CUSTODY_SOURCE_ID,
+                  externalId: "provider-adapter-exact-wins",
+                  timestamp: occurredAt,
+                  transactionType: "buy_fiat",
+                  principalId: TEST_PRINCIPAL_ID,
+                },
+                {
+                  sourceId: OTHER_SOURCE_ID,
+                  externalId: "provider-adapter-other-principal",
+                  timestamp: occurredAt,
+                  transactionType: "buy_fiat",
+                  principalId: OTHER_PRINCIPAL_ID,
+                },
+                {
+                  sourceId: TEST_CUSTODY_SOURCE_ID,
+                  externalId: "provider-adapter-contradiction",
+                  timestamp: occurredAt,
+                  transactionType: "buy_fiat",
+                  principalId: TEST_PRINCIPAL_ID,
+                },
+              ])
+              .returning({ id: schema.transactions.id })
+            const [
+              selectedTransaction,
+              duplicateTransaction,
+              exactTransaction,
+              otherTransaction,
+              contradictoryTransaction,
+            ] = transactions
+            if (
+              selectedTransaction === undefined ||
+              duplicateTransaction === undefined ||
+              exactTransaction === undefined ||
+              otherTransaction === undefined ||
+              contradictoryTransaction === undefined
+            ) {
+              return yield* Effect.die("Failed to create provider adapter facts")
+            }
+
+            yield* db.insert(schema.transactionLegs).values([
+              {
+                sourceId: TEST_CUSTODY_SOURCE_ID,
+                externalId: "provider-adapter-selected-row-leg",
+                timestamp: occurredAt,
+                principalId: TEST_PRINCIPAL_ID,
+                assetId: TEST_BTC_ASSET_ID,
+                amount: "1",
+                kind: "acquisition",
+                provenance: "deterministic",
+                metadata: { providerAssetRowId: PROVIDER_ASSET_ROW_ID },
+                transactionId: selectedTransaction.id,
+              },
+              {
+                sourceId: TEST_CUSTODY_SOURCE_ID,
+                externalId: "provider-adapter-duplicate-row-leg",
+                timestamp: occurredAt,
+                principalId: TEST_PRINCIPAL_ID,
+                assetId: TEST_BTC_ASSET_ID,
+                amount: "1",
+                kind: "acquisition",
+                provenance: "deterministic",
+                metadata: { providerAssetRowId: DUPLICATE_PROVIDER_ASSET_ROW_ID },
+                transactionId: duplicateTransaction.id,
+              },
+              {
+                sourceId: TEST_CUSTODY_SOURCE_ID,
+                externalId: "provider-adapter-exact-wins-leg",
+                timestamp: occurredAt,
+                principalId: TEST_PRINCIPAL_ID,
+                assetId: TEST_BTC_ASSET_ID,
+                amount: "1",
+                kind: "acquisition",
+                provenance: "deterministic",
+                metadata: { providerAssetRowId: PROVIDER_ASSET_ROW_ID },
+                transactionId: exactTransaction.id,
+              },
+              {
+                sourceId: OTHER_SOURCE_ID,
+                externalId: "provider-adapter-other-principal-leg",
+                timestamp: occurredAt,
+                principalId: OTHER_PRINCIPAL_ID,
+                assetId: TEST_BTC_ASSET_ID,
+                amount: "1",
+                kind: "acquisition",
+                provenance: "deterministic",
+                metadata: { providerAssetRowId: PROVIDER_ASSET_ROW_ID },
+                transactionId: otherTransaction.id,
+              },
+              {
+                sourceId: TEST_CUSTODY_SOURCE_ID,
+                externalId: "provider-adapter-contradiction-selected-leg",
+                timestamp: occurredAt,
+                principalId: TEST_PRINCIPAL_ID,
+                assetId: TEST_BTC_ASSET_ID,
+                amount: "1",
+                kind: "acquisition",
+                provenance: "deterministic",
+                metadata: { providerAssetRowId: PROVIDER_ASSET_ROW_ID },
+                transactionId: contradictoryTransaction.id,
+              },
+              {
+                sourceId: TEST_CUSTODY_SOURCE_ID,
+                externalId: "provider-adapter-contradiction-system-leg",
+                timestamp: occurredAt,
+                principalId: TEST_PRINCIPAL_ID,
+                assetId: TEST_BTC_ASSET_ID,
+                amount: "1",
+                kind: "acquisition",
+                provenance: "deterministic",
+                metadata: { providerAssetRowId: DUPLICATE_PROVIDER_ASSET_ROW_ID },
+                transactionId: contradictoryTransaction.id,
+              },
+            ])
+            yield* db.insert(schema.providerTransfers).values({
+              sourceId: TEST_CUSTODY_SOURCE_ID,
+              transactionId: exactTransaction.id,
+              externalId: "provider-adapter-exact-observation",
+              providerAssetId: PROVIDER_ASSET_ROW_ID,
+              timestamp: occurredAt,
+              direction: "inbound",
+              processingMode: "evidence_only",
+              fromAccountRef: "external",
+              toAccountRef: "owned",
+              observedBlockchainId: representation.blockchainId,
+              observedRepresentationType: "native",
+              amount: "1",
+            })
+
+            return { targetId: target.id, overrideId: override.id }
+          })
+        )
+      )
+
+      const principalLedger = yield* Effect.promise(loadFactualLedger)
+      const otherLedger = yield* Effect.promise(() =>
+        runRepository(
+          Effect.flatMap(FactualLedgerRepository, (repository) =>
+            repository.load({
+              principalId: OTHER_PRINCIPAL_ID,
+              reportingCurrency: CurrencyCode.make("EUR"),
+            })
+          )
+        )
+      )
+
+      expect(
+        Object.fromEntries(
+          principalLedger.events.map((event) => [event.transactionReference, event.assetId])
+        )
+      ).toEqual({
+        "provider-adapter-selected-row": OVERRIDE_ASSET_ID,
+        "provider-adapter-duplicate-row": TEST_BTC_ASSET_ID,
+        "provider-adapter-exact-wins": TEST_BTC_ASSET_ID,
+      })
+      expect(otherLedger.events[0]?.assetId).toBe(TEST_BTC_ASSET_ID)
+      expect(principalLedger.principalAssetOverrideRevision).toEqual([
+        expect.objectContaining({
+          target: expect.objectContaining({
+            _tag: "provider_asset",
+            providerAssetRowId: PROVIDER_ASSET_ROW_ID,
+          }),
+          kind: "identity",
+          overrideId: activeOverride.overrideId,
+          operation: "create",
+        }),
+      ])
+
+      const inclusionOverrideId = yield* Effect.promise(() =>
+        runPg(
+          Effect.gen(function* () {
+            const db = yield* drizzle
+            const [override] = yield* db
+              .insert(schema.principalAssetOverrides)
+              .values({
+                principalId: TEST_PRINCIPAL_ID,
+                targetId: activeOverride.targetId,
+                kind: "inclusion",
+                operation: "create",
+                inspectedSystemRevision: "provider-adapter-inclusion-v1",
+                inspectedSystemInclusion: "included",
+                replacementInclusion: "excluded",
+                actorUserId: TEST_USER_ID,
+                reason: "Exclude this chainless provider row",
+              })
+              .returning({ id: schema.principalAssetOverrides.id })
+            if (override === undefined) {
+              return yield* Effect.die("Failed to create provider inclusion override")
+            }
+            return override.id
+          })
+        )
+      )
+      const excludedLedger = yield* Effect.promise(loadFactualLedger)
+      expect(
+        Object.fromEntries(
+          excludedLedger.events.map((event) => [event.transactionReference, event.assetId])
+        )
+      ).toEqual({
+        "provider-adapter-contradiction": TEST_BTC_ASSET_ID,
+        "provider-adapter-duplicate-row": TEST_BTC_ASSET_ID,
+        "provider-adapter-exact-wins": TEST_BTC_ASSET_ID,
+      })
+
+      yield* Effect.promise(() =>
+        runPg(
+          Effect.gen(function* () {
+            const db = yield* drizzle
+            yield* db.insert(schema.principalAssetOverrides).values([
+              {
+                principalId: TEST_PRINCIPAL_ID,
+                targetId: activeOverride.targetId,
+                kind: "inclusion" as const,
+                operation: "withdraw" as const,
+                inspectedSystemRevision: "provider-adapter-inclusion-v1",
+                inspectedSystemInclusion: "included" as const,
+                actorUserId: TEST_USER_ID,
+                reason: "Return this provider row to system inclusion",
+                supersedesOverrideId: inclusionOverrideId,
+              },
+              {
+                principalId: TEST_PRINCIPAL_ID,
+                targetId: activeOverride.targetId,
+                kind: "identity" as const,
+                operation: "withdraw" as const,
+                inspectedSystemRevision: "provider-adapter-system-v1",
+                inspectedSystemIdentity: "resolved" as const,
+                inspectedSystemAssetId: TEST_BTC_ASSET_ID,
+                actorUserId: TEST_USER_ID,
+                reason: "Return provider facts to the system identity",
+                supersedesOverrideId: activeOverride.overrideId,
+              },
+            ])
+          })
+        )
+      )
+
+      const withdrawnLedger = yield* Effect.promise(loadFactualLedger)
+      expect(withdrawnLedger.events.every(({ assetId }) => assetId === TEST_BTC_ASSET_ID)).toBe(
+        true
+      )
+      expect(withdrawnLedger.events).toHaveLength(5)
+      expect(withdrawnLedger.principalAssetOverrideRevision[0]).toEqual(
+        expect.objectContaining({ operation: "withdraw" })
+      )
+
+      const mappings = yield* Effect.promise(() =>
+        runPg(
+          Effect.gen(function* () {
+            const db = yield* drizzle
+            return yield* db
+              .select({
+                providerAssetRowId: schema.providerAssetMappings.providerAssetRowId,
+                canonicalAssetId: schema.providerAssetMappings.canonicalAssetId,
+              })
+              .from(schema.providerAssetMappings)
+          })
+        )
+      )
+      expect(mappings).toEqual(
+        expect.arrayContaining([
+          { providerAssetRowId: PROVIDER_ASSET_ROW_ID, canonicalAssetId: TEST_BTC_ASSET_ID },
+          {
+            providerAssetRowId: DUPLICATE_PROVIDER_ASSET_ROW_ID,
+            canonicalAssetId: TEST_BTC_ASSET_ID,
+          },
+        ])
+      )
+    })
+  )
+
+  it.effect("uses the current provider identity conclusion over its mapping", () =>
+    Effect.gen(function* () {
+      yield* Effect.promise(() =>
+        runPg(
+          Effect.gen(function* () {
+            yield* seedOverrideAsset
+            yield* seedProviderBoundaryAsset({
+              providerAssetRowId: CONCLUDED_PROVIDER_ASSET_ROW_ID,
+              providerAssetId: "current-conclusion",
+              canonicalAssetId: TEST_BTC_ASSET_ID,
+              currentConclusion: { outcome: "attach", assetId: OVERRIDE_ASSET_ID },
+            })
+            yield* seedProviderBoundaryTransaction({
+              externalId: "provider-boundary-current-conclusion",
+              legs: [
+                {
+                  externalId: "provider-boundary-current-conclusion-leg",
+                  assetId: TEST_BTC_ASSET_ID,
+                  kind: "acquisition",
+                  providerAssetRowId: CONCLUDED_PROVIDER_ASSET_ROW_ID,
+                },
+              ],
+            })
+          })
+        )
+      )
+
+      const ledger = yield* Effect.promise(loadFactualLedger)
+      expect(ledger.events.map(({ assetId }) => assetId)).toEqual([OVERRIDE_ASSET_ID])
+    })
+  )
+
+  it.effect("does not reverse an excluded provider conclusion before T12", () =>
+    Effect.gen(function* () {
+      yield* Effect.promise(() =>
+        runPg(
+          Effect.gen(function* () {
+            yield* seedProviderBoundaryAsset({
+              providerAssetRowId: EXCLUDED_PROVIDER_ASSET_ROW_ID,
+              providerAssetId: "current-exclusion",
+              canonicalAssetId: TEST_BTC_ASSET_ID,
+              currentConclusion: { outcome: "excluded" },
+            })
+            yield* createProviderOverride({
+              providerAssetRowId: EXCLUDED_PROVIDER_ASSET_ROW_ID,
+              kind: "inclusion",
+              replacementInclusion: "included",
+            })
+            yield* seedProviderBoundaryTransaction({
+              externalId: "provider-boundary-current-exclusion",
+              legs: [
+                {
+                  externalId: "provider-boundary-current-exclusion-leg",
+                  assetId: TEST_BTC_ASSET_ID,
+                  kind: "acquisition",
+                  providerAssetRowId: EXCLUDED_PROVIDER_ASSET_ROW_ID,
+                },
+              ],
+            })
+            yield* seedProviderBoundaryTransaction({
+              externalId: "provider-boundary-exact-current-exclusion",
+              legs: [
+                {
+                  externalId: "provider-boundary-exact-current-exclusion-leg",
+                  assetId: TEST_BTC_ASSET_ID,
+                  assetRepresentationId: TEST_BTC_REPRESENTATION_ID,
+                  kind: "acquisition",
+                  providerAssetRowId: EXCLUDED_PROVIDER_ASSET_ROW_ID,
+                },
+              ],
+            })
+          })
+        )
+      )
+
+      const ledger = yield* Effect.promise(loadFactualLedger)
+      expect(ledger.events).toEqual([])
+    })
+  )
+
+  it.effect("omits only the provider leg targeted by an inclusion override", () =>
+    Effect.gen(function* () {
+      yield* Effect.promise(() =>
+        runPg(
+          Effect.gen(function* () {
+            yield* seedProviderBoundaryAsset({
+              providerAssetRowId: MIXED_PROVIDER_ASSET_ROW_ID,
+              providerAssetId: "mixed-excluded",
+              canonicalAssetId: TEST_BTC_ASSET_ID,
+            })
+            yield* seedProviderBoundaryAsset({
+              providerAssetRowId: MIXED_OTHER_PROVIDER_ASSET_ROW_ID,
+              providerAssetId: "mixed-kept",
+              canonicalAssetId: TEST_BTC_ASSET_ID,
+            })
+            yield* createProviderOverride({
+              providerAssetRowId: MIXED_PROVIDER_ASSET_ROW_ID,
+              kind: "inclusion",
+              replacementInclusion: "excluded",
+            })
+            yield* seedProviderBoundaryTransaction({
+              externalId: "provider-boundary-mixed-exclusion",
+              legs: [
+                {
+                  externalId: "provider-boundary-mixed-excluded-leg",
+                  assetId: TEST_BTC_ASSET_ID,
+                  kind: "fee",
+                  providerAssetRowId: MIXED_PROVIDER_ASSET_ROW_ID,
+                },
+                {
+                  externalId: "provider-boundary-mixed-kept-leg",
+                  assetId: TEST_BTC_ASSET_ID,
+                  kind: "acquisition",
+                  providerAssetRowId: MIXED_OTHER_PROVIDER_ASSET_ROW_ID,
+                },
+              ],
+            })
+          })
+        )
+      )
+
+      const ledger = yield* Effect.promise(loadFactualLedger)
+      expect(ledger.events).toHaveLength(1)
+      expect(ledger.events[0]?._tag).toBe("acquisition")
+      expect(ledger.events[0]?.assetId).toBe(TEST_BTC_ASSET_ID)
+    })
+  )
+
+  it.effect("withholds exact and provider legs with contradictory effective identities", () =>
+    Effect.gen(function* () {
+      yield* Effect.promise(() =>
+        runPg(
+          Effect.gen(function* () {
+            yield* seedOverrideAsset
+            yield* seedProviderBoundaryAsset({
+              providerAssetRowId: MIXED_OTHER_PROVIDER_ASSET_ROW_ID,
+              providerAssetId: "exact-provider-conflict",
+              canonicalAssetId: TEST_BTC_ASSET_ID,
+            })
+            yield* createExactIdentityOverride
+            yield* seedProviderBoundaryTransaction({
+              externalId: "provider-boundary-exact-provider-contradiction",
+              legs: [
+                {
+                  externalId: "provider-boundary-exact-conflict-leg",
+                  assetId: OVERRIDE_ASSET_ID,
+                  assetRepresentationId: TEST_BTC_REPRESENTATION_ID,
+                  kind: "acquisition",
+                },
+                {
+                  externalId: "provider-boundary-provider-conflict-leg",
+                  assetId: TEST_BTC_ASSET_ID,
+                  kind: "acquisition",
+                  providerAssetRowId: MIXED_OTHER_PROVIDER_ASSET_ROW_ID,
+                },
+              ],
+            })
+          })
+        )
+      )
+
+      const ledger = yield* Effect.promise(loadFactualLedger)
+      expect(ledger.events).toEqual([])
+    })
+  )
+
+  it.effect("groups provider conflicts by the current system identity", () =>
+    Effect.gen(function* () {
+      yield* Effect.promise(() =>
+        runPg(
+          Effect.gen(function* () {
+            yield* seedOverrideAsset
+            yield* seedProviderBoundaryAsset({
+              providerAssetRowId: CONVERGED_PROVIDER_ASSET_ROW_ID,
+              providerAssetId: "converged-stale-row",
+              canonicalAssetId: TEST_BTC_ASSET_ID,
+              currentConclusion: { outcome: "attach", assetId: OVERRIDE_ASSET_ID },
+            })
+            yield* seedProviderBoundaryAsset({
+              providerAssetRowId: CONVERGED_OTHER_PROVIDER_ASSET_ROW_ID,
+              providerAssetId: "converged-current-row",
+              canonicalAssetId: OVERRIDE_ASSET_ID,
+            })
+            yield* createProviderOverride({
+              providerAssetRowId: CONVERGED_PROVIDER_ASSET_ROW_ID,
+              kind: "identity",
+              inspectedSystemAssetId: OVERRIDE_ASSET_ID,
+              replacementAssetId: TEST_BTC_ASSET_ID,
+            })
+            yield* seedProviderBoundaryTransaction({
+              externalId: "provider-boundary-converged-conflict",
+              legs: [
+                {
+                  externalId: "provider-boundary-converged-stale-leg",
+                  assetId: TEST_BTC_ASSET_ID,
+                  kind: "acquisition",
+                  providerAssetRowId: CONVERGED_PROVIDER_ASSET_ROW_ID,
+                },
+                {
+                  externalId: "provider-boundary-converged-current-leg",
+                  assetId: OVERRIDE_ASSET_ID,
+                  kind: "acquisition",
+                  providerAssetRowId: CONVERGED_OTHER_PROVIDER_ASSET_ROW_ID,
+                },
+              ],
+            })
+          })
+        )
+      )
+
+      const ledger = yield* Effect.promise(loadFactualLedger)
+      expect(ledger.events).toEqual([])
     })
   )
 
@@ -1578,6 +2382,117 @@ describe("FactualLedgerRepositoryLive", () => {
         _tag: "market_quote",
         eventId: "10000000-0000-4000-8000-000000000015",
       })
+    })
+  )
+
+  it.effect("withholds globally excluded custody movements without leaking their legs", () =>
+    Effect.gen(function* () {
+      const providerTimestamp = DateTime.toDateUtc(DateTime.makeUnsafe("2025-03-05T10:00:00.000Z"))
+      const canonicalTimestamp = DateTime.toDateUtc(DateTime.makeUnsafe("2025-03-05T10:02:00.000Z"))
+
+      yield* Effect.promise(() =>
+        runPg(
+          Effect.gen(function* () {
+            const db = yield* drizzle
+            yield* seedCexSource({
+              sourceId: TEST_DESTINATION_SOURCE_ID,
+              fixtureName: "Excluded reconciliation destination",
+            })
+            yield* seedProviderBoundaryAsset({
+              providerAssetRowId: EXCLUDED_PROVIDER_ASSET_ROW_ID,
+              providerAssetId: "excluded-reconciliation",
+              canonicalAssetId: TEST_BTC_ASSET_ID,
+              currentConclusion: { outcome: "excluded" },
+            })
+            yield* seedProviderBoundaryAsset({
+              providerAssetRowId: MIXED_OTHER_PROVIDER_ASSET_ROW_ID,
+              providerAssetId: "included-reconciliation",
+              canonicalAssetId: TEST_BTC_ASSET_ID,
+            })
+            const excluded = yield* seedCustodyReconciliation({
+              reconciliationId: "10000000-0000-4000-8000-000000000030",
+              fixtureName: "excluded-custody",
+              providerSourceId: TEST_CUSTODY_SOURCE_ID,
+              canonicalSourceId: TEST_DESTINATION_SOURCE_ID,
+              providerAssetRowId: EXCLUDED_PROVIDER_ASSET_ROW_ID,
+              providerTimestamp,
+              canonicalTimestamp,
+              direction: "outbound",
+              amount: "0.75",
+              reconciliationStatus: "matched",
+              status: "approved",
+              deterministic: false,
+            })
+            yield* seedCustodyReconciliation({
+              reconciliationId: "10000000-0000-4000-8000-000000000031",
+              fixtureName: "included-custody",
+              providerSourceId: TEST_CUSTODY_SOURCE_ID,
+              canonicalSourceId: TEST_DESTINATION_SOURCE_ID,
+              providerAssetRowId: MIXED_OTHER_PROVIDER_ASSET_ROW_ID,
+              providerTimestamp,
+              canonicalTimestamp,
+              direction: "outbound",
+              amount: "0.5",
+              reconciliationStatus: "matched",
+              status: "auto_applied",
+              deterministic: true,
+            })
+            yield* db.insert(schema.transactionLegs).values([
+              {
+                sourceId: TEST_CUSTODY_SOURCE_ID,
+                externalId: "excluded-custody-provider-leg",
+                timestamp: providerTimestamp,
+                principalId: TEST_PRINCIPAL_ID,
+                assetId: TEST_BTC_ASSET_ID,
+                amount: "0.75",
+                kind: "disposal",
+                provenance: "deterministic",
+                transactionId: excluded.providerTransactionId,
+              },
+              {
+                sourceId: TEST_DESTINATION_SOURCE_ID,
+                externalId: "excluded-custody-canonical-leg",
+                timestamp: canonicalTimestamp,
+                principalId: TEST_PRINCIPAL_ID,
+                assetId: TEST_BTC_ASSET_ID,
+                amount: "0.75",
+                kind: "acquisition",
+                provenance: "deterministic",
+                transactionId: excluded.canonicalTransactionId,
+                sourceTransferId: excluded.canonicalTransferId,
+              },
+              {
+                sourceId: TEST_CUSTODY_SOURCE_ID,
+                externalId: "excluded-custody-synthetic-out",
+                timestamp: providerTimestamp,
+                principalId: TEST_PRINCIPAL_ID,
+                assetId: TEST_BTC_ASSET_ID,
+                amount: "0.75",
+                kind: "disposal",
+                provenance: "deterministic",
+                derivationRule: "internal_transfer_out",
+                transactionId: excluded.providerTransactionId,
+              },
+              {
+                sourceId: TEST_DESTINATION_SOURCE_ID,
+                externalId: "excluded-custody-synthetic-in",
+                timestamp: canonicalTimestamp,
+                principalId: TEST_PRINCIPAL_ID,
+                assetId: TEST_BTC_ASSET_ID,
+                amount: "0.75",
+                kind: "acquisition",
+                provenance: "deterministic",
+                derivationRule: "internal_transfer_in",
+                transactionId: excluded.canonicalTransactionId,
+              },
+            ])
+          })
+        )
+      )
+
+      const result = yield* Effect.promise(loadFactualLedger)
+      expect(result.events.map(({ id }) => id)).toEqual(["10000000-0000-4000-8000-000000000031"])
+      expect(result.events[0]?._tag).toBe("custody_movement")
     })
   )
 })

@@ -27,21 +27,40 @@ export interface CustodyUnitMembership {
 /**
  * Canonical identity-override stream leaf read while adapting factual rows.
  *
- * Tuple order is part of the calculation input revision contract:
- * target ID, blockchain, representation type, contract, mint, override record ID,
- * operation, superseded record ID, and selected economic asset.
+ * The tagged target keeps exact representations and chainless provider assets distinct.
+ * Every leaf includes its stream kind, record ID, operation, supersession link, and
+ * replacement so the calculation input commits to the decision snapshot it read.
  */
-export type PrincipalAssetOverrideRevisionRecord = readonly [
-  targetId: string,
-  blockchainId: string,
-  representationType: "native" | "token" | "nft",
-  contractAddress: string | null,
-  mintAddress: string | null,
-  overrideId: string,
-  operation: "create" | "replace" | "withdraw",
-  supersedesOverrideId: string | null,
-  replacementAssetId: string | null,
-]
+export type PrincipalAssetOverrideRevisionRecord =
+  | {
+      readonly target: {
+        readonly _tag: "representation"
+        readonly targetId: string
+        readonly blockchainId: string
+        readonly representationType: "native" | "token" | "nft"
+        readonly contractAddress: string | null
+        readonly mintAddress: string | null
+      }
+      readonly kind: "identity"
+      readonly overrideId: string
+      readonly operation: "create" | "replace" | "withdraw"
+      readonly supersedesOverrideId: string | null
+      readonly replacementAssetId: string | null
+      readonly replacementInclusion: null
+    }
+  | {
+      readonly target: {
+        readonly _tag: "provider_asset"
+        readonly targetId: string
+        readonly providerAssetRowId: string
+      }
+      readonly kind: "identity" | "inclusion"
+      readonly overrideId: string
+      readonly operation: "create" | "replace" | "withdraw"
+      readonly supersedesOverrideId: string | null
+      readonly replacementAssetId: string | null
+      readonly replacementInclusion: "included" | "excluded" | null
+    }
 
 /** Stored accounting facts ready for the pure tax-accounting engine. */
 export interface FactualLedger {
