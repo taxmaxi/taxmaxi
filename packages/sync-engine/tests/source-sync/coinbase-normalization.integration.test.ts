@@ -1,11 +1,14 @@
 import * as DateTime from "effect/DateTime"
-import { and, eq } from "drizzle-orm"
+import { and, eq, inArray } from "drizzle-orm"
 import * as BigDecimal from "effect/BigDecimal"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import * as Option from "effect/Option"
+import * as Schema from "effect/Schema"
 import { beforeEach, describe, expect, it } from "@effect/vitest"
 import { SourceSyncServiceLive, TransferReconciliationServiceLive } from "@my/sync-engine/layers"
+import { AuthUserId } from "@my/core/authentication"
+import { PrincipalId } from "@my/core/ownership"
 import { SourceSyncJobExecutorLive } from "../../src/layers/SourceSyncJobExecutorLive.ts"
 import { SourceProviderRegistryLive } from "../../src/layers/SourceProviderRegistryLive.ts"
 import { HeliusSolanaSourceSyncProviderLive } from "../../src/providers/helius-solana/layers/HeliusSolanaSourceSyncProviderLive.ts"
@@ -27,6 +30,7 @@ import { ProviderAssetRepositoryLive } from "../../../persistence/src/layers/Pro
 import { ProviderReferenceRepositoryLive } from "../../../persistence/src/layers/ProviderReferenceRepositoryLive.ts"
 import { RepositoriesLive } from "../../../persistence/src/layers/RepositoriesLive.ts"
 import { drizzle } from "../../../persistence/src/layers/PgClientLive.ts"
+import { PrincipalAssetOverrideRepository } from "../../../persistence/src/services/PrincipalAssetOverrideRepository.ts"
 import { schema } from "../../../persistence/src/schema/index.ts"
 import {
   makeIntegrationTestDatabaseContext,
@@ -44,6 +48,11 @@ const recreateTestDatabase = context.recreateTestDatabase
 const BTC_ASSET_ID = "00000000-0000-0000-0000-000000000541"
 const BTC_BASE_REPRESENTATION_ID = "00000000-0000-0000-0000-000000000543"
 const DOT_ASSET_ID = "00000000-0000-0000-0000-000000000542"
+const PROVIDER_OVERRIDE_ASSET_ID = "00000000-0000-4000-8000-000000000544"
+
+const ProviderAssetLegMetadata = Schema.Struct({
+  providerAssetRowId: Schema.String.check(Schema.isUUID()),
+})
 
 const expectDecimalAmount = (actual: string, expected: string) => {
   const actualDecimal = BigDecimal.fromString(actual)
@@ -408,8 +417,8 @@ const TestLayer = SourceSyncLayer.pipe(
   Layer.provideMerge(TestPgClientLive)
 )
 
-const userId = "00000000-0000-0000-0000-000000000101"
-const principalId = "00000000-0000-0000-0000-000000000102"
+const userId = "00000000-0000-4000-8000-000000000101"
+const principalId = "00000000-0000-4000-8000-000000000102"
 const sourceId = "00000000-0000-0000-0000-000000000201"
 const seedCoinbaseSource = () =>
   Effect.gen(function* () {
@@ -488,6 +497,162 @@ const replaySource = () =>
       jobId: summary.jobId,
     })
   }).pipe(Effect.provide(TestLayer))
+
+const prepareLegacyProviderOverrideReplay = () =>
+  Effect.gen(function* () {
+    const db = yield* drizzle
+    yield* db.insert(schema.assets).values({
+      id: PROVIDER_OVERRIDE_ASSET_ID,
+      name: "Principal Coinbase selection",
+      symbol: "CB-SELECTED",
+      type: "fungible",
+    })
+    const [providerAsset] = yield* db
+      .select({
+        id: schema.providerAssets.id,
+        rawProviderPayload: schema.providerAssets.rawProviderPayload,
+      })
+      .from(schema.providerAssets)
+      .where(
+        and(
+          eq(schema.providerAssets.provider, "coinbase"),
+          eq(schema.providerAssets.providerAssetId, "btc-provider-asset")
+        )
+      )
+      .limit(1)
+    if (providerAsset === undefined) {
+      return yield* Effect.die("Missing Coinbase BTC provider asset")
+    }
+    const [mapping] = yield* db
+      .select({
+        canonicalAssetId: schema.providerAssetMappings.canonicalAssetId,
+        assetRepresentationId: schema.providerAssetMappings.assetRepresentationId,
+        mappingStatus: schema.providerAssetMappings.mappingStatus,
+      })
+      .from(schema.providerAssetMappings)
+      .where(eq(schema.providerAssetMappings.providerAssetRowId, providerAsset.id))
+      .limit(1)
+    const [historicalMainLeg] = yield* db
+      .select({ id: schema.transactionLegs.id })
+      .from(schema.transactionLegs)
+      .where(eq(schema.transactionLegs.externalId, "tx-buy-1:main"))
+      .limit(1)
+    if (historicalMainLeg === undefined) {
+      return yield* Effect.die("Missing historical Coinbase main leg")
+    }
+    yield* db
+      .update(schema.transactionLegs)
+      .set({ metadata: { legacyWithoutProviderAssetRowId: true } })
+      .where(
+        inArray(schema.transactionLegs.externalId, [
+          "tx-buy-1:main",
+          "tx-send-1:network_fee:fee_leg",
+        ])
+      )
+    return { providerAsset, mapping, historicalMainLeg }
+  }).pipe(Effect.provide(TestPgClientLive))
+
+const createProviderIdentityOverride = ({
+  providerAssetRowId,
+}: {
+  readonly providerAssetRowId: string
+}) =>
+  Effect.gen(function* () {
+    const repository = yield* PrincipalAssetOverrideRepository
+    const target = {
+      _tag: "provider_asset" as const,
+      providerAssetRowId,
+    }
+    const projection = Option.getOrThrow(
+      yield* repository.findProjection({
+        principalId: PrincipalId.make(principalId),
+        target,
+      })
+    )
+    return Option.getOrThrow(
+      yield* repository.create({
+        actorUserId: AuthUserId.make(userId),
+        expectedSystemRevision: projection.system.identityRevision,
+        principalId: PrincipalId.make(principalId),
+        reason: "Use the selected economic asset for chainless Coinbase BTC rows",
+        replacement: { _tag: "identity", assetId: PROVIDER_OVERRIDE_ASSET_ID },
+        target,
+      })
+    )
+  }).pipe(Effect.provide(TestLayer))
+
+const loadProviderOverrideApplicationSources = (overrideId: string) =>
+  Effect.gen(function* () {
+    const db = yield* drizzle
+    return yield* db
+      .select({ sourceId: schema.principalAssetOverrideApplications.sourceId })
+      .from(schema.principalAssetOverrideApplications)
+      .where(eq(schema.principalAssetOverrideApplications.overrideId, overrideId))
+  }).pipe(Effect.provide(TestPgClientLive))
+
+const loadProviderOverrideLegs = () =>
+  Effect.gen(function* () {
+    const db = yield* drizzle
+    return yield* db
+      .select({
+        id: schema.transactionLegs.id,
+        externalId: schema.transactionLegs.externalId,
+        assetId: schema.transactionLegs.assetId,
+        metadata: schema.transactionLegs.metadata,
+      })
+      .from(schema.transactionLegs)
+      .where(eq(schema.transactionLegs.sourceId, sourceId))
+  }).pipe(Effect.provide(TestPgClientLive))
+
+const useFutureProviderOverrideSyncRecord = () => {
+  remoteReferenceCatalogAvailable = true
+  activeSyncRecords = [
+    defaultSyncRecords[0],
+    makeCoinbaseRecord({
+      externalRecordId: "tx-buy-after-provider-override",
+      occurredAt: DateTime.toDateUtc(DateTime.makeUnsafe("2025-06-01T10:00:00.000Z")),
+      payload: {
+        id: "tx-buy-after-provider-override",
+        type: "buy",
+        status: "completed",
+        amount: { amount: "0.25000000", currency: "BTC" },
+        native_amount: { amount: "2500.00", currency: "EUR" },
+        created_at: "2025-06-01T10:00:00.000Z",
+        resource_path:
+          "/v2/accounts/coinbase-account-1/transactions/tx-buy-after-provider-override",
+      },
+    }),
+    ...defaultSyncRecords.slice(1),
+  ]
+}
+
+const loadFutureProviderOverrideState = (providerAssetRowId: string) =>
+  Effect.gen(function* () {
+    const db = yield* drizzle
+    const [futureLeg] = yield* db
+      .select({
+        assetId: schema.transactionLegs.assetId,
+        metadata: schema.transactionLegs.metadata,
+      })
+      .from(schema.transactionLegs)
+      .where(eq(schema.transactionLegs.externalId, "tx-buy-after-provider-override:main"))
+      .limit(1)
+    const [providerAsset] = yield* db
+      .select({ rawProviderPayload: schema.providerAssets.rawProviderPayload })
+      .from(schema.providerAssets)
+      .where(eq(schema.providerAssets.id, providerAssetRowId))
+      .limit(1)
+    const [mapping] = yield* db
+      .select({
+        canonicalAssetId: schema.providerAssetMappings.canonicalAssetId,
+        assetRepresentationId: schema.providerAssetMappings.assetRepresentationId,
+        mappingStatus: schema.providerAssetMappings.mappingStatus,
+      })
+      .from(schema.providerAssetMappings)
+      .where(eq(schema.providerAssetMappings.providerAssetRowId, providerAssetRowId))
+      .limit(1)
+    return { futureLeg, providerAsset, mapping }
+  }).pipe(Effect.provide(TestPgClientLive))
 
 const fetchProviderTransferState = () =>
   Effect.gen(function* () {
@@ -935,16 +1100,17 @@ describe("coinbase normalization persistence", () => {
         expect(firstRun.rawRows.every((row) => row.normalizedAt !== null)).toBe(true)
         expect(firstRun.rawRows.every((row) => row.normalizationError === null)).toBe(true)
         expect(firstRun.transactionCount).toBe(4)
-        expect(firstRun.transactions.map((row) => row.transactionType).sort()).toEqual([
-          "buy_fiat",
-          "internal_transfer",
-          "sell_fiat",
-          "staking_reward",
-        ])
+        expect(
+          firstRun.transactions
+            .map((row) => row.transactionType)
+            .sort((left, right) => (left ?? "").localeCompare(right ?? ""))
+        ).toEqual(["buy_fiat", "internal_transfer", "sell_fiat", "staking_reward"])
         expect(firstRun.venueContextCount).toBe(4)
-        expect(firstRun.transfers.map((row) => row.externalId).sort()).toEqual([
-          "tx-send-1:network_fee",
-        ])
+        expect(
+          firstRun.transfers
+            .map((row) => row.externalId)
+            .sort((left, right) => (left ?? "").localeCompare(right ?? ""))
+        ).toEqual(["tx-send-1:network_fee"])
         expect(firstRun.legs).toHaveLength(4)
         expect(firstRun.transactionReviews).toEqual([
           expect.objectContaining({
@@ -967,6 +1133,171 @@ describe("coinbase normalization persistence", () => {
         expect(secondRun.legs).toHaveLength(firstRun.legs.length)
       })
     )
+  )
+
+  it.effect("carries the exact Coinbase provider asset row into main and fee legs", () =>
+    Effect.gen(function* () {
+      yield* runSync()
+
+      const state = yield* Effect.gen(function* () {
+        const db = yield* drizzle
+        const [btcProviderAsset] = yield* db
+          .select({ id: schema.providerAssets.id })
+          .from(schema.providerAssets)
+          .where(
+            and(
+              eq(schema.providerAssets.provider, "coinbase"),
+              eq(schema.providerAssets.providerAssetId, "btc-provider-asset")
+            )
+          )
+          .limit(1)
+        if (btcProviderAsset === undefined) {
+          return yield* Effect.die("Missing Coinbase BTC provider asset")
+        }
+
+        const legs = yield* db
+          .select({
+            externalId: schema.transactionLegs.externalId,
+            sourceTransferId: schema.transactionLegs.sourceTransferId,
+            metadata: schema.transactionLegs.metadata,
+          })
+          .from(schema.transactionLegs)
+          .where(eq(schema.transactionLegs.sourceId, sourceId))
+
+        return { btcProviderAsset, legs }
+      }).pipe(Effect.provide(TestPgClientLive))
+
+      const mainLeg = state.legs.find((leg) => leg.externalId === "tx-buy-1:main")
+      const feeLeg = state.legs.find((leg) => leg.externalId === "tx-send-1:network_fee:fee_leg")
+      const mainLegMetadata = yield* Schema.decodeUnknownEffect(ProviderAssetLegMetadata)(
+        mainLeg?.metadata
+      )
+      const feeLegMetadata = yield* Schema.decodeUnknownEffect(ProviderAssetLegMetadata)(
+        feeLeg?.metadata
+      )
+      expect(mainLeg?.sourceTransferId).toBeNull()
+      expect(feeLeg?.sourceTransferId).not.toBeNull()
+      expect(mainLegMetadata).toEqual({
+        providerAssetRowId: state.btcProviderAsset.id,
+      })
+      expect(feeLegMetadata).toEqual({
+        providerAssetRowId: state.btcProviderAsset.id,
+      })
+    })
+  )
+
+  it.effect("keeps the selected provider row when duplicate Coinbase currencies exist", () =>
+    Effect.gen(function* () {
+      yield* runSync()
+      const duplicateProviderAssetRowId = "00000000-0000-4000-8000-000000000545"
+      const farFuture = DateTime.toDateUtc(DateTime.makeUnsafe("2099-01-01T00:00:00.000Z"))
+      yield* Effect.gen(function* () {
+        const db = yield* drizzle
+        yield* db.insert(schema.providerAssets).values({
+          id: duplicateProviderAssetRowId,
+          provider: "coinbase",
+          providerAssetId: "btc-duplicate-provider-asset",
+          currencyCode: "BTC",
+          name: "Bitcoin duplicate observation",
+          exponent: 8,
+          providerType: "crypto",
+          rawProviderPayload: { row: "duplicate-btc" },
+          retrievedAt: farFuture,
+        })
+        yield* db.insert(schema.providerAssetMappings).values({
+          providerAssetRowId: duplicateProviderAssetRowId,
+          mappingKind: "asset",
+          canonicalAssetId: DOT_ASSET_ID,
+          mappingStatus: "approved",
+        })
+      }).pipe(Effect.provide(TestPgClientLive))
+
+      activeSyncRecords = [
+        defaultSyncRecords[0],
+        makeCoinbaseRecord({
+          externalRecordId: "tx-buy-duplicate-btc-row",
+          occurredAt: DateTime.toDateUtc(DateTime.makeUnsafe("2025-06-02T10:00:00.000Z")),
+          payload: {
+            id: "tx-buy-duplicate-btc-row",
+            type: "buy",
+            status: "completed",
+            amount: { amount: "0.50000000", currency: "BTC" },
+            native_amount: { amount: "5000.00", currency: "EUR" },
+            created_at: "2025-06-02T10:00:00.000Z",
+            resource_path: "/v2/accounts/coinbase-account-1/transactions/tx-buy-duplicate-btc-row",
+          },
+        }),
+        ...defaultSyncRecords.slice(1),
+      ]
+      yield* runSync()
+
+      const [leg] = yield* Effect.gen(function* () {
+        const db = yield* drizzle
+        return yield* db
+          .select({
+            assetId: schema.transactionLegs.assetId,
+            metadata: schema.transactionLegs.metadata,
+          })
+          .from(schema.transactionLegs)
+          .where(eq(schema.transactionLegs.externalId, "tx-buy-duplicate-btc-row:main"))
+          .limit(1)
+      }).pipe(Effect.provide(TestPgClientLive))
+      const metadata = yield* Schema.decodeUnknownEffect(ProviderAssetLegMetadata)(leg?.metadata)
+
+      expect(leg?.assetId).toBe(DOT_ASSET_ID)
+      expect(metadata.providerAssetRowId).toBe(duplicateProviderAssetRowId)
+    })
+  )
+
+  it.effect(
+    "replays historical Coinbase legs and applies the provider override to later rows",
+    () =>
+      Effect.gen(function* () {
+        yield* runSync()
+        const before = yield* prepareLegacyProviderOverrideReplay()
+        const created = yield* createProviderIdentityOverride({
+          providerAssetRowId: before.providerAsset.id,
+        })
+        const overrideId = created.activeIdentityOverride?.id
+        if (overrideId === undefined) {
+          return yield* Effect.die("Created provider identity override has no active record")
+        }
+
+        expect(created.recomputation.status).toBe("updating")
+        expect(yield* loadProviderOverrideApplicationSources(overrideId)).toEqual([{ sourceId }])
+
+        remoteReferenceCatalogAvailable = false
+        const replay = yield* replaySource()
+        const replayed = yield* loadProviderOverrideLegs()
+        const historicalMainLeg = replayed.find(({ externalId }) => externalId === "tx-buy-1:main")
+        const historicalFeeLeg = replayed.find(
+          ({ externalId }) => externalId === "tx-send-1:network_fee:fee_leg"
+        )
+
+        expect(replay.status).toBe("completed")
+        expect(historicalMainLeg).toMatchObject({
+          assetId: PROVIDER_OVERRIDE_ASSET_ID,
+          metadata: expect.objectContaining({ providerAssetRowId: before.providerAsset.id }),
+        })
+        expect(historicalMainLeg?.id).not.toBe(before.historicalMainLeg.id)
+        expect(historicalFeeLeg).toMatchObject({
+          assetId: PROVIDER_OVERRIDE_ASSET_ID,
+          metadata: expect.objectContaining({ providerAssetRowId: before.providerAsset.id }),
+        })
+
+        useFutureProviderOverrideSyncRecord()
+        yield* runSync()
+        const after = yield* loadFutureProviderOverrideState(before.providerAsset.id)
+
+        expect(after.futureLeg).toMatchObject({
+          assetId: PROVIDER_OVERRIDE_ASSET_ID,
+          metadata: expect.objectContaining({ providerAssetRowId: before.providerAsset.id }),
+        })
+        expect(after.providerAsset?.rawProviderPayload).toEqual(
+          before.providerAsset.rawProviderPayload
+        )
+        expect(after.mapping).toEqual(before.mapping)
+      })
   )
 
   it.effect("does not mark approved fiat primary currency mappings as unresolved assets", () =>
