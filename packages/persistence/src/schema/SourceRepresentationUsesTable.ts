@@ -48,6 +48,7 @@ export const sourceRepresentationUses = pgTable(
     uniqueIndex("source_representation_uses_mint_unique_idx")
       .on(table.sourceId, table.blockchainId, table.representationType, table.mintAddress)
       .where(sql`${table.mintAddress} is not null`),
+    uniqueIndex("source_representation_uses_id_source_unique_idx").on(table.id, table.sourceId),
     index("idx_source_representation_uses_source").on(table.sourceId),
   ]
 )

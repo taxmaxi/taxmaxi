@@ -16,7 +16,9 @@ import { addresses } from "./AddressesTable.ts"
 import { assetRepresentations } from "./AssetRepresentationsTable.ts"
 import { assets } from "./AssetsTable.ts"
 import { principals } from "./PrincipalsTable.ts"
+import { providerAssets } from "./ProviderAssetsTable.ts"
 import { sourceRecordsRaw } from "./SourceRecordsRawTable.ts"
+import { sourceRepresentationUses } from "./SourceRepresentationUsesTable.ts"
 import { sources } from "./SourcesTable.ts"
 import { transactions } from "./TransactionsTable.ts"
 import { transfers } from "./TransfersTable.ts"
@@ -86,6 +88,10 @@ export const transactionLegs = pgTable(
       .notNull()
       .references(() => assets.id),
     assetRepresentationId: uuid("asset_representation_id"),
+    sourceRepresentationUseId: uuid("source_representation_use_id"),
+    providerAssetRowId: uuid("provider_asset_row_id").references(() => providerAssets.id, {
+      onDelete: "set null",
+    }),
     amount: numeric("amount", { precision: 355, scale: 255 }).notNull(), // Exact asset quantity in canonical asset units.
 
     // Accounting classification
@@ -126,6 +132,11 @@ export const transactionLegs = pgTable(
       foreignColumns: [assetRepresentations.id],
       name: "transaction_legs_asset_representation_fk",
     }),
+    foreignKey({
+      columns: [table.sourceRepresentationUseId, table.sourceId],
+      foreignColumns: [sourceRepresentationUses.id, sourceRepresentationUses.sourceId],
+      name: "transaction_legs_representation_use_source_fk",
+    }),
     check(
       "transaction_legs_identifier_present",
       sql`${table.txHash} is not null or ${table.externalId} is not null`
@@ -165,6 +176,10 @@ export const transactionLegs = pgTable(
 
     // Query legs by asset (for factual-ledger calculation input)
     index("idx_transaction_legs_asset").on(table.assetId),
+
+    index("idx_transaction_legs_representation_use").on(table.sourceRepresentationUseId),
+
+    index("idx_transaction_legs_provider_asset_row").on(table.providerAssetRowId),
 
     // Query legs by kind for factual-ledger calculation input
     index("idx_transaction_legs_kind").on(table.kind),

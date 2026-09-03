@@ -17,7 +17,9 @@ import { assetRepresentations } from "./AssetRepresentationsTable.ts"
 import { assets } from "./AssetsTable.ts"
 import { blockchains } from "./BlockchainsTable.ts"
 import { principals } from "./PrincipalsTable.ts"
+import { providerAssets } from "./ProviderAssetsTable.ts"
 import { sourceRecordsRaw } from "./SourceRecordsRawTable.ts"
+import { sourceRepresentationUses } from "./SourceRepresentationUsesTable.ts"
 import { sources } from "./SourcesTable.ts"
 
 export const transferTypeEnum = pgEnum("transfer_type", [
@@ -85,6 +87,10 @@ export const transfers = pgTable(
       .notNull()
       .references(() => assets.id),
     assetRepresentationId: uuid("asset_representation_id"),
+    sourceRepresentationUseId: uuid("source_representation_use_id"),
+    providerAssetRowId: uuid("provider_asset_row_id").references(() => providerAssets.id, {
+      onDelete: "set null",
+    }),
     amount: numeric("amount", { precision: 355, scale: 255 }).notNull(), // Provider-native decimal amount.
     tokenId: text("token_id"), // Optional NFT/inscription-like identifier.
 
@@ -116,6 +122,11 @@ export const transfers = pgTable(
       foreignColumns: [assetRepresentations.id],
       name: "transfers_asset_representation_fk",
     }),
+    foreignKey({
+      columns: [table.sourceRepresentationUseId, table.sourceId],
+      foreignColumns: [sourceRepresentationUses.id, sourceRepresentationUses.sourceId],
+      name: "transfers_representation_use_source_fk",
+    }),
     uniqueIndex("idx_transfers_source_external_unique")
       .on(table.sourceId, table.externalId)
       .where(sql`${table.externalId} is not null`),
@@ -140,6 +151,8 @@ export const transfers = pgTable(
     index("idx_transfers_external_group").on(table.sourceId, table.externalGroupId),
     index("idx_transfers_source_type").on(table.sourceId, table.type),
     index("idx_transfers_blockchain_tx_hash").on(table.blockchainId, table.txHash),
+    index("idx_transfers_representation_use").on(table.sourceRepresentationUseId),
+    index("idx_transfers_provider_asset_row").on(table.providerAssetRowId),
   ]
 )
 
