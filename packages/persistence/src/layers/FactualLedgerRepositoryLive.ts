@@ -216,17 +216,15 @@ const exactFactDecision = ({
   readonly providerDecision: PrincipalProviderAssetDecision | undefined
   readonly storedAssetId: string | null
 }): FactDecisionOutcome => {
+  if (providerDecision?.systemInclusion === "excluded") return { _tag: "excluded" }
+
   const systemAssetId = exactDecision.systemAssetId
-  const systemInclusion =
-    exactDecision.systemInclusion === "excluded" || providerDecision?.systemInclusion === "excluded"
-      ? "excluded"
-      : "included"
   const decision = decidePrincipalAssetOverride({
     systemIdentity:
       systemAssetId === null
         ? { _tag: "unresolved" }
         : { _tag: "resolved", assetId: systemAssetId },
-    systemInclusion,
+    systemInclusion: exactDecision.systemInclusion,
     identityReplacement:
       exactDecision.identityReplacementAssetId === null
         ? null
@@ -713,12 +711,14 @@ const make = Effect.gen(function* () {
   const loadProviderInputDecisions = ({
     custodyUnitIdBySource,
     decisions,
+    handledProviderTransferIds,
     inputBlockerByKey,
     principalId,
     withheldTransactionIds,
   }: Pick<LoadParams, "principalId"> & {
     readonly custodyUnitIdBySource: ReadonlyMap<string, CustodyUnitId>
     readonly decisions: PrincipalAssetOverrideDecisions
+    readonly handledProviderTransferIds: ReadonlySet<string>
     readonly inputBlockerByKey: Map<string, FactualLedgerInputBlocker>
     readonly withheldTransactionIds: Set<string>
   }) =>
@@ -776,10 +776,11 @@ const make = Effect.gen(function* () {
         .pipe(wrapSqlError("factualLedgerRepository.load.providerInputs"))
 
       for (const row of rows) {
+        if (handledProviderTransferIds.has(row.id)) continue
+
         const isFinalizedReconciliation =
           row.reconciliationStatus === "approved" ||
           (row.reconciliationStatus === "auto_applied" && row.reconciliationDeterministic)
-        if (isFinalizedReconciliation) continue
 
         const outcome = selectFactDecision({
           decisions,
@@ -792,16 +793,18 @@ const make = Effect.gen(function* () {
           withheldTransactionIds.add(row.transactionId)
           continue
         }
-        if (outcome._tag === "ignored") continue
+        if (outcome._tag === "ignored" && !isFinalizedReconciliation) continue
 
         const assetReviewIsOpen =
           row.needsReview === true && reviewIncludesAssetLayer(row.matchedLayer)
         const blockedOutcome =
           outcome._tag === "blocked" || outcome._tag === "malformed"
             ? outcome
-            : assetReviewIsOpen
-              ? ({ _tag: "malformed", assetId: outcome.assetId } as const)
-              : undefined
+            : outcome._tag === "ignored"
+              ? ({ _tag: "malformed", assetId: null } as const)
+              : assetReviewIsOpen || isFinalizedReconciliation
+                ? ({ _tag: "malformed", assetId: outcome.assetId } as const)
+                : undefined
         if (blockedOutcome === undefined) continue
 
         const blockerError = recordOutcomeBlockers({
@@ -1000,6 +1003,7 @@ const make = Effect.gen(function* () {
       }> = []
       const reconciledCanonicalTransferIds = new Set<string>()
       const reconciledProviderTransactionIds = new Set<string>()
+      const handledProviderTransferIds = new Set<string>()
       const seenCanonicalTransferIds = new Set<string>()
       const pairs: Array<{
         readonly canonicalTransactionId: string | null
@@ -1014,6 +1018,7 @@ const make = Effect.gen(function* () {
           })
         }
         seenCanonicalTransferIds.add(row.canonicalTransferId)
+        handledProviderTransferIds.add(row.providerTransferId)
         reconciledCanonicalTransferIds.add(row.canonicalTransferId)
         reconciledProviderTransactionIds.add(row.providerTransactionId)
         pairs.push({
@@ -1167,6 +1172,7 @@ const make = Effect.gen(function* () {
 
       return {
         eventRows,
+        handledProviderTransferIds,
         pairs,
         reconciledCanonicalTransferIds,
         reconciledProviderTransactionIds,
@@ -1426,16 +1432,17 @@ const make = Effect.gen(function* () {
       )
       const inputBlockerByKey = new Map<string, FactualLedgerInputBlocker>()
       const withheldTransactionIds = new Set<string>()
-      yield* loadProviderInputDecisions({
+      const custodyMovementEvents = yield* loadCustodyMovementEvents({
         custodyUnitIdBySource,
         decisions,
         inputBlockerByKey,
         principalId,
         withheldTransactionIds,
       })
-      const custodyMovementEvents = yield* loadCustodyMovementEvents({
+      yield* loadProviderInputDecisions({
         custodyUnitIdBySource,
         decisions,
+        handledProviderTransferIds: custodyMovementEvents.handledProviderTransferIds,
         inputBlockerByKey,
         principalId,
         withheldTransactionIds,

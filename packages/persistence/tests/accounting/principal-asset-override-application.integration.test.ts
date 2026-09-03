@@ -841,7 +841,7 @@ describe("principal asset override application", () => {
     })
   )
 
-  it.effect("lets an exact inclusion decision reverse the catalog spam policy", () =>
+  it.effect("lets exact inclusion reverse representation spam but not global exclusion", () =>
     Effect.gen(function* () {
       yield* Effect.promise(() =>
         runPg(
@@ -922,6 +922,24 @@ describe("principal asset override application", () => {
 
       const ledger = yield* Effect.promise(loadLedger)
       expect(ledger.events.map(({ id }) => id)).toEqual(["10000000-0000-4000-8000-000000000106"])
+
+      yield* Effect.promise(() =>
+        runPg(
+          Effect.gen(function* () {
+            yield* seedProviderAsset({
+              id: INCLUDED_PROVIDER_ASSET_ID,
+              mappingStatus: "excluded",
+            })
+            const db = yield* drizzle
+            yield* db
+              .update(schema.transactionLegs)
+              .set({ providerAssetRowId: INCLUDED_PROVIDER_ASSET_ID })
+              .where(eq(schema.transactionLegs.id, "10000000-0000-4000-8000-000000000106"))
+          })
+        )
+      )
+
+      expect((yield* Effect.promise(loadLedger)).events).toEqual([])
     })
   )
 
@@ -1192,6 +1210,64 @@ describe("principal asset override application", () => {
             code: "unresolved_identity",
             assetId: null,
             providerAssetRowId: UNRESOLVED_PROVIDER_ASSET_ID,
+          }),
+        ])
+      )
+    })
+  )
+
+  it.effect("preflights a finalized reconciliation that lacks a canonical transfer", () =>
+    Effect.gen(function* () {
+      const providerTransferId = yield* Effect.promise(() =>
+        runPg(
+          Effect.gen(function* () {
+            yield* seedProviderAsset({ id: BLOCKED_PROVIDER_ASSET_ID, exponent: null })
+            const db = yield* drizzle
+            const [representation] = yield* db
+              .select({ blockchainId: schema.assetRepresentations.blockchainId })
+              .from(schema.assetRepresentations)
+              .where(eq(schema.assetRepresentations.id, TEST_BTC_REPRESENTATION_ID))
+            if (representation === undefined) return yield* Effect.die("Missing blockchain")
+            const [sourceUse] = yield* db
+              .insert(schema.sourceRepresentationUses)
+              .values({
+                sourceId: SOURCE_ID,
+                blockchainId: representation.blockchainId,
+                representationType: "token",
+                contractAddress: "0x3333333333333333333333333333333333333333",
+              })
+              .returning({ id: schema.sourceRepresentationUses.id })
+            if (sourceUse === undefined) return yield* Effect.die("Failed to create source use")
+            const fact = yield* seedProviderTransaction({
+              externalId: "incomplete-finalized-reconciliation",
+              providerAssetRowId: BLOCKED_PROVIDER_ASSET_ID,
+              sourceRepresentationUseId: sourceUse.id,
+            })
+            yield* db.insert(schema.transferReconciliations).values({
+              principalId: PRINCIPAL_ID,
+              providerTransferId: fact.providerTransferId,
+              canonicalTransactionId: fact.transactionId,
+              status: "approved",
+              matchReason: "Incomplete approved fixture",
+            })
+            return fact.providerTransferId
+          })
+        )
+      )
+
+      const ledger = yield* Effect.promise(loadLedger)
+      expect(ledger.events).toEqual([])
+      expect(ledger.inputBlockers).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            code: "missing_decimals",
+            eventId: providerTransferId,
+            providerAssetRowId: BLOCKED_PROVIDER_ASSET_ID,
+          }),
+          expect.objectContaining({
+            code: "unresolved_identity",
+            eventId: providerTransferId,
+            providerAssetRowId: BLOCKED_PROVIDER_ASSET_ID,
           }),
         ])
       )
