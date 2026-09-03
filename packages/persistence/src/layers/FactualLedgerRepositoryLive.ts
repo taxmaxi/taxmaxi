@@ -510,13 +510,7 @@ const make = Effect.gen(function* () {
             providerTransactionId: row.feeTransactionId,
           })
         }
-        if (
-          isReconciledEconomicLeg(row) ||
-          row.derivationRule === "internal_transfer_in" ||
-          row.derivationRule === "internal_transfer_out"
-        ) {
-          continue
-        }
+        if (isReconciledEconomicLeg(row)) continue
         const outcome = selectFactDecision({
           decisions,
           providerAssetRowId: row.providerAssetRowId,

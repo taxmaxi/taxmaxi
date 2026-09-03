@@ -704,6 +704,71 @@ describe("principal asset override application", () => {
     })
   )
 
+  it.effect("preflights a suppressed internal-transfer leg before its sibling", () =>
+    Effect.gen(function* () {
+      const internalLegId = "10000000-0000-4000-8000-000000000118"
+      yield* Effect.promise(() =>
+        runPg(
+          Effect.gen(function* () {
+            yield* seedProviderAsset({ id: BLOCKED_PROVIDER_ASSET_ID, exponent: null })
+            const db = yield* drizzle
+            const occurredAt = DateTime.toDateUtc(DateTime.makeUnsafe("2025-02-10T11:10:00.000Z"))
+            const [transaction] = yield* db
+              .insert(schema.transactions)
+              .values({
+                sourceId: SOURCE_ID,
+                externalId: "blocked-internal-transfer-transaction",
+                timestamp: occurredAt,
+                transactionType: "internal_transfer",
+                principalId: PRINCIPAL_ID,
+              })
+              .returning({ id: schema.transactions.id })
+            if (transaction === undefined) return yield* Effect.die("Failed to create transaction")
+            yield* db.insert(schema.transactionLegs).values([
+              {
+                id: internalLegId,
+                sourceId: SOURCE_ID,
+                externalId: "blocked-internal-transfer-leg",
+                timestamp: occurredAt,
+                principalId: PRINCIPAL_ID,
+                assetId: TEST_BTC_ASSET_ID,
+                providerAssetRowId: BLOCKED_PROVIDER_ASSET_ID,
+                amount: "1",
+                kind: "acquisition" as const,
+                provenance: "deterministic" as const,
+                derivationRule: "internal_transfer_in" as const,
+                transactionId: transaction.id,
+              },
+              {
+                id: "10000000-0000-4000-8000-000000000119",
+                sourceId: SOURCE_ID,
+                externalId: "internal-transfer-sibling",
+                timestamp: occurredAt,
+                principalId: PRINCIPAL_ID,
+                assetId: TEST_BTC_ASSET_ID,
+                sourceRepresentationUseId: SOURCE_USE_ID,
+                amount: "1",
+                kind: "disposal" as const,
+                provenance: "deterministic" as const,
+                transactionId: transaction.id,
+              },
+            ])
+          })
+        )
+      )
+
+      const ledger = yield* Effect.promise(loadLedger)
+      expect(ledger.events).toEqual([])
+      expect(ledger.inputBlockers).toEqual([
+        expect.objectContaining({
+          code: "missing_decimals",
+          eventId: internalLegId,
+          providerAssetRowId: BLOCKED_PROVIDER_ASSET_ID,
+        }),
+      ])
+    })
+  )
+
   it.effect("withholds a fee transaction and the operation it paid for together", () =>
     Effect.gen(function* () {
       yield* Effect.promise(() =>
