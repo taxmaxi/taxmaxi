@@ -42,7 +42,9 @@ import {
 } from "./SyncEngineRepositorySupport.ts"
 import {
   makePrincipalAssetOverrideDecisionLoader,
+  type PrincipalAssetOverrideDecisions,
   resolvePrincipalAssetId,
+  resolveSystemAssetId,
 } from "./PrincipalAssetOverrideDecisionLoader.ts"
 
 interface PersistedSourceLegRecord {
@@ -1505,9 +1507,11 @@ const make = Effect.gen(function* () {
   }
 
   const persistFeeInventoryMovements = ({
+    decisions,
     executor,
     legs,
   }: {
+    readonly decisions: PrincipalAssetOverrideDecisions
     readonly executor: SourceNormalizationExecutor
     readonly legs: ReadonlyArray<PersistedSourceLegRecord>
   }) =>
@@ -1549,7 +1553,11 @@ const make = Effect.gen(function* () {
               transactionId: leg.transactionId,
               providerTransferId: null,
               transactionLegId: leg.id,
-              assetId: leg.assetId,
+              assetId: resolveSystemAssetId({
+                decisions,
+                assetId: leg.assetId,
+                assetRepresentationId: leg.assetRepresentationId,
+              }),
               assetRepresentationId: leg.assetRepresentationId,
               timestamp: leg.timestamp,
               direction: "outbound",
@@ -1636,6 +1644,26 @@ const make = Effect.gen(function* () {
                 ),
             { concurrency: 1, discard: true }
           )
+
+          // The write changes no value, but advances the tuple version. A concurrent override
+          // mutation with an older SERIALIZABLE snapshot must then use its existing retry path.
+          const [ownedPrincipal] = yield* tx
+            .update(schema.principals)
+            .set({ updatedAt: sql`${schema.principals.updatedAt}` })
+            .where(eq(schema.principals.id, params.transaction.principalId))
+            .returning({ id: schema.principals.id })
+            .pipe(
+              wrapSyncEngineSqlError(
+                "sourceNormalizationRepository.persistNormalizedArtifacts.lockPrincipal"
+              )
+            )
+
+          if (ownedPrincipal === undefined) {
+            return yield* toSyncEngineStorageError({
+              operation: "sourceNormalizationRepository.persistNormalizedArtifacts.lockPrincipal",
+              error: `Principal ${params.transaction.principalId} no longer exists`,
+            })
+          }
 
           const [ownedSource] = yield* tx
             .select({ id: schema.sources.id })
@@ -1731,48 +1759,32 @@ const make = Effect.gen(function* () {
             executor: tx,
             canonicalTransfers,
           })
+          const systemCanonicalTransfers = persistedCanonicalTransfers.map((transfer) => ({
+            ...transfer,
+            assetId: resolveSystemAssetId({
+              decisions,
+              assetId: transfer.assetId,
+              assetRepresentationId: transfer.assetRepresentationId,
+            }),
+          }))
           const derivedLegs =
             "deriveLegs" in params
               ? yield* params.deriveLegs({
                   transaction: persistedTransaction,
                   venueContext: persistedVenueContext,
                   providerTransfers: persistedProviderTransfers,
-                  canonicalTransfers: persistedCanonicalTransfers,
+                  canonicalTransfers: systemCanonicalTransfers,
                 })
               : params.legs
-          const missingDerivedRepresentationIds = [
-            ...new Set(
-              derivedLegs.flatMap(({ assetRepresentationId }) =>
-                assetRepresentationId === null ||
-                assetRepresentationId === undefined ||
-                decisions.assetIdByRepresentationId.has(assetRepresentationId)
+          const completeDecisions =
+            yield* principalAssetOverrideDecisionLoader.includeSystemRepresentations({
+              decisions,
+              assetRepresentationIds: derivedLegs.flatMap(({ assetRepresentationId }) =>
+                assetRepresentationId === null || assetRepresentationId === undefined
                   ? []
                   : [assetRepresentationId]
-              )
-            ),
-          ]
-          const additionalCatalogPairs =
-            missingDerivedRepresentationIds.length === 0
-              ? []
-              : yield* tx
-                  .select({
-                    id: schema.assetRepresentations.id,
-                    assetId: schema.assetRepresentations.assetId,
-                  })
-                  .from(schema.assetRepresentations)
-                  .where(inArray(schema.assetRepresentations.id, missingDerivedRepresentationIds))
-                  .pipe(
-                    wrapSyncEngineSqlError(
-                      "sourceNormalizationRepository.persistNormalizedArtifacts.loadDerivedLegRepresentations"
-                    )
-                  )
-          const completeDecisions = {
-            ...decisions,
-            assetIdByRepresentationId: new Map([
-              ...decisions.assetIdByRepresentationId,
-              ...additionalCatalogPairs.map(({ id, assetId }) => [id, assetId] as const),
-            ]),
-          }
+              ),
+            })
           const effectiveLegs = derivedLegs.map((leg) => ({
             ...leg,
             assetId: resolvePrincipalAssetId({
@@ -1812,6 +1824,7 @@ const make = Effect.gen(function* () {
               feesOnly: hasFailedStatus,
             })
             yield* persistFeeInventoryMovements({
+              decisions: completeDecisions,
               executor: tx,
               legs: persistedLegs,
             })

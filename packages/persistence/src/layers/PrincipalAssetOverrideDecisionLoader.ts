@@ -31,6 +31,7 @@ interface ExactTargetRow {
 /** Effective representation decisions plus the exact override snapshot that produced them. */
 export interface PrincipalAssetOverrideDecisions {
   readonly assetIdByRepresentationId: ReadonlyMap<string, string>
+  readonly systemAssetIdByRepresentationId: ReadonlyMap<string, string>
   readonly revision: ReadonlyArray<PrincipalAssetOverrideRevisionRecord>
 }
 
@@ -47,6 +48,20 @@ export const resolvePrincipalAssetId = ({
   assetRepresentationId === null || assetRepresentationId === undefined
     ? systemAssetId
     : (decisions.assetIdByRepresentationId.get(assetRepresentationId) ?? systemAssetId)
+
+/** Restore the catalog economic asset for a stored representation. */
+export const resolveSystemAssetId = ({
+  decisions,
+  assetId,
+  assetRepresentationId,
+}: {
+  readonly decisions: PrincipalAssetOverrideDecisions
+  readonly assetId: string
+  readonly assetRepresentationId: string | null | undefined
+}): string =>
+  assetRepresentationId === null || assetRepresentationId === undefined
+    ? assetId
+    : (decisions.systemAssetIdByRepresentationId.get(assetRepresentationId) ?? assetId)
 
 const targetKey = ({
   blockchainId,
@@ -193,6 +208,11 @@ export const makePrincipalAssetOverrideDecisionLoader = Effect.gen(function* () 
           return [representation.id, selectedAssetId ?? representation.assetId] as const
         })
       )
+      const systemAssetIdByRepresentationId = new Map(
+        representations.map(
+          (representation) => [representation.id, representation.assetId] as const
+        )
+      )
       const revision = leaves.map(
         (leaf): PrincipalAssetOverrideRevisionRecord => [
           leaf.targetId,
@@ -207,8 +227,50 @@ export const makePrincipalAssetOverrideDecisionLoader = Effect.gen(function* () 
         ]
       )
 
-      return { assetIdByRepresentationId, revision }
+      return { assetIdByRepresentationId, systemAssetIdByRepresentationId, revision }
     })
 
-  return { load }
+  const includeSystemRepresentations = ({
+    decisions,
+    assetRepresentationIds,
+  }: {
+    readonly decisions: PrincipalAssetOverrideDecisions
+    readonly assetRepresentationIds: ReadonlyArray<string>
+  }): Effect.Effect<PrincipalAssetOverrideDecisions, PersistenceError> =>
+    Effect.gen(function* () {
+      const missingIds = [
+        ...new Set(
+          assetRepresentationIds.filter(
+            (assetRepresentationId) =>
+              !decisions.systemAssetIdByRepresentationId.has(assetRepresentationId)
+          )
+        ),
+      ]
+      if (missingIds.length === 0) return decisions
+
+      const representations = yield* db
+        .select({
+          id: schema.assetRepresentations.id,
+          assetId: schema.assetRepresentations.assetId,
+        })
+        .from(schema.assetRepresentations)
+        .where(inArray(schema.assetRepresentations.id, missingIds))
+        .orderBy(asc(schema.assetRepresentations.id))
+        .pipe(wrapSqlError("principalAssetOverrideDecisionLoader.includeSystemRepresentations"))
+      const catalogPairs = representations.map(({ id, assetId }) => [id, assetId] as const)
+
+      return {
+        ...decisions,
+        assetIdByRepresentationId: new Map([
+          ...decisions.assetIdByRepresentationId,
+          ...catalogPairs,
+        ]),
+        systemAssetIdByRepresentationId: new Map([
+          ...decisions.systemAssetIdByRepresentationId,
+          ...catalogPairs,
+        ]),
+      }
+    })
+
+  return { includeSystemRepresentations, load }
 })

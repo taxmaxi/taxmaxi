@@ -71,6 +71,7 @@ const ONCHAIN_ADDRESS_ID = "00000000-0000-0000-0000-000000000701"
 const ONCHAIN_SOURCE_ID = "00000000-0000-0000-0000-000000000702"
 const SECOND_ONCHAIN_ADDRESS_ID = "00000000-0000-0000-0000-000000000703"
 const SECOND_ONCHAIN_SOURCE_ID = "00000000-0000-0000-0000-000000000704"
+const OVERRIDE_ASSET_ID = "00000000-0000-4000-8000-000000000705"
 
 await Effect.runPromise(context.recreateTestDatabase())
 
@@ -1105,6 +1106,211 @@ describe("TransferReconciliationServiceLive", () => {
         transactionId: legacyReviewTransactionId,
         categorizationReason: "Keep asset review.",
         matchedLayer: "asset_resolution",
+      })
+    })
+  )
+
+  it.effect("reconciles an exact representation using the principal's active asset", () =>
+    Effect.gen(function* () {
+      const walletAddress = "bc1qoverridewallet0000000000000000000000000"
+      const timestamp = DateTime.toDateUtc(DateTime.makeUnsafe("2025-04-11T10:00:00.000Z"))
+      const providerAssetRowId = yield* Effect.promise(() => runPg(seedApprovedProviderAsset({})))
+      yield* Effect.promise(() => runPg(seedOwnedOnchainSource({ walletAddress })))
+      const providerTransferId = yield* Effect.promise(() =>
+        runPg(
+          seedProviderTransfer({
+            providerAssetRowId,
+            externalId: "provider-transfer-exact-override",
+            timestamp,
+            amount: "0.10000000",
+            toAddress: walletAddress,
+            networkHash: "btc-exact-override-hash",
+          })
+        )
+      )
+      yield* Effect.promise(() =>
+        runPg(seedCustodyMovement({ amount: "0.10000000", providerTransferId, timestamp }))
+      )
+      yield* Effect.promise(() =>
+        runPg(
+          Effect.gen(function* () {
+            const db = yield* drizzle
+            yield* db.insert(schema.assets).values({
+              id: OVERRIDE_ASSET_ID,
+              name: "Principal-selected Bitcoin",
+              symbol: "BTC-SELECTED",
+              type: "fungible",
+            })
+          })
+        )
+      )
+      const receiptTimestamp = DateTime.toDateUtc(DateTime.makeUnsafe("2025-04-11T10:05:00.000Z"))
+      const receipt = yield* Effect.promise(() =>
+        runPg(
+          seedOnchainReceipt({
+            externalId: "onchain-receipt-exact-override",
+            txHash: "btc-exact-override-hash",
+            timestamp: receiptTimestamp,
+            amount: "0.10000000",
+            walletAddress,
+            blockchainId: fixture.bitcoinBlockchainId,
+            assetId: OVERRIDE_ASSET_ID,
+          })
+        )
+      )
+      yield* Effect.promise(() =>
+        runPg(
+          Effect.gen(function* () {
+            const db = yield* drizzle
+            const [representation] = yield* db
+              .select({
+                blockchainId: schema.assetRepresentations.blockchainId,
+                representationType: schema.assetRepresentations.type,
+                contractAddress: schema.assetRepresentations.contractAddress,
+                mintAddress: schema.assetRepresentations.mintAddress,
+              })
+              .from(schema.assetRepresentations)
+              .where(eq(schema.assetRepresentations.id, TEST_BTC_REPRESENTATION_ID))
+            if (representation === undefined) {
+              return yield* Effect.die("Missing Bitcoin representation")
+            }
+            const [target] = yield* db
+              .insert(schema.principalAssetOverrideTargets)
+              .values({
+                principalId: TEST_PRINCIPAL_ID,
+                targetKind: "representation",
+                ...representation,
+              })
+              .returning({ id: schema.principalAssetOverrideTargets.id })
+            if (target === undefined) return yield* Effect.die("Failed to create override target")
+            yield* db.insert(schema.principalAssetOverrides).values({
+              principalId: TEST_PRINCIPAL_ID,
+              targetId: target.id,
+              kind: "identity",
+              operation: "create",
+              inspectedSystemRevision: "reconciliation-exact-override-v1",
+              inspectedSystemIdentity: "resolved",
+              inspectedSystemAssetId: TEST_BTC_ASSET_ID,
+              replacementAssetId: OVERRIDE_ASSET_ID,
+              actorUserId: fixture.userId,
+              reason: "Use the selected asset during reconciliation",
+            })
+          })
+        )
+      )
+
+      const summary = yield* Effect.promise(() =>
+        runTransferReconciliation(
+          Effect.flatMap(TransferReconciliationService, (service) =>
+            service.reconcileTransferCandidates({
+              principalId: TEST_PRINCIPAL_ID,
+              sourceId: TEST_SOURCE_ID,
+            })
+          )
+        )
+      )
+      const [reconciliation] = yield* Effect.promise(() =>
+        runPg(
+          Effect.gen(function* () {
+            const db = yield* drizzle
+            return yield* db
+              .select({
+                canonicalTransferId: schema.transferReconciliations.canonicalTransferId,
+                status: schema.transferReconciliations.status,
+                matchReason: schema.transferReconciliations.matchReason,
+              })
+              .from(schema.transferReconciliations)
+              .where(eq(schema.transferReconciliations.providerTransferId, providerTransferId))
+          })
+        )
+      )
+
+      expect(summary).toMatchObject({ evaluatedProviderTransfers: 1, autoApplied: 1 })
+      expect(reconciliation).toEqual({
+        canonicalTransferId: receipt.transferId,
+        status: "auto_applied",
+        matchReason: "deterministic_wallet_receipt_match",
+      })
+    })
+  )
+
+  it.effect("keeps a real non-override economic asset conflict in review", () =>
+    Effect.gen(function* () {
+      const walletAddress = "bc1qconflictwallet000000000000000000000000"
+      const timestamp = DateTime.toDateUtc(DateTime.makeUnsafe("2025-04-12T10:00:00.000Z"))
+      const providerAssetRowId = yield* Effect.promise(() => runPg(seedApprovedProviderAsset({})))
+      yield* Effect.promise(() => runPg(seedOwnedOnchainSource({ walletAddress })))
+      const providerTransferId = yield* Effect.promise(() =>
+        runPg(
+          seedProviderTransfer({
+            providerAssetRowId,
+            externalId: "provider-transfer-real-asset-conflict",
+            timestamp,
+            amount: "0.10000000",
+            toAddress: walletAddress,
+            networkHash: "btc-real-asset-conflict-hash",
+          })
+        )
+      )
+      yield* Effect.promise(() =>
+        runPg(seedCustodyMovement({ amount: "0.10000000", providerTransferId, timestamp }))
+      )
+      yield* Effect.promise(() =>
+        runPg(
+          Effect.gen(function* () {
+            const db = yield* drizzle
+            yield* db.insert(schema.assets).values({
+              id: OVERRIDE_ASSET_ID,
+              name: "Conflicting Bitcoin asset",
+              symbol: "BTC-CONFLICT",
+              type: "fungible",
+            })
+          })
+        )
+      )
+      yield* Effect.promise(() =>
+        runPg(
+          seedOnchainReceipt({
+            externalId: "onchain-receipt-real-asset-conflict",
+            txHash: "btc-real-asset-conflict-hash",
+            timestamp: DateTime.toDateUtc(DateTime.makeUnsafe("2025-04-12T10:05:00.000Z")),
+            amount: "0.10000000",
+            walletAddress,
+            blockchainId: fixture.bitcoinBlockchainId,
+            assetId: OVERRIDE_ASSET_ID,
+          })
+        )
+      )
+
+      const summary = yield* Effect.promise(() =>
+        runTransferReconciliation(
+          Effect.flatMap(TransferReconciliationService, (service) =>
+            service.reconcileTransferCandidates({
+              principalId: TEST_PRINCIPAL_ID,
+              sourceId: TEST_SOURCE_ID,
+            })
+          )
+        )
+      )
+      const [reconciliation] = yield* Effect.promise(() =>
+        runPg(
+          Effect.gen(function* () {
+            const db = yield* drizzle
+            return yield* db
+              .select({
+                status: schema.transferReconciliations.status,
+                matchReason: schema.transferReconciliations.matchReason,
+              })
+              .from(schema.transferReconciliations)
+              .where(eq(schema.transferReconciliations.providerTransferId, providerTransferId))
+          })
+        )
+      )
+
+      expect(summary).toMatchObject({ evaluatedProviderTransfers: 1, needsReview: 1 })
+      expect(reconciliation).toEqual({
+        status: "needs_review",
+        matchReason: "representation_economic_asset_conflict",
       })
     })
   )
