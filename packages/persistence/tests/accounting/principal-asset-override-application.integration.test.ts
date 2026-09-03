@@ -356,6 +356,78 @@ describe("principal asset override application", () => {
     })
   )
 
+  it.effect("does not borrow provider identity for an exact-linked fact", () =>
+    Effect.gen(function* () {
+      const legId = "10000000-0000-4000-8000-000000000112"
+      yield* Effect.promise(() =>
+        runPg(
+          Effect.gen(function* () {
+            yield* seedProviderAsset({ id: INCLUDED_PROVIDER_ASSET_ID })
+            yield* createOverride({
+              kind: "identity",
+              providerAssetRowId: INCLUDED_PROVIDER_ASSET_ID,
+              replacementAssetId: REPLACEMENT_ASSET_ID,
+            })
+            const db = yield* drizzle
+            const occurredAt = DateTime.toDateUtc(DateTime.makeUnsafe("2025-02-10T10:30:00.000Z"))
+            const [representation] = yield* db
+              .select({ blockchainId: schema.assetRepresentations.blockchainId })
+              .from(schema.assetRepresentations)
+              .where(eq(schema.assetRepresentations.id, TEST_BTC_REPRESENTATION_ID))
+            if (representation === undefined) return yield* Effect.die("Missing blockchain")
+            const [sourceUse] = yield* db
+              .insert(schema.sourceRepresentationUses)
+              .values({
+                sourceId: SOURCE_ID,
+                blockchainId: representation.blockchainId,
+                representationType: "token",
+                contractAddress: "0x2222222222222222222222222222222222222222",
+              })
+              .returning({ id: schema.sourceRepresentationUses.id })
+            const [transaction] = yield* db
+              .insert(schema.transactions)
+              .values({
+                sourceId: SOURCE_ID,
+                externalId: "exact-with-provider-identity",
+                timestamp: occurredAt,
+                transactionType: "buy_fiat",
+                principalId: PRINCIPAL_ID,
+              })
+              .returning({ id: schema.transactions.id })
+            if (sourceUse === undefined || transaction === undefined) {
+              return yield* Effect.die("Failed to create exact-link fixture")
+            }
+            yield* db.insert(schema.transactionLegs).values({
+              id: legId,
+              sourceId: SOURCE_ID,
+              externalId: "exact-with-provider-identity-leg",
+              timestamp: occurredAt,
+              principalId: PRINCIPAL_ID,
+              assetId: TEST_BTC_ASSET_ID,
+              sourceRepresentationUseId: sourceUse.id,
+              providerAssetRowId: INCLUDED_PROVIDER_ASSET_ID,
+              amount: "1",
+              kind: "acquisition",
+              provenance: "deterministic",
+              transactionId: transaction.id,
+            })
+          })
+        )
+      )
+
+      const ledger = yield* Effect.promise(loadLedger)
+      expect(ledger.events).toEqual([])
+      expect(ledger.inputBlockers).toEqual([
+        expect.objectContaining({
+          code: "unresolved_identity",
+          eventId: legId,
+          assetId: TEST_BTC_ASSET_ID,
+          providerAssetRowId: INCLUDED_PROVIDER_ASSET_ID,
+        }),
+      ])
+    })
+  )
+
   it.effect("withholds the whole transaction when one recorded target is excluded", () =>
     Effect.gen(function* () {
       yield* Effect.promise(() =>
@@ -479,6 +551,68 @@ describe("principal asset override application", () => {
                 kind: "fee" as const,
                 provenance: "deterministic" as const,
                 transactionId: feeTransaction.id,
+                feeForTransactionId: operation.id,
+              },
+            ])
+          })
+        )
+      )
+
+      const ledger = yield* Effect.promise(loadLedger)
+      expect(ledger.events).toEqual([])
+      expect(ledger.inputBlockers).toEqual([])
+    })
+  )
+
+  it.effect("withholds a transactionless fee with its excluded operation", () =>
+    Effect.gen(function* () {
+      yield* Effect.promise(() =>
+        runPg(
+          Effect.gen(function* () {
+            yield* seedProviderAsset({ id: BLOCKED_PROVIDER_ASSET_ID })
+            yield* createOverride({
+              kind: "inclusion",
+              providerAssetRowId: BLOCKED_PROVIDER_ASSET_ID,
+              replacementInclusion: "excluded",
+            })
+            const db = yield* drizzle
+            const occurredAt = DateTime.toDateUtc(DateTime.makeUnsafe("2025-02-10T11:20:00.000Z"))
+            const [operation] = yield* db
+              .insert(schema.transactions)
+              .values({
+                sourceId: SOURCE_ID,
+                externalId: "transactionless-fee-operation",
+                timestamp: occurredAt,
+                transactionType: "buy_fiat",
+                principalId: PRINCIPAL_ID,
+              })
+              .returning({ id: schema.transactions.id })
+            if (operation === undefined) return yield* Effect.die("Failed to create operation")
+            yield* db.insert(schema.transactionLegs).values([
+              {
+                id: "10000000-0000-4000-8000-000000000113",
+                sourceId: SOURCE_ID,
+                externalId: "transactionless-fee-operation-leg",
+                timestamp: occurredAt,
+                principalId: PRINCIPAL_ID,
+                assetId: TEST_BTC_ASSET_ID,
+                providerAssetRowId: BLOCKED_PROVIDER_ASSET_ID,
+                amount: "1",
+                kind: "acquisition" as const,
+                provenance: "deterministic" as const,
+                transactionId: operation.id,
+              },
+              {
+                id: "10000000-0000-4000-8000-000000000114",
+                sourceId: SOURCE_ID,
+                externalId: "transactionless-fee-leg",
+                timestamp: occurredAt,
+                principalId: PRINCIPAL_ID,
+                assetId: TEST_BTC_ASSET_ID,
+                sourceRepresentationUseId: SOURCE_USE_ID,
+                amount: "0.01",
+                kind: "fee" as const,
+                provenance: "deterministic" as const,
                 feeForTransactionId: operation.id,
               },
             ])
@@ -846,6 +980,59 @@ describe("principal asset override application", () => {
           }),
         ])
       )
+    })
+  )
+
+  it.effect("returns a blocker for a review-only recorded provider use", () =>
+    Effect.gen(function* () {
+      const transactionId = yield* Effect.promise(() =>
+        runPg(
+          Effect.gen(function* () {
+            yield* seedProviderAsset({
+              id: UNRESOLVED_PROVIDER_ASSET_ID,
+              canonicalAssetId: null,
+            })
+            const db = yield* drizzle
+            const occurredAt = DateTime.toDateUtc(DateTime.makeUnsafe("2025-02-10T12:15:00.000Z"))
+            const [transaction] = yield* db
+              .insert(schema.transactions)
+              .values({
+                sourceId: SOURCE_ID,
+                externalId: "review-only-provider-use",
+                timestamp: occurredAt,
+                transactionType: "trade_other",
+                principalId: PRINCIPAL_ID,
+              })
+              .returning({ id: schema.transactions.id })
+            if (transaction === undefined) {
+              return yield* Effect.die("Failed to create review-only transaction")
+            }
+            yield* db.insert(schema.providerAssetTransactionUses).values({
+              providerAssetRowId: UNRESOLVED_PROVIDER_ASSET_ID,
+              transactionId: transaction.id,
+              sourceId: SOURCE_ID,
+            })
+            yield* db.insert(schema.transactionReviews).values({
+              principalId: PRINCIPAL_ID,
+              transactionId: transaction.id,
+              needsReview: true,
+              matchedLayer: "provider_asset_mapping",
+            })
+            return transaction.id
+          })
+        )
+      )
+
+      const ledger = yield* Effect.promise(loadLedger)
+      expect(ledger.events).toEqual([])
+      expect(ledger.inputBlockers).toEqual([
+        expect.objectContaining({
+          code: "unresolved_identity",
+          eventId: transactionId,
+          assetId: null,
+          providerAssetRowId: UNRESOLVED_PROVIDER_ASSET_ID,
+        }),
+      ])
     })
   )
 

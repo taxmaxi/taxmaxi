@@ -20,7 +20,7 @@ import {
 import { decidePrincipalAssetOverride, type PrincipalAssetEffectiveDecision } from "@my/core/assets"
 import { CURRENCIES_BY_CODE, type CurrencyCode } from "@my/core/currency"
 import { SourceId } from "@my/core/source"
-import { aliasedTable, and, asc, eq, inArray, or } from "drizzle-orm"
+import { aliasedTable, and, asc, eq, inArray, notExists, or } from "drizzle-orm"
 import * as BigDecimal from "effect/BigDecimal"
 import * as DateTime from "effect/DateTime"
 import * as Effect from "effect/Effect"
@@ -104,6 +104,11 @@ const decodeRequired = <S extends Schema.Constraint>({
 
 const decodeValuationDecimal = (value: string): BigDecimal.BigDecimal | undefined =>
   Option.getOrUndefined(BigDecimal.fromString(value))
+
+const isPositiveQuantity = (value: string): boolean => {
+  const quantity = decodeValuationDecimal(value)
+  return quantity !== undefined && BigDecimal.isPositive(quantity)
+}
 
 const validateReportingCurrency = (reportingCurrency: CurrencyCode) =>
   CURRENCIES_BY_CODE.has(reportingCurrency)
@@ -207,7 +212,7 @@ const exactFactDecision = ({
   readonly providerDecision: PrincipalProviderAssetDecision | undefined
   readonly storedAssetId: string | null
 }): FactDecisionOutcome => {
-  const systemAssetId = exactDecision.systemAssetId ?? providerDecision?.systemAssetId ?? null
+  const systemAssetId = exactDecision.systemAssetId
   const systemInclusion =
     exactDecision.systemInclusion === "excluded" || providerDecision?.systemInclusion === "excluded"
       ? "excluded"
@@ -539,6 +544,32 @@ const make = Effect.gen(function* () {
             sourceId: row.sourceId,
           })
           if (blockerError !== undefined) return yield* blockerError
+          if (!isPositiveQuantity(row.amount) && outcome._tag === "blocked") {
+            const quantityError = recordOutcomeBlockers({
+              blockers: inputBlockerByKey,
+              custodyUnitIdBySource,
+              eventId: row.id,
+              outcome: { _tag: "malformed", assetId: outcome.assetId },
+              providerAssetRowId: row.providerAssetRowId,
+              sourceId: row.sourceId,
+            })
+            if (quantityError !== undefined) return yield* quantityError
+          }
+          if (row.transactionId === null) withheldLegIds.add(row.id)
+          else withheldTransactionIds.add(row.transactionId)
+          if (row.feeTransactionId !== null) withheldTransactionIds.add(row.feeTransactionId)
+          continue
+        }
+        if (!isPositiveQuantity(row.amount)) {
+          const blockerError = recordOutcomeBlockers({
+            blockers: inputBlockerByKey,
+            custodyUnitIdBySource,
+            eventId: row.id,
+            outcome: { _tag: "malformed", assetId: outcome.assetId },
+            providerAssetRowId: row.providerAssetRowId,
+            sourceId: row.sourceId,
+          })
+          if (blockerError !== undefined) return yield* blockerError
           if (row.transactionId === null) withheldLegIds.add(row.id)
           else withheldTransactionIds.add(row.transactionId)
           if (row.feeTransactionId !== null) withheldTransactionIds.add(row.feeTransactionId)
@@ -597,6 +628,7 @@ const make = Effect.gen(function* () {
         if (
           withheldLegIds.has(row.id) ||
           (row.transactionId !== null && withheldTransactionIds.has(row.transactionId)) ||
+          (row.feeTransactionId !== null && withheldTransactionIds.has(row.feeTransactionId)) ||
           isReconciledEconomicLeg(row) ||
           row.derivationRule === "internal_transfer_in" ||
           row.derivationRule === "internal_transfer_out"
@@ -767,6 +799,121 @@ const make = Effect.gen(function* () {
         if (blockerError !== undefined) return yield* blockerError
         withheldTransactionIds.add(row.transactionId)
       }
+
+      const transactionUseRows = yield* db
+        .select({
+          providerAssetRowId: schema.providerAssetTransactionUses.providerAssetRowId,
+          sourceId: schema.providerAssetTransactionUses.sourceId,
+          transactionId: schema.providerAssetTransactionUses.transactionId,
+          needsReview: schema.transactionReviews.needsReview,
+          matchedLayer: schema.transactionReviews.matchedLayer,
+        })
+        .from(schema.providerAssetTransactionUses)
+        .innerJoin(
+          schema.transactions,
+          and(
+            eq(schema.transactions.id, schema.providerAssetTransactionUses.transactionId),
+            eq(schema.transactions.sourceId, schema.providerAssetTransactionUses.sourceId),
+            eq(schema.transactions.principalId, principalId)
+          )
+        )
+        .innerJoin(
+          schema.sources,
+          and(
+            eq(schema.sources.id, schema.providerAssetTransactionUses.sourceId),
+            eq(schema.sources.principalId, principalId)
+          )
+        )
+        .leftJoin(
+          schema.transactionReviews,
+          and(
+            eq(
+              schema.transactionReviews.transactionId,
+              schema.providerAssetTransactionUses.transactionId
+            ),
+            eq(schema.transactionReviews.principalId, principalId)
+          )
+        )
+        .where(
+          and(
+            notExists(
+              db
+                .select({ id: schema.providerTransfers.id })
+                .from(schema.providerTransfers)
+                .where(
+                  and(
+                    eq(
+                      schema.providerTransfers.transactionId,
+                      schema.providerAssetTransactionUses.transactionId
+                    ),
+                    eq(
+                      schema.providerTransfers.providerAssetId,
+                      schema.providerAssetTransactionUses.providerAssetRowId
+                    )
+                  )
+                )
+            ),
+            notExists(
+              db
+                .select({ id: schema.transactionLegs.id })
+                .from(schema.transactionLegs)
+                .where(
+                  and(
+                    eq(
+                      schema.transactionLegs.transactionId,
+                      schema.providerAssetTransactionUses.transactionId
+                    ),
+                    eq(
+                      schema.transactionLegs.providerAssetRowId,
+                      schema.providerAssetTransactionUses.providerAssetRowId
+                    ),
+                    eq(schema.transactionLegs.principalId, principalId)
+                  )
+                )
+            )
+          )
+        )
+        .orderBy(
+          asc(schema.providerAssetTransactionUses.transactionId),
+          asc(schema.providerAssetTransactionUses.providerAssetRowId)
+        )
+        .pipe(wrapSqlError("factualLedgerRepository.load.providerTransactionUses"))
+
+      for (const row of transactionUseRows) {
+        const outcome = selectFactDecision({
+          decisions,
+          providerAssetRowId: row.providerAssetRowId,
+          requiresTarget: true,
+          sourceRepresentationUseId: null,
+          storedAssetId: null,
+        })
+        if (outcome._tag === "excluded") {
+          withheldTransactionIds.add(row.transactionId)
+          continue
+        }
+        if (outcome._tag === "ignored") continue
+
+        const assetReviewIsOpen =
+          row.needsReview === true && reviewIncludesAssetLayer(row.matchedLayer)
+        const blockedOutcome =
+          outcome._tag === "blocked" || outcome._tag === "malformed"
+            ? outcome
+            : assetReviewIsOpen
+              ? ({ _tag: "malformed", assetId: outcome.assetId } as const)
+              : undefined
+        if (blockedOutcome === undefined) continue
+
+        const blockerError = recordOutcomeBlockers({
+          blockers: inputBlockerByKey,
+          custodyUnitIdBySource,
+          eventId: row.transactionId,
+          outcome: blockedOutcome,
+          providerAssetRowId: row.providerAssetRowId,
+          sourceId: row.sourceId,
+        })
+        if (blockerError !== undefined) return yield* blockerError
+        withheldTransactionIds.add(row.transactionId)
+      }
     })
 
   const loadCustodyMovementEvents = ({
@@ -797,6 +944,7 @@ const make = Effect.gen(function* () {
           canonicalExternalGroupId: canonicalTransactionTable.externalGroupId,
           providerAssetRowId: schema.providerTransfers.providerAssetId,
           providerSourceRepresentationUseId: schema.providerTransfers.sourceRepresentationUseId,
+          providerInventoryAssetId: schema.inventoryMovements.assetId,
           assetId: schema.transfers.assetId,
           canonicalProviderAssetRowId: schema.transfers.providerAssetRowId,
           canonicalSourceRepresentationUseId: schema.transfers.sourceRepresentationUseId,
@@ -895,34 +1043,112 @@ const make = Effect.gen(function* () {
           canonicalTransactionId: row.canonicalTransactionId,
           providerTransactionId: row.providerTransactionId,
         })
-        const providerAssetRowId = row.canonicalProviderAssetRowId ?? row.providerAssetRowId
-        const sourceRepresentationUseId =
-          row.canonicalSourceRepresentationUseId ?? row.providerSourceRepresentationUseId
-        const outcome = selectFactDecision({
+        const canonicalOutcome = selectFactDecision({
           decisions,
-          providerAssetRowId,
+          providerAssetRowId: row.canonicalProviderAssetRowId,
           requiresTarget: true,
-          sourceRepresentationUseId,
+          sourceRepresentationUseId: row.canonicalSourceRepresentationUseId,
           storedAssetId: row.assetId,
         })
-        if (outcome._tag === "excluded") {
+        const providerOutcome = selectFactDecision({
+          decisions,
+          providerAssetRowId: row.providerAssetRowId,
+          requiresTarget: true,
+          sourceRepresentationUseId: row.providerSourceRepresentationUseId,
+          storedAssetId: row.providerInventoryAssetId,
+        })
+        const outcomes = [
+          {
+            outcome: canonicalOutcome,
+            providerAssetRowId: row.canonicalProviderAssetRowId,
+            sourceId: row.canonicalSourceId,
+          },
+          {
+            outcome: providerOutcome,
+            providerAssetRowId: row.providerAssetRowId,
+            sourceId: row.providerSourceId,
+          },
+        ] as const
+        const isExcluded = outcomes.some(({ outcome }) => outcome._tag === "excluded")
+        if (isExcluded) {
           withheldTransactionIds.add(row.providerTransactionId)
           if (row.canonicalTransactionId !== null) {
             withheldTransactionIds.add(row.canonicalTransactionId)
           }
           continue
         }
-        if (outcome._tag === "ignored") continue
-        if (outcome._tag === "blocked" || outcome._tag === "malformed") {
+        let hasBlockedOutcome = false
+        for (const entry of outcomes) {
+          const blockedOutcome =
+            entry.outcome._tag === "blocked" || entry.outcome._tag === "malformed"
+              ? entry.outcome
+              : entry.outcome._tag === "ignored"
+                ? ({ _tag: "malformed", assetId: null } as const)
+                : undefined
+          if (blockedOutcome === undefined) continue
+          hasBlockedOutcome = true
           const blockerError = recordOutcomeBlockers({
             blockers: inputBlockerByKey,
             custodyUnitIdBySource,
             eventId: row.id,
-            outcome,
-            providerAssetRowId,
+            outcome: blockedOutcome,
+            providerAssetRowId: entry.providerAssetRowId,
+            sourceId: entry.sourceId,
+          })
+          if (blockerError !== undefined) return yield* blockerError
+        }
+        if (hasBlockedOutcome) {
+          withheldTransactionIds.add(row.providerTransactionId)
+          if (row.canonicalTransactionId !== null) {
+            withheldTransactionIds.add(row.canonicalTransactionId)
+          }
+          continue
+        }
+        if (canonicalOutcome._tag !== "included" || providerOutcome._tag !== "included") {
+          return yield* new PersistenceError({
+            operation: "factualLedgerRepository.load.custodyDecision",
+            cause: `Custody movement has no included decision after preflight: ${row.id}`,
+          })
+        }
+        if (!isPositiveQuantity(row.amount)) {
+          const blockerError = recordOutcomeBlockers({
+            blockers: inputBlockerByKey,
+            custodyUnitIdBySource,
+            eventId: row.id,
+            outcome: { _tag: "malformed", assetId: canonicalOutcome.assetId },
+            providerAssetRowId: row.canonicalProviderAssetRowId,
             sourceId: row.canonicalSourceId,
           })
           if (blockerError !== undefined) return yield* blockerError
+          withheldTransactionIds.add(row.providerTransactionId)
+          if (row.canonicalTransactionId !== null) {
+            withheldTransactionIds.add(row.canonicalTransactionId)
+          }
+          continue
+        }
+        if (canonicalOutcome.assetId !== providerOutcome.assetId) {
+          for (const entry of [
+            {
+              assetId: canonicalOutcome.assetId,
+              providerAssetRowId: row.canonicalProviderAssetRowId,
+              sourceId: row.canonicalSourceId,
+            },
+            {
+              assetId: providerOutcome.assetId,
+              providerAssetRowId: row.providerAssetRowId,
+              sourceId: row.providerSourceId,
+            },
+          ]) {
+            const blockerError = recordOutcomeBlockers({
+              blockers: inputBlockerByKey,
+              custodyUnitIdBySource,
+              eventId: row.id,
+              outcome: { _tag: "malformed", assetId: entry.assetId },
+              providerAssetRowId: entry.providerAssetRowId,
+              sourceId: entry.sourceId,
+            })
+            if (blockerError !== undefined) return yield* blockerError
+          }
           withheldTransactionIds.add(row.providerTransactionId)
           if (row.canonicalTransactionId !== null) {
             withheldTransactionIds.add(row.canonicalTransactionId)
@@ -947,7 +1173,7 @@ const make = Effect.gen(function* () {
               _tag: "custody_movement",
               id: row.id,
               occurredAt: { epochMillis: row.canonicalTimestamp.getTime() },
-              assetId: outcome.assetId,
+              assetId: canonicalOutcome.assetId,
               quantity: row.amount,
               ...(reference === undefined ? {} : { transactionReference: reference }),
               fromCustodySourceId,
@@ -1170,7 +1396,28 @@ const make = Effect.gen(function* () {
         )
         .where(eq(schema.transfers.principalId, principalId))
         .pipe(wrapSqlError("factualLedgerRepository.load.transferTargets"))
-      const targetRows = [...legTargetRows, ...providerTransferTargetRows, ...transferTargetRows]
+      const providerTransactionUseTargetRows = yield* db
+        .select({
+          providerAssetRowId: schema.providerAssetTransactionUses.providerAssetRowId,
+        })
+        .from(schema.providerAssetTransactionUses)
+        .innerJoin(
+          schema.sources,
+          and(
+            eq(schema.providerAssetTransactionUses.sourceId, schema.sources.id),
+            eq(schema.sources.principalId, principalId)
+          )
+        )
+        .pipe(wrapSqlError("factualLedgerRepository.load.providerTransactionUseTargets"))
+      const targetRows = [
+        ...legTargetRows,
+        ...providerTransferTargetRows,
+        ...transferTargetRows,
+        ...providerTransactionUseTargetRows.map(({ providerAssetRowId }) => ({
+          providerAssetRowId,
+          sourceRepresentationUseId: null,
+        })),
+      ]
       const providerAssetRowIds = targetRows.flatMap(({ providerAssetRowId }) =>
         providerAssetRowId === null ? [] : [providerAssetRowId]
       )

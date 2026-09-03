@@ -434,6 +434,10 @@ const seedCustodyReconciliation = ({
       return yield* Effect.die(`Failed to create transactions for ${fixtureName}`)
     }
 
+    const providerSourceRepresentationUseId = yield* recordRepresentationUse({
+      assetRepresentationId: TEST_BTC_REPRESENTATION_ID,
+      sourceId: providerTransferSourceId ?? providerSourceId,
+    })
     const [providerTransfer] = yield* db
       .insert(schema.providerTransfers)
       .values({
@@ -441,6 +445,7 @@ const seedCustodyReconciliation = ({
         transactionId: providerTransaction.id,
         externalId: `${fixtureName}-provider-transfer`,
         providerAssetId: providerAssetRowId,
+        sourceRepresentationUseId: providerSourceRepresentationUseId,
         timestamp: providerTimestamp,
         direction,
         processingMode: "accounting_only",
@@ -1596,7 +1601,7 @@ describe("FactualLedgerRepositoryLive", () => {
     })
   )
 
-  it.effect("fails non-positive leg quantities through the repository error channel", () =>
+  it.effect("returns malformed blockers for non-positive leg quantities", () =>
     Effect.gen(function* () {
       const occurredAt = DateTime.toDateUtc(DateTime.makeUnsafe("2025-02-04T11:00:00.000Z"))
 
@@ -1625,11 +1630,15 @@ describe("FactualLedgerRepositoryLive", () => {
           )
         )
 
-        const error = yield* Effect.promise(() => loadFactualLedgerError())
-        expect(error).toMatchObject({
-          _tag: "PersistenceError",
-          operation: "factualLedgerRepository.load.event",
-        })
+        const result = yield* Effect.promise(loadFactualLedger)
+        expect(result.events).toEqual([])
+        expect(result.inputBlockers).toEqual([
+          expect.objectContaining({
+            code: "malformed_movement",
+            eventId: id,
+            assetId: TEST_BTC_ASSET_ID,
+          }),
+        ])
 
         yield* Effect.promise(() =>
           runPg(
@@ -1643,7 +1652,7 @@ describe("FactualLedgerRepositoryLive", () => {
     })
   )
 
-  it.effect("fails a zero canonical-transfer quantity through the repository error channel", () =>
+  it.effect("returns a malformed blocker for a zero canonical-transfer quantity", () =>
     Effect.gen(function* () {
       const providerTimestamp = DateTime.toDateUtc(DateTime.makeUnsafe("2025-02-04T12:00:00.000Z"))
       const canonicalTimestamp = DateTime.toDateUtc(DateTime.makeUnsafe("2025-02-04T12:02:00.000Z"))
@@ -1673,11 +1682,15 @@ describe("FactualLedgerRepositoryLive", () => {
         )
       )
 
-      const error = yield* Effect.promise(() => loadFactualLedgerError())
-      expect(error).toMatchObject({
-        _tag: "PersistenceError",
-        operation: "factualLedgerRepository.load.event",
-      })
+      const result = yield* Effect.promise(loadFactualLedger)
+      expect(result.events).toEqual([])
+      expect(result.inputBlockers).toEqual([
+        expect.objectContaining({
+          code: "malformed_movement",
+          eventId: "10000000-0000-4000-8000-000000000008",
+          assetId: TEST_BTC_ASSET_ID,
+        }),
+      ])
     })
   )
 
@@ -2567,11 +2580,16 @@ describe("FactualLedgerRepositoryLive", () => {
               providerAssetId: "blocked-reconciliation",
               canonicalAssetId: TEST_BTC_ASSET_ID,
             })
+            yield* seedProviderBoundaryAsset({
+              providerAssetRowId: MIXED_OTHER_PROVIDER_ASSET_ROW_ID,
+              providerAssetId: "canonical-reconciliation",
+              canonicalAssetId: TEST_BTC_ASSET_ID,
+            })
             yield* db
               .update(schema.providerAssets)
               .set({ exponent: null })
               .where(eq(schema.providerAssets.id, MIXED_PROVIDER_ASSET_ROW_ID))
-            yield* seedCustodyReconciliation({
+            const reconciliation = yield* seedCustodyReconciliation({
               reconciliationId: "10000000-0000-4000-8000-000000000032",
               fixtureName: "blocked-custody",
               providerSourceId: TEST_CUSTODY_SOURCE_ID,
@@ -2585,6 +2603,10 @@ describe("FactualLedgerRepositoryLive", () => {
               status: "approved",
               deterministic: false,
             })
+            yield* db
+              .update(schema.transfers)
+              .set({ providerAssetRowId: MIXED_OTHER_PROVIDER_ASSET_ROW_ID })
+              .where(eq(schema.transfers.id, reconciliation.canonicalTransferId))
           })
         )
       )
