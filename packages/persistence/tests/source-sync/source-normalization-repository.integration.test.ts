@@ -239,6 +239,45 @@ const seedExactIdentityOverride = ({
     return { targetId: target.id, overrideId: override.id }
   })
 
+const seedAdditionalOverrideSource = ({
+  fixture,
+  sourceId = SECOND_OVERRIDE_SOURCE_ID,
+  principalId = TEST_PRINCIPAL_ID,
+}: {
+  readonly fixture: SyncEngineRepositoryFixture
+  readonly sourceId?: string
+  readonly principalId?: string
+}) =>
+  Effect.gen(function* () {
+    const db = yield* drizzle
+    const [firstAccount] = yield* db
+      .select({ cexId: schema.cexAccount.cexId })
+      .from(schema.cexAccount)
+      .where(eq(schema.cexAccount.id, fixture.cexAccountId))
+    if (firstAccount === undefined) return yield* Effect.die("Missing first CEX account")
+
+    const [secondAccount] = yield* db
+      .insert(schema.cexAccount)
+      .values({
+        cexId: firstAccount.cexId,
+        principalId,
+        providerUserId: `override-provider-user-${sourceId}`,
+        providerAccountId: `override-provider-account-${sourceId}`,
+      })
+      .returning({ id: schema.cexAccount.id })
+    if (secondAccount === undefined) return yield* Effect.die("Failed to create provider account")
+
+    yield* db.insert(schema.sources).values({
+      id: sourceId,
+      principalId,
+      name: "Additional exact representation provider",
+      providerKey: `exact-provider-${sourceId}`,
+      sourceableType: "cex",
+      cexAccountId: secondAccount.id,
+    })
+    return secondAccount.id
+  })
+
 interface ExactOverrideArtifactOptions {
   readonly sourceId?: string
   readonly cexAccountId?: string
@@ -388,18 +427,24 @@ const persistExactOverrideCallbackArtifact = ({
   kind,
   occurredAt,
   providerStatus,
+  sourceId = TEST_SOURCE_ID,
+  cexAccountId = fixture.cexAccountId,
+  principalId = TEST_PRINCIPAL_ID,
 }: {
   readonly externalId: string
   readonly fixture: SyncEngineRepositoryFixture
   readonly kind: "acquisition" | "fee"
   readonly occurredAt: Date
   readonly providerStatus: "pending" | "completed"
+  readonly sourceId?: string
+  readonly cexAccountId?: string
+  readonly principalId?: string
 }) =>
   runRepository(
     Effect.flatMap(SourceNormalizationRepository, (repository) =>
       repository.persistNormalizedArtifacts({
         transaction: {
-          sourceId: TEST_SOURCE_ID,
+          sourceId,
           sourceRawRecordId: null,
           externalId: `${externalId}-transaction`,
           externalGroupId: externalId,
@@ -414,11 +459,11 @@ const persistExactOverrideCallbackArtifact = ({
           metadata: { evidence: externalId },
           providerFiatAmount: null,
           providerFiatCurrency: null,
-          principalId: TEST_PRINCIPAL_ID,
+          principalId,
         },
         venueContext: {
           venueType: "cex",
-          cexAccountId: fixture.cexAccountId,
+          cexAccountId,
           externalAccountId: "coinbase-account-1",
           externalOrderId: null,
           externalFillId: null,
@@ -432,8 +477,8 @@ const persistExactOverrideCallbackArtifact = ({
         providerTransfers: [],
         canonicalTransfers: [
           {
-            sourceId: TEST_SOURCE_ID,
-            principalId: TEST_PRINCIPAL_ID,
+            sourceId,
+            principalId,
             sourceRawRecordId: null,
             externalId: `${externalId}-transfer`,
             externalGroupId: externalId,
@@ -465,12 +510,12 @@ const persistExactOverrideCallbackArtifact = ({
 
           return Effect.succeed([
             {
-              sourceId: TEST_SOURCE_ID,
+              sourceId,
               sourceRawRecordId: null,
               externalId: `${externalId}-leg`,
               txHash: null,
               timestamp: occurredAt,
-              principalId: TEST_PRINCIPAL_ID,
+              principalId,
               addressId: null,
               assetId: transfer.assetId,
               assetRepresentationId: transfer.assetRepresentationId,
@@ -846,37 +891,7 @@ describe("SourceNormalizationRepositoryLive", () => {
     Effect.gen(function* () {
       const occurredAt = DateTime.toDateUtc(DateTime.makeUnsafe("2025-02-01T10:00:00.000Z"))
       const secondCexAccountId = yield* Effect.promise(() =>
-        runPg(
-          Effect.gen(function* () {
-            const db = yield* drizzle
-            const [firstAccount] = yield* db
-              .select({ cexId: schema.cexAccount.cexId })
-              .from(schema.cexAccount)
-              .where(eq(schema.cexAccount.id, fixture.cexAccountId))
-            if (firstAccount === undefined) return yield* Effect.die("Missing first CEX account")
-            const [secondAccount] = yield* db
-              .insert(schema.cexAccount)
-              .values({
-                cexId: firstAccount.cexId,
-                principalId: TEST_PRINCIPAL_ID,
-                providerUserId: "second-provider-user",
-                providerAccountId: "second-provider-account",
-              })
-              .returning({ id: schema.cexAccount.id })
-            if (secondAccount === undefined) {
-              return yield* Effect.die("Failed to create second provider account")
-            }
-            yield* db.insert(schema.sources).values({
-              id: SECOND_OVERRIDE_SOURCE_ID,
-              principalId: TEST_PRINCIPAL_ID,
-              name: "Second exact representation provider",
-              providerKey: "second-exact-provider",
-              sourceableType: "cex",
-              cexAccountId: secondAccount.id,
-            })
-            return secondAccount.id
-          })
-        )
+        runPg(seedAdditionalOverrideSource({ fixture }))
       )
       const secondPrincipalFixture = yield* Effect.promise(() =>
         runPg(
@@ -1015,6 +1030,131 @@ describe("SourceNormalizationRepositoryLive", () => {
           },
         ])
       )
+    })
+  )
+
+  it.effect("tracks callback-derived representations for later override replay", () =>
+    Effect.gen(function* () {
+      const occurredAt = DateTime.toDateUtc(DateTime.makeUnsafe("2025-02-01T10:30:00.000Z"))
+      const overrideFixture = yield* Effect.promise(() =>
+        runPg(
+          seedSyncEngineRepositoryFixture({
+            userId: CONCURRENT_USER_ID,
+            principalId: CONCURRENT_PRINCIPAL_ID,
+            sourceId: CONCURRENT_SOURCE_A_ID,
+          })
+        )
+      )
+      const secondCexAccountId = yield* Effect.promise(() =>
+        runPg(
+          seedAdditionalOverrideSource({
+            fixture: overrideFixture,
+            sourceId: CONCURRENT_SOURCE_B_ID,
+            principalId: CONCURRENT_PRINCIPAL_ID,
+          })
+        )
+      )
+      yield* Effect.promise(() =>
+        persistExactOverrideArtifact({
+          externalId: "override-origin-source",
+          fixture: overrideFixture,
+          occurredAt,
+          sourceId: CONCURRENT_SOURCE_A_ID,
+          cexAccountId: overrideFixture.cexAccountId,
+          principalId: CONCURRENT_PRINCIPAL_ID,
+        })
+      )
+      const historical = yield* Effect.promise(() =>
+        persistExactOverrideCallbackArtifact({
+          externalId: "historical-callback-source",
+          fixture: overrideFixture,
+          kind: "acquisition",
+          occurredAt,
+          providerStatus: "pending",
+          sourceId: CONCURRENT_SOURCE_B_ID,
+          cexAccountId: secondCexAccountId,
+          principalId: CONCURRENT_PRINCIPAL_ID,
+        })
+      )
+      expect(historical.canonicalTransfers[0]?.assetId).toBe(TEST_BTC_ASSET_ID)
+      expect(historical.legs[0]?.assetId).toBe(TEST_BTC_ASSET_ID)
+
+      yield* Effect.promise(() =>
+        runPg(
+          Effect.gen(function* () {
+            const db = yield* drizzle
+            yield* db.insert(schema.assets).values({
+              id: OVERRIDE_ASSET_ID,
+              name: "Principal-selected asset",
+              symbol: "SELECTED",
+              type: "fungible",
+            })
+          })
+        )
+      )
+      const target = {
+        _tag: "representation" as const,
+        blockchain: "bitcoin",
+        type: "token" as const,
+        contractAddress: "sync-engine-btc-fixture",
+        mintAddress: null,
+      }
+      const createdProjection = Option.getOrThrow(
+        yield* Effect.promise(() =>
+          runSourceAndOverrideRepositories(
+            Effect.gen(function* () {
+              const overrideRepository = yield* PrincipalAssetOverrideRepository
+              const projection = Option.getOrThrow(
+                yield* overrideRepository.findProjection({
+                  principalId: PrincipalId.make(CONCURRENT_PRINCIPAL_ID),
+                  target,
+                })
+              )
+              return yield* overrideRepository.create({
+                actorUserId: AuthUserId.make(CONCURRENT_USER_ID),
+                expectedSystemRevision: projection.system.identityRevision,
+                principalId: PrincipalId.make(CONCURRENT_PRINCIPAL_ID),
+                reason: "Replay every source that stored the exact representation",
+                replacement: { _tag: "identity", assetId: OVERRIDE_ASSET_ID },
+                target,
+              })
+            })
+          )
+        )
+      )
+      const activeOverrideId = createdProjection.activeIdentityOverride?.id
+      expect(activeOverrideId).toBeDefined()
+      const applicationSources = yield* Effect.promise(() =>
+        runPg(
+          Effect.gen(function* () {
+            const db = yield* drizzle
+            return yield* db
+              .select({ sourceId: schema.principalAssetOverrideApplications.sourceId })
+              .from(schema.principalAssetOverrideApplications)
+              .where(
+                eq(schema.principalAssetOverrideApplications.overrideId, activeOverrideId ?? "")
+              )
+          })
+        )
+      )
+      expect(applicationSources.map(({ sourceId }) => sourceId)).toEqual(
+        expect.arrayContaining([CONCURRENT_SOURCE_A_ID, CONCURRENT_SOURCE_B_ID])
+      )
+
+      const replayed = yield* Effect.promise(() =>
+        persistExactOverrideCallbackArtifact({
+          externalId: "historical-callback-source",
+          fixture: overrideFixture,
+          kind: "acquisition",
+          occurredAt,
+          providerStatus: "pending",
+          sourceId: CONCURRENT_SOURCE_B_ID,
+          cexAccountId: secondCexAccountId,
+          principalId: CONCURRENT_PRINCIPAL_ID,
+        })
+      )
+      expect(replayed.canonicalTransfers[0]?.assetId).toBe(OVERRIDE_ASSET_ID)
+      expect(replayed.legs[0]?.assetId).toBe(OVERRIDE_ASSET_ID)
     })
   )
 

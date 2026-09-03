@@ -489,10 +489,46 @@ const make = Effect.gen(function* () {
       )
       .orderBy(asc(onchainProviderTransferTable.timestamp), asc(onchainProviderTransferTable.id))
 
-    return Effect.all([canonicalCandidates, observedCandidates]).pipe(
-      Effect.map(([canonical, observed]) => [...canonical, ...observed]),
-      wrapSyncEngineSqlError("transferReconciliationRepository.findOnchainTransferCandidates")
-    )
+    return Effect.gen(function* () {
+      const [canonical, observed] = yield* Effect.all([
+        canonicalCandidates,
+        observedCandidates,
+      ]).pipe(
+        wrapSyncEngineSqlError("transferReconciliationRepository.findOnchainTransferCandidates")
+      )
+      const decisions = yield* principalAssetOverrideDecisionLoader
+        .load({
+          principalId,
+          assetRepresentationIds: observed.flatMap(({ assetRepresentationId }) =>
+            assetRepresentationId === null ? [] : [assetRepresentationId]
+          ),
+        })
+        .pipe(
+          Effect.mapError(
+            (cause) =>
+              new SyncEngineStorageError({
+                operation:
+                  "transferReconciliationRepository.findOnchainTransferCandidates.loadOverrides",
+                cause,
+              })
+          )
+        )
+
+      return [
+        ...canonical,
+        ...observed.map((candidate) => ({
+          ...candidate,
+          assetId:
+            candidate.assetId === null
+              ? null
+              : resolvePrincipalAssetId({
+                  decisions,
+                  systemAssetId: candidate.assetId,
+                  assetRepresentationId: candidate.assetRepresentationId,
+                }),
+        })),
+      ]
+    })
   }
 
   const findOnchainTransferCandidates: TransferReconciliationRepositoryShape["findOnchainTransferCandidates"] =
