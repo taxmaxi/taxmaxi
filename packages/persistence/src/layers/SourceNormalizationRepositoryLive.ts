@@ -63,6 +63,8 @@ interface PersistedSourceLegRecord {
   readonly derivationRule: string | null
 }
 
+type StoredSourceTransactionLegDraft = Omit<SourceTransactionLegDraft, "providerAssetRowId">
+
 /**
  * Wrap residual errors in `SyncEngineStorageError`, but let a typed credit-exhaustion
  * outcome pass through so callers can route it to a resumable state instead of a
@@ -130,6 +132,132 @@ const sourceRepresentationUseKey = ({
 const ProviderTransferMetadataSchema = Schema.Struct({
   role: Schema.optional(Schema.Literals(["principal", "fee", "rent"])),
 })
+
+const SourceTransactionLegMetadataSchema = Schema.Record(Schema.String, Schema.Unknown)
+
+const PRINCIPAL_OVERRIDE_REVIEW_LAYER = "principal_asset_override"
+
+const appendReviewSegment = ({
+  existing,
+  segment,
+  separator,
+}: {
+  readonly existing: string | null
+  readonly segment: string
+  readonly separator: string
+}): string =>
+  existing === null || existing.trim() === ""
+    ? segment
+    : existing.includes(segment)
+      ? existing
+      : `${existing}${separator}${segment}`
+
+const withProviderIdentityConflictReview = ({
+  principalId,
+  transactionType,
+  review,
+}: {
+  readonly principalId: string
+  readonly transactionType: string | null
+  readonly review: SourceTransactionReviewDraft | null
+}): SourceTransactionReviewDraft => ({
+  principalId,
+  reviewStatus: "needs_review",
+  originalTypeKey: review?.originalTypeKey ?? transactionType,
+  originalConfidence: review?.originalConfidence ?? null,
+  currentTypeKey: review?.currentTypeKey ?? transactionType,
+  legalRuleSetVersion: review?.legalRuleSetVersion ?? null,
+  categorizationReason: appendReviewSegment({
+    existing: review?.categorizationReason ?? null,
+    segment:
+      "principal_asset_override: Chainless provider asset decisions disagree on the effective economic asset.",
+    separator: " ",
+  }),
+  matchedLayer: appendReviewSegment({
+    existing: review?.matchedLayer ?? null,
+    segment: PRINCIPAL_OVERRIDE_REVIEW_LAYER,
+    separator: ",",
+  }),
+  needsReview: true,
+  userNotes: review?.userNotes ?? null,
+  reviewedAt: null,
+})
+
+const applyPrincipalProviderAssetDecisions = ({
+  decisions,
+  legs,
+  providerTransfers,
+}: {
+  readonly decisions: PrincipalAssetOverrideDecisions
+  readonly legs: ReadonlyArray<SourceTransactionLegDraft>
+  readonly providerTransfers: ReadonlyArray<PersistedSourceProviderTransfer>
+}): {
+  readonly hasIdentityConflict: boolean
+  readonly hasExcludedLeg: boolean
+  readonly legs: ReadonlyArray<SourceTransactionLegDraft>
+  readonly systemAssetIds: ReadonlyArray<string>
+} => {
+  const hasExactTransactionObservation = providerTransfers.some(
+    ({ observedBlockchainId }) => observedBlockchainId !== null
+  )
+  const effectiveAssetBySystemAsset = new Map<string, string>()
+  const effectiveLegs: SourceTransactionLegDraft[] = []
+  const systemAssetIds: string[] = []
+  let hasIdentityConflict = false
+  let hasExcludedLeg = false
+
+  for (const leg of legs) {
+    const providerAssetRowId = leg.providerAssetRowId ?? null
+    const providerDecision =
+      providerAssetRowId === null
+        ? undefined
+        : decisions.providerAssetDecisionById.get(providerAssetRowId)
+    const mayUseProviderFallback =
+      providerAssetRowId !== null &&
+      leg.assetRepresentationId === null &&
+      !hasExactTransactionObservation
+    const inclusion = mayUseProviderFallback
+      ? providerDecision?.inclusion
+      : providerDecision?.systemInclusion
+
+    // A principal inclusion cannot reverse a system exclusion until T12 has the
+    // blocker semantics needed to decide whether that movement is sound.
+    if (providerDecision?.systemInclusion === "excluded" || inclusion === "excluded") {
+      hasExcludedLeg = true
+      continue
+    }
+
+    const representationSystemAssetId = resolveSystemAssetId({
+      decisions,
+      assetId: leg.assetId,
+      assetRepresentationId: leg.assetRepresentationId,
+    })
+    const systemAssetId = mayUseProviderFallback
+      ? (providerDecision?.systemAssetId ?? representationSystemAssetId)
+      : representationSystemAssetId
+    const assetId = resolvePrincipalAssetId({
+      decisions,
+      systemAssetId,
+      assetRepresentationId: leg.assetRepresentationId,
+      providerAssetRowId: mayUseProviderFallback ? providerAssetRowId : null,
+    })
+    const earlierAssetId = effectiveAssetBySystemAsset.get(systemAssetId)
+    if (earlierAssetId !== undefined && earlierAssetId !== assetId) {
+      hasIdentityConflict = true
+    } else {
+      effectiveAssetBySystemAsset.set(systemAssetId, assetId)
+    }
+    effectiveLegs.push({ ...leg, assetId })
+    systemAssetIds.push(systemAssetId)
+  }
+
+  return {
+    hasIdentityConflict,
+    hasExcludedLeg,
+    legs: hasIdentityConflict || hasExcludedLeg ? [] : effectiveLegs,
+    systemAssetIds: hasIdentityConflict || hasExcludedLeg ? [] : systemAssetIds,
+  }
+}
 
 const decodeProviderTransferMetadata = (metadata: unknown) =>
   Schema.decodeUnknownEffect(ProviderTransferMetadataSchema)(metadata).pipe(
@@ -227,6 +355,7 @@ const make = Effect.gen(function* () {
     assetRepresentationId: schema.transfers.assetRepresentationId,
     amount: schema.transfers.amount,
     type: schema.transfers.type,
+    metadata: schema.transfers.metadata,
   } as const
 
   const selectPersistedProviderTransferFields = {
@@ -1058,7 +1187,7 @@ const make = Effect.gen(function* () {
     legs,
   }: {
     readonly executor: SourceNormalizationExecutor
-    readonly legs: ReadonlyArray<SourceTransactionLegDraft>
+    readonly legs: ReadonlyArray<StoredSourceTransactionLegDraft>
   }) =>
     Effect.forEach(legs, (leg) =>
       Effect.gen(function* () {
@@ -1547,17 +1676,18 @@ const make = Effect.gen(function* () {
   }
 
   const persistFeeInventoryMovements = ({
-    decisions,
     executor,
     legs,
   }: {
-    readonly decisions: PrincipalAssetOverrideDecisions
     readonly executor: SourceNormalizationExecutor
-    readonly legs: ReadonlyArray<PersistedSourceLegRecord>
+    readonly legs: ReadonlyArray<{
+      readonly leg: PersistedSourceLegRecord
+      readonly systemAssetId: string
+    }>
   }) =>
     Effect.forEach(
-      legs.filter((leg) => leg.kind === "fee"),
-      (leg) =>
+      legs.filter(({ leg }) => leg.kind === "fee"),
+      ({ leg, systemAssetId }) =>
         Effect.gen(function* () {
           const amountComparison = yield* compareDecimalStrings({
             left: leg.amount,
@@ -1593,11 +1723,7 @@ const make = Effect.gen(function* () {
               transactionId: leg.transactionId,
               providerTransferId: null,
               transactionLegId: leg.id,
-              assetId: resolveSystemAssetId({
-                decisions,
-                assetId: leg.assetId,
-                assetRepresentationId: leg.assetRepresentationId,
-              }),
+              assetId: systemAssetId,
               assetRepresentationId: leg.assetRepresentationId,
               timestamp: leg.timestamp,
               direction: "outbound",
@@ -1736,6 +1862,7 @@ const make = Effect.gen(function* () {
 
           const decisions = yield* principalAssetOverrideDecisionLoader.load({
             principalId: params.transaction.principalId,
+            providerAssetRowIds: params.providerAssetRowIds,
             assetRepresentationIds: [
               ...params.canonicalTransfers,
               ...("legs" in params ? params.legs : []),
@@ -1831,18 +1958,52 @@ const make = Effect.gen(function* () {
                   : [assetRepresentationId]
               ),
             })
-          const effectiveLegs = derivedLegs.map((leg) => ({
-            ...leg,
-            assetId: resolvePrincipalAssetId({
-              decisions: completeDecisions,
-              systemAssetId: leg.assetId,
-              assetRepresentationId: leg.assetRepresentationId,
-            }),
-          }))
+          const providerDecisionResult = applyPrincipalProviderAssetDecisions({
+            decisions: completeDecisions,
+            legs: derivedLegs,
+            providerTransfers: persistedProviderTransfers,
+          })
+          const effectiveLegs = providerDecisionResult.legs
+          const storedLegs = yield* Effect.forEach(effectiveLegs, (leg) =>
+            Effect.gen(function* () {
+              const { providerAssetRowId, ...storedLeg } = leg
+              if (providerAssetRowId === null || providerAssetRowId === undefined) {
+                return storedLeg
+              }
+              const metadata = yield* Schema.decodeUnknownEffect(
+                SourceTransactionLegMetadataSchema
+              )(leg.metadata).pipe(
+                Effect.mapError((cause) =>
+                  toSyncEngineStorageError({
+                    operation:
+                      "sourceNormalizationRepository.persistNormalizedArtifacts.legProviderAssetMetadata",
+                    error: cause,
+                  })
+                )
+              )
+              return {
+                ...storedLeg,
+                metadata: { ...metadata, providerAssetRowId },
+              }
+            })
+          )
           const persistedLegs = yield* upsertTransactionLegs({
             executor: tx,
-            legs: effectiveLegs,
+            legs: storedLegs,
           })
+          const persistedLegsWithSystemAssets = yield* Effect.forEach(persistedLegs, (leg, index) =>
+            Effect.gen(function* () {
+              const systemAssetId = providerDecisionResult.systemAssetIds[index]
+              if (systemAssetId === undefined) {
+                return yield* toSyncEngineStorageError({
+                  operation:
+                    "sourceNormalizationRepository.persistNormalizedArtifacts.legSystemAsset",
+                  error: "persisted leg has no matching system asset",
+                })
+              }
+              return { leg, systemAssetId }
+            })
+          )
 
           const hasCompletedStatus = hasCompletedProviderStatus(params.transaction.providerStatus)
           const hasFailedStatus = hasFailedProviderStatus(params.transaction.providerStatus)
@@ -1870,9 +2031,8 @@ const make = Effect.gen(function* () {
               feesOnly: hasFailedStatus,
             })
             yield* persistFeeInventoryMovements({
-              decisions: completeDecisions,
               executor: tx,
-              legs: persistedLegs,
+              legs: persistedLegsWithSystemAssets,
             })
           } else {
             yield* removeInventoryMovementsForTransaction({
@@ -1884,7 +2044,13 @@ const make = Effect.gen(function* () {
           yield* upsertTransactionReview({
             executor: tx,
             transactionId: persistedTransaction.id,
-            transactionReview: params.transactionReview,
+            transactionReview: providerDecisionResult.hasIdentityConflict
+              ? withProviderIdentityConflictReview({
+                  principalId: persistedTransaction.principalId,
+                  transactionType: params.transaction.transactionType,
+                  review: params.transactionReview,
+                })
+              : params.transactionReview,
           })
           if (persistedTransaction.sourceRawRecordId !== null) {
             yield* tx

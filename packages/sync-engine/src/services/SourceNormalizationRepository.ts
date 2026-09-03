@@ -213,6 +213,8 @@ export interface SourceTransactionLegDraft {
   readonly kind: SourceLegKind
   readonly provenance: SourceLegProvenance
   readonly derivationRule: string | null
+  /** Exact chainless provider observation used to derive this leg, when present. */
+  readonly providerAssetRowId?: string | null
   readonly metadata: unknown
   readonly transactionId: string | null
   readonly sourceTransferId: string | null
@@ -277,6 +279,7 @@ export interface PersistedSourceTransfer {
   readonly assetRepresentationId: string | null
   readonly amount: string
   readonly type: SourceTransferType
+  readonly metadata?: unknown
 }
 
 /**

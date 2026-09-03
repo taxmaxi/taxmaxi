@@ -2,6 +2,7 @@ import { expect, it } from "@effect/vitest"
 import * as DateTime from "effect/DateTime"
 import * as Effect from "effect/Effect"
 import * as Option from "effect/Option"
+import * as Schema from "effect/Schema"
 import { CoinbaseRecordNormalizerLive } from "../../src/providers/coinbase/layers/CoinbaseRecordNormalizerLive.ts"
 import { CoinbaseRecordNormalizer } from "../../src/providers/coinbase/services/CoinbaseRecordNormalizer.ts"
 import type { SourceRawRecord, SourceSyncSource } from "../../src/services/SourceSyncModels.ts"
@@ -70,7 +71,11 @@ const normalizeProviderFiat = (payload: unknown) =>
     const result = yield* normalizer.normalize({
       source,
       sourceRecord: sourceRecord(payload),
-      resolveAssetId: () => Effect.succeed(Option.none()),
+      resolveAsset: () =>
+        Effect.succeed({
+          assetId: Option.none(),
+          providerAssetRowId: "00000000-0000-4000-8000-000000000501",
+        }),
       resolveBlockchainId: () => Option.none(),
     })
 
@@ -112,4 +117,68 @@ it.effect("converts only proven advanced-trade SELL and sell debits to observed 
       { amount: "6000", currency: "EUR" },
     ])
   })
+)
+
+it.effect("keeps each same-currency fee paired with its resolved provider row", () =>
+  Effect.gen(function* () {
+    const firstAssetId = "00000000-0000-4000-8000-000000000511"
+    const secondAssetId = "00000000-0000-4000-8000-000000000512"
+    const firstProviderAssetRowId = "00000000-0000-4000-8000-000000000513"
+    const secondProviderAssetRowId = "00000000-0000-4000-8000-000000000514"
+    const resolutions = [
+      { assetId: firstAssetId, providerAssetRowId: firstProviderAssetRowId },
+      { assetId: secondAssetId, providerAssetRowId: secondProviderAssetRowId },
+    ] as const
+    let resolutionIndex = 0
+    const normalizer = yield* CoinbaseRecordNormalizer
+    const result = yield* normalizer.normalize({
+      source,
+      sourceRecord: sourceRecord({
+        ...advancedTradeFill(),
+        network: {
+          status: "confirmed",
+          hash: "dual-fee-hash",
+          network_name: "bitcoin",
+          transaction_fee: { amount: "0.0001", currency: "BTC" },
+        },
+        advanced_trade_fill: {
+          ...advancedTradeFill().advanced_trade_fill,
+          commission: { amount: "0.0002", currency: "BTC" },
+        },
+      }),
+      resolveAsset: () =>
+        Effect.gen(function* () {
+          const resolution = resolutions[resolutionIndex]
+          resolutionIndex += 1
+          if (resolution === undefined) {
+            return yield* Effect.die("Unexpected extra Coinbase fee asset resolution")
+          }
+          return {
+            assetId: Option.some(resolution.assetId),
+            providerAssetRowId: resolution.providerAssetRowId,
+          }
+        }),
+      resolveBlockchainId: () => Option.none(),
+    })
+    const pairs = yield* Effect.forEach(result.canonicalTransfers, (transfer) =>
+      Schema.decodeUnknownEffect(
+        Schema.Struct({ providerAssetRowId: Schema.String.check(Schema.isUUID()) })
+      )(transfer.metadata).pipe(
+        Effect.map((metadata) => ({
+          assetId: transfer.assetId,
+          providerAssetRowId: String(metadata.providerAssetRowId),
+        }))
+      )
+    )
+
+    expect(pairs).toEqual(
+      expect.arrayContaining([
+        { assetId: firstAssetId, providerAssetRowId: firstProviderAssetRowId },
+        { assetId: secondAssetId, providerAssetRowId: secondProviderAssetRowId },
+      ])
+    )
+    expect(result.feeProviderAssetRowIds).toEqual(
+      expect.arrayContaining([firstProviderAssetRowId, secondProviderAssetRowId])
+    )
+  }).pipe(Effect.provide(CoinbaseRecordNormalizerLive))
 )

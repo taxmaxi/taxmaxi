@@ -229,6 +229,7 @@ const partyAddress = (party: CoinbaseTransaction["from"]): string | null =>
 
 interface CoinbaseFeeTransferBuildResult {
   readonly transfer: CoinbaseRecordNormalizationResult["canonicalTransfers"][number] | null
+  readonly providerAssetRowId: string | null
   readonly unresolvedAssetCurrency: string | null
 }
 
@@ -455,15 +456,17 @@ const buildFeeTransfer = (params: {
     ) {
       return {
         transfer: null,
+        providerAssetRowId: null,
         unresolvedAssetCurrency: null,
       } satisfies CoinbaseFeeTransferBuildResult
     }
 
-    const assetId = yield* params.normalizeParams.resolveAssetId(params.money.currency)
+    const resolvedAsset = yield* params.normalizeParams.resolveAsset(params.money.currency)
 
-    if (Option.isNone(assetId)) {
+    if (Option.isNone(resolvedAsset.assetId)) {
       return {
         transfer: null,
+        providerAssetRowId: resolvedAsset.providerAssetRowId,
         unresolvedAssetCurrency: params.money.currency.toUpperCase(),
       } satisfies CoinbaseFeeTransferBuildResult
     }
@@ -498,7 +501,7 @@ const buildFeeTransfer = (params: {
         fromPartyResourcePath: toNullable(params.transaction.from?.resource_path),
         toPartyType: "fee",
         toPartyResourcePath: null,
-        assetId: assetId.value,
+        assetId: resolvedAsset.assetId.value,
         assetRepresentationId: null,
         amount: params.money.amount,
         tokenId: null,
@@ -509,8 +512,10 @@ const buildFeeTransfer = (params: {
           coinbaseTransactionId: params.transaction.id,
           providerStatus: params.transaction.status,
           networkHash: params.transaction.network?.hash ?? null,
+          providerAssetRowId: resolvedAsset.providerAssetRowId,
         },
       },
+      providerAssetRowId: resolvedAsset.providerAssetRowId,
       unresolvedAssetCurrency: null,
     } satisfies CoinbaseFeeTransferBuildResult
   })
@@ -578,6 +583,13 @@ const normalizeCoinbaseRecord = (params: NormalizeCoinbaseRecordParams) =>
     const canonicalTransfers = feeTransferResults.flatMap((result) =>
       result.transfer === null ? [] : [result.transfer]
     )
+    const feeProviderAssetRowIds = Array.from(
+      new Set(
+        feeTransferResults.flatMap((result) =>
+          result.providerAssetRowId === null ? [] : [result.providerAssetRowId]
+        )
+      )
+    )
     const providerTransfers = yield* buildPrincipalProviderTransfers({
       normalizeParams: params,
       transaction: transactionPayload,
@@ -642,6 +654,7 @@ const normalizeCoinbaseRecord = (params: NormalizeCoinbaseRecordParams) =>
       },
       providerTransfers,
       canonicalTransfers,
+      feeProviderAssetRowIds,
       unresolvedAssetCurrencies,
       primaryAssetCurrency: transactionPayload.amount.currency,
     }

@@ -28,6 +28,8 @@ export interface CoinbaseDerivedAsset {
 export interface CoinbaseResolvedFeeTransfer {
   readonly transfer: PersistedSourceTransfer
   readonly asset: CoinbaseDerivedAsset
+  /** Exact Coinbase provider asset row used to resolve this fee. */
+  readonly providerAssetRowId: string
 }
 
 /**

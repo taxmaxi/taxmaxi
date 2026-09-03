@@ -70,6 +70,7 @@ const CoinbaseMetadataSchema = Schema.Struct({
     pairedRecordRequired: Schema.Boolean,
     mappingStatus: Schema.Literals(["approved", "pending_review"]),
   }),
+  providerAssetRowId: Schema.optional(Schema.String.check(Schema.isUUID())),
   pairedRecord: Schema.optional(
     Schema.Struct({
       externalId: Schema.String,
@@ -483,6 +484,7 @@ const buildMainLeg = (
       kind: classification.kind,
       provenance: "deterministic",
       derivationRule: classification.derivationRule,
+      providerAssetRowId: metadata.providerAssetRowId ?? null,
       metadata: {
         provider: "coinbase",
         providerTransactionType: params.transaction.providerTransactionType,
@@ -507,7 +509,7 @@ const buildFeeLegs = (
   ReadonlyArray<CoinbaseLegDerivationResult["legs"][number]>,
   CoinbaseLegDerivationError
 > =>
-  Effect.forEach(params.feeTransfers, ({ transfer, asset }) =>
+  Effect.forEach(params.feeTransfers, ({ transfer, asset, providerAssetRowId }) =>
     Effect.gen(function* () {
       const quoteCurrency = Option.getOrNull(
         instrumentQuoteCurrency(params.venueContext?.instrument ?? null)
@@ -536,6 +538,7 @@ const buildFeeLegs = (
           transfer.externalId?.endsWith(":network_fee") === true
             ? "coinbase_network_fee"
             : "coinbase_commission_fee",
+        providerAssetRowId,
         metadata: {
           provider: "coinbase",
           providerTransactionType: params.transaction.providerTransactionType,
