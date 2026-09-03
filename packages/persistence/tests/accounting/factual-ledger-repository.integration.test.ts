@@ -256,10 +256,7 @@ const seedProviderBoundaryTransaction = ({
         amount: "1",
         kind: leg.kind,
         provenance: "deterministic" as const,
-        metadata:
-          leg.providerAssetRowId === undefined
-            ? undefined
-            : { providerAssetRowId: leg.providerAssetRowId },
+        providerAssetRowId: leg.providerAssetRowId,
         transactionId: transaction.id,
       }))
     )
@@ -972,7 +969,7 @@ describe("FactualLedgerRepositoryLive", () => {
                 amount: "1",
                 kind: "acquisition",
                 provenance: "deterministic",
-                metadata: { providerAssetRowId: PROVIDER_ASSET_ROW_ID },
+                providerAssetRowId: PROVIDER_ASSET_ROW_ID,
                 transactionId: selectedTransaction.id,
               },
               {
@@ -984,7 +981,7 @@ describe("FactualLedgerRepositoryLive", () => {
                 amount: "1",
                 kind: "acquisition",
                 provenance: "deterministic",
-                metadata: { providerAssetRowId: DUPLICATE_PROVIDER_ASSET_ROW_ID },
+                providerAssetRowId: DUPLICATE_PROVIDER_ASSET_ROW_ID,
                 transactionId: duplicateTransaction.id,
               },
               {
@@ -996,7 +993,7 @@ describe("FactualLedgerRepositoryLive", () => {
                 amount: "1",
                 kind: "acquisition",
                 provenance: "deterministic",
-                metadata: { providerAssetRowId: PROVIDER_ASSET_ROW_ID },
+                providerAssetRowId: PROVIDER_ASSET_ROW_ID,
                 transactionId: exactTransaction.id,
               },
               {
@@ -1008,7 +1005,7 @@ describe("FactualLedgerRepositoryLive", () => {
                 amount: "1",
                 kind: "acquisition",
                 provenance: "deterministic",
-                metadata: { providerAssetRowId: PROVIDER_ASSET_ROW_ID },
+                providerAssetRowId: PROVIDER_ASSET_ROW_ID,
                 transactionId: otherTransaction.id,
               },
               {
@@ -1020,7 +1017,7 @@ describe("FactualLedgerRepositoryLive", () => {
                 amount: "1",
                 kind: "acquisition",
                 provenance: "deterministic",
-                metadata: { providerAssetRowId: PROVIDER_ASSET_ROW_ID },
+                providerAssetRowId: PROVIDER_ASSET_ROW_ID,
                 transactionId: contradictoryTransaction.id,
               },
               {
@@ -1032,7 +1029,7 @@ describe("FactualLedgerRepositoryLive", () => {
                 amount: "1",
                 kind: "acquisition",
                 provenance: "deterministic",
-                metadata: { providerAssetRowId: DUPLICATE_PROVIDER_ASSET_ROW_ID },
+                providerAssetRowId: DUPLICATE_PROVIDER_ASSET_ROW_ID,
                 transactionId: contradictoryTransaction.id,
               },
             ])

@@ -48,17 +48,6 @@ const EXCHANGE_TYPES = new Set([
   "nft_sell",
 ])
 
-const ProviderAssetLegMetadata = Schema.Struct({
-  providerAssetRowId: Schema.String.check(Schema.isUUID()),
-})
-
-const providerAssetRowIdFromMetadata = (metadata: unknown): string | null =>
-  Option.getOrNull(
-    Option.map(Schema.decodeUnknownOption(ProviderAssetLegMetadata)(metadata), (row) =>
-      String(row.providerAssetRowId)
-    )
-  )
-
 const acquisitionCause = (transactionType: string | null): AcquisitionCause => {
   if (transactionType === "gift_received") return "gift"
   if (transactionType === "airdrop") return "airdrop"
@@ -187,10 +176,10 @@ const make = Effect.gen(function* () {
           timestamp: schema.transactionLegs.timestamp,
           assetId: schema.transactionLegs.assetId,
           assetRepresentationId: schema.transactionLegs.assetRepresentationId,
+          providerAssetRowId: schema.transactionLegs.providerAssetRowId,
           amount: schema.transactionLegs.amount,
           kind: schema.transactionLegs.kind,
           derivationRule: schema.transactionLegs.derivationRule,
-          metadata: schema.transactionLegs.metadata,
           hasExactProviderObservation: sql<boolean>`exists (
             select 1
             from ${schema.providerTransfers} exact_transfer
@@ -256,7 +245,7 @@ const make = Effect.gen(function* () {
             reconciledProviderTransactionIds.has(row.transactionId)))
 
       for (const row of rows) {
-        const providerAssetRowId = providerAssetRowIdFromMetadata(row.metadata)
+        const providerAssetRowId = row.providerAssetRowId
         const mayUseProviderFallback =
           row.assetRepresentationId === null && !row.hasExactProviderObservation
         const providerDecision =
@@ -352,7 +341,7 @@ const make = Effect.gen(function* () {
             assetRepresentationId: row.assetRepresentationId,
             providerAssetRowId:
               row.assetRepresentationId === null && !row.hasExactProviderObservation
-                ? providerAssetRowIdFromMetadata(row.metadata)
+                ? row.providerAssetRowId
                 : null,
           }),
           quantity: row.amount,
@@ -696,8 +685,8 @@ const make = Effect.gen(function* () {
   const load: FactualLedgerRepositoryShape["load"] = ({ principalId, reportingCurrency }) =>
     Effect.gen(function* () {
       const supportedReportingCurrency = yield* validateReportingCurrency(reportingCurrency)
-      const providerAssetMetadataRows = yield* db
-        .select({ metadata: schema.transactionLegs.metadata })
+      const providerAssetLegRows = yield* db
+        .select({ providerAssetRowId: schema.transactionLegs.providerAssetRowId })
         .from(schema.transactionLegs)
         .innerJoin(
           schema.sources,
@@ -720,10 +709,9 @@ const make = Effect.gen(function* () {
         )
         .pipe(wrapSqlError("factualLedgerRepository.load.providerTransferAssets"))
       const providerAssetRowIds = [
-        ...providerAssetMetadataRows.flatMap(({ metadata }) => {
-          const providerAssetRowId = providerAssetRowIdFromMetadata(metadata)
-          return providerAssetRowId === null ? [] : [providerAssetRowId]
-        }),
+        ...providerAssetLegRows.flatMap(({ providerAssetRowId }) =>
+          providerAssetRowId === null ? [] : [providerAssetRowId]
+        ),
         ...providerTransferAssetRows.flatMap(({ providerAssetRowId }) =>
           providerAssetRowId === null ? [] : [providerAssetRowId]
         ),

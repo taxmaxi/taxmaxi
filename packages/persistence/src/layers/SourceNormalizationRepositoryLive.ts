@@ -1451,7 +1451,31 @@ const make = Effect.gen(function* () {
           mintAddress: schema.sourceRepresentationUses.mintAddress,
         })
         .from(schema.sourceRepresentationUses)
-        .where(eq(schema.sourceRepresentationUses.sourceId, sourceId))
+        .where(
+          and(
+            eq(schema.sourceRepresentationUses.sourceId, sourceId),
+            or(
+              ...Array.from(observedRepresentations.values(), (representation) =>
+                and(
+                  eq(schema.sourceRepresentationUses.blockchainId, representation.blockchainId),
+                  eq(
+                    schema.sourceRepresentationUses.representationType,
+                    representation.representationType
+                  ),
+                  representation.contractAddress === null
+                    ? isNull(schema.sourceRepresentationUses.contractAddress)
+                    : eq(
+                        schema.sourceRepresentationUses.contractAddress,
+                        representation.contractAddress
+                      ),
+                  representation.mintAddress === null
+                    ? isNull(schema.sourceRepresentationUses.mintAddress)
+                    : eq(schema.sourceRepresentationUses.mintAddress, representation.mintAddress)
+                )
+              )
+            )
+          )
+        )
         .pipe(
           wrapSyncEngineSqlError(
             "sourceNormalizationRepository.recordSourceRepresentationUses.loadRecordedUses"
