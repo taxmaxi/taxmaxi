@@ -1,6 +1,7 @@
 import { sql } from "drizzle-orm"
 import {
   check,
+  foreignKey,
   index,
   integer,
   jsonb,
@@ -16,6 +17,7 @@ import { assetRepresentationTypeEnum } from "./AssetRepresentationsTable.ts"
 import { blockchains } from "./BlockchainsTable.ts"
 import { providerAssets } from "./ProviderAssetsTable.ts"
 import { sourceRecordsRaw } from "./SourceRecordsRawTable.ts"
+import { sourceRepresentationUses } from "./SourceRepresentationUsesTable.ts"
 import { sources } from "./SourcesTable.ts"
 import { transactions } from "./TransactionsTable.ts"
 
@@ -61,6 +63,7 @@ export const providerTransfers = pgTable(
     providerAssetId: uuid("provider_asset_id").references(() => providerAssets.id, {
       onDelete: "set null",
     }),
+    sourceRepresentationUseId: uuid("source_representation_use_id"),
 
     timestamp: timestamp("timestamp").notNull(),
     direction: providerTransferDirectionEnum("direction").notNull(),
@@ -85,6 +88,11 @@ export const providerTransfers = pgTable(
     updatedAt: timestamp("updated_at").notNull().defaultNow(),
   },
   (table) => [
+    foreignKey({
+      columns: [table.sourceRepresentationUseId, table.sourceId],
+      foreignColumns: [sourceRepresentationUses.id, sourceRepresentationUses.sourceId],
+      name: "provider_transfers_representation_use_source_fk",
+    }),
     check(
       "provider_transfers_identifier_present",
       sql`${table.externalId} is not null or ${table.networkHash} is not null`
@@ -141,6 +149,7 @@ export const providerTransfers = pgTable(
     index("idx_provider_transfers_source_timestamp").on(table.sourceId, table.timestamp),
     index("idx_provider_transfers_transaction").on(table.transactionId),
     index("idx_provider_transfers_provider_asset").on(table.providerAssetId),
+    index("idx_provider_transfers_representation_use").on(table.sourceRepresentationUseId),
     index("idx_provider_transfers_external_group").on(table.sourceId, table.externalGroupId),
     index("idx_provider_transfers_network_hash").on(table.networkHash),
   ]
