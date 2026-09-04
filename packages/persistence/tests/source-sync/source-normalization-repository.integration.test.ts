@@ -853,6 +853,18 @@ const loadCoinbasePostOverrideState = ({
     return { mapping, movements }
   })
 
+const loadProviderTransferSourceUseId = (externalId: string) =>
+  runPg(
+    Effect.gen(function* () {
+      const db = yield* drizzle
+      const [providerTransfer] = yield* db
+        .select({ sourceRepresentationUseId: schema.providerTransfers.sourceRepresentationUseId })
+        .from(schema.providerTransfers)
+        .where(eq(schema.providerTransfers.externalId, externalId))
+      return providerTransfer?.sourceRepresentationUseId
+    })
+  )
+
 const persistCoinbaseNormalization = ({
   source,
   sourceRecord,
@@ -1306,7 +1318,10 @@ describe("SourceNormalizationRepositoryLive", () => {
     readonly cexAccountId?: string
     readonly providerTransfers?: ReadonlyArray<{
       readonly providerAssetId: string
-      readonly observedBlockchainId: string
+      readonly observedBlockchainId: string | null
+      readonly processingMode?: "accounting_and_evidence" | "evidence_only"
+      readonly direction?: "inbound" | "outbound"
+      readonly role?: "principal" | "fee"
     }>
     readonly legs: ReadonlyArray<{
       readonly externalId: string
@@ -1355,8 +1370,8 @@ describe("SourceNormalizationRepositoryLive", () => {
             externalGroupId: externalId,
             providerAssetId: transfer.providerAssetId,
             timestamp: occurredAt,
-            direction: "inbound" as const,
-            processingMode: "evidence_only" as const,
+            direction: transfer.direction ?? ("inbound" as const),
+            processingMode: transfer.processingMode ?? ("evidence_only" as const),
             fromAccountRef: "external",
             toAccountRef: "owned",
             fromAddress: null,
@@ -1364,12 +1379,14 @@ describe("SourceNormalizationRepositoryLive", () => {
             networkName: "bitcoin",
             networkHash: `${externalId}-hash-${index}`,
             observedBlockchainId: transfer.observedBlockchainId,
-            observedRepresentationType: "token" as const,
-            observedContractAddress: "sync-engine-btc-fixture",
+            observedRepresentationType:
+              transfer.observedBlockchainId === null ? null : ("token" as const),
+            observedContractAddress:
+              transfer.observedBlockchainId === null ? null : "sync-engine-btc-fixture",
             observedMintAddress: null,
-            observedDecimals: 8,
+            observedDecimals: transfer.observedBlockchainId === null ? null : 8,
             amount: "1",
-            metadata: { evidence: externalId },
+            metadata: { evidence: externalId, role: transfer.role ?? "principal" },
           })),
           canonicalTransfers: [],
           providerAssetRowIds: legs.map(({ providerAssetRowId }) => providerAssetRowId),
@@ -2180,6 +2197,159 @@ describe("SourceNormalizationRepositoryLive", () => {
       )
 
       expect(result.legs.map(({ assetId }) => assetId)).toEqual([TEST_BTC_ASSET_ID])
+    })
+  )
+
+  it.effect("keeps exact-linked provider fee inventory on the system asset", () =>
+    Effect.gen(function* () {
+      const occurredAt = DateTime.toDateUtc(DateTime.makeUnsafe("2025-02-01T10:20:00.000Z"))
+      yield* Effect.promise(() => seedProviderDecisionFixture(occurredAt))
+      yield* Effect.promise(() =>
+        runPg(
+          seedExactIdentityOverride({
+            fixture,
+            reason: "Use the selected identity for accounting but not fee custody",
+          })
+        )
+      )
+
+      yield* Effect.promise(() =>
+        persistProviderDecisionArtifacts({
+          occurredAt,
+          externalId: "provider-exact-fee-system-asset",
+          providerTransfers: [
+            {
+              providerAssetId: PROVIDER_ASSET_ROW_A_ID,
+              observedBlockchainId: fixture.bitcoinBlockchainId,
+              processingMode: "accounting_and_evidence",
+              direction: "outbound",
+              role: "fee",
+            },
+          ],
+          legs: [
+            {
+              externalId: "provider-exact-fee-system-asset-leg",
+              providerAssetRowId: PROVIDER_ASSET_ROW_A_ID,
+              kind: "fee",
+            },
+          ],
+        })
+      )
+
+      const [feeMovement] = yield* Effect.promise(() =>
+        runPg(
+          Effect.gen(function* () {
+            const db = yield* drizzle
+            return yield* db
+              .select({
+                assetId: schema.inventoryMovements.assetId,
+                sourceRepresentationUseId: schema.providerTransfers.sourceRepresentationUseId,
+              })
+              .from(schema.inventoryMovements)
+              .innerJoin(
+                schema.providerTransfers,
+                eq(schema.providerTransfers.id, schema.inventoryMovements.providerTransferId)
+              )
+              .where(
+                eq(
+                  schema.providerTransfers.externalId,
+                  "provider-exact-fee-system-asset-provider-0"
+                )
+              )
+          })
+        )
+      )
+
+      expect(feeMovement?.sourceRepresentationUseId).not.toBeNull()
+      expect(feeMovement?.assetId).toBe(TEST_BTC_ASSET_ID)
+    })
+  )
+
+  it.effect("withholds an exact-linked fact whose provider row is globally excluded", () =>
+    Effect.gen(function* () {
+      const occurredAt = DateTime.toDateUtc(DateTime.makeUnsafe("2025-02-01T10:20:00.000Z"))
+      yield* Effect.promise(() => seedProviderDecisionFixture(occurredAt))
+
+      const result = yield* Effect.promise(() =>
+        persistProviderDecisionArtifacts({
+          occurredAt,
+          externalId: "provider-exact-system-excluded",
+          providerTransfers: [
+            {
+              providerAssetId: PROVIDER_ASSET_ROW_EXCLUDED_ID,
+              observedBlockchainId: fixture.bitcoinBlockchainId,
+              processingMode: "accounting_and_evidence",
+            },
+          ],
+          legs: [
+            {
+              externalId: "provider-exact-system-excluded-leg",
+              providerAssetRowId: PROVIDER_ASSET_ROW_EXCLUDED_ID,
+            },
+          ],
+        })
+      )
+
+      const sourceUseId = yield* Effect.promise(() =>
+        loadProviderTransferSourceUseId("provider-exact-system-excluded-provider-0")
+      )
+
+      expect(sourceUseId).not.toBeNull()
+      expect(result.legs).toEqual([])
+    })
+  )
+
+  it.effect("uses a persisted exact provider link when retry omits observation fields", () =>
+    Effect.gen(function* () {
+      const occurredAt = DateTime.toDateUtc(DateTime.makeUnsafe("2025-02-01T10:20:00.000Z"))
+      yield* Effect.promise(() => seedProviderDecisionFixture(occurredAt))
+      const artifacts = {
+        occurredAt,
+        externalId: "provider-exact-retry",
+        legs: [
+          {
+            externalId: "provider-exact-retry-leg",
+            providerAssetRowId: PROVIDER_ASSET_ROW_USER_EXCLUDED_ID,
+          },
+        ],
+      } as const
+
+      const first = yield* Effect.promise(() =>
+        persistProviderDecisionArtifacts({
+          ...artifacts,
+          providerTransfers: [
+            {
+              providerAssetId: PROVIDER_ASSET_ROW_USER_EXCLUDED_ID,
+              observedBlockchainId: fixture.bitcoinBlockchainId,
+              processingMode: "accounting_and_evidence",
+            },
+          ],
+        })
+      )
+      const firstUseId = yield* Effect.promise(() =>
+        loadProviderTransferSourceUseId("provider-exact-retry-provider-0")
+      )
+      expect(firstUseId).not.toBeNull()
+      expect(first.legs.map(({ assetId }) => assetId)).toEqual([TEST_BTC_ASSET_ID])
+
+      const retried = yield* Effect.promise(() =>
+        persistProviderDecisionArtifacts({
+          ...artifacts,
+          providerTransfers: [
+            {
+              providerAssetId: PROVIDER_ASSET_ROW_USER_EXCLUDED_ID,
+              observedBlockchainId: null,
+              processingMode: "accounting_and_evidence",
+            },
+          ],
+        })
+      )
+
+      const retriedUseId = yield* Effect.promise(() =>
+        loadProviderTransferSourceUseId("provider-exact-retry-provider-0")
+      )
+      expect(retriedUseId).toBe(firstUseId)
+      expect(retried.legs.map(({ assetId }) => assetId)).toEqual([TEST_BTC_ASSET_ID])
     })
   )
 

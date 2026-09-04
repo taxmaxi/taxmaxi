@@ -260,17 +260,15 @@ const applyPrincipalProviderAssetDecisions = ({
     }
   )
   const hasBlockedOrExcludedProviderUse = providerAssetRowIds.some((providerAssetRowId) => {
+    const providerDecision = decisions.providerAssetDecisionById.get(providerAssetRowId)
     if (
       exactProviderAssetRowIds.has(providerAssetRowId) ||
       decisions.ignoredProviderAssetRowIds.has(providerAssetRowId)
     ) {
-      return false
+      return providerDecision?.systemInclusion === "excluded"
     }
 
-    return (
-      decisions.providerAssetDecisionById.get(providerAssetRowId)?.effectiveDecision._tag !==
-      "included"
-    )
+    return providerDecision?.effectiveDecision._tag !== "included"
   })
 
   for (const leg of legs) {
@@ -1906,14 +1904,18 @@ const make = Effect.gen(function* () {
         const providerDecision = decisions.providerAssetDecisionById.get(
           providerTransfer.providerAssetId
         )
-        const assetId =
+        const systemAssetId =
+          exactDecision === undefined
+            ? (providerDecision?.systemAssetId ??
+              (assetMapping?.mappingStatus === "approved" ? assetMapping.assetId : null))
+            : exactDecision.systemAssetId
+        const principalAssetId =
           exactDecision === undefined
             ? providerDecision?.effectiveDecision._tag === "included"
               ? providerDecision.effectiveDecision.assetId
-              : assetMapping?.mappingStatus === "approved"
-                ? assetMapping.assetId
-                : null
-            : (exactDecision.identityReplacementAssetId ?? exactDecision.systemAssetId)
+              : systemAssetId
+            : (exactDecision.identityReplacementAssetId ?? systemAssetId)
+        const assetId = purpose === "fee" ? systemAssetId : principalAssetId
 
         if (assetId === null || assetId === undefined) {
           return yield* removeInventoryMovementForProviderTransfer({
@@ -2093,7 +2095,7 @@ const make = Effect.gen(function* () {
     providerAssetRowIds,
     canonicalTransfers,
     derivedLegs,
-    linkedProviderTransfers,
+    persistedProviderTransfers,
     linkedCanonicalTransfers,
     derivedLegRecordedUses,
   }: {
@@ -2101,7 +2103,7 @@ const make = Effect.gen(function* () {
     readonly providerAssetRowIds: ReadonlyArray<string>
     readonly canonicalTransfers: ReadonlyArray<{ readonly assetRepresentationId?: string | null }>
     readonly derivedLegs: ReadonlyArray<SourceTransactionLegDraft>
-    readonly linkedProviderTransfers: ReadonlyArray<LinkedSourceProviderTransferInput>
+    readonly persistedProviderTransfers: ReadonlyArray<PersistedSourceProviderTransferWithTarget>
     readonly linkedCanonicalTransfers: ReadonlyArray<LinkedSourceTransferDraft>
     readonly derivedLegRecordedUses: RecordedSourceRepresentationUses
   }) =>
@@ -2112,12 +2114,12 @@ const make = Effect.gen(function* () {
           : [assetRepresentationId]
       )
       const sourceRepresentationUseIds = [
-        ...linkedProviderTransfers.flatMap(({ linked }) =>
-          linked.sourceRepresentationUseId === null ||
-          linked.processingMode === "evidence_only" ||
-          linked.processingMode === "stale"
+        ...persistedProviderTransfers.flatMap((providerTransfer) =>
+          providerTransfer.sourceRepresentationUseId === null ||
+          providerTransfer.processingMode === "evidence_only" ||
+          providerTransfer.processingMode === "stale"
             ? []
-            : [linked.sourceRepresentationUseId]
+            : [providerTransfer.sourceRepresentationUseId]
         ),
         ...linkedCanonicalTransfers.flatMap(({ sourceRepresentationUseId }) =>
           sourceRepresentationUseId === null ? [] : [sourceRepresentationUseId]
@@ -2140,13 +2142,13 @@ const make = Effect.gen(function* () {
         providerAssetRowIds,
       })
       const exactProviderAssetRowIds = new Set([
-        ...linkedProviderTransfers.flatMap(({ linked }) =>
-          linked.sourceRepresentationUseId === null ||
-          linked.providerAssetId === null ||
-          linked.processingMode === "evidence_only" ||
-          linked.processingMode === "stale"
+        ...persistedProviderTransfers.flatMap((providerTransfer) =>
+          providerTransfer.sourceRepresentationUseId === null ||
+          providerTransfer.providerAssetId === null ||
+          providerTransfer.processingMode === "evidence_only" ||
+          providerTransfer.processingMode === "stale"
             ? []
-            : [linked.providerAssetId]
+            : [providerTransfer.providerAssetId]
         ),
         ...linkedCanonicalTransfers.flatMap(({ providerAssetRowId, sourceRepresentationUseId }) =>
           sourceRepresentationUseId === null || providerAssetRowId === null
@@ -2404,7 +2406,7 @@ const make = Effect.gen(function* () {
             providerAssetRowIds: params.providerAssetRowIds,
             canonicalTransfers,
             derivedLegs,
-            linkedProviderTransfers,
+            persistedProviderTransfers,
             linkedCanonicalTransfers,
             derivedLegRecordedUses,
           })
