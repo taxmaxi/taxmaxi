@@ -895,6 +895,8 @@ describe("TransferReconciliationServiceLive", () => {
                 amount: "0.10000000",
                 kind: "disposal",
                 provenance: "deterministic",
+                originKind: "provider_transfer" as const,
+                providerTransferId,
               },
               {
                 sourceId: ONCHAIN_SOURCE_ID,
@@ -906,6 +908,8 @@ describe("TransferReconciliationServiceLive", () => {
                 amount: "0.10000000",
                 kind: "acquisition",
                 provenance: "deterministic",
+                originKind: "canonical_transfer" as const,
+                sourceTransferId: receipt.transferId,
               },
             ])
             return providerTransfer.transactionId
@@ -1084,6 +1088,7 @@ describe("TransferReconciliationServiceLive", () => {
               amount: "0.10000000",
               kind: "disposal",
               provenance: "deterministic",
+              originKind: "none" as const,
               derivationRule: "internal_transfer_out",
               metadata: { reconciliation: { providerTransferId } },
             })
@@ -1819,6 +1824,7 @@ describe("TransferReconciliationServiceLive", () => {
                   amount: "0.10000000",
                   kind: "disposal",
                   provenance: "manual",
+                  originKind: "none" as const,
                   derivationRule: "manual_taxable_disposal",
                   fiatAmount: "5000.00",
                   fiatCurrency: "EUR",
@@ -2023,6 +2029,7 @@ describe("TransferReconciliationServiceLive", () => {
               amount: "0.10000000",
               kind: "disposal",
               provenance: "deterministic",
+              originKind: "none" as const,
               derivationRule: "internal_transfer_out",
               metadata: { reconciliation: { providerTransferId } },
             })
@@ -4323,6 +4330,7 @@ describe("TransferReconciliationServiceLive", () => {
               amount: "0.12500000",
               kind: "acquisition",
               provenance: "deterministic",
+              originKind: "none" as const,
               derivationRule: "internal_transfer_in",
               metadata: { reconciliation: { providerTransferId } },
             })

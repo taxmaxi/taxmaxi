@@ -14,6 +14,7 @@ import { ProviderReferenceRepositoryLive } from "../../src/layers/ProviderRefere
 import { PrincipalAssetOverrideRepositoryLive } from "../../src/layers/PrincipalAssetOverrideRepositoryLive.ts"
 import { SourceNormalizationRepositoryLive } from "../../src/layers/SourceNormalizationRepositoryLive.ts"
 import { SourceRawRecordRepositoryLive } from "../../src/layers/SourceRawRecordRepositoryLive.ts"
+import { SourceReplayRepositoryLive } from "../../src/layers/SourceReplayRepositoryLive.ts"
 import { schema } from "../../src/schema/index.ts"
 import { PrincipalAssetOverrideRepository } from "../../src/services/PrincipalAssetOverrideRepository.ts"
 import {
@@ -29,6 +30,7 @@ import {
 } from "../support/integration-test-kit.ts"
 import {
   SourceNormalizationRepository,
+  SourceReplayRepository,
   SourceSyncCreditExhaustedError,
 } from "@my/sync-engine/services"
 import {
@@ -72,6 +74,9 @@ const loadSourceRepresentationUses = (sourceId: string) =>
 
 const runRepository = <A, E>(effect: Effect.Effect<A, E, SourceNormalizationRepository>) =>
   Effect.runPromise(context.runWithLayer({ effect, layer: SourceNormalizationRepositoryLive }))
+
+const runReplayRepository = <A, E>(effect: Effect.Effect<A, E, SourceReplayRepository>) =>
+  Effect.runPromise(context.runWithLayer({ effect, layer: SourceReplayRepositoryLive }))
 
 const SourceAndOverrideRepositoryTestLayer = Layer.mergeAll(
   SourceNormalizationRepositoryLive,
@@ -417,6 +422,8 @@ const persistExactOverrideArtifact = ({
             derivationRule: "exact_override_fixture",
             metadata: { evidence: externalId },
             transactionId: null,
+            originKind: "none" as const,
+            providerTransferId: null,
             sourceTransferId: null,
             fiatAmount: null,
             fiatCurrency: null,
@@ -673,12 +680,16 @@ const persistCoinbaseNormalization = ({
   skipLegDerivation = false,
   omitProviderTransfers = false,
   providerTransferRole,
+  includeOriginlessSibling = false,
+  invalidProviderOrigin,
 }: {
   readonly source: SourceSyncSource
   readonly sourceRecord: SourceRawRecord
   readonly skipLegDerivation?: boolean
   readonly omitProviderTransfers?: boolean
   readonly providerTransferRole?: "principal" | "fee"
+  readonly includeOriginlessSibling?: boolean
+  readonly invalidProviderOrigin?: "mismatched_transaction" | "dual_origin"
 }) =>
   Effect.gen(function* () {
     const referenceDataService = yield* CoinbaseReferenceDataService
@@ -692,15 +703,17 @@ const persistCoinbaseNormalization = ({
       sourceRecord,
       lookups,
     })
-    const providerTransfers = omitProviderTransfers
-      ? []
-      : prepared.providerTransfers.map((providerTransfer) => ({
-          ...providerTransfer,
-          metadata:
-            providerTransferRole === undefined
-              ? providerTransfer.metadata
-              : { role: providerTransferRole },
-        }))
+    const primaryProviderTransfer =
+      omitProviderTransfers || prepared.primaryProviderTransfer === null
+        ? null
+        : {
+            ...prepared.primaryProviderTransfer,
+            metadata:
+              providerTransferRole === undefined
+                ? prepared.primaryProviderTransfer.metadata
+                : { role: providerTransferRole },
+          }
+    const providerTransfers = primaryProviderTransfer === null ? [] : [primaryProviderTransfer]
 
     return yield* sourceNormalizationRepository.persistNormalizedArtifacts(
       prepared.legDerivationStrategy === "derive" && !skipLegDerivation
@@ -712,14 +725,86 @@ const persistCoinbaseNormalization = ({
             providerAssetRowIds: prepared.providerAssetRowIds,
             transactionReview: prepared.transactionReview,
             resolvedTransactionType: prepared.resolvedTransactionType,
-            deriveLegs: ({ transaction, venueContext, canonicalTransfers }) =>
-              coinbaseSourceSyncProvider.deriveLegs({
-                transaction,
-                venueContext,
-                primaryAsset: prepared.primaryAsset,
-                canonicalTransfers,
-                deriveMainLeg: prepared.deriveMainLeg,
-              }),
+            deriveLegs: ({
+              transaction,
+              venueContext,
+              providerTransferByDraft,
+              canonicalTransfers,
+            }) => {
+              const persistedPrimaryProviderTransfer =
+                primaryProviderTransfer === null
+                  ? null
+                  : providerTransferByDraft.get(primaryProviderTransfer)
+              if (
+                primaryProviderTransfer !== null &&
+                persistedPrimaryProviderTransfer === undefined
+              ) {
+                return Effect.die("Missing persisted primary provider transfer")
+              }
+
+              return coinbaseSourceSyncProvider
+                .deriveLegs({
+                  transaction,
+                  venueContext,
+                  primaryAsset: prepared.primaryAsset,
+                  primaryProviderTransferId: persistedPrimaryProviderTransfer?.id ?? null,
+                  canonicalTransfers,
+                  deriveMainLeg: prepared.deriveMainLeg,
+                })
+                .pipe(
+                  Effect.map((legs) => {
+                    const completeLegs = includeOriginlessSibling
+                      ? [
+                          ...legs,
+                          {
+                            sourceId: transaction.sourceId,
+                            sourceRawRecordId: transaction.sourceRawRecordId,
+                            externalId: `${transaction.externalId ?? transaction.id}:unrelated`,
+                            txHash: null,
+                            timestamp: transaction.timestamp,
+                            principalId: transaction.principalId,
+                            addressId: null,
+                            assetId: TEST_BTC_ASSET_ID,
+                            assetRepresentationId: null,
+                            amount: "0.25000000",
+                            kind: "acquisition" as const,
+                            provenance: "deterministic" as const,
+                            derivationRule: "t10c_unrelated_sibling",
+                            providerAssetRowId: prepared.providerAssetRowIds[0] ?? null,
+                            metadata: { fixture: "t10c_originless_sibling" },
+                            transactionId: transaction.id,
+                            originKind: "none" as const,
+                            providerTransferId: null,
+                            sourceTransferId: null,
+                            fiatAmount: null,
+                            fiatCurrency: null,
+                            feeForTransactionId: null,
+                          },
+                        ]
+                      : legs
+
+                    const [providerOriginLeg, ...remainingLegs] = completeLegs
+                    if (providerOriginLeg === undefined || invalidProviderOrigin === undefined) {
+                      return completeLegs
+                    }
+
+                    return [
+                      {
+                        ...providerOriginLeg,
+                        transactionId:
+                          invalidProviderOrigin === "mismatched_transaction"
+                            ? "00000000-0000-4000-8000-000000000799"
+                            : providerOriginLeg.transactionId,
+                        sourceTransferId:
+                          invalidProviderOrigin === "dual_origin"
+                            ? "00000000-0000-4000-8000-000000000798"
+                            : providerOriginLeg.sourceTransferId,
+                      },
+                      ...remainingLegs,
+                    ]
+                  })
+                )
+            },
           }
         : {
             transaction: prepared.transaction,
@@ -1099,6 +1184,8 @@ describe("SourceNormalizationRepositoryLive", () => {
                 providerAssetRowId: leg.providerAssetRowId,
                 metadata: { evidence: leg.externalId },
                 transactionId: transaction.id,
+                originKind: "none" as const,
+                providerTransferId: null,
                 sourceTransferId: null,
                 fiatAmount: null,
                 fiatCurrency: null,
@@ -1948,7 +2035,7 @@ describe("SourceNormalizationRepositoryLive", () => {
         kind: "fee",
       })
 
-      const [feeInventoryMovement] = yield* Effect.promise(() =>
+      const [feeState] = yield* Effect.promise(() =>
         runPg(
           Effect.gen(function* () {
             const db = yield* drizzle
@@ -1956,6 +2043,9 @@ describe("SourceNormalizationRepositoryLive", () => {
               .select({
                 assetId: schema.inventoryMovements.assetId,
                 assetRepresentationId: schema.inventoryMovements.assetRepresentationId,
+                originKind: schema.transactionLegs.originKind,
+                providerTransferId: schema.transactionLegs.providerTransferId,
+                sourceTransferId: schema.transactionLegs.sourceTransferId,
               })
               .from(schema.inventoryMovements)
               .innerJoin(
@@ -1966,9 +2056,12 @@ describe("SourceNormalizationRepositoryLive", () => {
           })
         )
       )
-      expect(feeInventoryMovement).toEqual({
+      expect(feeState).toEqual({
         assetId: TEST_BTC_ASSET_ID,
         assetRepresentationId: TEST_BTC_REPRESENTATION_ID,
+        originKind: "canonical_transfer",
+        providerTransferId: null,
+        sourceTransferId: feeDerived.canonicalTransfers[0]?.id,
       })
     })
   )
@@ -4914,6 +5007,7 @@ describe("SourceNormalizationRepositoryLive", () => {
                 amount: "0.10000000",
                 kind: "fee",
                 provenance: "deterministic",
+                originKind: "none" as const,
                 transactionId: oldTransactionId,
                 feeForTransactionId: oldTransactionId,
               })
@@ -5003,6 +5097,8 @@ describe("SourceNormalizationRepositoryLive", () => {
                     derivationRule: "commission",
                     metadata: { provider: "coinbase" },
                     transactionId: transaction.id,
+                    originKind: "none" as const,
+                    providerTransferId: null,
                     sourceTransferId: null,
                     fiatAmount: null,
                     fiatCurrency: null,
@@ -5036,26 +5132,87 @@ describe("SourceNormalizationRepositoryLive", () => {
     })
   )
 
-  it.effect("keeps Coinbase provider transfer persistence idempotent on replay", () =>
+  it.effect("rejects mismatched and dual provider-transfer origins", () =>
+    Effect.gen(function* () {
+      const occurredAt = DateTime.toDateUtc(DateTime.makeUnsafe("2025-04-03T09:00:00.000Z"))
+      const payload = {
+        id: "tx-provider-origin-validation",
+        type: "receive",
+        status: "completed",
+        amount: { amount: "0.05000000", currency: "BTC" },
+        native_amount: { amount: "750.00", currency: "EUR" },
+        created_at: occurredAt.toISOString(),
+        resource_path: "/v2/accounts/coinbase-account-1/transactions/tx-provider-origin-validation",
+        description: "T10c provider-origin validation fixture",
+        network: {
+          status: "confirmed",
+          hash: "tx-provider-origin-validation-hash",
+          network_name: "base",
+        },
+        from: {
+          address: "bc1qprovideroriginvalidationsource",
+          resource: "address",
+        },
+      }
+      const source = buildCoinbaseSource({ cexAccountId: fixture.cexAccountId })
+      const sourceRecord = buildSeededRawRecord({
+        rawRecordId: TEST_RAW_RECORD_ID,
+        externalRecordId: "raw-acquire-1",
+        occurredAt,
+        payload,
+      })
+
+      const mismatchedTransactionError = yield* Effect.promise(() =>
+        runCoinbaseNormalization(
+          persistCoinbaseNormalization({
+            source,
+            sourceRecord,
+            invalidProviderOrigin: "mismatched_transaction",
+          }).pipe(Effect.flip)
+        )
+      )
+      expect(mismatchedTransactionError).toMatchObject({
+        _tag: "SyncEngineStorageError",
+        operation: "sourceNormalizationRepository.finalizeTransactionLegOrigins.scope",
+      })
+
+      const dualOriginError = yield* Effect.promise(() =>
+        runCoinbaseNormalization(
+          persistCoinbaseNormalization({
+            source,
+            sourceRecord,
+            invalidProviderOrigin: "dual_origin",
+          }).pipe(Effect.flip)
+        )
+      )
+      expect(dualOriginError).toMatchObject({
+        _tag: "SyncEngineStorageError",
+        operation: "sourceNormalizationRepository.finalizeTransactionLegOrigins.links",
+      })
+    })
+  )
+
+  it.effect("replays the producer-known provider transfer origin without borrowing it", () =>
     Effect.gen(function* () {
       const rawRecordId = "00000000-0000-0000-0000-000000000693"
       const occurredAt = DateTime.toDateUtc(DateTime.makeUnsafe("2025-04-03T10:00:00.000Z"))
       const payload = {
-        id: "tx-send-provider-transfer-replay-1",
-        type: "send",
+        id: "tx-receive-provider-transfer-replay-1",
+        type: "receive",
         status: "completed",
-        amount: { amount: "-0.05000000", currency: "BTC" },
-        native_amount: { amount: "-750.00", currency: "EUR" },
+        amount: { amount: "0.05000000", currency: "BTC" },
+        native_amount: { amount: "750.00", currency: "EUR" },
         created_at: occurredAt.toISOString(),
         resource_path:
-          "/v2/accounts/coinbase-account-1/transactions/tx-send-provider-transfer-replay-1",
+          "/v2/accounts/coinbase-account-1/transactions/tx-receive-provider-transfer-replay-1",
+        description: "T10c provider-origin replay fixture",
         network: {
           status: "confirmed",
-          hash: "tx-send-provider-transfer-replay-hash-1",
+          hash: "tx-receive-provider-transfer-replay-hash-1",
           network_name: "base",
         },
-        to: {
-          address: "bc1qprovidertransferreplaydestination",
+        from: {
+          address: "bc1qprovidertransferreplaysource",
           resource: "address",
         },
       }
@@ -5064,7 +5221,7 @@ describe("SourceNormalizationRepositoryLive", () => {
         runPg(
           seedRawRecord({
             rawRecordId,
-            externalRecordId: "raw-provider-send-replay-1",
+            externalRecordId: "raw-provider-receive-replay-1",
             occurredAt,
             payload,
           })
@@ -5074,48 +5231,99 @@ describe("SourceNormalizationRepositoryLive", () => {
       const source = buildCoinbaseSource({ cexAccountId: fixture.cexAccountId })
       const sourceRecord = buildSeededRawRecord({
         rawRecordId,
-        externalRecordId: "raw-provider-send-replay-1",
+        externalRecordId: "raw-provider-receive-replay-1",
         occurredAt,
         payload,
       })
 
-      yield* Effect.promise(() =>
+      const firstResult = yield* Effect.promise(() =>
         runCoinbaseNormalization(
           persistCoinbaseNormalization({
             source,
             sourceRecord,
+            includeOriginlessSibling: true,
           })
         )
       )
 
-      yield* Effect.promise(() =>
-        runCoinbaseNormalization(
-          persistCoinbaseNormalization({
-            source,
-            sourceRecord,
-          })
-        )
-      )
+      const firstProviderTransfer = firstResult.providerTransfers[0]
+      if (firstProviderTransfer === undefined) {
+        return yield* Effect.die("Missing provider transfer from T10c replay fixture")
+      }
 
-      const counts = yield* Effect.promise(() =>
+      const loadLegs = () =>
         runPg(
           Effect.gen(function* () {
             const db = yield* drizzle
-            const providerTransfers = yield* db.select().from(schema.providerTransfers)
-            const transactions = yield* db.select().from(schema.transactions)
-            const inventoryMovements = yield* db.select().from(schema.inventoryMovements)
-            return {
-              providerTransfers,
-              transactions,
-              inventoryMovements,
-            }
+            return yield* db
+              .select({
+                externalId: schema.transactionLegs.externalId,
+                originKind: schema.transactionLegs.originKind,
+                providerTransferId: schema.transactionLegs.providerTransferId,
+                sourceTransferId: schema.transactionLegs.sourceTransferId,
+              })
+              .from(schema.transactionLegs)
+              .where(eq(schema.transactionLegs.transactionId, firstResult.transaction.id))
+              .orderBy(asc(schema.transactionLegs.externalId))
+          })
+        )
+
+      expect(yield* Effect.promise(loadLegs)).toEqual([
+        {
+          externalId: "tx-receive-provider-transfer-replay-1:main",
+          originKind: "provider_transfer",
+          providerTransferId: firstProviderTransfer.id,
+          sourceTransferId: null,
+        },
+        {
+          externalId: "tx-receive-provider-transfer-replay-1:unrelated",
+          originKind: "none",
+          providerTransferId: null,
+          sourceTransferId: null,
+        },
+      ])
+
+      yield* Effect.promise(() =>
+        runReplayRepository(
+          Effect.flatMap(SourceReplayRepository, (repository) =>
+            repository.resetSourceDerivedState({ sourceId: source.id })
+          )
+        )
+      )
+
+      expect(yield* Effect.promise(loadLegs)).toEqual([])
+
+      const replayResult = yield* Effect.promise(() =>
+        runCoinbaseNormalization(
+          persistCoinbaseNormalization({
+            source,
+            sourceRecord,
+            includeOriginlessSibling: true,
           })
         )
       )
 
-      expect(counts.providerTransfers).toHaveLength(1)
-      expect(counts.transactions).toHaveLength(1)
-      expect(counts.inventoryMovements).toHaveLength(1)
+      const replayedProviderTransfer = replayResult.providerTransfers[0]
+      if (replayedProviderTransfer === undefined) {
+        return yield* Effect.die("Missing replayed provider transfer from T10c fixture")
+      }
+
+      expect(replayedProviderTransfer.id).not.toBe(firstProviderTransfer.id)
+
+      expect(yield* Effect.promise(loadLegs)).toEqual([
+        {
+          externalId: "tx-receive-provider-transfer-replay-1:main",
+          originKind: "provider_transfer",
+          providerTransferId: replayedProviderTransfer.id,
+          sourceTransferId: null,
+        },
+        {
+          externalId: "tx-receive-provider-transfer-replay-1:unrelated",
+          originKind: "none",
+          providerTransferId: null,
+          sourceTransferId: null,
+        },
+      ])
     })
   )
 })

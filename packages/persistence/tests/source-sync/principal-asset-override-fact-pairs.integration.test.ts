@@ -86,6 +86,7 @@ const makeLeg = ({
   amount: "1",
   kind: "acquisition" as const,
   provenance: "deterministic" as const,
+  originKind: "none" as const,
   derivationRule: "test_catalog_identity",
   metadata: null,
   transactionId: null,

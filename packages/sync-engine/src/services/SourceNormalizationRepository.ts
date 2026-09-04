@@ -53,6 +53,9 @@ export type SourceLegKind = "acquisition" | "disposal" | "income" | "fee"
  */
 export type SourceLegProvenance = "deterministic" | "rule" | "ai" | "manual"
 
+/** SourceLegOriginKind - Exact factual transfer origin recorded for a leg. */
+export type SourceLegOriginKind = "provider_transfer" | "canonical_transfer" | "none"
+
 /**
  * SourceProviderTransferDirection - Direction for durable provider-side movements.
  */
@@ -219,6 +222,13 @@ export interface SourceTransactionLegDraft {
   readonly providerAssetRowId?: string | null
   readonly metadata: unknown
   readonly transactionId: string | null
+  /**
+   * Provider-derived and originless writers must state this explicitly. The persistence writer
+   * records `canonical_transfer` for the already-explicit `sourceTransferId` path.
+   */
+  readonly originKind?: SourceLegOriginKind
+  /** Exact persisted provider transfer that produced this leg. */
+  readonly providerTransferId?: string | null
   readonly sourceTransferId: string | null
   readonly fiatAmount: string | null
   readonly fiatCurrency: string | null
@@ -350,6 +360,11 @@ export interface PersistNormalizedSourceArtifactsContext {
   readonly transaction: PersistedSourceTransaction
   readonly venueContext: PersistedSourceVenueContext
   readonly providerTransfers: ReadonlyArray<PersistedSourceProviderTransfer>
+  /** Direct association from each producer draft object to the row written for it. */
+  readonly providerTransferByDraft: ReadonlyMap<
+    SourceProviderTransferDraft,
+    PersistedSourceProviderTransfer
+  >
   readonly canonicalTransfers: ReadonlyArray<PersistedSourceTransfer>
 }
 

@@ -270,6 +270,7 @@ const seedFactualLedgerOnly = Effect.gen(function* () {
     amount: "99",
     kind: "acquisition",
     provenance: "deterministic",
+    originKind: "none" as const,
     fiatAmount: "990",
     fiatCurrency: "EUR",
   })

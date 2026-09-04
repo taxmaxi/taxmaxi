@@ -2386,6 +2386,7 @@ describe("AssetExceptionRepositoryLive", () => {
                 amount: "10",
                 kind: "acquisition",
                 provenance: "deterministic",
+                originKind: "none" as const,
               })
               .returning({ id: schema.transactionLegs.id })
             if (leg === undefined) {

@@ -62,6 +62,8 @@ export interface PreparedCoinbaseNormalization {
   readonly transaction: SourceTransactionDraft
   readonly venueContext: SourceVenueContextDraft
   readonly providerTransfers: ReadonlyArray<SourceProviderTransferDraft>
+  /** Exact principal movement draft that may produce the main accounting leg. */
+  readonly primaryProviderTransfer: SourceProviderTransferDraft | null
   readonly canonicalTransfers: ReadonlyArray<SourceTransferDraft>
   readonly transactionReview: SourceTransactionReviewDraft | null
   readonly resolvedTransactionType: CoinbaseResolvedTransactionTypeMapping
@@ -78,6 +80,7 @@ export interface DeriveCoinbaseProviderLegsParams {
   readonly transaction: PersistedSourceTransaction
   readonly venueContext: PersistedSourceVenueContext | null
   readonly primaryAsset: SyncEngineAsset | null
+  readonly primaryProviderTransferId: string | null
   readonly canonicalTransfers: ReadonlyArray<PersistedSourceTransfer>
   readonly deriveMainLeg: boolean
 }

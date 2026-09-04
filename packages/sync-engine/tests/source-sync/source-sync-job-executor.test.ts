@@ -606,6 +606,7 @@ const makeExecutorLayer = ({
             transaction,
             venueContext,
             providerTransfers: [],
+            providerTransferByDraft: new Map(),
             canonicalTransfers: [],
           })
         }

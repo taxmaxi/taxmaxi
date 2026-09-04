@@ -712,6 +712,7 @@ const persistDualFeeNormalization = (normalized: CoinbaseRecordNormalizationResu
           transaction,
           venueContext,
           primaryAsset: null,
+          primaryProviderTransferId: null,
           canonicalTransfers,
           deriveMainLeg: false,
         }),

@@ -256,6 +256,7 @@ const seedProviderBoundaryTransaction = ({
         amount: "1",
         kind: leg.kind,
         provenance: "deterministic" as const,
+        originKind: "none" as const,
         providerAssetRowId: leg.providerAssetRowId,
         transactionId: transaction.id,
       }))
@@ -430,6 +431,7 @@ const seedCustodyReconciliation = ({
     })
 
     return {
+      providerTransferId: providerTransfer.id,
       providerTransactionId: providerTransaction.id,
       canonicalTransactionId: canonicalTransaction.id,
       canonicalTransferId: canonicalTransfer.id,
@@ -506,6 +508,7 @@ describe("FactualLedgerRepositoryLive", () => {
                 amount: "1.25",
                 kind: "acquisition",
                 provenance: "deterministic",
+                originKind: "none" as const,
                 transactionId: purchaseTransaction.id,
               },
               {
@@ -518,6 +521,7 @@ describe("FactualLedgerRepositoryLive", () => {
                 amount: "0.5",
                 kind: "disposal",
                 provenance: "deterministic",
+                originKind: "none" as const,
                 transactionId: saleTransaction.id,
               },
               {
@@ -530,6 +534,7 @@ describe("FactualLedgerRepositoryLive", () => {
                 amount: "0.75",
                 kind: "acquisition",
                 provenance: "deterministic",
+                originKind: "none" as const,
                 transactionId: saleTransaction.id,
               },
               {
@@ -542,6 +547,7 @@ describe("FactualLedgerRepositoryLive", () => {
                 amount: "0.25",
                 kind: "disposal",
                 provenance: "deterministic",
+                originKind: "none" as const,
                 transactionId: purchaseTransaction.id,
               },
             ])
@@ -722,6 +728,7 @@ describe("FactualLedgerRepositoryLive", () => {
                 amount: "1",
                 kind: "acquisition" as const,
                 provenance: "deterministic" as const,
+                originKind: "none" as const,
                 transactionId: transaction.id,
               }))
             )
@@ -969,6 +976,7 @@ describe("FactualLedgerRepositoryLive", () => {
                 amount: "1",
                 kind: "acquisition",
                 provenance: "deterministic",
+                originKind: "none" as const,
                 providerAssetRowId: PROVIDER_ASSET_ROW_ID,
                 transactionId: selectedTransaction.id,
               },
@@ -981,6 +989,7 @@ describe("FactualLedgerRepositoryLive", () => {
                 amount: "1",
                 kind: "acquisition",
                 provenance: "deterministic",
+                originKind: "none" as const,
                 providerAssetRowId: DUPLICATE_PROVIDER_ASSET_ROW_ID,
                 transactionId: duplicateTransaction.id,
               },
@@ -993,6 +1002,7 @@ describe("FactualLedgerRepositoryLive", () => {
                 amount: "1",
                 kind: "acquisition",
                 provenance: "deterministic",
+                originKind: "none" as const,
                 providerAssetRowId: PROVIDER_ASSET_ROW_ID,
                 transactionId: exactTransaction.id,
               },
@@ -1005,6 +1015,7 @@ describe("FactualLedgerRepositoryLive", () => {
                 amount: "1",
                 kind: "acquisition",
                 provenance: "deterministic",
+                originKind: "none" as const,
                 providerAssetRowId: PROVIDER_ASSET_ROW_ID,
                 transactionId: otherTransaction.id,
               },
@@ -1017,6 +1028,7 @@ describe("FactualLedgerRepositoryLive", () => {
                 amount: "1",
                 kind: "acquisition",
                 provenance: "deterministic",
+                originKind: "none" as const,
                 providerAssetRowId: PROVIDER_ASSET_ROW_ID,
                 transactionId: contradictoryTransaction.id,
               },
@@ -1029,6 +1041,7 @@ describe("FactualLedgerRepositoryLive", () => {
                 amount: "1",
                 kind: "acquisition",
                 provenance: "deterministic",
+                originKind: "none" as const,
                 providerAssetRowId: DUPLICATE_PROVIDER_ASSET_ROW_ID,
                 transactionId: contradictoryTransaction.id,
               },
@@ -1464,6 +1477,7 @@ describe("FactualLedgerRepositoryLive", () => {
               amount: "0.01",
               kind: "fee",
               provenance: "deterministic",
+              originKind: "none" as const,
               transactionId: feeTransaction.id,
               feeForTransactionId: operation.id,
             })
@@ -1505,6 +1519,7 @@ describe("FactualLedgerRepositoryLive", () => {
                 amount,
                 kind: "acquisition",
                 provenance: "deterministic",
+                originKind: "none" as const,
               })
             })
           )
@@ -1601,6 +1616,7 @@ describe("FactualLedgerRepositoryLive", () => {
               amount: "1",
               kind: "acquisition",
               provenance: "deterministic",
+              originKind: "none" as const,
               transactionId: transaction.id,
             })
             yield* db.insert(schema.assetPrices).values({
@@ -1700,6 +1716,7 @@ describe("FactualLedgerRepositoryLive", () => {
                 amount: "1",
                 kind: "acquisition",
                 provenance: "deterministic",
+                originKind: "none" as const,
                 transactionId: foreignSourceTransaction.id,
               },
               {
@@ -1712,6 +1729,7 @@ describe("FactualLedgerRepositoryLive", () => {
                 amount: "2",
                 kind: "disposal",
                 provenance: "deterministic",
+                originKind: "none" as const,
                 transactionId: foreignTransactionOnOwnedSource.id,
               },
               {
@@ -1724,6 +1742,7 @@ describe("FactualLedgerRepositoryLive", () => {
                 amount: "3",
                 kind: "acquisition",
                 provenance: "deterministic",
+                originKind: "none" as const,
                 transactionId: mismatchedSourceTransaction.id,
               },
               {
@@ -1736,6 +1755,7 @@ describe("FactualLedgerRepositoryLive", () => {
                 amount: "0.01",
                 kind: "fee",
                 provenance: "deterministic",
+                originKind: "none" as const,
                 feeForTransactionId: mismatchedFeeTarget.id,
               },
             ])
@@ -1814,6 +1834,7 @@ describe("FactualLedgerRepositoryLive", () => {
               amount: "2",
               kind: "acquisition",
               provenance: "deterministic",
+              originKind: "none" as const,
               transactionId: transaction.id,
               fiatAmount: "999.00",
               fiatCurrency: "EUR",
@@ -1973,6 +1994,7 @@ describe("FactualLedgerRepositoryLive", () => {
                 amount: "1",
                 kind: "acquisition" as const,
                 provenance: "deterministic" as const,
+                originKind: "none" as const,
                 transactionId: transaction.id,
               }))
             )
@@ -2062,6 +2084,7 @@ describe("FactualLedgerRepositoryLive", () => {
                 amount: "1",
                 kind: "disposal",
                 provenance: "deterministic",
+                originKind: "none" as const,
                 transactionId: negativeTransaction.id,
               },
               {
@@ -2074,6 +2097,7 @@ describe("FactualLedgerRepositoryLive", () => {
                 amount: "1",
                 kind: "disposal",
                 provenance: "deterministic",
+                originKind: "none" as const,
                 transactionId: ambiguousTransaction.id,
               },
               {
@@ -2086,6 +2110,7 @@ describe("FactualLedgerRepositoryLive", () => {
                 amount: "2",
                 kind: "acquisition",
                 provenance: "deterministic",
+                originKind: "none" as const,
                 transactionId: ambiguousTransaction.id,
               },
               {
@@ -2098,6 +2123,7 @@ describe("FactualLedgerRepositoryLive", () => {
                 amount: "1",
                 kind: "acquisition",
                 provenance: "deterministic",
+                originKind: "none" as const,
                 transactionId: invalidTransaction.id,
               },
             ])
@@ -2269,6 +2295,8 @@ describe("FactualLedgerRepositoryLive", () => {
                 amount: "0.75",
                 kind: "disposal",
                 provenance: "deterministic",
+                originKind: "provider_transfer" as const,
+                providerTransferId: finalized.providerTransferId,
                 transactionId: finalized.providerTransactionId,
               },
               {
@@ -2281,6 +2309,7 @@ describe("FactualLedgerRepositoryLive", () => {
                 amount: "0.75",
                 kind: "acquisition",
                 provenance: "deterministic",
+                originKind: "canonical_transfer" as const,
                 transactionId: finalized.canonicalTransactionId,
                 sourceTransferId: finalized.canonicalTransferId,
               },
@@ -2294,6 +2323,8 @@ describe("FactualLedgerRepositoryLive", () => {
                 amount: "0.5",
                 kind: "acquisition",
                 provenance: "deterministic",
+                originKind: "provider_transfer" as const,
+                providerTransferId: finalizedInbound.providerTransferId,
                 transactionId: finalizedInbound.providerTransactionId,
               },
               {
@@ -2306,6 +2337,7 @@ describe("FactualLedgerRepositoryLive", () => {
                 amount: "0.5",
                 kind: "disposal",
                 provenance: "deterministic",
+                originKind: "canonical_transfer" as const,
                 transactionId: finalizedInbound.canonicalTransactionId,
                 sourceTransferId: finalizedInbound.canonicalTransferId,
               },
@@ -2319,6 +2351,7 @@ describe("FactualLedgerRepositoryLive", () => {
                 amount: "0.125",
                 kind: "acquisition",
                 provenance: "deterministic",
+                originKind: "canonical_transfer" as const,
                 transactionId: finalized.canonicalTransactionId,
                 sourceTransferId: unrelatedTransfer.id,
               },
@@ -2332,6 +2365,7 @@ describe("FactualLedgerRepositoryLive", () => {
                 amount: "0.75",
                 kind: "disposal",
                 provenance: "deterministic",
+                originKind: "none" as const,
                 derivationRule: "internal_transfer_out",
                 transactionId: finalized.providerTransactionId,
               },
@@ -2345,6 +2379,7 @@ describe("FactualLedgerRepositoryLive", () => {
                 amount: "0.75",
                 kind: "acquisition",
                 provenance: "deterministic",
+                originKind: "none" as const,
                 derivationRule: "internal_transfer_in",
                 transactionId: finalized.canonicalTransactionId,
               },
@@ -2461,6 +2496,8 @@ describe("FactualLedgerRepositoryLive", () => {
                 amount: "0.75",
                 kind: "disposal",
                 provenance: "deterministic",
+                originKind: "provider_transfer" as const,
+                providerTransferId: excluded.providerTransferId,
                 transactionId: excluded.providerTransactionId,
               },
               {
@@ -2472,6 +2509,7 @@ describe("FactualLedgerRepositoryLive", () => {
                 amount: "0.75",
                 kind: "acquisition",
                 provenance: "deterministic",
+                originKind: "canonical_transfer" as const,
                 transactionId: excluded.canonicalTransactionId,
                 sourceTransferId: excluded.canonicalTransferId,
               },
@@ -2484,6 +2522,7 @@ describe("FactualLedgerRepositoryLive", () => {
                 amount: "0.75",
                 kind: "disposal",
                 provenance: "deterministic",
+                originKind: "none" as const,
                 derivationRule: "internal_transfer_out",
                 transactionId: excluded.providerTransactionId,
               },
@@ -2496,6 +2535,7 @@ describe("FactualLedgerRepositoryLive", () => {
                 amount: "0.75",
                 kind: "acquisition",
                 provenance: "deterministic",
+                originKind: "none" as const,
                 derivationRule: "internal_transfer_in",
                 transactionId: excluded.canonicalTransactionId,
               },

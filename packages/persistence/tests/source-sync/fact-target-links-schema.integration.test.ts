@@ -117,6 +117,7 @@ const legValues = ({
   amount: "1",
   kind: "acquisition" as const,
   provenance: "deterministic" as const,
+  originKind: sourceTransferId === null ? ("none" as const) : ("canonical_transfer" as const),
   transactionId: TRANSACTION_ID,
   sourceTransferId,
 })

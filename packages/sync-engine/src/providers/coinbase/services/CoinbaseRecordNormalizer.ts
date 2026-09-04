@@ -43,6 +43,8 @@ export interface CoinbaseRecordNormalizationResult {
   readonly transaction: SourceTransactionDraft
   readonly venueContext: SourceVenueContextDraft
   readonly providerTransfers: ReadonlyArray<SourceProviderTransferDraft>
+  /** Exact principal movement draft which may produce the main accounting leg. */
+  readonly primaryProviderTransfer: SourceProviderTransferDraft | null
   readonly canonicalTransfers: ReadonlyArray<SourceTransferDraft>
   readonly feeProviderAssetRowIds: ReadonlyArray<string>
   readonly unresolvedAssetCurrencies: ReadonlyArray<string>

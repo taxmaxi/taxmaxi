@@ -17,6 +17,7 @@ import { assetRepresentations } from "./AssetRepresentationsTable.ts"
 import { assets } from "./AssetsTable.ts"
 import { principals } from "./PrincipalsTable.ts"
 import { providerAssets } from "./ProviderAssetsTable.ts"
+import { providerTransfers } from "./ProviderTransfersTable.ts"
 import { sourceRecordsRaw } from "./SourceRecordsRawTable.ts"
 import { sourceRepresentationUses } from "./SourceRepresentationUsesTable.ts"
 import { sources } from "./SourcesTable.ts"
@@ -44,6 +45,15 @@ export type LegKind = (typeof legKindEnum.enumValues)[number]
 export const legProvenanceEnum = pgEnum("leg_provenance", ["deterministic", "rule", "ai", "manual"])
 
 export type LegProvenance = (typeof legProvenanceEnum.enumValues)[number]
+
+/** Records which factual transfer, if any, directly produced a transaction leg. */
+export const transactionLegOriginKindEnum = pgEnum("transaction_leg_origin_kind", [
+  "provider_transfer",
+  "canonical_transfer",
+  "none",
+])
+
+export type TransactionLegOriginKind = (typeof transactionLegOriginKindEnum.enumValues)[number]
 
 /**
  * Transaction legs table - factual accounting legs derived from raw transfers/events
@@ -109,7 +119,11 @@ export const transactionLegs = pgTable(
       onDelete: "cascade",
     }),
 
-    // Link to source transfer (if derived from a transfer)
+    // Exact transfer origin selected by the leg writer. Originless legs say so explicitly.
+    originKind: transactionLegOriginKindEnum("origin_kind").notNull(),
+    providerTransferId: uuid("provider_transfer_id").references(() => providerTransfers.id, {
+      onDelete: "cascade",
+    }),
     sourceTransferId: uuid("source_transfer_id").references(() => transfers.id, {
       onDelete: "cascade",
     }),
@@ -145,6 +159,12 @@ export const transactionLegs = pgTable(
       "transaction_legs_tx_hash_requires_address",
       sql`${table.txHash} is null or ${table.addressId} is not null`
     ),
+    check(
+      "transaction_legs_origin_matches_kind",
+      sql`(${table.originKind} = 'provider_transfer' and ${table.providerTransferId} is not null and ${table.sourceTransferId} is null)
+        or (${table.originKind} = 'canonical_transfer' and ${table.providerTransferId} is null and ${table.sourceTransferId} is not null)
+        or (${table.originKind} = 'none' and ${table.providerTransferId} is null and ${table.sourceTransferId} is null)`
+    ),
     uniqueIndex("idx_transaction_legs_source_external_unique")
       .on(table.sourceId, table.externalId)
       .where(sql`${table.externalId} is not null`),
@@ -167,6 +187,8 @@ export const transactionLegs = pgTable(
 
     // Query legs by transaction
     index("idx_transaction_legs_transaction").on(table.transactionId),
+
+    index("idx_transaction_legs_provider_transfer").on(table.providerTransferId),
 
     // Query legs by address (for portfolio views)
     index("idx_transaction_legs_address").on(table.addressId),
