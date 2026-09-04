@@ -118,9 +118,13 @@ const makeCoinbaseProviderModule = (
                       canonicalTransfers,
                       resolveProviderAssetDecision,
                       persistProviderAssetTransferCandidate,
+                      recordTransactionReviewWithoutProviderAssetMapping,
                       withholdAccountingFacts,
                     }) =>
                       Effect.gen(function* () {
+                        recordTransactionReviewWithoutProviderAssetMapping(
+                          prepared.transactionReviewWithoutProviderAssetMapping
+                        )
                         const primaryProviderTransfer =
                           prepared.primaryProviderTransfer === null
                             ? null

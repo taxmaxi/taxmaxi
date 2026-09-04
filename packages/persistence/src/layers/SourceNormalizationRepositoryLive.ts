@@ -253,6 +253,37 @@ const withPrincipalAssetUnresolvedIdentityReview = ({
   reviewedAt: null,
 })
 
+const withPrincipalAssetExclusionReview = ({
+  principalId,
+  transactionType,
+  review,
+}: {
+  readonly principalId: string
+  readonly transactionType: string | null
+  readonly review: SourceTransactionReviewDraft | null
+}): SourceTransactionReviewDraft => ({
+  principalId,
+  reviewStatus: "needs_review",
+  originalTypeKey: review?.originalTypeKey ?? transactionType,
+  originalConfidence: review?.originalConfidence ?? null,
+  currentTypeKey: review?.currentTypeKey ?? transactionType,
+  legalRuleSetVersion: review?.legalRuleSetVersion ?? null,
+  categorizationReason: appendReviewSegment({
+    existing: review?.categorizationReason ?? null,
+    segment:
+      "principal_asset_override: Accounting facts withheld by an active principal exclusion.",
+    separator: " ",
+  }),
+  matchedLayer: appendReviewSegment({
+    existing: review?.matchedLayer ?? null,
+    segment: PRINCIPAL_OVERRIDE_REVIEW_LAYER,
+    separator: ",",
+  }),
+  needsReview: true,
+  userNotes: review?.userNotes ?? null,
+  reviewedAt: null,
+})
+
 const applyPrincipalProviderAssetDecisions = ({
   decisions,
   legs,
@@ -275,6 +306,8 @@ const applyPrincipalProviderAssetDecisions = ({
   readonly sourceRepresentationUseIds: ReadonlyArray<string>
   readonly derivationTechnicalBlockers: ReadonlyArray<PrincipalAssetTechnicalBlocker>
 }): {
+  readonly hasPrincipalExclusion: boolean
+  readonly resolvesProviderAssetMappingReview: boolean
   readonly hasUnresolvedIdentity: boolean
   readonly withholdsAccountingFacts: boolean
   readonly technicalBlockers: ReadonlyArray<PrincipalAssetTechnicalBlocker>
@@ -294,6 +327,8 @@ const applyPrincipalProviderAssetDecisions = ({
   > = []
   const feeCustodyAssetIds: Array<string | null> = []
   let hasUnresolvedIdentity = false
+  let hasPrincipalExclusion = false
+  let resolvesProviderAssetMappingReview = false
   const technicalBlockers = new Set<PrincipalAssetTechnicalBlocker>(derivationTechnicalBlockers)
   let hasBlockedOrExcludedExactUse = false
   for (const sourceRepresentationUseId of sourceRepresentationUseIds) {
@@ -306,6 +341,7 @@ const applyPrincipalProviderAssetDecisions = ({
 
     const inclusion = decision.inclusionReplacement ?? decision.systemInclusion
     const assetId = decision.identityReplacementAssetId ?? decision.systemAssetId
+    if (decision.inclusionReplacement === "excluded") hasPrincipalExclusion = true
     if (assetId === null) hasUnresolvedIdentity = true
     if (inclusion === "excluded" || assetId === null) hasBlockedOrExcludedExactUse = true
   }
@@ -320,6 +356,23 @@ const applyPrincipalProviderAssetDecisions = ({
 
     const providerDecision = decisions.providerAssetDecisionById.get(providerAssetRowId)
     if (sourceRepresentationUseId !== null) {
+      const exactDecision =
+        decisions.sourceRepresentationUseDecisionById.get(sourceRepresentationUseId)
+      if (exactDecision?.inclusionReplacement === "excluded") hasPrincipalExclusion = true
+      const exactInclusion =
+        exactDecision === undefined
+          ? "excluded"
+          : (exactDecision.inclusionReplacement ?? exactDecision.systemInclusion)
+      const exactAssetId =
+        exactDecision?.identityReplacementAssetId ?? exactDecision?.systemAssetId ?? null
+      if (
+        providerDecision?.systemAssetId === null &&
+        providerDecision.systemInclusion !== "excluded" &&
+        exactInclusion === "included" &&
+        exactAssetId !== null
+      ) {
+        resolvesProviderAssetMappingReview = true
+      }
       return providerDecision?.systemInclusion === "excluded"
     }
     if (decisions.ignoredProviderAssetRowIds.has(providerAssetRowId)) return false
@@ -331,6 +384,19 @@ const applyPrincipalProviderAssetDecisions = ({
 
     for (const technicalBlocker of providerDecision.technicalBlockers) {
       technicalBlockers.add(technicalBlocker)
+    }
+
+    if (
+      providerDecision.systemInclusion === "included" &&
+      providerDecision.inclusion === "excluded"
+    ) {
+      hasPrincipalExclusion = true
+    }
+    if (
+      providerDecision.systemAssetId === null &&
+      providerDecision.effectiveDecision._tag === "included"
+    ) {
+      resolvesProviderAssetMappingReview = true
     }
 
     if (
@@ -443,6 +509,8 @@ const applyPrincipalProviderAssetDecisions = ({
     derivationTechnicalBlockers.length > 0
 
   return {
+    hasPrincipalExclusion,
+    resolvesProviderAssetMappingReview,
     hasUnresolvedIdentity,
     withholdsAccountingFacts,
     technicalBlockers: [...technicalBlockers].sort(),
@@ -2654,6 +2722,14 @@ const make = Effect.gen(function* () {
           const persistedCandidateCanonicalTransfers: PersistedSourceTransfer[] = []
           const resolvedDerivationTargets: SourceProviderAssetDecisionTarget[] = []
           const derivationTechnicalBlockers: PrincipalAssetTechnicalBlocker[] = []
+          const recordedTransactionReviewWithoutProviderAssetMapping: {
+            value:
+              | { readonly _tag: "not_recorded" }
+              | {
+                  readonly _tag: "recorded"
+                  readonly review: SourceTransactionReviewDraft | null
+                }
+          } = { value: { _tag: "not_recorded" } }
           const resolveDerivationProviderAssetDecision = (
             target: SourceProviderAssetDecisionTarget
           ) => {
@@ -2712,6 +2788,12 @@ const make = Effect.gen(function* () {
                   canonicalTransfers: systemCanonicalTransfers,
                   resolveProviderAssetDecision: resolveDerivationProviderAssetDecision,
                   persistProviderAssetTransferCandidate,
+                  recordTransactionReviewWithoutProviderAssetMapping: (review) => {
+                    recordedTransactionReviewWithoutProviderAssetMapping.value = {
+                      _tag: "recorded",
+                      review,
+                    }
+                  },
                   withholdAccountingFacts: (reason) => {
                     derivationTechnicalBlockers.push(reason)
                   },
@@ -2816,6 +2898,28 @@ const make = Effect.gen(function* () {
             sourceRepresentationUseIds,
             derivationTechnicalBlockers,
           })
+          if (
+            providerDecisionResult.withholdsAccountingFacts &&
+            persistedCandidateCanonicalTransfers.length > 0
+          ) {
+            yield* tx
+              .delete(schema.transfers)
+              .where(
+                inArray(
+                  schema.transfers.id,
+                  persistedCandidateCanonicalTransfers.map(({ id }) => id)
+                )
+              )
+              .pipe(
+                wrapSyncEngineSqlError(
+                  "sourceNormalizationRepository.persistNormalizedArtifacts.removeWithheldCandidateTransfers"
+                )
+              )
+          }
+          const retainedCandidateCanonicalTransfers =
+            providerDecisionResult.withholdsAccountingFacts
+              ? []
+              : persistedCandidateCanonicalTransfers
           const effectiveLegs = providerDecisionResult.legs
           const linkedLegs = yield* finalizeTransactionLegOrigins({
             legs: effectiveLegs,
@@ -2878,13 +2982,26 @@ const make = Effect.gen(function* () {
             })
           }
 
+          const resolvedProviderMappingReview =
+            providerDecisionResult.resolvesProviderAssetMappingReview &&
+            !providerDecisionResult.withholdsAccountingFacts &&
+            recordedTransactionReviewWithoutProviderAssetMapping.value._tag === "recorded"
+              ? recordedTransactionReviewWithoutProviderAssetMapping.value.review
+              : params.transactionReview
+          const principalExclusionReview = providerDecisionResult.hasPrincipalExclusion
+            ? withPrincipalAssetExclusionReview({
+                principalId: persistedTransaction.principalId,
+                transactionType: params.transaction.transactionType,
+                review: resolvedProviderMappingReview,
+              })
+            : resolvedProviderMappingReview
           const unresolvedIdentityReview = providerDecisionResult.hasUnresolvedIdentity
             ? withPrincipalAssetUnresolvedIdentityReview({
                 principalId: persistedTransaction.principalId,
                 transactionType: params.transaction.transactionType,
-                review: params.transactionReview,
+                review: principalExclusionReview,
               })
-            : params.transactionReview
+            : principalExclusionReview
           const technicalBlockerReview =
             providerDecisionResult.technicalBlockers.length === 0
               ? unresolvedIdentityReview
@@ -2922,7 +3039,7 @@ const make = Effect.gen(function* () {
             providerTransfers: persistedProviderTransfers,
             canonicalTransfers: [
               ...persistedCanonicalTransfers,
-              ...persistedCandidateCanonicalTransfers,
+              ...retainedCandidateCanonicalTransfers,
             ],
             legs: persistedLegs,
           }

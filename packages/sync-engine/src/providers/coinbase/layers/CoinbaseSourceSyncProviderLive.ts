@@ -1178,6 +1178,7 @@ const make = Effect.gen(function* () {
         canonicalTransfers: normalized.canonicalTransfers,
         feeTransferCandidates: normalized.feeTransferCandidates,
         transactionReview,
+        transactionReviewWithoutProviderAssetMapping: baseTransactionReview,
         resolvedTransactionType,
         primaryAsset: Option.getOrNull(maybePrimaryAsset),
         legDerivationStrategy: !shouldDeriveLegs || hasAssetDecisionOnlySkip ? "skip" : "derive",

@@ -114,6 +114,8 @@ export interface PreparedCoinbaseNormalization {
   /** Inert writer-built fees carried for the later source-rebuild decision seam. */
   readonly feeTransferCandidates: ReadonlyArray<CoinbaseAssetDecisionFeeTransferCandidate>
   readonly transactionReview: SourceTransactionReviewDraft | null
+  /** The writer's review before provider-asset mapping details are added. */
+  readonly transactionReviewWithoutProviderAssetMapping: SourceTransactionReviewDraft | null
   readonly resolvedTransactionType: CoinbaseResolvedTransactionTypeMapping
   readonly primaryAsset: SyncEngineAsset | null
   readonly legDerivationStrategy: "derive" | "skip"

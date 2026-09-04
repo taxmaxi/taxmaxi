@@ -431,6 +431,10 @@ export interface PersistNormalizedSourceArtifactsContext {
   readonly persistProviderAssetTransferCandidate: (
     candidate: SourceProviderAssetTransferCandidate
   ) => Effect.Effect<SourceProviderAssetTransferCandidateResult, SyncEngineStorageError>
+  /** Records the writer's review before provider-asset mapping details were added. */
+  readonly recordTransactionReviewWithoutProviderAssetMapping: (
+    review: SourceTransactionReviewDraft | null
+  ) => void
   /** Records a provider-derived blocker while keeping the transaction and provider evidence. */
   readonly withholdAccountingFacts: (reason: SourceLegDerivationWithholdingReason) => void
 }

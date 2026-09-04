@@ -614,6 +614,7 @@ const makeExecutorLayer = ({
             }),
             persistProviderAssetTransferCandidate: () =>
               Effect.succeed({ _tag: "blocked", reason: { _tag: "unresolved_identity" } }),
+            recordTransactionReviewWithoutProviderAssetMapping: () => undefined,
             withholdAccountingFacts: () => undefined,
           })
         }
