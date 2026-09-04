@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it } from "@effect/vitest"
 import { JurisdictionCode, TaxYear } from "@my/core/accounting"
 import { CurrencyCode } from "@my/core/currency"
 import { PrincipalId } from "@my/core/ownership"
+import { SourceReplayRepository } from "@my/sync-engine/services"
 import { eq } from "drizzle-orm"
 import * as DateTime from "effect/DateTime"
 import * as Effect from "effect/Effect"
@@ -10,8 +11,14 @@ import { CalculationRunRepositoryLive } from "../../src/layers/CalculationRunRep
 import { CalculationRunServiceLive } from "../../src/layers/CalculationRunServiceLive.ts"
 import { FactualLedgerRepositoryLive } from "../../src/layers/FactualLedgerRepositoryLive.ts"
 import { drizzle } from "../../src/layers/PgClientLive.ts"
+import { SourceReplayRepositoryLive } from "../../src/layers/SourceReplayRepositoryLive.ts"
 import { schema } from "../../src/schema/index.ts"
-import { CalculationRunId } from "../../src/services/CalculationRunRepository.ts"
+import { PersistenceError } from "../../src/errors/RepositoryError.ts"
+import {
+  CalculationRunId,
+  CalculationRunRepository,
+  type CalculationRunRepositoryShape,
+} from "../../src/services/CalculationRunRepository.ts"
 import { CalculationRunService } from "../../src/services/CalculationRunService.ts"
 import { FactualLedgerRepository } from "../../src/services/FactualLedgerRepository.ts"
 import {
@@ -52,21 +59,44 @@ const CalculationRunServiceTestLive = CalculationRunServiceLive.pipe(
   Layer.provide(Layer.merge(CalculationRunRepositoryLive, FactualLedgerRepositoryLive))
 )
 
+const calculationRunServiceWithPersist = (
+  makePersist: (
+    repository: CalculationRunRepositoryShape
+  ) => CalculationRunRepositoryShape["persist"]
+) => {
+  const repositoryLive = Layer.effect(
+    CalculationRunRepository,
+    Effect.map(CalculationRunRepository, (repository) =>
+      CalculationRunRepository.of({
+        fail: repository.fail,
+        getLatestStatus: repository.getLatestStatus,
+        persist: makePersist(repository),
+        settleStaleAndFindRecomputePrincipals: repository.settleStaleAndFindRecomputePrincipals,
+        start: repository.start,
+      })
+    )
+  ).pipe(Layer.provide(CalculationRunRepositoryLive))
+
+  return CalculationRunServiceLive.pipe(
+    Layer.provide(Layer.merge(repositoryLive, FactualLedgerRepositoryLive))
+  )
+}
+
+const recomputeEffect = (id: string) =>
+  Effect.flatMap(CalculationRunService, (service) =>
+    service.recompute({
+      id: CalculationRunId.make(id),
+      principalId: PRINCIPAL_ID,
+      jurisdiction: JurisdictionCode.make("DE"),
+      taxYear: TaxYear.make(2025),
+      reportingCurrency: EUR,
+      accountingChoices: [],
+    })
+  )
+
 const recompute = (id: string) =>
   Effect.runPromise(
-    context.runWithLayer({
-      effect: Effect.flatMap(CalculationRunService, (service) =>
-        service.recompute({
-          id: CalculationRunId.make(id),
-          principalId: PRINCIPAL_ID,
-          jurisdiction: JurisdictionCode.make("DE"),
-          taxYear: TaxYear.make(2025),
-          reportingCurrency: EUR,
-          accountingChoices: [],
-        })
-      ),
-      layer: CalculationRunServiceTestLive,
-    })
+    context.runWithLayer({ effect: recomputeEffect(id), layer: CalculationRunServiceTestLive })
   )
 
 const createOverride = ({
@@ -148,18 +178,19 @@ const seedProviderTransaction = ({
   externalId,
   inventoryAssetId = TEST_BTC_ASSET_ID,
   legId,
+  occurredAt = DateTime.toDateUtc(DateTime.makeUnsafe("2025-02-10T10:00:00.000Z")),
   providerAssetRowId,
   sourceRepresentationUseId,
 }: {
   readonly externalId: string
   readonly inventoryAssetId?: string | null
   readonly legId?: string
+  readonly occurredAt?: Date
   readonly providerAssetRowId: string
   readonly sourceRepresentationUseId?: string
 }) =>
   Effect.gen(function* () {
     const db = yield* drizzle
-    const occurredAt = DateTime.toDateUtc(DateTime.makeUnsafe("2025-02-10T10:00:00.000Z"))
     const [rawRecord] = yield* db
       .insert(schema.sourceRecordsRaw)
       .values({
@@ -1253,7 +1284,42 @@ describe("principal asset override application", () => {
               })
               .returning({ id: schema.transactionLegs.id })
             if (linkless === undefined) return yield* Effect.die("Failed to create linkless leg")
-            return { linkless, missingDecimals, unresolved }
+            const [sourceTransfer] = yield* db
+              .insert(schema.transfers)
+              .values({
+                sourceId: SOURCE_ID,
+                principalId: PRINCIPAL_ID,
+                externalId: "targetless-source-transfer",
+                timestamp: occurredAt,
+                type: "cex",
+                fromAccountRef: "provider",
+                toAccountRef: "principal",
+                assetId: TEST_BTC_ASSET_ID,
+                amount: "1",
+              })
+              .returning({ id: schema.transfers.id })
+            if (sourceTransfer === undefined) {
+              return yield* Effect.die("Failed to create targetless source transfer")
+            }
+            const [transferLinked] = yield* db
+              .insert(schema.transactionLegs)
+              .values({
+                id: "10000000-0000-4000-8000-000000000120",
+                sourceId: SOURCE_ID,
+                externalId: "targetless-source-transfer-leg",
+                timestamp: occurredAt,
+                principalId: PRINCIPAL_ID,
+                assetId: TEST_BTC_ASSET_ID,
+                amount: "1",
+                kind: "acquisition",
+                provenance: "deterministic",
+                sourceTransferId: sourceTransfer.id,
+              })
+              .returning({ id: schema.transactionLegs.id })
+            if (transferLinked === undefined) {
+              return yield* Effect.die("Failed to create targetless transfer-linked leg")
+            }
+            return { linkless, missingDecimals, transferLinked, unresolved }
           })
         )
       )
@@ -1265,6 +1331,11 @@ describe("principal asset override application", () => {
           expect.objectContaining({
             code: "malformed_movement",
             eventId: targets.linkless.id,
+            assetId: TEST_BTC_ASSET_ID,
+          }),
+          expect.objectContaining({
+            code: "malformed_movement",
+            eventId: targets.transferLinked.id,
             assetId: TEST_BTC_ASSET_ID,
           }),
           expect.objectContaining({
@@ -1498,6 +1569,132 @@ describe("principal asset override application", () => {
     })
   )
 
+  it.effect("classifies a disappearing blocker target as a stale run", () =>
+    Effect.gen(function* () {
+      const activeRunId = "00000000-0000-4000-8000-000000000925"
+      const staleRunId = "00000000-0000-4000-8000-000000000926"
+      const followUpRunId = "00000000-0000-4000-8000-000000000927"
+
+      yield* Effect.promise(() => recompute(activeRunId))
+      yield* Effect.promise(() =>
+        runPg(
+          Effect.gen(function* () {
+            yield* seedProviderAsset({
+              id: UNRESOLVED_PROVIDER_ASSET_ID,
+              canonicalAssetId: null,
+            })
+            yield* seedProviderTransaction({
+              externalId: "blocker-target-deleted-after-snapshot",
+              inventoryAssetId: null,
+              providerAssetRowId: UNRESOLVED_PROVIDER_ASSET_ID,
+            })
+          })
+        )
+      )
+
+      const racingServiceLive = calculationRunServiceWithPersist(
+        (repository) => (params) =>
+          Effect.gen(function* () {
+            yield* Effect.promise(() =>
+              runPg(
+                Effect.gen(function* () {
+                  const db = yield* drizzle
+                  yield* db
+                    .delete(schema.providerAssets)
+                    .where(eq(schema.providerAssets.id, UNRESOLVED_PROVIDER_ASSET_ID))
+                })
+              )
+            )
+            return yield* repository.persist(params)
+          })
+      )
+      const error = yield* Effect.flip(
+        context.runWithLayer({
+          effect: recomputeEffect(staleRunId),
+          layer: racingServiceLive,
+        })
+      )
+      expect(error).toBeInstanceOf(PersistenceError)
+
+      const afterFailure = yield* Effect.promise(() =>
+        runPg(
+          Effect.gen(function* () {
+            const db = yield* drizzle
+            const [run] = yield* db
+              .select({
+                status: schema.calculationRuns.status,
+                failureCode: schema.calculationRuns.failureCode,
+              })
+              .from(schema.calculationRuns)
+              .where(eq(schema.calculationRuns.id, staleRunId))
+            const [active] = yield* db
+              .select({ runId: schema.activeCalculationRuns.runId })
+              .from(schema.activeCalculationRuns)
+              .where(eq(schema.activeCalculationRuns.principalId, PRINCIPAL_ID))
+            return { active, run }
+          })
+        )
+      )
+      expect(afterFailure).toEqual({
+        active: { runId: activeRunId },
+        run: { status: "failed", failureCode: "calculation_stale_recomputed" },
+      })
+
+      yield* context.runWithLayer({
+        effect: Effect.flatMap(SourceReplayRepository, (repository) =>
+          repository.resetSourceDerivedState({ sourceId: SOURCE_ID })
+        ),
+        layer: SourceReplayRepositoryLive,
+      })
+      yield* Effect.promise(() =>
+        runPg(
+          Effect.gen(function* () {
+            const db = yield* drizzle
+            const completedAt = yield* DateTime.nowAsDate
+            yield* db.insert(schema.processingJobs).values({
+              sourceId: SOURCE_ID,
+              principalId: PRINCIPAL_ID,
+              status: "completed",
+              completedAt,
+            })
+          })
+        )
+      )
+      const maintenance = yield* context.runWithLayer({
+        effect: Effect.flatMap(CalculationRunRepository, (repository) =>
+          repository.settleStaleAndFindRecomputePrincipals({
+            staleBefore: DateTime.toDateUtc(DateTime.makeUnsafe(0)),
+            limit: 100,
+          })
+        ),
+        layer: CalculationRunRepositoryLive,
+      })
+      expect(maintenance.principalIds).toContain(PRINCIPAL_ID)
+
+      yield* Effect.promise(() => recompute(followUpRunId))
+      const afterFollowUp = yield* Effect.promise(() =>
+        runPg(
+          Effect.gen(function* () {
+            const db = yield* drizzle
+            const [run] = yield* db
+              .select({ status: schema.calculationRuns.status })
+              .from(schema.calculationRuns)
+              .where(eq(schema.calculationRuns.id, followUpRunId))
+            const [active] = yield* db
+              .select({ runId: schema.activeCalculationRuns.runId })
+              .from(schema.activeCalculationRuns)
+              .where(eq(schema.activeCalculationRuns.principalId, PRINCIPAL_ID))
+            return { active, run }
+          })
+        )
+      )
+      expect(afterFollowUp).toEqual({
+        active: { runId: followUpRunId },
+        run: { status: "complete" },
+      })
+    })
+  )
+
   it.effect("stores adapter blockers on a partial calculation run", () =>
     Effect.gen(function* () {
       const providerTransferId = yield* Effect.promise(() =>
@@ -1551,6 +1748,48 @@ describe("principal asset override application", () => {
           providerAssetRowId: UNRESOLVED_PROVIDER_ASSET_ID,
         },
       ])
+    })
+  )
+
+  it.effect("does not add post-tax-year fact blockers to an earlier run", () =>
+    Effect.gen(function* () {
+      yield* Effect.promise(() =>
+        runPg(
+          Effect.gen(function* () {
+            yield* seedProviderAsset({
+              id: UNRESOLVED_PROVIDER_ASSET_ID,
+              canonicalAssetId: null,
+            })
+            yield* seedProviderTransaction({
+              externalId: "future-unresolved-provider-row",
+              inventoryAssetId: null,
+              occurredAt: DateTime.toDateUtc(DateTime.makeUnsafe("2026-02-10T10:00:00.000Z")),
+              providerAssetRowId: UNRESOLVED_PROVIDER_ASSET_ID,
+            })
+          })
+        )
+      )
+
+      const runId = "00000000-0000-4000-8000-000000000924"
+      yield* Effect.promise(() => recompute(runId))
+      const stored = yield* Effect.promise(() =>
+        runPg(
+          Effect.gen(function* () {
+            const db = yield* drizzle
+            const [run] = yield* db
+              .select({ status: schema.calculationRuns.status })
+              .from(schema.calculationRuns)
+              .where(eq(schema.calculationRuns.id, runId))
+            const blockers = yield* db
+              .select({ code: schema.calculationRunBlockers.code })
+              .from(schema.calculationRunBlockers)
+              .where(eq(schema.calculationRunBlockers.runId, runId))
+            return { blockers, run }
+          })
+        )
+      )
+
+      expect(stored).toEqual({ blockers: [], run: { status: "complete" } })
     })
   )
 

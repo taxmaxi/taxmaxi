@@ -43,6 +43,7 @@ export type FactualLedgerInputBlockerTarget =
 export type FactualLedgerInputBlocker = {
   readonly code: FactualLedgerInputBlockerCode
   readonly eventId: AccountingEvent["id"]
+  readonly occurredAt: Date
   readonly custodyUnitId: CustodyUnitId
   readonly missingQuantity: null
 } & FactualLedgerInputBlockerTarget

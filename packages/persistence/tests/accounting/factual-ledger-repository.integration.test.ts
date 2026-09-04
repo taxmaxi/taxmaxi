@@ -2566,7 +2566,7 @@ describe("FactualLedgerRepositoryLive", () => {
     })
   )
 
-  it.effect("returns a provider blocker for a reconciled custody movement", () =>
+  it.effect("returns a provider blocker when the other custody side is excluded", () =>
     Effect.gen(function* () {
       const providerTimestamp = DateTime.toDateUtc(DateTime.makeUnsafe("2025-03-05T10:00:00.000Z"))
       const canonicalTimestamp = DateTime.toDateUtc(DateTime.makeUnsafe("2025-03-05T10:02:00.000Z"))
@@ -2588,6 +2588,7 @@ describe("FactualLedgerRepositoryLive", () => {
               providerAssetRowId: MIXED_OTHER_PROVIDER_ASSET_ROW_ID,
               providerAssetId: "canonical-reconciliation",
               canonicalAssetId: TEST_BTC_ASSET_ID,
+              currentConclusion: { outcome: "excluded" },
             })
             yield* db
               .update(schema.providerAssets)

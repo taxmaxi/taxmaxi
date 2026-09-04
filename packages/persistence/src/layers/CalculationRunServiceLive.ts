@@ -22,6 +22,7 @@ import { eq, sql } from "drizzle-orm"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import * as Schema from "effect/Schema"
+import { databaseErrorMetadata } from "../errors/DatabaseErrorMetadata.ts"
 import { PersistenceError } from "../errors/RepositoryError.ts"
 import { schema } from "../schema/index.ts"
 import {
@@ -45,6 +46,8 @@ import {
 import { drizzle } from "./PgClientLive.ts"
 
 const CALCULATION_FAILED_CODE = "calculation_failed"
+const CALCULATION_STALE_RECOMPUTED_CODE = "calculation_stale_recomputed"
+const BLOCKER_PROVIDER_ASSET_FOREIGN_KEY = "calculation_run_blockers_DSx7wqqyVAYZ_fkey"
 
 const IllegalAccountingChoiceErrorTag = Schema.TaggedStruct("IllegalAccountingChoiceError", {})
 
@@ -82,9 +85,10 @@ const canonicalValuationFact = (fact: ValuationFact): ReadonlyArray<string | num
 
 const canonicalInputBlocker = (
   blocker: FactualLedgerInputBlocker
-): ReadonlyArray<string | null> => [
+): ReadonlyArray<string | number | null> => [
   blocker.code,
   blocker.eventId,
+  blocker.occurredAt.getTime(),
   blocker.assetId ?? null,
   "providerAssetRowId" in blocker ? (blocker.providerAssetRowId ?? null) : null,
   blocker.custodyUnitId,
@@ -126,6 +130,14 @@ const makeValuationRevision = (valuationFacts: ReadonlyArray<ValuationFact>): Va
   ValuationRevision.make(
     `sha256:${sha256("taxmaxi:valuation-facts:v1", valuationFacts.map(canonicalValuationFact))}`
   )
+
+const isConcurrentFactChange = (error: unknown): boolean => {
+  const metadata = databaseErrorMetadata(error)
+  return metadata?.code === "23503" && metadata.constraint === BLOCKER_PROVIDER_ASSET_FOREIGN_KEY
+}
+
+const isThroughTaxYear = (blocker: FactualLedgerInputBlocker, taxYear: number): boolean =>
+  blocker.occurredAt.getTime() < Date.UTC(taxYear + 1, 0, 1)
 
 const make = Effect.gen(function* () {
   const db = yield* drizzle
@@ -210,13 +222,16 @@ const make = Effect.gen(function* () {
         valuationFacts: snapshot.factualLedger.valuationFacts,
       }).pipe(
         Effect.flatMap((result) => {
+          const inputBlockers = snapshot.factualLedger.inputBlockers.filter((blocker) =>
+            isThroughTaxYear(blocker, params.taxYear)
+          )
           const combinedResult: CalculationRunResult =
-            snapshot.factualLedger.inputBlockers.length === 0
+            inputBlockers.length === 0
               ? result
               : {
                   ...result,
                   status: "partial",
-                  blockers: [...snapshot.factualLedger.inputBlockers, ...result.blockers],
+                  blockers: [...inputBlockers, ...result.blockers],
                 }
 
           return calculationRunRepository.persist({
@@ -233,7 +248,9 @@ const make = Effect.gen(function* () {
             .fail({
               id: params.id,
               principalId: params.principalId,
-              failureCode: CALCULATION_FAILED_CODE,
+              failureCode: isConcurrentFactChange(originalCause)
+                ? CALCULATION_STALE_RECOMPUTED_CODE
+                : CALCULATION_FAILED_CODE,
             })
             .pipe(
               Effect.catchCause((settlementCause) =>

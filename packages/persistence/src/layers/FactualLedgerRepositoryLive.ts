@@ -288,6 +288,7 @@ const blockerKey = (blocker: FactualLedgerInputBlocker): string =>
   [
     blocker.code,
     blocker.eventId,
+    blocker.occurredAt.toISOString(),
     blocker.assetId,
     "providerAssetRowId" in blocker ? blocker.providerAssetRowId : null,
     blocker.custodyUnitId,
@@ -297,12 +298,14 @@ const addOutcomeBlockers = ({
   blockers,
   custodyUnitId,
   eventId,
+  occurredAt,
   outcome,
   providerAssetRowId,
 }: {
   readonly blockers: Map<string, FactualLedgerInputBlocker>
   readonly custodyUnitId: CustodyUnitId
   readonly eventId: string
+  readonly occurredAt: Date
   readonly outcome: Extract<FactDecisionOutcome, { readonly _tag: "blocked" | "malformed" }>
   readonly providerAssetRowId: string | null
 }): boolean => {
@@ -322,6 +325,7 @@ const addOutcomeBlockers = ({
     const blocker: FactualLedgerInputBlocker = {
       code,
       eventId: AccountingEventId.make(eventId),
+      occurredAt,
       custodyUnitId,
       missingQuantity: null,
       ...target,
@@ -335,6 +339,7 @@ const recordOutcomeBlockers = ({
   blockers,
   custodyUnitIdBySource,
   eventId,
+  occurredAt,
   outcome,
   providerAssetRowId,
   sourceId,
@@ -342,6 +347,7 @@ const recordOutcomeBlockers = ({
   readonly blockers: Map<string, FactualLedgerInputBlocker>
   readonly custodyUnitIdBySource: ReadonlyMap<string, CustodyUnitId>
   readonly eventId: string
+  readonly occurredAt: Date
   readonly outcome: Extract<FactDecisionOutcome, { readonly _tag: "blocked" | "malformed" }>
   readonly providerAssetRowId: string | null
   readonly sourceId: string
@@ -353,7 +359,16 @@ const recordOutcomeBlockers = ({
       cause: `Source is not assigned to a custody unit: ${sourceId}`,
     })
   }
-  if (!addOutcomeBlockers({ blockers, custodyUnitId, eventId, outcome, providerAssetRowId })) {
+  if (
+    !addOutcomeBlockers({
+      blockers,
+      custodyUnitId,
+      eventId,
+      occurredAt,
+      outcome,
+      providerAssetRowId,
+    })
+  ) {
     return new PersistenceError({
       operation: "factualLedgerRepository.load.unaddressableBlocker",
       cause: `Blocked fact has neither an asset nor provider-asset link: ${eventId}`,
@@ -517,6 +532,7 @@ const make = Effect.gen(function* () {
           requiresTarget:
             row.sourceRawRecordId !== null ||
             row.assetRepresentationId !== null ||
+            row.sourceTransferId !== null ||
             row.providerAssetRowId !== null,
           sourceRepresentationUseId: row.sourceRepresentationUseId,
           storedAssetId: row.assetId,
@@ -532,6 +548,7 @@ const make = Effect.gen(function* () {
             blockers: inputBlockerByKey,
             custodyUnitIdBySource,
             eventId: row.id,
+            occurredAt: row.timestamp,
             outcome: { _tag: "malformed", assetId: row.assetId },
             providerAssetRowId: row.providerAssetRowId,
             sourceId: row.sourceId,
@@ -547,6 +564,7 @@ const make = Effect.gen(function* () {
             blockers: inputBlockerByKey,
             custodyUnitIdBySource,
             eventId: row.id,
+            occurredAt: row.timestamp,
             outcome,
             providerAssetRowId: row.providerAssetRowId,
             sourceId: row.sourceId,
@@ -557,6 +575,7 @@ const make = Effect.gen(function* () {
               blockers: inputBlockerByKey,
               custodyUnitIdBySource,
               eventId: row.id,
+              occurredAt: row.timestamp,
               outcome: { _tag: "malformed", assetId: outcome.assetId },
               providerAssetRowId: row.providerAssetRowId,
               sourceId: row.sourceId,
@@ -573,6 +592,7 @@ const make = Effect.gen(function* () {
             blockers: inputBlockerByKey,
             custodyUnitIdBySource,
             eventId: row.id,
+            occurredAt: row.timestamp,
             outcome: { _tag: "malformed", assetId: outcome.assetId },
             providerAssetRowId: row.providerAssetRowId,
             sourceId: row.sourceId,
@@ -593,6 +613,7 @@ const make = Effect.gen(function* () {
             blockers: inputBlockerByKey,
             custodyUnitIdBySource,
             eventId: row.id,
+            occurredAt: row.timestamp,
             outcome: { _tag: "malformed", assetId: outcome.assetId },
             providerAssetRowId: row.providerAssetRowId,
             sourceId: row.sourceId,
@@ -721,6 +742,7 @@ const make = Effect.gen(function* () {
         .select({
           id: schema.providerTransfers.id,
           sourceId: schema.providerTransfers.sourceId,
+          timestamp: schema.providerTransfers.timestamp,
           transactionId: schema.providerTransfers.transactionId,
           providerAssetRowId: schema.providerTransfers.providerAssetId,
           sourceRepresentationUseId: schema.providerTransfers.sourceRepresentationUseId,
@@ -805,6 +827,7 @@ const make = Effect.gen(function* () {
           blockers: inputBlockerByKey,
           custodyUnitIdBySource,
           eventId: row.id,
+          occurredAt: row.timestamp,
           outcome: blockedOutcome,
           providerAssetRowId: row.providerAssetRowId,
           sourceId: row.sourceId,
@@ -818,6 +841,7 @@ const make = Effect.gen(function* () {
           providerAssetRowId: schema.providerAssetTransactionUses.providerAssetRowId,
           sourceId: schema.providerAssetTransactionUses.sourceId,
           transactionId: schema.providerAssetTransactionUses.transactionId,
+          timestamp: schema.transactions.timestamp,
           needsReview: schema.transactionReviews.needsReview,
           matchedLayer: schema.transactionReviews.matchedLayer,
         })
@@ -881,6 +905,7 @@ const make = Effect.gen(function* () {
           blockers: inputBlockerByKey,
           custodyUnitIdBySource,
           eventId: row.transactionId,
+          occurredAt: row.timestamp,
           outcome: blockedOutcome,
           providerAssetRowId: row.providerAssetRowId,
           sourceId: row.sourceId,
@@ -1045,14 +1070,6 @@ const make = Effect.gen(function* () {
             sourceId: row.providerSourceId,
           },
         ] as const
-        const isExcluded = outcomes.some(({ outcome }) => outcome._tag === "excluded")
-        if (isExcluded) {
-          withheldTransactionIds.add(row.providerTransactionId)
-          if (row.canonicalTransactionId !== null) {
-            withheldTransactionIds.add(row.canonicalTransactionId)
-          }
-          continue
-        }
         let hasBlockedOutcome = false
         for (const entry of outcomes) {
           const blockedOutcome =
@@ -1067,11 +1084,20 @@ const make = Effect.gen(function* () {
             blockers: inputBlockerByKey,
             custodyUnitIdBySource,
             eventId: row.id,
+            occurredAt: row.canonicalTimestamp,
             outcome: blockedOutcome,
             providerAssetRowId: entry.providerAssetRowId,
             sourceId: entry.sourceId,
           })
           if (blockerError !== undefined) return yield* blockerError
+        }
+        const isExcluded = outcomes.some(({ outcome }) => outcome._tag === "excluded")
+        if (isExcluded) {
+          withheldTransactionIds.add(row.providerTransactionId)
+          if (row.canonicalTransactionId !== null) {
+            withheldTransactionIds.add(row.canonicalTransactionId)
+          }
+          continue
         }
         if (hasBlockedOutcome) {
           withheldTransactionIds.add(row.providerTransactionId)
@@ -1091,6 +1117,7 @@ const make = Effect.gen(function* () {
             blockers: inputBlockerByKey,
             custodyUnitIdBySource,
             eventId: row.id,
+            occurredAt: row.canonicalTimestamp,
             outcome: { _tag: "malformed", assetId: canonicalOutcome.assetId },
             providerAssetRowId: row.canonicalProviderAssetRowId,
             sourceId: row.canonicalSourceId,
@@ -1119,6 +1146,7 @@ const make = Effect.gen(function* () {
               blockers: inputBlockerByKey,
               custodyUnitIdBySource,
               eventId: row.id,
+              occurredAt: row.canonicalTimestamp,
               outcome: { _tag: "malformed", assetId: entry.assetId },
               providerAssetRowId: entry.providerAssetRowId,
               sourceId: entry.sourceId,
