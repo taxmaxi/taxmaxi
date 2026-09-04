@@ -2083,6 +2083,10 @@ const make = Effect.gen(function* () {
             })
           }
 
+          const overrideHistorySnapshot = yield* principalAssetOverrideDecisionLoader.loadHistory({
+            principalId: params.transaction.principalId,
+          })
+
           const [ownedSource] = yield* tx
             .select({ id: schema.sources.id })
             .from(schema.sources)
@@ -2112,8 +2116,8 @@ const make = Effect.gen(function* () {
             yield* params.beforePersist
           }
 
-          const decisions = yield* principalAssetOverrideDecisionLoader.load({
-            principalId: params.transaction.principalId,
+          const decisions = yield* principalAssetOverrideDecisionLoader.loadFromSnapshot({
+            snapshot: overrideHistorySnapshot,
             providerAssetRowIds: params.providerAssetRowIds,
             assetRepresentationIds: [
               ...params.canonicalTransfers,

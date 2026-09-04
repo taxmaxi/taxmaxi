@@ -123,6 +123,15 @@ export interface PrincipalAssetOverrideDecisions {
   >
   readonly providerAssetDecisionById: ReadonlyMap<string, PrincipalProviderAssetDecision>
   readonly ignoredProviderAssetRowIds: ReadonlySet<string>
+  readonly overrideHistorySnapshot: PrincipalAssetOverrideHistorySnapshot
+  readonly revision: ReadonlyArray<PrincipalAssetOverrideRevisionRecord>
+}
+
+/** One principal's override stream leaves captured by a single history query. */
+export interface PrincipalAssetOverrideHistorySnapshot {
+  readonly principalId: string
+  readonly identityReplacementAssetIdByTargetKey: ReadonlyMap<string, string>
+  readonly inclusionReplacementByTargetKey: ReadonlyMap<string, "included" | "excluded">
   readonly revision: ReadonlyArray<PrincipalAssetOverrideRevisionRecord>
 }
 
@@ -159,7 +168,7 @@ export const resolveSystemAssetId = ({
     ? assetId
     : (decisions.systemAssetIdByRepresentationId.get(assetRepresentationId) ?? assetId)
 
-const targetKey = ({
+const exactTargetKey = ({
   blockchainId,
   representationType,
   contractAddress,
@@ -188,13 +197,15 @@ const activeReplacementInclusion = (
 ): "included" | "excluded" | null =>
   leaf === undefined || leaf.operation === "withdraw" ? null : leaf.replacementInclusion
 
-const makeLeavesByStream = (leaves: ReadonlyArray<TypedTargetRow>) =>
-  new Map(
-    leaves.map((leaf) => [
-      `${leaf.targetKind === "representation" ? targetKey(leaf) : leaf.providerAssetRowId}\0${leaf.kind}`,
-      leaf,
-    ])
-  )
+const providerAssetTargetKey = (providerAssetRowId: string): string =>
+  `provider_asset\0${providerAssetRowId}`
+
+const representationTargetKey = (
+  target: Pick<
+    ExactTargetRow,
+    "blockchainId" | "representationType" | "contractAddress" | "mintAddress"
+  >
+): string => `representation\0${exactTargetKey(target)}`
 
 const validateTargetRows = (
   rows: ReadonlyArray<OverrideTargetRow>
@@ -238,20 +249,19 @@ const validateTargetRows = (
   })
 
 const makeRepresentationDecisionMaps = ({
-  leaves,
+  snapshot,
   representations,
 }: {
-  readonly leaves: ReadonlyArray<TypedTargetRow>
+  readonly snapshot: PrincipalAssetOverrideHistorySnapshot
   readonly representations: ReadonlyArray<RepresentationRow>
 }) => {
-  const leavesByStream = makeLeavesByStream(leaves)
   const systemAssetIdByRepresentationId = new Map(
     representations.map((representation) => [representation.id, representation.assetId] as const)
   )
   const assetIdByRepresentationId = new Map(
     representations.map((representation) => {
-      const selectedAssetId = activeReplacementAssetId(
-        leavesByStream.get(`${targetKey(representation)}\0identity`)
+      const selectedAssetId = snapshot.identityReplacementAssetIdByTargetKey.get(
+        representationTargetKey(representation)
       )
 
       return [representation.id, selectedAssetId ?? representation.assetId] as const
@@ -262,23 +272,18 @@ const makeRepresentationDecisionMaps = ({
 }
 
 const makeSourceRepresentationUseDecisionMap = ({
-  leaves,
+  snapshot,
   sourceUses,
 }: {
-  readonly leaves: ReadonlyArray<TypedTargetRow>
+  readonly snapshot: PrincipalAssetOverrideHistorySnapshot
   readonly sourceUses: ReadonlyArray<SourceRepresentationUseRow>
 }) => {
-  const leavesByStream = makeLeavesByStream(leaves)
-
   return new Map(
     sourceUses.map((sourceUse) => {
-      const key = targetKey(sourceUse)
-      const identityReplacementAssetId = activeReplacementAssetId(
-        leavesByStream.get(`${key}\0identity`)
-      )
-      const inclusionReplacement = activeReplacementInclusion(
-        leavesByStream.get(`${key}\0inclusion`)
-      )
+      const key = representationTargetKey(sourceUse)
+      const identityReplacementAssetId =
+        snapshot.identityReplacementAssetIdByTargetKey.get(key) ?? null
+      const inclusionReplacement = snapshot.inclusionReplacementByTargetKey.get(key) ?? null
       const systemInclusion = sourceUse.systemExcluded === true ? "excluded" : "included"
       return [
         sourceUse.id,
@@ -294,14 +299,12 @@ const makeSourceRepresentationUseDecisionMap = ({
 }
 
 const makeProviderAssetDecisionMap = ({
-  leaves,
+  snapshot,
   providerMappings,
 }: {
-  readonly leaves: ReadonlyArray<TypedTargetRow>
+  readonly snapshot: PrincipalAssetOverrideHistorySnapshot
   readonly providerMappings: ReadonlyArray<ProviderMappingRow>
 }) => {
-  const leavesByStream = makeLeavesByStream(leaves)
-
   const systemAssetId = (row: ProviderMappingRow): string | null => {
     if (row.currentConclusionId === null) {
       return row.mappingStatus === "approved" ? row.canonicalAssetId : null
@@ -358,12 +361,12 @@ const makeProviderAssetDecisionMap = ({
         return [[providerAssetRowId, excludedDecision] as const]
       }
 
-      const identityLeaf = leavesByStream.get(`${providerAssetRowId}\0identity`)
-      const inclusionLeaf = leavesByStream.get(`${providerAssetRowId}\0inclusion`)
+      const key = providerAssetTargetKey(providerAssetRowId)
       const catalogAssetId = systemAssetId(providerMapping)
       const catalogInclusion = systemInclusion(providerMapping)
-      const identityReplacementAssetId = activeReplacementAssetId(identityLeaf)
-      const inclusionReplacement = activeReplacementInclusion(inclusionLeaf)
+      const identityReplacementAssetId =
+        snapshot.identityReplacementAssetIdByTargetKey.get(key) ?? null
+      const inclusionReplacement = snapshot.inclusionReplacementByTargetKey.get(key) ?? null
       const resolvedAssetType =
         catalogAssetId === null
           ? providerAssetType(providerMapping.providerType)
@@ -451,6 +454,43 @@ const makeRevision = (
     }
   })
 
+const makeHistorySnapshot = ({
+  principalId,
+  leaves,
+}: {
+  readonly principalId: string
+  readonly leaves: ReadonlyArray<TypedTargetRow>
+}): PrincipalAssetOverrideHistorySnapshot => {
+  const identityReplacementAssetIdByTargetKey = new Map<string, string>()
+  const inclusionReplacementByTargetKey = new Map<string, "included" | "excluded">()
+
+  for (const leaf of leaves) {
+    const key =
+      leaf.targetKind === "representation"
+        ? representationTargetKey(leaf)
+        : providerAssetTargetKey(leaf.providerAssetRowId)
+    if (leaf.kind === "identity") {
+      const replacementAssetId = activeReplacementAssetId(leaf)
+      if (replacementAssetId !== null) {
+        identityReplacementAssetIdByTargetKey.set(key, replacementAssetId)
+      }
+      continue
+    }
+
+    const replacementInclusion = activeReplacementInclusion(leaf)
+    if (replacementInclusion !== null) {
+      inclusionReplacementByTargetKey.set(key, replacementInclusion)
+    }
+  }
+
+  return {
+    principalId,
+    identityReplacementAssetIdByTargetKey,
+    inclusionReplacementByTargetKey,
+    revision: makeRevision(leaves),
+  }
+}
+
 /** Build the principal-scoped loader against the current SQL transaction context. */
 export const makePrincipalAssetOverrideDecisionLoader = Effect.gen(function* () {
   const db = yield* drizzle
@@ -461,17 +501,11 @@ export const makePrincipalAssetOverrideDecisionLoader = Effect.gen(function* () 
   const mappingAsset = aliasedTable(schema.assets, "override_loader_mapping_asset")
   const conclusionAsset = aliasedTable(schema.assets, "override_loader_conclusion_asset")
 
-  const load = ({
+  const loadHistory = ({
     principalId,
-    assetRepresentationIds = [],
-    sourceRepresentationUseIds = [],
-    providerAssetRowIds,
   }: {
     readonly principalId: string
-    readonly assetRepresentationIds?: ReadonlyArray<string>
-    readonly sourceRepresentationUseIds?: ReadonlyArray<string>
-    readonly providerAssetRowIds?: ReadonlyArray<string>
-  }): Effect.Effect<PrincipalAssetOverrideDecisions, PersistenceError> =>
+  }): Effect.Effect<PrincipalAssetOverrideHistorySnapshot, PersistenceError> =>
     Effect.gen(function* () {
       const rows = yield* db
         .select({
@@ -516,12 +550,29 @@ export const makePrincipalAssetOverrideDecisionLoader = Effect.gen(function* () 
         .pipe(wrapSqlError("principalAssetOverrideDecisionLoader.load.history"))
 
       const typedRows = yield* validateTargetRows(rows)
-      const leaves = streamLeaves(typedRows)
-      const exactLeaves = leaves.filter(
-        (leaf): leaf is ExactTargetRow => leaf.targetKind === "representation"
+      return makeHistorySnapshot({
+        principalId,
+        leaves: streamLeaves(typedRows),
+      })
+    })
+
+  const loadFromSnapshot = ({
+    snapshot,
+    assetRepresentationIds = [],
+    sourceRepresentationUseIds = [],
+    providerAssetRowIds,
+  }: {
+    readonly snapshot: PrincipalAssetOverrideHistorySnapshot
+    readonly assetRepresentationIds?: ReadonlyArray<string>
+    readonly sourceRepresentationUseIds?: ReadonlyArray<string>
+    readonly providerAssetRowIds?: ReadonlyArray<string>
+  }): Effect.Effect<PrincipalAssetOverrideDecisions, PersistenceError> =>
+    Effect.gen(function* () {
+      const exactTargets = snapshot.revision.flatMap((record) =>
+        record.target._tag === "representation" ? [record.target] : []
       )
       const requestedRepresentationIds = [...new Set(assetRepresentationIds)].sort()
-      const targetConditions = exactLeaves.map((target) =>
+      const targetConditions = exactTargets.map((target) =>
         and(
           eq(schema.assetRepresentations.blockchainId, target.blockchainId),
           eq(schema.assetRepresentations.type, target.representationType),
@@ -557,7 +608,7 @@ export const makePrincipalAssetOverrideDecisionLoader = Effect.gen(function* () 
               .pipe(wrapSqlError("principalAssetOverrideDecisionLoader.load.representations"))
 
       const { assetIdByRepresentationId, systemAssetIdByRepresentationId } =
-        makeRepresentationDecisionMaps({ leaves, representations })
+        makeRepresentationDecisionMaps({ snapshot, representations })
       const requestedSourceUseIds = [...new Set(sourceRepresentationUseIds)].sort()
       const sourceUses =
         requestedSourceUseIds.length === 0
@@ -577,7 +628,7 @@ export const makePrincipalAssetOverrideDecisionLoader = Effect.gen(function* () 
                 schema.sources,
                 and(
                   eq(schema.sources.id, schema.sourceRepresentationUses.sourceId),
-                  eq(schema.sources.principalId, principalId)
+                  eq(schema.sources.principalId, snapshot.principalId)
                 )
               )
               .leftJoin(
@@ -599,11 +650,11 @@ export const makePrincipalAssetOverrideDecisionLoader = Effect.gen(function* () 
               .orderBy(asc(schema.sourceRepresentationUses.id))
               .pipe(wrapSqlError("principalAssetOverrideDecisionLoader.load.sourceUses"))
       const sourceRepresentationUseDecisionById = makeSourceRepresentationUseDecisionMap({
-        leaves,
+        snapshot,
         sourceUses,
       })
-      const targetProviderAssetIds = typedRows.flatMap((row) =>
-        row.targetKind === "provider_asset" ? [row.providerAssetRowId] : []
+      const targetProviderAssetIds = snapshot.revision.flatMap((record) =>
+        record.target._tag === "provider_asset" ? [record.target.providerAssetRowId] : []
       )
       const requestedProviderAssetIds = [
         ...new Set(providerAssetRowIds ?? targetProviderAssetIds),
@@ -647,7 +698,7 @@ export const makePrincipalAssetOverrideDecisionLoader = Effect.gen(function* () 
               .orderBy(asc(schema.providerAssets.id))
               .pipe(wrapSqlError("principalAssetOverrideDecisionLoader.load.providerAssets"))
       const providerAssetDecisionById = makeProviderAssetDecisionMap({
-        leaves,
+        snapshot,
         providerMappings,
       })
       const ignoredProviderAssetRowIds = new Set(
@@ -655,17 +706,36 @@ export const makePrincipalAssetOverrideDecisionLoader = Effect.gen(function* () 
           mappingKind === "fiat" ? [providerAssetRowId] : []
         )
       )
-      const revision = makeRevision(leaves)
-
       return {
         assetIdByRepresentationId,
         systemAssetIdByRepresentationId,
         sourceRepresentationUseDecisionById,
         providerAssetDecisionById,
         ignoredProviderAssetRowIds,
-        revision,
+        overrideHistorySnapshot: snapshot,
+        revision: snapshot.revision,
       }
     })
+
+  const load = ({
+    principalId,
+    assetRepresentationIds,
+    sourceRepresentationUseIds,
+    providerAssetRowIds,
+  }: {
+    readonly principalId: string
+    readonly assetRepresentationIds?: ReadonlyArray<string>
+    readonly sourceRepresentationUseIds?: ReadonlyArray<string>
+    readonly providerAssetRowIds?: ReadonlyArray<string>
+  }): Effect.Effect<PrincipalAssetOverrideDecisions, PersistenceError> =>
+    Effect.flatMap(loadHistory({ principalId }), (snapshot) =>
+      loadFromSnapshot({
+        snapshot,
+        ...(assetRepresentationIds === undefined ? {} : { assetRepresentationIds }),
+        ...(sourceRepresentationUseIds === undefined ? {} : { sourceRepresentationUseIds }),
+        ...(providerAssetRowIds === undefined ? {} : { providerAssetRowIds }),
+      })
+    )
 
   const includeSystemRepresentations = ({
     decisions,
@@ -689,18 +759,31 @@ export const makePrincipalAssetOverrideDecisionLoader = Effect.gen(function* () 
         .select({
           id: schema.assetRepresentations.id,
           assetId: schema.assetRepresentations.assetId,
+          blockchainId: schema.assetRepresentations.blockchainId,
+          representationType: schema.assetRepresentations.type,
+          contractAddress: schema.assetRepresentations.contractAddress,
+          mintAddress: schema.assetRepresentations.mintAddress,
         })
         .from(schema.assetRepresentations)
         .where(inArray(schema.assetRepresentations.id, missingIds))
         .orderBy(asc(schema.assetRepresentations.id))
         .pipe(wrapSqlError("principalAssetOverrideDecisionLoader.includeSystemRepresentations"))
       const catalogPairs = representations.map(({ id, assetId }) => [id, assetId] as const)
+      const effectivePairs = representations.map(
+        (representation) =>
+          [
+            representation.id,
+            decisions.overrideHistorySnapshot.identityReplacementAssetIdByTargetKey.get(
+              representationTargetKey(representation)
+            ) ?? representation.assetId,
+          ] as const
+      )
 
       return {
         ...decisions,
         assetIdByRepresentationId: new Map([
           ...decisions.assetIdByRepresentationId,
-          ...catalogPairs,
+          ...effectivePairs,
         ]),
         systemAssetIdByRepresentationId: new Map([
           ...decisions.systemAssetIdByRepresentationId,
@@ -709,5 +792,5 @@ export const makePrincipalAssetOverrideDecisionLoader = Effect.gen(function* () 
       }
     })
 
-  return { includeSystemRepresentations, load }
+  return { includeSystemRepresentations, load, loadFromSnapshot, loadHistory }
 })

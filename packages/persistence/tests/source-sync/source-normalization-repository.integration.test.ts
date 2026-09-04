@@ -1,6 +1,8 @@
 import * as DateTime from "effect/DateTime"
 import { asc, eq, inArray, sql } from "drizzle-orm"
 import * as Effect from "effect/Effect"
+import * as Fiber from "effect/Fiber"
+import * as Latch from "effect/Latch"
 import * as Layer from "effect/Layer"
 import * as Option from "effect/Option"
 import { beforeEach, describe, expect, it } from "@effect/vitest"
@@ -290,6 +292,7 @@ const seedAdditionalOverrideSource = ({
   })
 
 interface ExactOverrideArtifactOptions {
+  readonly beforePersist?: Effect.Effect<void>
   readonly sourceId?: string
   readonly cexAccountId?: string
   readonly includeCanonicalTransfer?: boolean
@@ -310,6 +313,7 @@ const persistExactOverrideArtifact = ({
   principalId = TEST_PRINCIPAL_ID,
   providerObservedRepresentationType = "token",
   sourceRawRecordId = null,
+  beforePersist,
 }: ExactOverrideArtifactOptions & {
   readonly externalId: string
   readonly fixture: SyncEngineRepositoryFixture
@@ -318,6 +322,7 @@ const persistExactOverrideArtifact = ({
   runRepository(
     Effect.flatMap(SourceNormalizationRepository, (repository) =>
       repository.persistNormalizedArtifacts({
+        ...(beforePersist === undefined ? {} : { beforePersist }),
         transaction: {
           sourceId,
           sourceRawRecordId,
@@ -447,6 +452,8 @@ const persistExactOverrideCallbackArtifact = ({
   principalId = TEST_PRINCIPAL_ID,
   providerAssetRowId = null,
   legUsesSourceTransferTargetOnly = false,
+  includeCanonicalTransfer = true,
+  beforePersist,
 }: {
   readonly externalId: string
   readonly fixture: SyncEngineRepositoryFixture
@@ -458,10 +465,13 @@ const persistExactOverrideCallbackArtifact = ({
   readonly principalId?: string
   readonly providerAssetRowId?: string | null
   readonly legUsesSourceTransferTargetOnly?: boolean
+  readonly includeCanonicalTransfer?: boolean
+  readonly beforePersist?: Effect.Effect<void>
 }) =>
   runRepository(
     Effect.flatMap(SourceNormalizationRepository, (repository) =>
       repository.persistNormalizedArtifacts({
+        ...(beforePersist === undefined ? {} : { beforePersist }),
         transaction: {
           sourceId,
           sourceRawRecordId: null,
@@ -494,39 +504,46 @@ const persistExactOverrideCallbackArtifact = ({
           metadata: { evidence: externalId },
         },
         providerTransfers: [],
-        canonicalTransfers: [
-          {
-            sourceId,
-            principalId,
-            sourceRawRecordId: null,
-            externalId: `${externalId}-transfer`,
-            externalGroupId: externalId,
-            addressId: null,
-            blockchainId: fixture.bitcoinBlockchainId,
-            txHash: null,
-            timestamp: occurredAt,
-            type: "cex",
-            fromAddress: null,
-            toAddress: null,
-            fromAccountRef: "external",
-            toAccountRef: "owned",
-            fromPartyType: null,
-            fromPartyResourcePath: null,
-            toPartyType: null,
-            toPartyResourcePath: null,
-            assetId: TEST_BTC_ASSET_ID,
-            assetRepresentationId: TEST_BTC_REPRESENTATION_ID,
-            providerAssetRowId,
-            amount: "1",
-            tokenId: null,
-            notes: null,
-            metadata: { evidence: externalId },
-          },
-        ],
+        canonicalTransfers: includeCanonicalTransfer
+          ? [
+              {
+                sourceId,
+                principalId,
+                sourceRawRecordId: null,
+                externalId: `${externalId}-transfer`,
+                externalGroupId: externalId,
+                addressId: null,
+                blockchainId: fixture.bitcoinBlockchainId,
+                txHash: null,
+                timestamp: occurredAt,
+                type: "cex",
+                fromAddress: null,
+                toAddress: null,
+                fromAccountRef: "external",
+                toAccountRef: "owned",
+                fromPartyType: null,
+                fromPartyResourcePath: null,
+                toPartyType: null,
+                toPartyResourcePath: null,
+                assetId: TEST_BTC_ASSET_ID,
+                assetRepresentationId: TEST_BTC_REPRESENTATION_ID,
+                providerAssetRowId,
+                amount: "1",
+                tokenId: null,
+                notes: null,
+                metadata: { evidence: externalId },
+              },
+            ]
+          : [],
         providerAssetRowIds: providerAssetRowId === null ? [] : [providerAssetRowId],
         deriveLegs: ({ transaction, canonicalTransfers }) => {
           const [transfer] = canonicalTransfers
-          if (transfer === undefined) return Effect.die("Missing callback transfer")
+          if (includeCanonicalTransfer && transfer === undefined) {
+            return Effect.die("Missing callback transfer")
+          }
+          const assetId = transfer?.assetId ?? TEST_BTC_ASSET_ID
+          const assetRepresentationId =
+            transfer?.assetRepresentationId ?? TEST_BTC_REPRESENTATION_ID
 
           return Effect.succeed([
             {
@@ -537,17 +554,18 @@ const persistExactOverrideCallbackArtifact = ({
               timestamp: occurredAt,
               principalId,
               addressId: null,
-              assetId: transfer.assetId,
-              assetRepresentationId: legUsesSourceTransferTargetOnly
-                ? null
-                : transfer.assetRepresentationId,
+              assetId,
+              assetRepresentationId: legUsesSourceTransferTargetOnly ? null : assetRepresentationId,
               amount: "1",
               kind,
               provenance: "deterministic" as const,
               derivationRule: "callback_exact_override_fixture",
-              metadata: { derivedFromAssetId: transfer.assetId },
+              metadata: { derivedFromAssetId: assetId },
               transactionId: transaction.id,
-              sourceTransferId: transfer.id,
+              sourceTransferId: transfer?.id ?? null,
+              ...(transfer === undefined
+                ? { originKind: "none" as const, providerTransferId: null }
+                : {}),
               fiatAmount: null,
               fiatCurrency: null,
               feeForTransactionId: kind === "fee" ? transaction.id : null,
@@ -1521,6 +1539,143 @@ describe("SourceNormalizationRepositoryLive", () => {
     })
   )
 
+  it.effect("uses one override history snapshot for a racing source write", () =>
+    Effect.gen(function* () {
+      const occurredAt = DateTime.toDateUtc(DateTime.makeUnsafe("2025-02-01T09:30:00.000Z"))
+      const reachedPersistHook = yield* Latch.make()
+      const releasePersistHook = yield* Latch.make()
+      const sourceWrite = yield* Effect.forkChild(
+        Effect.promise(() =>
+          persistExactOverrideArtifact({
+            externalId: "racing-override-snapshot",
+            fixture,
+            occurredAt,
+            beforePersist: Effect.gen(function* () {
+              yield* reachedPersistHook.open
+              yield* releasePersistHook.await
+            }),
+          })
+        )
+      )
+
+      yield* reachedPersistHook.await
+      yield* Effect.promise(() =>
+        runPg(
+          seedExactIdentityOverride({
+            fixture,
+            reason: "Commit after the source captured its override history",
+          })
+        )
+      )
+      yield* releasePersistHook.open
+
+      const racingResult = yield* Fiber.join(sourceWrite)
+      expect(racingResult.canonicalTransfers[0]).toMatchObject({
+        assetId: TEST_BTC_ASSET_ID,
+        assetRepresentationId: TEST_BTC_REPRESENTATION_ID,
+      })
+      expect(racingResult.legs[0]?.assetId).toBe(TEST_BTC_ASSET_ID)
+
+      const laterResult = yield* Effect.promise(() =>
+        persistExactOverrideArtifact({
+          externalId: "after-racing-override-snapshot",
+          fixture,
+          occurredAt,
+        })
+      )
+      expect(laterResult.canonicalTransfers[0]?.assetId).toBe(OVERRIDE_ASSET_ID)
+      expect(laterResult.legs[0]?.assetId).toBe(OVERRIDE_ASSET_ID)
+    })
+  )
+
+  it.effect("applies captured history to a callback-derived representation", () =>
+    Effect.gen(function* () {
+      const occurredAt = DateTime.toDateUtc(DateTime.makeUnsafe("2025-02-01T09:35:00.000Z"))
+      const activeOverride = yield* Effect.promise(() =>
+        runPg(
+          seedExactIdentityOverride({
+            fixture,
+            reason: "Use the first selected asset for callback-derived facts",
+          })
+        )
+      )
+      yield* Effect.promise(() =>
+        runPg(
+          Effect.gen(function* () {
+            const db = yield* drizzle
+            yield* db.insert(schema.assets).values({
+              id: PROVIDER_OVERRIDE_ASSET_ID,
+              name: "Later principal-selected asset",
+              symbol: "LATER",
+              type: "fungible",
+            })
+          })
+        )
+      )
+
+      const reachedPersistHook = yield* Latch.make()
+      const releasePersistHook = yield* Latch.make()
+      const sourceWrite = yield* Effect.forkChild(
+        Effect.promise(() =>
+          persistExactOverrideCallbackArtifact({
+            externalId: "racing-callback-override-snapshot",
+            fixture,
+            kind: "acquisition",
+            occurredAt,
+            providerStatus: "pending",
+            includeCanonicalTransfer: false,
+            beforePersist: Effect.gen(function* () {
+              yield* reachedPersistHook.open
+              yield* releasePersistHook.await
+            }),
+          })
+        )
+      )
+
+      yield* reachedPersistHook.await
+      yield* Effect.promise(() =>
+        runPg(
+          Effect.gen(function* () {
+            const db = yield* drizzle
+            yield* db.insert(schema.principalAssetOverrides).values({
+              principalId: TEST_PRINCIPAL_ID,
+              targetId: activeOverride.targetId,
+              kind: "identity",
+              operation: "replace",
+              inspectedSystemRevision: "exact-override-system-v1",
+              inspectedSystemIdentity: "resolved",
+              inspectedSystemAssetId: TEST_BTC_ASSET_ID,
+              replacementAssetId: PROVIDER_OVERRIDE_ASSET_ID,
+              actorUserId: fixture.userId,
+              reason: "Commit a later identity after the source captured history",
+              supersedesOverrideId: activeOverride.overrideId,
+            })
+          })
+        )
+      )
+      yield* releasePersistHook.open
+
+      const racingResult = yield* Fiber.join(sourceWrite)
+      expect(racingResult.canonicalTransfers).toEqual([])
+      expect(racingResult.legs[0]).toMatchObject({
+        assetId: OVERRIDE_ASSET_ID,
+        assetRepresentationId: TEST_BTC_REPRESENTATION_ID,
+      })
+
+      const laterResult = yield* Effect.promise(() =>
+        persistExactOverrideCallbackArtifact({
+          externalId: "after-racing-callback-override-snapshot",
+          fixture,
+          kind: "acquisition",
+          occurredAt,
+          providerStatus: "pending",
+          includeCanonicalTransfer: false,
+        })
+      )
+      expect(laterResult.legs[0]?.assetId).toBe(PROVIDER_OVERRIDE_ASSET_ID)
+    })
+  )
+
   it.effect("applies one exact identity override to replayed and future accounting facts", () =>
     Effect.gen(function* () {
       const occurredAt = DateTime.toDateUtc(DateTime.makeUnsafe("2025-02-01T10:00:00.000Z"))
@@ -2120,25 +2275,13 @@ describe("SourceNormalizationRepositoryLive", () => {
               contractAddress: "sync-engine-btc-fixture",
               mintAddress: null,
             })
-            yield* db.execute(sql`
-              create function delay_concurrent_representation_use() returns trigger
-              language plpgsql as $trigger$
-              begin
-                perform pg_sleep(0.5);
-                return new;
-              end
-              $trigger$
-            `)
-            yield* db.execute(sql`
-              create trigger delay_concurrent_representation_use
-              before insert on source_representation_uses
-              for each row execute function delay_concurrent_representation_use()
-            `)
             return secondAccount.id
           })
         )
       )
 
+      const sourceOwnsPrincipalLock = yield* Latch.make()
+      const releaseSourceWrite = yield* Latch.make()
       const [stored, created] = yield* Effect.promise(() =>
         runSourceAndOverrideRepositories(
           Effect.gen(function* () {
@@ -2159,6 +2302,10 @@ describe("SourceNormalizationRepositoryLive", () => {
             return yield* Effect.all(
               [
                 sourceRepository.persistNormalizedArtifacts({
+                  beforePersist: Effect.gen(function* () {
+                    yield* sourceOwnsPrincipalLock.open
+                    yield* releaseSourceWrite.await
+                  }),
                   transaction: {
                     sourceId: CONCURRENT_SOURCE_B_ID,
                     sourceRawRecordId: null,
@@ -2248,7 +2395,7 @@ describe("SourceNormalizationRepositoryLive", () => {
                   transactionReview: null,
                   resolvedTransactionType: APPROVED_MAPPING,
                 }),
-                Effect.sleep("100 millis").pipe(
+                sourceOwnsPrincipalLock.await.pipe(
                   Effect.andThen(
                     overrideRepository.create({
                       actorUserId: AuthUserId.make(CONCURRENT_USER_ID),
@@ -2266,20 +2413,18 @@ describe("SourceNormalizationRepositoryLive", () => {
                     })
                   )
                 ),
+                sourceOwnsPrincipalLock.await.pipe(
+                  Effect.andThen(
+                    Effect.promise(() =>
+                      context.waitForQueryBlockedOnLock({ queryIncludes: "principals" })
+                    )
+                  ),
+                  Effect.andThen(releaseSourceWrite.open)
+                ),
               ],
               { concurrency: "unbounded" }
             )
           })
-        ).finally(() =>
-          runPg(
-            Effect.gen(function* () {
-              const db = yield* drizzle
-              yield* db.execute(
-                sql`drop trigger delay_concurrent_representation_use on source_representation_uses`
-              )
-              yield* db.execute(sql`drop function delay_concurrent_representation_use()`)
-            })
-          )
         )
       )
 
@@ -2287,20 +2432,187 @@ describe("SourceNormalizationRepositoryLive", () => {
       const activeOverrideId = createdProjection.activeIdentityOverride?.id
       expect(stored.canonicalTransfers[0]?.assetId).toBe(TEST_BTC_ASSET_ID)
       expect(activeOverrideId).toBeDefined()
-      const applicationSources = yield* Effect.promise(() =>
+      const durableReplay = yield* Effect.promise(() =>
         runPg(
           Effect.gen(function* () {
             const db = yield* drizzle
             return yield* db
-              .select({ sourceId: schema.principalAssetOverrideApplications.sourceId })
+              .select({
+                sourceId: schema.principalAssetOverrideApplications.sourceId,
+                mode: schema.processingJobs.mode,
+                status: schema.processingJobs.status,
+                progressDetails: schema.processingJobs.progressDetails,
+              })
               .from(schema.principalAssetOverrideApplications)
+              .innerJoin(
+                schema.processingJobs,
+                eq(
+                  schema.processingJobs.id,
+                  schema.principalAssetOverrideApplications.processingJobId
+                )
+              )
               .where(
                 eq(schema.principalAssetOverrideApplications.overrideId, activeOverrideId ?? "")
               )
           })
         )
       )
-      expect(applicationSources.map(({ sourceId }) => sourceId)).toContain(CONCURRENT_SOURCE_B_ID)
+      expect(durableReplay).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            sourceId: CONCURRENT_SOURCE_B_ID,
+            mode: "replay",
+            status: "pending",
+            progressDetails: expect.objectContaining({
+              mode: "replay",
+              reason: "principal_asset_override",
+              overrideId: activeOverrideId,
+            }),
+          }),
+        ])
+      )
+    })
+  )
+
+  it.effect("applies an override that wins the principal lock before a source's first use", () =>
+    Effect.gen(function* () {
+      const occurredAt = DateTime.toDateUtc(DateTime.makeUnsafe("2025-02-02T10:05:00.000Z"))
+      const concurrentFixture = yield* Effect.promise(() =>
+        runPg(
+          seedSyncEngineRepositoryFixture({
+            userId: CONCURRENT_USER_ID,
+            principalId: CONCURRENT_PRINCIPAL_ID,
+            sourceId: CONCURRENT_SOURCE_A_ID,
+          })
+        )
+      )
+      const secondCexAccountId = yield* Effect.promise(() =>
+        runPg(
+          Effect.gen(function* () {
+            const db = yield* drizzle
+            yield* db.insert(schema.assets).values({
+              id: OVERRIDE_ASSET_ID,
+              name: "Principal-selected asset",
+              symbol: "SELECTED",
+              type: "fungible",
+            })
+            yield* db.insert(schema.sourceRepresentationUses).values({
+              sourceId: CONCURRENT_SOURCE_A_ID,
+              blockchainId: concurrentFixture.bitcoinBlockchainId,
+              representationType: "token",
+              contractAddress: "sync-engine-btc-fixture",
+              mintAddress: null,
+            })
+            return yield* seedAdditionalOverrideSource({
+              fixture: concurrentFixture,
+              sourceId: CONCURRENT_SOURCE_B_ID,
+              principalId: CONCURRENT_PRINCIPAL_ID,
+            })
+          })
+        )
+      )
+      const target = {
+        _tag: "representation" as const,
+        blockchain: "bitcoin",
+        type: "token" as const,
+        contractAddress: "sync-engine-btc-fixture",
+        mintAddress: null,
+      }
+      const projection = Option.getOrThrow(
+        yield* Effect.promise(() =>
+          runSourceAndOverrideRepositories(
+            Effect.flatMap(PrincipalAssetOverrideRepository, (overrideRepository) =>
+              overrideRepository.findProjection({
+                principalId: PrincipalId.make(CONCURRENT_PRINCIPAL_ID),
+                target,
+              })
+            )
+          )
+        )
+      )
+      const gateHeld = yield* Latch.make()
+      const releaseGate = yield* Latch.make()
+      const gate = yield* Effect.forkChild(
+        Effect.promise(() =>
+          runPg(
+            Effect.gen(function* () {
+              const db = yield* drizzle
+              yield* db.transaction((tx) =>
+                Effect.gen(function* () {
+                  yield* tx.execute(
+                    sql`select pg_advisory_xact_lock(hashtextextended('t12b1-override-first', 0))`
+                  )
+                  yield* gateHeld.open
+                  yield* releaseGate.await
+                })
+              )
+            })
+          )
+        )
+      )
+      yield* gateHeld.await
+      yield* Effect.promise(() =>
+        runPg(
+          Effect.gen(function* () {
+            const db = yield* drizzle
+            yield* db.execute(sql`
+              create function hold_override_after_principal_lock() returns trigger
+              language plpgsql as $trigger$
+              begin
+                perform pg_advisory_xact_lock(hashtextextended('t12b1-override-first', 0));
+                return new;
+              end
+              $trigger$
+            `)
+            yield* db.execute(sql`
+              create trigger hold_override_after_principal_lock
+              before insert on principal_asset_overrides
+              for each row execute function hold_override_after_principal_lock()
+            `)
+          })
+        )
+      )
+      const overrideMutation = yield* Effect.forkChild(
+        Effect.promise(() =>
+          runSourceAndOverrideRepositories(
+            Effect.flatMap(PrincipalAssetOverrideRepository, (overrideRepository) =>
+              overrideRepository.create({
+                actorUserId: AuthUserId.make(CONCURRENT_USER_ID),
+                expectedSystemRevision: projection.system.identityRevision,
+                principalId: PrincipalId.make(CONCURRENT_PRINCIPAL_ID),
+                reason: "Win the principal lock before the source records its first use",
+                replacement: { _tag: "identity", assetId: OVERRIDE_ASSET_ID },
+                target,
+              })
+            )
+          )
+        )
+      )
+      yield* Effect.promise(() =>
+        context.waitForQueryBlockedOnLock({ queryIncludes: "principal_asset_overrides" })
+      )
+      const sourceWrite = yield* Effect.forkChild(
+        Effect.promise(() =>
+          persistExactOverrideArtifact({
+            externalId: "override-first-use",
+            fixture: concurrentFixture,
+            occurredAt,
+            sourceId: CONCURRENT_SOURCE_B_ID,
+            cexAccountId: secondCexAccountId,
+            principalId: CONCURRENT_PRINCIPAL_ID,
+          })
+        )
+      )
+      yield* Effect.promise(() =>
+        context.waitForQueryBlockedOnLock({ queryIncludes: "principals" })
+      )
+      yield* releaseGate.open
+      yield* Fiber.join(gate)
+      yield* Fiber.join(overrideMutation)
+
+      const stored = yield* Fiber.join(sourceWrite)
+      expect(stored.canonicalTransfers[0]?.assetId).toBe(OVERRIDE_ASSET_ID)
+      expect(stored.legs[0]?.assetId).toBe(OVERRIDE_ASSET_ID)
     })
   )
 
