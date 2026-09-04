@@ -28,6 +28,7 @@ import {
   type SourceProviderAssetDecision,
   type SourceProviderAssetDecisionTarget,
   type SourceProviderAssetTransferCandidate,
+  type SourceProviderAssetTransferCandidateIdentity,
   type SourceProviderTransferDraft,
   type SourceTransactionDraft,
   type SourceTransactionLegDraft,
@@ -2423,7 +2424,7 @@ const make = Effect.gen(function* () {
 
   const preparePrincipalAssetDecisionApplication = ({
     overrideHistorySnapshot,
-    providerAssetRowIds,
+    derivationDecisions,
     canonicalTransfers,
     derivedLegs,
     resolvedDerivationTargets,
@@ -2431,7 +2432,7 @@ const make = Effect.gen(function* () {
     linkedCanonicalTransfers,
   }: {
     readonly overrideHistorySnapshot: PrincipalAssetOverrideHistorySnapshot
-    readonly providerAssetRowIds: ReadonlyArray<string>
+    readonly derivationDecisions: PrincipalAssetOverrideDecisions
     readonly canonicalTransfers: ReadonlyArray<{ readonly assetRepresentationId?: string | null }>
     readonly derivedLegs: ReadonlyArray<
       SourceTransactionLegDraft & { readonly sourceRepresentationUseId: string | null }
@@ -2461,7 +2462,7 @@ const make = Effect.gen(function* () {
             : []
         ),
       ]
-      const decisions = yield* principalAssetOverrideDecisionLoader.loadFromSnapshot({
+      const exactDecisions = yield* principalAssetOverrideDecisionLoader.loadFromSnapshot({
         snapshot: overrideHistorySnapshot,
         assetRepresentationIds: [...canonicalTransfers, ...derivedLegs].flatMap(
           ({ assetRepresentationId }) =>
@@ -2470,24 +2471,36 @@ const make = Effect.gen(function* () {
               : [assetRepresentationId]
         ),
         sourceRepresentationUseIds,
-        providerAssetRowIds: [
-          ...providerAssetRowIds,
-          ...persistedProviderTransfers.flatMap(({ providerAssetId }) =>
-            providerAssetId === null ? [] : [providerAssetId]
-          ),
-          ...linkedCanonicalTransfers.flatMap(({ providerAssetRowId }) =>
-            providerAssetRowId === null ? [] : [providerAssetRowId]
-          ),
-          ...derivedLegs.flatMap(({ providerAssetRowId }) =>
-            providerAssetRowId === null || providerAssetRowId === undefined
-              ? []
-              : [providerAssetRowId]
-          ),
-          ...resolvedDerivationTargets.map(({ providerAssetRowId }) => providerAssetRowId),
-        ],
+        providerAssetRowIds: [],
+      })
+      const decisions = includeExactPrincipalAssetDecisions({
+        decisions: derivationDecisions,
+        exactDecisions,
       })
       return { decisions, sourceRepresentationUseIds }
     })
+
+  const includeExactPrincipalAssetDecisions = ({
+    decisions,
+    exactDecisions,
+  }: {
+    readonly decisions: PrincipalAssetOverrideDecisions
+    readonly exactDecisions: PrincipalAssetOverrideDecisions
+  }): PrincipalAssetOverrideDecisions => ({
+    ...decisions,
+    assetIdByRepresentationId: new Map([
+      ...decisions.assetIdByRepresentationId,
+      ...exactDecisions.assetIdByRepresentationId,
+    ]),
+    systemAssetIdByRepresentationId: new Map([
+      ...decisions.systemAssetIdByRepresentationId,
+      ...exactDecisions.systemAssetIdByRepresentationId,
+    ]),
+    sourceRepresentationUseDecisionById: new Map([
+      ...decisions.sourceRepresentationUseDecisionById,
+      ...exactDecisions.sourceRepresentationUseDecisionById,
+    ]),
+  })
 
   const persistNormalizedArtifacts = <E>(
     params: PersistNormalizedSourceArtifactsParams<E>
@@ -2578,9 +2591,14 @@ const make = Effect.gen(function* () {
             yield* params.beforePersist
           }
 
-          const decisions = yield* principalAssetOverrideDecisionLoader.loadFromSnapshot({
+          const initialDecisions = yield* principalAssetOverrideDecisionLoader.loadFromSnapshot({
             snapshot: overrideHistorySnapshot,
-            providerAssetRowIds: params.providerAssetRowIds,
+            providerAssetRowIds: [
+              ...params.providerAssetRowIds,
+              ...params.providerTransfers.flatMap(({ providerAssetId }) =>
+                providerAssetId === null ? [] : [providerAssetId]
+              ),
+            ],
             assetRepresentationIds: [
               ...params.canonicalTransfers,
               ...("legs" in params ? params.legs : []),
@@ -2593,7 +2611,7 @@ const make = Effect.gen(function* () {
           const canonicalTransfers = params.canonicalTransfers.map((transfer) => ({
             ...transfer,
             assetId: resolvePrincipalAssetId({
-              decisions,
+              decisions: initialDecisions,
               systemAssetId: transfer.assetId,
               assetRepresentationId: transfer.assetRepresentationId,
               providerAssetRowId: transfer.providerAssetRowId,
@@ -2687,20 +2705,20 @@ const make = Effect.gen(function* () {
             ({ sourceRepresentationUseId }) =>
               sourceRepresentationUseId === null ? [] : [sourceRepresentationUseId]
           )
-          const derivationDecisions = yield* principalAssetOverrideDecisionLoader.loadFromSnapshot({
-            snapshot: overrideHistorySnapshot,
-            assetRepresentationIds: canonicalTransfers.flatMap(({ assetRepresentationId }) =>
-              assetRepresentationId === null || assetRepresentationId === undefined
-                ? []
-                : [assetRepresentationId]
-            ),
-            sourceRepresentationUseIds: preDerivationSourceRepresentationUseIds,
-            providerAssetRowIds: [
-              ...params.providerAssetRowIds,
-              ...persistedProviderTransfers.flatMap(({ providerAssetId }) =>
-                providerAssetId === null ? [] : [providerAssetId]
+          const persistedExactDecisions =
+            yield* principalAssetOverrideDecisionLoader.loadFromSnapshot({
+              snapshot: overrideHistorySnapshot,
+              assetRepresentationIds: canonicalTransfers.flatMap(({ assetRepresentationId }) =>
+                assetRepresentationId === null || assetRepresentationId === undefined
+                  ? []
+                  : [assetRepresentationId]
               ),
-            ],
+              sourceRepresentationUseIds: preDerivationSourceRepresentationUseIds,
+              providerAssetRowIds: [],
+            })
+          const derivationDecisions = includeExactPrincipalAssetDecisions({
+            decisions: initialDecisions,
+            exactDecisions: persistedExactDecisions,
           })
           const persistedCanonicalTransfers = yield* upsertCanonicalTransfers({
             executor: tx,
@@ -2720,6 +2738,7 @@ const make = Effect.gen(function* () {
             }
           > = []
           const persistedCandidateCanonicalTransfers: PersistedSourceTransfer[] = []
+          const attemptedCandidateIdentities: SourceProviderAssetTransferCandidateIdentity[] = []
           const resolvedDerivationTargets: SourceProviderAssetDecisionTarget[] = []
           const derivationTechnicalBlockers: PrincipalAssetTechnicalBlocker[] = []
           const recordedTransactionReviewWithoutProviderAssetMapping: {
@@ -2788,6 +2807,9 @@ const make = Effect.gen(function* () {
                   canonicalTransfers: systemCanonicalTransfers,
                   resolveProviderAssetDecision: resolveDerivationProviderAssetDecision,
                   persistProviderAssetTransferCandidate,
+                  recordProviderAssetTransferCandidateIdentity: (identity) => {
+                    attemptedCandidateIdentities.push(identity)
+                  },
                   recordTransactionReviewWithoutProviderAssetMapping: (review) => {
                     recordedTransactionReviewWithoutProviderAssetMapping.value = {
                       _tag: "recorded",
@@ -2879,7 +2901,7 @@ const make = Effect.gen(function* () {
           const { decisions: completeDecisions, sourceRepresentationUseIds } =
             yield* preparePrincipalAssetDecisionApplication({
               overrideHistorySnapshot,
-              providerAssetRowIds: params.providerAssetRowIds,
+              derivationDecisions,
               canonicalTransfers: [...canonicalTransfers, ...candidateLinkedCanonicalTransfers],
               derivedLegs: linkedLegTargets,
               resolvedDerivationTargets,
@@ -2898,23 +2920,34 @@ const make = Effect.gen(function* () {
             sourceRepresentationUseIds,
             derivationTechnicalBlockers,
           })
-          if (
-            providerDecisionResult.withholdsAccountingFacts &&
-            persistedCandidateCanonicalTransfers.length > 0
-          ) {
+          if (providerDecisionResult.withholdsAccountingFacts) {
             yield* tx
-              .delete(schema.transfers)
-              .where(
-                inArray(
-                  schema.transfers.id,
-                  persistedCandidateCanonicalTransfers.map(({ id }) => id)
-                )
-              )
+              .delete(schema.transactionLegs)
+              .where(eq(schema.transactionLegs.transactionId, persistedTransaction.id))
               .pipe(
                 wrapSyncEngineSqlError(
-                  "sourceNormalizationRepository.persistNormalizedArtifacts.removeWithheldCandidateTransfers"
+                  "sourceNormalizationRepository.persistNormalizedArtifacts.removeWithheldTransactionLegs"
                 )
               )
+            if (attemptedCandidateIdentities.length > 0) {
+              yield* tx
+                .delete(schema.transfers)
+                .where(
+                  or(
+                    ...attemptedCandidateIdentities.map(({ externalId, sourceId }) =>
+                      and(
+                        eq(schema.transfers.sourceId, sourceId),
+                        eq(schema.transfers.externalId, externalId)
+                      )
+                    )
+                  )
+                )
+                .pipe(
+                  wrapSyncEngineSqlError(
+                    "sourceNormalizationRepository.persistNormalizedArtifacts.removeWithheldCandidateTransfers"
+                  )
+                )
+            }
           }
           const retainedCandidateCanonicalTransfers =
             providerDecisionResult.withholdsAccountingFacts

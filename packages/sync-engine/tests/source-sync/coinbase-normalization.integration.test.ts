@@ -1333,6 +1333,104 @@ describe("coinbase normalization persistence", () => {
   )
 
   it.effect(
+    "clears resolved mapping review without reopening closed no-derivation rows",
+    () =>
+      Effect.gen(function* () {
+        const account = makeCoinbaseRecord({
+          recordType: "coinbase_account",
+          externalRecordId: "coinbase-account-1",
+          occurredAt: DateTime.toDateUtc(DateTime.makeUnsafe("2025-01-01T00:00:00.000Z")),
+          payload: {
+            id: "coinbase-account-1",
+            created_at: "2025-01-01T00:00:00.000Z",
+            updated_at: "2025-01-01T00:00:00.000Z",
+          },
+        })
+        activeSyncRecords = [
+          account,
+          ...(
+            [
+              { status: "completed", amount: "0.00000000" },
+              { status: "pending", amount: "0.40000000" },
+            ] as const
+          ).map(({ status, amount }, index) =>
+            makeCoinbaseRecord({
+              externalRecordId: `tx-${status}-hype-no-derivation`,
+              occurredAt: DateTime.toDateUtc(
+                DateTime.makeUnsafe(`2025-01-0${index + 2}T10:00:00.000Z`)
+              ),
+              payload: {
+                id: `tx-${status}-hype-no-derivation`,
+                type: "tx",
+                status,
+                amount: { amount, currency: "HYPE" },
+                native_amount: { amount: "4000.00", currency: "EUR" },
+                created_at: `2025-01-0${index + 2}T10:00:00.000Z`,
+                resource_path: `/v2/accounts/coinbase-account-1/transactions/tx-${status}-hype-no-derivation`,
+              },
+            })
+          ),
+        ]
+        activeCryptoCurrencies = [...defaultCryptoCurrencies, hypeCryptoCurrency]
+        yield* seedPendingProviderAssetMapping({
+          currencyCode: "HYPE",
+          providerAssetId: "hype-provider-asset",
+          providerType: "crypto",
+        })
+        yield* runSync()
+
+        const providerAsset = yield* Effect.gen(function* () {
+          const db = yield* drizzle
+          yield* db
+            .insert(schema.assets)
+            .values({
+              id: PROVIDER_OVERRIDE_ASSET_ID,
+              name: "Principal HYPE selection",
+              symbol: "HYPE-SELECTED",
+              type: "fungible",
+            })
+            .onConflictDoNothing({ target: schema.assets.id })
+          const [row] = yield* db
+            .select({ id: schema.providerAssets.id })
+            .from(schema.providerAssets)
+            .where(
+              and(
+                eq(schema.providerAssets.provider, "coinbase"),
+                eq(schema.providerAssets.currencyCode, "HYPE")
+              )
+            )
+            .limit(1)
+          if (row === undefined) return yield* Effect.die("Missing HYPE provider asset")
+          return row
+        }).pipe(Effect.provide(TestPgClientLive))
+
+        yield* createProviderIdentityOverride({ providerAssetRowId: providerAsset.id })
+        remoteReferenceCatalogAvailable = false
+        const replay = yield* replaySource()
+        const state = yield* fetchCounts()
+
+        expect(replay.status).toBe("completed")
+        expect(state.legs).toEqual([])
+        expect(state.transfers).toEqual([])
+        expect(state.transactionReviews).toHaveLength(2)
+        expect(
+          state.transactionReviews.every(
+            ({ matchedLayer }) => matchedLayer?.includes("provider_asset_mapping") === false
+          )
+        ).toBe(true)
+        const pendingTransaction = state.transactions.find(
+          ({ externalId }) => externalId === "tx-pending-hype-no-derivation"
+        )
+        expect(
+          state.transactionReviews.some(
+            ({ transactionId }) => transactionId === pendingTransaction?.id
+          )
+        ).toBe(true)
+      }),
+    15_000
+  )
+
+  it.effect(
     "persists a settled fiat Coinbase tx for review without an inventory leg",
     () =>
       Effect.gen(function* () {
@@ -2186,7 +2284,7 @@ describe("coinbase normalization persistence", () => {
   )
 
   it.effect(
-    "replays a chainless buy with its writer-built fee after sound principal overrides",
+    "removes replayed fee facts when their writer-built candidate later becomes blocked",
     () =>
       Effect.gen(function* () {
         activeSyncRecords = makeBtcWithHypeFeeSyncRecords()
@@ -2295,6 +2393,53 @@ describe("coinbase normalization persistence", () => {
         })
         expect(state.inventoryMovements).toEqual([])
         expect(state.mapping).toEqual({ canonicalAssetId: null, mappingStatus: "excluded" })
+
+        yield* Effect.gen(function* () {
+          const db = yield* drizzle
+          yield* db
+            .update(schema.providerAssets)
+            .set({ exponent: null })
+            .where(eq(schema.providerAssets.id, providerAsset.id))
+        }).pipe(Effect.provide(TestPgClientLive))
+
+        const blockedReplay = yield* replaySource()
+        const blockedState = yield* Effect.gen(function* () {
+          const db = yield* drizzle
+          const candidateTransfers = yield* db
+            .select({ id: schema.transfers.id })
+            .from(schema.transfers)
+            .where(eq(schema.transfers.externalId, "tx-btc-with-hype-fee:network_fee"))
+          const legs = yield* db
+            .select({ id: schema.transactionLegs.id })
+            .from(schema.transactionLegs)
+          const inventoryMovements = yield* db
+            .select({ id: schema.inventoryMovements.id })
+            .from(schema.inventoryMovements)
+          const [review] = yield* db
+            .select({
+              categorizationReason: schema.transactionReviews.categorizationReason,
+              matchedLayer: schema.transactionReviews.matchedLayer,
+            })
+            .from(schema.transactionReviews)
+            .innerJoin(
+              schema.transactions,
+              eq(schema.transactions.id, schema.transactionReviews.transactionId)
+            )
+            .where(eq(schema.transactions.externalId, "tx-btc-with-hype-fee"))
+          const providerUses = yield* db
+            .select({ providerAssetRowId: schema.providerAssetTransactionUses.providerAssetRowId })
+            .from(schema.providerAssetTransactionUses)
+            .where(eq(schema.providerAssetTransactionUses.providerAssetRowId, providerAsset.id))
+          return { candidateTransfers, inventoryMovements, legs, providerUses, review }
+        }).pipe(Effect.provide(TestPgClientLive))
+
+        expect(blockedReplay.status).toBe("completed")
+        expect(blockedState.candidateTransfers).toEqual([])
+        expect(blockedState.legs).toEqual([])
+        expect(blockedState.inventoryMovements).toEqual([])
+        expect(blockedState.providerUses).toEqual([{ providerAssetRowId: providerAsset.id }])
+        expect(blockedState.review?.categorizationReason).toContain("missing_decimals")
+        expect(blockedState.review?.matchedLayer).toContain("principal_asset_override")
       }),
     15_000
   )

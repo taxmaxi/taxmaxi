@@ -118,12 +118,42 @@ const makeCoinbaseProviderModule = (
                       canonicalTransfers,
                       resolveProviderAssetDecision,
                       persistProviderAssetTransferCandidate,
+                      recordProviderAssetTransferCandidateIdentity,
                       recordTransactionReviewWithoutProviderAssetMapping,
                       withholdAccountingFacts,
                     }) =>
                       Effect.gen(function* () {
                         recordTransactionReviewWithoutProviderAssetMapping(
                           prepared.transactionReviewWithoutProviderAssetMapping
+                        )
+                        const feeTransferCandidates = yield* Effect.forEach(
+                          prepared.feeTransferCandidates,
+                          (candidate) =>
+                            Effect.gen(function* () {
+                              if (
+                                candidate.transfer.externalId === null ||
+                                candidate.transfer.sourceId !== transaction.sourceId
+                              ) {
+                                return yield* new SyncEngineStorageError({
+                                  operation:
+                                    "sourceProviderRegistry.coinbase.recordFeeTransferCandidateIdentity",
+                                  cause:
+                                    "Coinbase fee transfer candidate is missing its stable source identity",
+                                })
+                              }
+                              recordProviderAssetTransferCandidateIdentity({
+                                sourceId: candidate.transfer.sourceId,
+                                externalId: candidate.transfer.externalId,
+                              })
+                              return {
+                                _tag: "provider_asset_transfer_candidate" as const,
+                                target: {
+                                  _tag: "provider_asset_transaction_use" as const,
+                                  providerAssetRowId: candidate.providerAssetRowId,
+                                },
+                                transfer: candidate.transfer,
+                              }
+                            })
                         )
                         const primaryProviderTransfer =
                           prepared.primaryProviderTransfer === null
@@ -165,16 +195,6 @@ const makeCoinbaseProviderModule = (
                         })
                         if (primaryAssetResult._tag === "withheld") return []
 
-                        const feeTransferCandidates = prepared.feeTransferCandidates.map(
-                          (candidate) => ({
-                            _tag: "provider_asset_transfer_candidate" as const,
-                            target: {
-                              _tag: "provider_asset_transaction_use" as const,
-                              providerAssetRowId: candidate.providerAssetRowId,
-                            },
-                            transfer: candidate.transfer,
-                          })
-                        )
                         const feeTransferDecisions = feeTransferCandidates.map((candidate) =>
                           resolveProviderAssetDecision(candidate.target)
                         )
@@ -204,7 +224,13 @@ const makeCoinbaseProviderModule = (
                         }
                         return legDerivation.legs
                       }).pipe(Effect.mapError(toCoinbaseRecoverableNormalizationError))
-                  : () => Effect.succeed([]),
+                  : ({ recordTransactionReviewWithoutProviderAssetMapping }) =>
+                      Effect.sync(() => {
+                        recordTransactionReviewWithoutProviderAssetMapping(
+                          prepared.transactionReviewWithoutProviderAssetMapping
+                        )
+                        return []
+                      }),
             } as const
           })
     )

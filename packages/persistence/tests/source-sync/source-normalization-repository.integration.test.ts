@@ -1408,6 +1408,7 @@ describe("SourceNormalizationRepositoryLive", () => {
     legs,
     transactionReview = null,
     transactionReviewWithoutProviderAssetMapping,
+    afterProviderDecision,
   }: {
     readonly occurredAt: Date
     readonly externalId: string
@@ -1429,6 +1430,7 @@ describe("SourceNormalizationRepositoryLive", () => {
     }>
     readonly transactionReview?: SourceTransactionReviewDraft | null
     readonly transactionReviewWithoutProviderAssetMapping?: SourceTransactionReviewDraft | null
+    readonly afterProviderDecision?: Effect.Effect<void>
   }) =>
     runRepository(
       Effect.flatMap(SourceNormalizationRepository, (repository) =>
@@ -1491,14 +1493,29 @@ describe("SourceNormalizationRepositoryLive", () => {
           })),
           canonicalTransfers: [],
           providerAssetRowIds: legs.map(({ providerAssetRowId }) => providerAssetRowId),
-          deriveLegs: ({ transaction, recordTransactionReviewWithoutProviderAssetMapping }) => {
-            if (transactionReviewWithoutProviderAssetMapping !== undefined) {
-              recordTransactionReviewWithoutProviderAssetMapping(
-                transactionReviewWithoutProviderAssetMapping
-              )
-            }
-            return Effect.succeed(
-              legs.map((leg) => ({
+          deriveLegs: ({
+            transaction,
+            recordTransactionReviewWithoutProviderAssetMapping,
+            resolveProviderAssetDecision,
+          }) =>
+            Effect.gen(function* () {
+              if (transactionReviewWithoutProviderAssetMapping !== undefined) {
+                recordTransactionReviewWithoutProviderAssetMapping(
+                  transactionReviewWithoutProviderAssetMapping
+                )
+              }
+              if (afterProviderDecision !== undefined) {
+                const [firstLeg] = legs
+                if (firstLeg === undefined) {
+                  return yield* Effect.die("Missing provider decision leg for pause")
+                }
+                resolveProviderAssetDecision({
+                  _tag: "provider_asset_transaction_use",
+                  providerAssetRowId: firstLeg.providerAssetRowId,
+                })
+                yield* afterProviderDecision
+              }
+              return legs.map((leg) => ({
                 sourceId,
                 sourceRawRecordId: null,
                 externalId: leg.externalId,
@@ -1522,8 +1539,7 @@ describe("SourceNormalizationRepositoryLive", () => {
                 fiatCurrency: null,
                 feeForTransactionId: leg.kind === "fee" ? transaction.id : null,
               }))
-            )
-          },
+            }),
           transactionReview,
           resolvedTransactionType: APPROVED_MAPPING,
         })
@@ -1637,6 +1653,7 @@ describe("SourceNormalizationRepositoryLive", () => {
             providerTransfers,
             resolveProviderAssetDecision,
             persistProviderAssetTransferCandidate,
+            recordProviderAssetTransferCandidateIdentity,
             withholdAccountingFacts,
           }) =>
             Effect.gen(function* () {
@@ -1648,6 +1665,10 @@ describe("SourceNormalizationRepositoryLive", () => {
                 _tag: "provider_asset_transaction_use" as const,
                 providerAssetRowId,
               }
+              recordProviderAssetTransferCandidateIdentity({
+                sourceId: TEST_SOURCE_ID,
+                externalId: `${externalId}-fee-transfer`,
+              })
               const feeDecision = resolveProviderAssetDecision(target)
               if (feeDecision._tag !== "included") return []
 
@@ -3127,6 +3148,75 @@ describe("SourceNormalizationRepositoryLive", () => {
     })
   )
 
+  it.effect("removes a prior candidate when its retry becomes technically blocked", () =>
+    Effect.gen(function* () {
+      const occurredAt = DateTime.toDateUtc(DateTime.makeUnsafe("2025-02-01T10:20:00.000Z"))
+      yield* Effect.promise(() => seedProviderDecisionFixture(occurredAt))
+      const params = {
+        occurredAt,
+        externalId: "candidate-included-then-blocked",
+        providerAssetRowId: PROVIDER_ASSET_ROW_A_ID,
+      }
+
+      const included = yield* Effect.promise(() =>
+        persistExactPrimaryWithChainlessFeeCandidate(params)
+      )
+      expect(included.canonicalTransfers).toEqual([
+        expect.objectContaining({ externalId: "candidate-included-then-blocked-fee-transfer" }),
+      ])
+      expect(included.legs).toHaveLength(2)
+
+      yield* Effect.promise(() =>
+        runPg(
+          Effect.gen(function* () {
+            const db = yield* drizzle
+            yield* db
+              .update(schema.providerAssets)
+              .set({ exponent: null })
+              .where(eq(schema.providerAssets.id, PROVIDER_ASSET_ROW_A_ID))
+          })
+        )
+      )
+
+      const withheld = yield* Effect.promise(() =>
+        persistExactPrimaryWithChainlessFeeCandidate(params)
+      )
+      const state = yield* Effect.promise(() =>
+        runPg(
+          Effect.gen(function* () {
+            const db = yield* drizzle
+            const candidateTransfers = yield* db
+              .select({ id: schema.transfers.id })
+              .from(schema.transfers)
+              .where(
+                eq(schema.transfers.externalId, "candidate-included-then-blocked-fee-transfer")
+              )
+            const legs = yield* db
+              .select({ id: schema.transactionLegs.id })
+              .from(schema.transactionLegs)
+              .where(eq(schema.transactionLegs.transactionId, withheld.transaction.id))
+            const inventory = yield* db
+              .select({ id: schema.inventoryMovements.id })
+              .from(schema.inventoryMovements)
+              .where(eq(schema.inventoryMovements.transactionId, withheld.transaction.id))
+            const providerEvidence = yield* db
+              .select({ id: schema.providerTransfers.id })
+              .from(schema.providerTransfers)
+              .where(eq(schema.providerTransfers.transactionId, withheld.transaction.id))
+            return { candidateTransfers, inventory, legs, providerEvidence }
+          })
+        )
+      )
+
+      expect(withheld.canonicalTransfers).toEqual([])
+      expect(withheld.legs).toEqual([])
+      expect(state.candidateTransfers).toEqual([])
+      expect(state.legs).toEqual([])
+      expect(state.inventory).toEqual([])
+      expect(state.providerEvidence).toHaveLength(1)
+    })
+  )
+
   it.effect("keeps exact and provider fallback identities separate for one provider row", () =>
     Effect.gen(function* () {
       const occurredAt = DateTime.toDateUtc(DateTime.makeUnsafe("2025-02-01T10:20:00.000Z"))
@@ -3828,6 +3918,138 @@ describe("SourceNormalizationRepositoryLive", () => {
             })
         )
       })
+  )
+
+  it.effect("replaces included facts when a later technical decision withholds", () =>
+    Effect.gen(function* () {
+      const occurredAt = DateTime.toDateUtc(DateTime.makeUnsafe("2025-02-01T10:20:00.000Z"))
+      yield* Effect.promise(() => seedProviderDecisionFixture(occurredAt))
+      const externalId = "provider-included-then-technically-blocked"
+      const artifacts = {
+        occurredAt,
+        externalId,
+        providerTransfers: [
+          {
+            providerAssetId: PROVIDER_ASSET_ROW_A_ID,
+            observedBlockchainId: null,
+            processingMode: "accounting_and_evidence" as const,
+          },
+        ],
+        legs: [
+          {
+            externalId: `${externalId}-leg`,
+            providerAssetRowId: PROVIDER_ASSET_ROW_A_ID,
+          },
+        ],
+      }
+
+      const included = yield* Effect.promise(() => persistProviderDecisionArtifacts(artifacts))
+      expect(included.legs).toHaveLength(1)
+
+      yield* Effect.promise(() =>
+        runPg(
+          Effect.gen(function* () {
+            const db = yield* drizzle
+            yield* db
+              .update(schema.providerAssets)
+              .set({ exponent: null })
+              .where(eq(schema.providerAssets.id, PROVIDER_ASSET_ROW_A_ID))
+          })
+        )
+      )
+
+      const withheld = yield* Effect.promise(() => persistProviderDecisionArtifacts(artifacts))
+      const state = yield* Effect.promise(() =>
+        runPg(
+          Effect.gen(function* () {
+            const db = yield* drizzle
+            const legs = yield* db
+              .select({ id: schema.transactionLegs.id })
+              .from(schema.transactionLegs)
+              .where(eq(schema.transactionLegs.transactionId, withheld.transaction.id))
+            const inventory = yield* db
+              .select({ id: schema.inventoryMovements.id })
+              .from(schema.inventoryMovements)
+              .where(eq(schema.inventoryMovements.transactionId, withheld.transaction.id))
+            const providerEvidence = yield* db
+              .select({ id: schema.providerTransfers.id })
+              .from(schema.providerTransfers)
+              .where(eq(schema.providerTransfers.transactionId, withheld.transaction.id))
+            const [review] = yield* db
+              .select({ categorizationReason: schema.transactionReviews.categorizationReason })
+              .from(schema.transactionReviews)
+              .where(eq(schema.transactionReviews.transactionId, withheld.transaction.id))
+            return { inventory, legs, providerEvidence, review }
+          })
+        )
+      )
+
+      expect(withheld.legs).toEqual([])
+      expect(state.legs).toEqual([])
+      expect(state.inventory).toEqual([])
+      expect(state.providerEvidence).toHaveLength(1)
+      expect(state.review?.categorizationReason).toContain("missing_decimals")
+    })
+  )
+
+  it.effect(
+    "reuses one provider decision view through derivation and final preflight",
+    () =>
+      Effect.gen(function* () {
+        const occurredAt = DateTime.toDateUtc(DateTime.makeUnsafe("2025-02-01T10:20:00.000Z"))
+        yield* Effect.promise(() => seedProviderDecisionFixture(occurredAt))
+        const decisionResolved = yield* Latch.make()
+        const releaseDerivation = yield* Latch.make()
+        const sourceWrite = yield* Effect.forkChild(
+          Effect.promise(() =>
+            persistProviderDecisionArtifacts({
+              occurredAt,
+              externalId: "provider-decision-snapshot-during-derivation",
+              legs: [
+                {
+                  externalId: "provider-decision-snapshot-during-derivation-leg",
+                  providerAssetRowId: PROVIDER_ASSET_ROW_A_ID,
+                },
+              ],
+              afterProviderDecision: decisionResolved.open.pipe(
+                Effect.andThen(releaseDerivation.await)
+              ),
+            })
+          )
+        )
+
+        yield* decisionResolved.await
+        yield* Effect.promise(() =>
+          runPg(
+            Effect.gen(function* () {
+              const db = yield* drizzle
+              yield* db
+                .update(schema.providerAssets)
+                .set({ exponent: null })
+                .where(eq(schema.providerAssets.id, PROVIDER_ASSET_ROW_A_ID))
+            })
+          )
+        )
+        yield* releaseDerivation.open
+
+        const first = yield* Fiber.join(sourceWrite)
+        const later = yield* Effect.promise(() =>
+          persistProviderDecisionArtifacts({
+            occurredAt,
+            externalId: "provider-decision-after-reference-change",
+            legs: [
+              {
+                externalId: "provider-decision-after-reference-change-leg",
+                providerAssetRowId: PROVIDER_ASSET_ROW_A_ID,
+              },
+            ],
+          })
+        )
+
+        expect(first.legs).toHaveLength(1)
+        expect(later.legs).toEqual([])
+      }),
+    15_000
   )
 
   it.effect("withholds all accounting legs when a principal exclusion applies", () =>

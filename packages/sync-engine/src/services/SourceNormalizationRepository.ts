@@ -393,6 +393,12 @@ export interface SourceProviderAssetTransferCandidate {
   readonly transfer: Omit<SourceTransferDraft, "assetId" | "providerAssetRowId">
 }
 
+/** Stable writer-supplied identity for a canonical transfer candidate in one source. */
+export interface SourceProviderAssetTransferCandidateIdentity {
+  readonly sourceId: string
+  readonly externalId: string
+}
+
 /** Result of applying and persisting one writer-built transfer candidate. */
 export type SourceProviderAssetTransferCandidateResult =
   | {
@@ -431,6 +437,10 @@ export interface PersistNormalizedSourceArtifactsContext {
   readonly persistProviderAssetTransferCandidate: (
     candidate: SourceProviderAssetTransferCandidate
   ) => Effect.Effect<SourceProviderAssetTransferCandidateResult, SyncEngineStorageError>
+  /** Records every writer-built transfer candidate before its decision is preflighted. */
+  readonly recordProviderAssetTransferCandidateIdentity: (
+    identity: SourceProviderAssetTransferCandidateIdentity
+  ) => void
   /** Records the writer's review before provider-asset mapping details were added. */
   readonly recordTransactionReviewWithoutProviderAssetMapping: (
     review: SourceTransactionReviewDraft | null
