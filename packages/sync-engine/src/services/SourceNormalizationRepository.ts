@@ -5,6 +5,7 @@
  */
 
 import { SyncCreditReasonCode } from "@my/core/billing"
+import type { PrincipalAssetTechnicalBlocker } from "@my/core/assets"
 import * as Context from "effect/Context"
 import type * as Effect from "effect/Effect"
 import * as Schema from "effect/Schema"
@@ -353,18 +354,57 @@ export interface PersistNormalizedSourceArtifactsResult {
   readonly legs: ReadonlyArray<PersistedSourceLeg>
 }
 
+/** Typed reason a principal-scoped provider asset cannot produce accounting facts. */
+export type SourceProviderAssetBlockedReason =
+  | {
+      readonly _tag: "technical_blocker"
+      readonly technicalBlockers: ReadonlyArray<PrincipalAssetTechnicalBlocker>
+    }
+  | { readonly _tag: "unresolved_identity" }
+
 /** Principal-scoped provider asset decision available to in-transaction leg derivation. */
 export type SourceProviderAssetDecision =
   | { readonly _tag: "included"; readonly assetId: string }
   | { readonly _tag: "excluded" }
-  | { readonly _tag: "blocked" }
+  | {
+      readonly _tag: "blocked"
+      readonly reason: SourceProviderAssetBlockedReason
+    }
 
 /** Recorded target carried by the exact provider-transfer fact being derived. */
-export interface SourceProviderAssetDecisionTarget {
-  readonly _tag: "provider_transfer"
-  readonly providerAssetRowId: string
-  readonly sourceRepresentationUseId: string | null
+export type SourceProviderAssetDecisionTarget =
+  | {
+      readonly _tag: "provider_transfer"
+      readonly providerAssetRowId: string
+      readonly sourceRepresentationUseId: string | null
+    }
+  | {
+      readonly _tag: "provider_asset_transaction_use"
+      readonly providerAssetRowId: string
+    }
+
+/** Writer-built canonical transfer waiting for its effective provider-asset decision. */
+export interface SourceProviderAssetTransferCandidate {
+  readonly _tag: "provider_asset_transfer_candidate"
+  readonly target: Extract<
+    SourceProviderAssetDecisionTarget,
+    { readonly _tag: "provider_asset_transaction_use" }
+  >
+  readonly transfer: Omit<SourceTransferDraft, "assetId" | "providerAssetRowId">
 }
+
+/** Result of applying and persisting one writer-built transfer candidate. */
+export type SourceProviderAssetTransferCandidateResult =
+  | {
+      readonly _tag: "included"
+      /** Provider-derivation view; it uses system identity when one exists. */
+      readonly transfer: PersistedSourceTransfer
+    }
+  | { readonly _tag: "excluded" }
+  | {
+      readonly _tag: "blocked"
+      readonly reason: SourceProviderAssetBlockedReason
+    }
 
 /**
  * PersistNormalizedSourceArtifactsContext - Persisted pre-leg artifacts available
@@ -384,6 +424,10 @@ export interface PersistNormalizedSourceArtifactsContext {
   readonly resolveProviderAssetDecision: (
     target: SourceProviderAssetDecisionTarget
   ) => SourceProviderAssetDecision
+  /** Applies and persists one exact writer-built transfer candidate in this transaction. */
+  readonly persistProviderAssetTransferCandidate: (
+    candidate: SourceProviderAssetTransferCandidate
+  ) => Effect.Effect<SourceProviderAssetTransferCandidateResult, SyncEngineStorageError>
 }
 
 /**

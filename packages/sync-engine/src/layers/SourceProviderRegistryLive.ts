@@ -117,6 +117,7 @@ const makeCoinbaseProviderModule = (
                       providerTransferByDraft,
                       canonicalTransfers,
                       resolveProviderAssetDecision,
+                      persistProviderAssetTransferCandidate,
                     }) =>
                       Effect.gen(function* () {
                         const primaryProviderTransfer =
@@ -138,10 +139,17 @@ const makeCoinbaseProviderModule = (
                         const primaryAssetResult = resolveCoinbasePrimaryAsset({
                           candidate: prepared.assetDecisionLegDerivationCandidate,
                           primaryAsset: prepared.primaryAsset,
-                          providerTransferTarget:
+                          providerAssetTarget:
                             primaryProviderTransfer?.providerAssetId === null ||
                             primaryProviderTransfer?.providerAssetId === undefined
-                              ? null
+                              ? prepared.assetDecisionLegDerivationCandidate === null
+                                ? null
+                                : {
+                                    _tag: "provider_asset_transaction_use",
+                                    providerAssetRowId:
+                                      prepared.assetDecisionLegDerivationCandidate
+                                        .providerAssetRowId,
+                                  }
                               : {
                                   _tag: "provider_transfer",
                                   providerAssetRowId: primaryProviderTransfer.providerAssetId,
@@ -152,12 +160,37 @@ const makeCoinbaseProviderModule = (
                         })
                         if (primaryAssetResult._tag === "withheld") return []
 
+                        const feeTransferCandidates = prepared.feeTransferCandidates.map(
+                          (candidate) => ({
+                            _tag: "provider_asset_transfer_candidate" as const,
+                            target: {
+                              _tag: "provider_asset_transaction_use" as const,
+                              providerAssetRowId: candidate.providerAssetRowId,
+                            },
+                            transfer: candidate.transfer,
+                          })
+                        )
+                        const feeTransferDecisions = feeTransferCandidates.map((candidate) =>
+                          resolveProviderAssetDecision(candidate.target)
+                        )
+                        if (feeTransferDecisions.some(({ _tag }) => _tag !== "included")) return []
+
+                        const feeTransferResults = yield* Effect.forEach(
+                          feeTransferCandidates,
+                          persistProviderAssetTransferCandidate,
+                          { concurrency: 1 }
+                        )
+                        if (feeTransferResults.some(({ _tag }) => _tag !== "included")) return []
+                        const resolvedFeeTransfers = feeTransferResults.flatMap((result) =>
+                          result._tag === "included" ? [result.transfer] : []
+                        )
+
                         return yield* coinbaseSourceSyncProvider.deriveLegs({
                           transaction,
                           venueContext,
                           primaryAsset: primaryAssetResult.asset,
                           primaryProviderTransferId: primaryProviderTransfer?.id ?? null,
-                          canonicalTransfers,
+                          canonicalTransfers: [...canonicalTransfers, ...resolvedFeeTransfers],
                           deriveMainLeg: prepared.deriveMainLeg,
                         })
                       }).pipe(Effect.mapError(toCoinbaseRecoverableNormalizationError))

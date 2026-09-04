@@ -77,12 +77,12 @@ export interface CoinbaseAssetDecisionLegDerivationCandidate {
 export const resolveCoinbasePrimaryAsset = ({
   candidate,
   primaryAsset,
-  providerTransferTarget,
+  providerAssetTarget,
   resolveProviderAssetDecision,
 }: {
   readonly candidate: CoinbaseAssetDecisionLegDerivationCandidate | null
   readonly primaryAsset: Pick<SyncEngineAsset, "id" | "symbol"> | null
-  readonly providerTransferTarget: SourceProviderAssetDecisionTarget | null
+  readonly providerAssetTarget: SourceProviderAssetDecisionTarget | null
   readonly resolveProviderAssetDecision: (
     target: SourceProviderAssetDecisionTarget
   ) => SourceProviderAssetDecision
@@ -90,9 +90,9 @@ export const resolveCoinbasePrimaryAsset = ({
   | { readonly _tag: "ready"; readonly asset: Pick<SyncEngineAsset, "id" | "symbol"> | null }
   | { readonly _tag: "withheld" } => {
   if (candidate === null) return { _tag: "ready", asset: primaryAsset }
-  if (providerTransferTarget === null) return { _tag: "withheld" }
+  if (providerAssetTarget === null) return { _tag: "withheld" }
 
-  const providerAssetDecision = resolveProviderAssetDecision(providerTransferTarget)
+  const providerAssetDecision = resolveProviderAssetDecision(providerAssetTarget)
   if (providerAssetDecision._tag !== "included") return { _tag: "withheld" }
 
   return {

@@ -608,7 +608,12 @@ const makeExecutorLayer = ({
             providerTransfers: [],
             providerTransferByDraft: new Map(),
             canonicalTransfers: [],
-            resolveProviderAssetDecision: () => ({ _tag: "blocked" }),
+            resolveProviderAssetDecision: () => ({
+              _tag: "blocked",
+              reason: { _tag: "unresolved_identity" },
+            }),
+            persistProviderAssetTransferCandidate: () =>
+              Effect.succeed({ _tag: "blocked", reason: { _tag: "unresolved_identity" } }),
           })
         }
         if (params.transaction.sourceRawRecordId !== null) {
