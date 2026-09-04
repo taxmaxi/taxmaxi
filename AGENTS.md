@@ -86,6 +86,9 @@ mise x -- pnpm --filter @my/persistence run migration:run
 
 Preserve useful seed data by rewriting it into clean new seed migrations instead of restoring the old migration chain.
 
+Pre Launch Only (i.e. until we stop using vX.X.X-beta.X git tags):
+Migrations may change schema and may empty tables. They must not rewrite existing data: no UPDATE backfills, no INSERT-from-SELECT transformations, no custom SQL that amends stored rows. When a schema change needs existing rows in a new shape, delete the affected derived rows and let replay or reseeding regenerate them through the normal writers. Emptying a table, including on prod, is acceptable until launch. This rule ends at launch and will be replaced then.
+
 ## Commit Messages
 
 Use Conventional Commits 1.0.0 for hand-written commit messages:
