@@ -138,6 +138,16 @@ const makeCoinbaseProviderModule = (
                         const primaryAssetResult = resolveCoinbasePrimaryAsset({
                           candidate: prepared.assetDecisionLegDerivationCandidate,
                           primaryAsset: prepared.primaryAsset,
+                          providerTransferTarget:
+                            primaryProviderTransfer?.providerAssetId === null ||
+                            primaryProviderTransfer?.providerAssetId === undefined
+                              ? null
+                              : {
+                                  _tag: "provider_transfer",
+                                  providerAssetRowId: primaryProviderTransfer.providerAssetId,
+                                  sourceRepresentationUseId:
+                                    primaryProviderTransfer.sourceRepresentationUseId,
+                                },
                           resolveProviderAssetDecision,
                         })
                         if (primaryAssetResult._tag === "withheld") return []

@@ -85,10 +85,6 @@ type LinkedSourceProviderTransferDraft = SourceProviderTransferDraft & {
   readonly sourceRepresentationUseId: string | null
 }
 
-type PersistedSourceProviderTransferWithTarget = PersistedSourceProviderTransfer & {
-  readonly sourceRepresentationUseId: string | null
-}
-
 interface LinkedSourceProviderTransferInput {
   readonly draft: SourceProviderTransferDraft
   readonly linked: LinkedSourceProviderTransferDraft
@@ -237,7 +233,7 @@ const applyPrincipalProviderAssetDecisions = ({
     }
   >
   readonly providerAssetRowIds: ReadonlyArray<string>
-  readonly providerTransfers: ReadonlyArray<PersistedSourceProviderTransferWithTarget>
+  readonly providerTransfers: ReadonlyArray<PersistedSourceProviderTransfer>
   readonly sourceRepresentationUseIds: ReadonlyArray<string>
 }): {
   readonly hasIdentityConflict: boolean
@@ -1907,7 +1903,7 @@ const make = Effect.gen(function* () {
     readonly decisions: PrincipalAssetOverrideDecisions
     readonly executor: SourceNormalizationExecutor
     readonly transaction: PersistedSourceTransaction
-    readonly providerTransfers: ReadonlyArray<PersistedSourceProviderTransferWithTarget>
+    readonly providerTransfers: ReadonlyArray<PersistedSourceProviderTransfer>
     readonly feesOnly: boolean
   }) => {
     const orderedProviderTransfers = [
@@ -2173,7 +2169,7 @@ const make = Effect.gen(function* () {
     readonly derivedLegs: ReadonlyArray<
       SourceTransactionLegDraft & { readonly sourceRepresentationUseId: string | null }
     >
-    readonly persistedProviderTransfers: ReadonlyArray<PersistedSourceProviderTransferWithTarget>
+    readonly persistedProviderTransfers: ReadonlyArray<PersistedSourceProviderTransfer>
     readonly linkedCanonicalTransfers: ReadonlyArray<LinkedSourceTransferDraft>
   }) =>
     Effect.gen(function* () {
@@ -2451,18 +2447,15 @@ const make = Effect.gen(function* () {
                   providerTransfers: persistedProviderTransfers,
                   providerTransferByDraft,
                   canonicalTransfers: systemCanonicalTransfers,
-                  resolveProviderAssetDecision: (providerAssetRowId) => {
-                    const persistedTarget = persistedProviderTransfers.find(
-                      (providerTransfer) =>
-                        providerTransfer.providerAssetId === providerAssetRowId &&
-                        providerTransfer.sourceRepresentationUseId !== null
-                    )
-                    return resolveSourceProviderAssetDecision({
+                  resolveProviderAssetDecision: ({
+                    providerAssetRowId,
+                    sourceRepresentationUseId,
+                  }) =>
+                    resolveSourceProviderAssetDecision({
                       decisions: derivationDecisions,
                       providerAssetRowId,
-                      sourceRepresentationUseId: persistedTarget?.sourceRepresentationUseId ?? null,
-                    })
-                  },
+                      sourceRepresentationUseId,
+                    }),
                 })
               : params.legs
           const derivedLegAssetRepresentationIds = derivedLegs.flatMap(

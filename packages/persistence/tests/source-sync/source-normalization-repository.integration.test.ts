@@ -872,6 +872,8 @@ const persistCoinbaseNormalization = ({
   omitProviderTransfers = false,
   omitProviderTransferObservation = false,
   providerTransferObservedBlockchainId,
+  sameAssetExactSiblingBlockchainId,
+  sameAssetExactSiblingPosition,
   providerTransferRole,
   includeOriginlessSibling = false,
   invalidProviderOrigin,
@@ -883,6 +885,8 @@ const persistCoinbaseNormalization = ({
   readonly omitProviderTransfers?: boolean
   readonly omitProviderTransferObservation?: boolean
   readonly providerTransferObservedBlockchainId?: string
+  readonly sameAssetExactSiblingBlockchainId?: string
+  readonly sameAssetExactSiblingPosition?: "before" | "after"
   readonly providerTransferRole?: "principal" | "fee"
   readonly includeOriginlessSibling?: boolean
   readonly invalidProviderOrigin?: "mismatched_transaction" | "dual_origin"
@@ -929,7 +933,29 @@ const persistCoinbaseNormalization = ({
                 ? prepared.primaryProviderTransfer.metadata
                 : { role: providerTransferRole },
           }
-    const providerTransfers = primaryProviderTransfer === null ? [] : [primaryProviderTransfer]
+    const exactSiblingProviderTransfer =
+      primaryProviderTransfer === null ||
+      sameAssetExactSiblingBlockchainId === undefined ||
+      sameAssetExactSiblingPosition === undefined
+        ? null
+        : {
+            ...primaryProviderTransfer,
+            externalId: `${primaryProviderTransfer.externalId ?? sourceRecord.id}:exact-sibling`,
+            processingMode: "evidence_only" as const,
+            observedBlockchainId: sameAssetExactSiblingBlockchainId,
+            observedRepresentationType: "token" as const,
+            observedContractAddress: "sync-engine-btc-fixture",
+            observedMintAddress: null,
+            observedDecimals: 8,
+          }
+    const providerTransfers =
+      primaryProviderTransfer === null
+        ? []
+        : exactSiblingProviderTransfer === null
+          ? [primaryProviderTransfer]
+          : sameAssetExactSiblingPosition === "before"
+            ? [exactSiblingProviderTransfer, primaryProviderTransfer]
+            : [primaryProviderTransfer, exactSiblingProviderTransfer]
 
     return yield* sourceNormalizationRepository.persistNormalizedArtifacts(
       (prepared.legDerivationStrategy === "derive" ||
@@ -964,6 +990,16 @@ const persistCoinbaseNormalization = ({
               const primaryAssetResult = resolveCoinbasePrimaryAsset({
                 candidate: prepared.assetDecisionLegDerivationCandidate,
                 primaryAsset: prepared.primaryAsset,
+                providerTransferTarget:
+                  persistedPrimaryProviderTransfer?.providerAssetId === null ||
+                  persistedPrimaryProviderTransfer?.providerAssetId === undefined
+                    ? null
+                    : {
+                        _tag: "provider_transfer",
+                        providerAssetRowId: persistedPrimaryProviderTransfer.providerAssetId,
+                        sourceRepresentationUseId:
+                          persistedPrimaryProviderTransfer.sourceRepresentationUseId,
+                      },
                 resolveProviderAssetDecision,
               })
               if (primaryAssetResult._tag === "withheld") return Effect.succeed([])
@@ -2868,6 +2904,64 @@ describe("SourceNormalizationRepositoryLive", () => {
         expect(retried.legs).toEqual([
           expect.objectContaining({ assetId: TEST_BTC_ASSET_ID, providerAssetRowId }),
         ])
+
+        yield* Effect.forEach(
+          ["before", "after"] as const,
+          (sameAssetExactSiblingPosition, index) =>
+            Effect.gen(function* () {
+              const siblingRawRecordId =
+                index === 0
+                  ? "00000000-0000-4000-8000-000000000499"
+                  : "00000000-0000-4000-8000-000000000500"
+              const siblingPayload = makeCoinbaseReceivePayload({
+                id: `coinbase-chainless-candidate-${sameAssetExactSiblingPosition}`,
+                timestamp: occurredAt,
+              })
+              yield* Effect.promise(() =>
+                runPg(
+                  seedRawRecord({
+                    rawRecordId: siblingRawRecordId,
+                    externalRecordId: `raw-coinbase-chainless-candidate-${sameAssetExactSiblingPosition}`,
+                    occurredAt,
+                    payload: siblingPayload,
+                  })
+                )
+              )
+              const siblingResult = yield* Effect.promise(() =>
+                runCoinbaseNormalization(
+                  persistCoinbaseNormalization({
+                    source,
+                    sourceRecord: buildSeededRawRecord({
+                      rawRecordId: siblingRawRecordId,
+                      externalRecordId: `raw-coinbase-chainless-candidate-${sameAssetExactSiblingPosition}`,
+                      occurredAt,
+                      payload: siblingPayload,
+                    }),
+                    omitProviderTransferObservation: true,
+                    sameAssetExactSiblingBlockchainId: fixture.bitcoinBlockchainId,
+                    sameAssetExactSiblingPosition,
+                    refreshReferenceData: false,
+                  })
+                )
+              )
+
+              expect(
+                siblingResult.providerTransfers.map(({ sourceRepresentationUseId }) =>
+                  sourceRepresentationUseId === null ? "chainless" : "exact"
+                )
+              ).toEqual(
+                sameAssetExactSiblingPosition === "before"
+                  ? ["exact", "chainless"]
+                  : ["chainless", "exact"]
+              )
+              expect(siblingResult.legs).toEqual([
+                expect.objectContaining({
+                  assetId: PROVIDER_OVERRIDE_ASSET_ID,
+                  providerAssetRowId,
+                }),
+              ])
+            })
+        )
       })
   )
 

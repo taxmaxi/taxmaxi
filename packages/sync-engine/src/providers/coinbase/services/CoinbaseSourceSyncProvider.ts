@@ -18,7 +18,10 @@ import type {
   SourceTransferDraft,
   SourceVenueContextDraft,
 } from "../../../services/SourceNormalizationRepository.ts"
-import type { SourceProviderAssetDecision } from "../../../services/SourceNormalizationRepository.ts"
+import type {
+  SourceProviderAssetDecision,
+  SourceProviderAssetDecisionTarget,
+} from "../../../services/SourceNormalizationRepository.ts"
 import type { SourceRawRecord, SourceSyncSource } from "../../../services/SourceSyncModels.ts"
 import {
   FetchProviderRawBatchParams,
@@ -74,17 +77,22 @@ export interface CoinbaseAssetDecisionLegDerivationCandidate {
 export const resolveCoinbasePrimaryAsset = ({
   candidate,
   primaryAsset,
+  providerTransferTarget,
   resolveProviderAssetDecision,
 }: {
   readonly candidate: CoinbaseAssetDecisionLegDerivationCandidate | null
   readonly primaryAsset: Pick<SyncEngineAsset, "id" | "symbol"> | null
-  readonly resolveProviderAssetDecision: (providerAssetRowId: string) => SourceProviderAssetDecision
+  readonly providerTransferTarget: SourceProviderAssetDecisionTarget | null
+  readonly resolveProviderAssetDecision: (
+    target: SourceProviderAssetDecisionTarget
+  ) => SourceProviderAssetDecision
 }):
   | { readonly _tag: "ready"; readonly asset: Pick<SyncEngineAsset, "id" | "symbol"> | null }
   | { readonly _tag: "withheld" } => {
   if (candidate === null) return { _tag: "ready", asset: primaryAsset }
+  if (providerTransferTarget === null) return { _tag: "withheld" }
 
-  const providerAssetDecision = resolveProviderAssetDecision(candidate.providerAssetRowId)
+  const providerAssetDecision = resolveProviderAssetDecision(providerTransferTarget)
   if (providerAssetDecision._tag !== "included") return { _tag: "withheld" }
 
   return {
