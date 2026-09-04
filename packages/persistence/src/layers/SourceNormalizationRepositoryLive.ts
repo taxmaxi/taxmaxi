@@ -24,6 +24,7 @@ import {
   type PersistedSourceTransaction,
   type SourceOnchainContextDraft,
   SourceNormalizationRepository,
+  type SourceProviderAssetDecision,
   type SourceProviderTransferDraft,
   type SourceTransactionDraft,
   type SourceTransactionLegDraft,
@@ -81,6 +82,10 @@ interface RecordedSourceRepresentationUses {
 }
 
 type LinkedSourceProviderTransferDraft = SourceProviderTransferDraft & {
+  readonly sourceRepresentationUseId: string | null
+}
+
+type PersistedSourceProviderTransferWithTarget = PersistedSourceProviderTransfer & {
   readonly sourceRepresentationUseId: string | null
 }
 
@@ -219,15 +224,21 @@ const withProviderIdentityConflictReview = ({
 
 const applyPrincipalProviderAssetDecisions = ({
   decisions,
+  exactProviderAssetRowIds,
   legs,
+  providerAssetRowIds,
   providerTransfers,
+  sourceRepresentationUseIds,
 }: {
   readonly decisions: PrincipalAssetOverrideDecisions
+  readonly exactProviderAssetRowIds: ReadonlySet<string>
   readonly legs: ReadonlyArray<SourceTransactionLegDraft>
+  readonly providerAssetRowIds: ReadonlyArray<string>
   readonly providerTransfers: ReadonlyArray<PersistedSourceProviderTransfer>
+  readonly sourceRepresentationUseIds: ReadonlyArray<string>
 }): {
   readonly hasIdentityConflict: boolean
-  readonly hasExcludedLeg: boolean
+  readonly withholdsAccountingFacts: boolean
   readonly legs: ReadonlyArray<SourceTransactionLegDraft>
   readonly systemAssetIds: ReadonlyArray<string>
 } => {
@@ -238,7 +249,29 @@ const applyPrincipalProviderAssetDecisions = ({
   const effectiveLegs: SourceTransactionLegDraft[] = []
   const systemAssetIds: string[] = []
   let hasIdentityConflict = false
-  let hasExcludedLeg = false
+  const hasBlockedOrExcludedExactUse = sourceRepresentationUseIds.some(
+    (sourceRepresentationUseId) => {
+      const decision = decisions.sourceRepresentationUseDecisionById.get(sourceRepresentationUseId)
+      if (decision === undefined) return true
+
+      const inclusion = decision.inclusionReplacement ?? decision.systemInclusion
+      const assetId = decision.identityReplacementAssetId ?? decision.systemAssetId
+      return inclusion === "excluded" || assetId === null
+    }
+  )
+  const hasBlockedOrExcludedProviderUse = providerAssetRowIds.some((providerAssetRowId) => {
+    if (
+      exactProviderAssetRowIds.has(providerAssetRowId) ||
+      decisions.ignoredProviderAssetRowIds.has(providerAssetRowId)
+    ) {
+      return false
+    }
+
+    return (
+      decisions.providerAssetDecisionById.get(providerAssetRowId)?.effectiveDecision._tag !==
+      "included"
+    )
+  })
 
   for (const leg of legs) {
     const providerAssetRowId = leg.providerAssetRowId ?? null
@@ -250,24 +283,16 @@ const applyPrincipalProviderAssetDecisions = ({
       providerAssetRowId !== null &&
       leg.assetRepresentationId === null &&
       !hasExactTransactionObservation
-    const inclusion = mayUseProviderFallback
-      ? providerDecision?.inclusion
-      : providerDecision?.systemInclusion
-
-    // A principal inclusion cannot reverse a system exclusion until T12 has the
-    // blocker semantics needed to decide whether that movement is sound.
-    if (providerDecision?.systemInclusion === "excluded" || inclusion === "excluded") {
-      hasExcludedLeg = true
-      continue
-    }
-
     const representationSystemAssetId = resolveSystemAssetId({
       decisions,
       assetId: leg.assetId,
       assetRepresentationId: leg.assetRepresentationId,
     })
     const systemAssetId = mayUseProviderFallback
-      ? (providerDecision?.systemAssetId ?? representationSystemAssetId)
+      ? (providerDecision?.systemAssetId ??
+        (providerDecision?.effectiveDecision._tag === "included"
+          ? providerDecision.effectiveDecision.assetId
+          : representationSystemAssetId))
       : representationSystemAssetId
     const assetId = resolvePrincipalAssetId({
       decisions,
@@ -285,12 +310,28 @@ const applyPrincipalProviderAssetDecisions = ({
     systemAssetIds.push(systemAssetId)
   }
 
+  const withholdsAccountingFacts =
+    hasBlockedOrExcludedExactUse || hasBlockedOrExcludedProviderUse || hasIdentityConflict
+
   return {
     hasIdentityConflict,
-    hasExcludedLeg,
-    legs: hasIdentityConflict || hasExcludedLeg ? [] : effectiveLegs,
-    systemAssetIds: hasIdentityConflict || hasExcludedLeg ? [] : systemAssetIds,
+    withholdsAccountingFacts,
+    legs: withholdsAccountingFacts ? [] : effectiveLegs,
+    systemAssetIds: withholdsAccountingFacts ? [] : systemAssetIds,
   }
+}
+
+const resolveSourceProviderAssetDecision = ({
+  decisions,
+  providerAssetRowId,
+}: {
+  readonly decisions: PrincipalAssetOverrideDecisions
+  readonly providerAssetRowId: string
+}): SourceProviderAssetDecision => {
+  const decision = decisions.providerAssetDecisionById.get(providerAssetRowId)?.effectiveDecision
+  if (decision === undefined || decision._tag === "blocked") return { _tag: "blocked" }
+  if (decision._tag === "excluded") return { _tag: "excluded" }
+  return { _tag: "included", assetId: decision.assetId }
 }
 
 const decodeProviderTransferMetadata = (metadata: unknown) =>
@@ -1790,14 +1831,16 @@ const make = Effect.gen(function* () {
     })
 
   const persistProviderInventoryMovements = ({
+    decisions,
     executor,
     transaction,
     providerTransfers,
     feesOnly,
   }: {
+    readonly decisions: PrincipalAssetOverrideDecisions
     readonly executor: SourceNormalizationExecutor
     readonly transaction: PersistedSourceTransaction
-    readonly providerTransfers: ReadonlyArray<PersistedSourceProviderTransfer>
+    readonly providerTransfers: ReadonlyArray<PersistedSourceProviderTransferWithTarget>
     readonly feesOnly: boolean
   }) => {
     const orderedProviderTransfers = [
@@ -1838,13 +1881,13 @@ const make = Effect.gen(function* () {
           .select({
             assetId: schema.providerAssetMappings.canonicalAssetId,
             assetRepresentationId: schema.providerAssetMappings.assetRepresentationId,
+            mappingStatus: schema.providerAssetMappings.mappingStatus,
           })
           .from(schema.providerAssetMappings)
           .where(
             and(
               eq(schema.providerAssetMappings.providerAssetRowId, providerTransfer.providerAssetId),
-              eq(schema.providerAssetMappings.mappingKind, "asset"),
-              eq(schema.providerAssetMappings.mappingStatus, "approved")
+              eq(schema.providerAssetMappings.mappingKind, "asset")
             )
           )
           .limit(1)
@@ -1854,7 +1897,25 @@ const make = Effect.gen(function* () {
             )
           )
 
-        if (assetMapping?.assetId === null || assetMapping?.assetId === undefined) {
+        const exactDecision =
+          providerTransfer.sourceRepresentationUseId === null
+            ? undefined
+            : decisions.sourceRepresentationUseDecisionById.get(
+                providerTransfer.sourceRepresentationUseId
+              )
+        const providerDecision = decisions.providerAssetDecisionById.get(
+          providerTransfer.providerAssetId
+        )
+        const assetId =
+          exactDecision === undefined
+            ? providerDecision?.effectiveDecision._tag === "included"
+              ? providerDecision.effectiveDecision.assetId
+              : assetMapping?.mappingStatus === "approved"
+                ? assetMapping.assetId
+                : null
+            : (exactDecision.identityReplacementAssetId ?? exactDecision.systemAssetId)
+
+        if (assetId === null || assetId === undefined) {
           return yield* removeInventoryMovementForProviderTransfer({
             executor,
             providerTransferId: providerTransfer.id,
@@ -1870,8 +1931,8 @@ const make = Effect.gen(function* () {
             sourceRawRecordId: providerTransfer.sourceRawRecordId,
             transactionId: transaction.id,
             providerTransferId: providerTransfer.id,
-            assetId: assetMapping.assetId,
-            assetRepresentationId: assetMapping.assetRepresentationId,
+            assetId,
+            assetRepresentationId: assetMapping?.assetRepresentationId ?? null,
             timestamp: providerTransfer.timestamp,
             direction: providerTransfer.direction,
             purpose,
@@ -2026,6 +2087,84 @@ const make = Effect.gen(function* () {
           }
         })
     )
+
+  const preparePrincipalAssetDecisionApplication = ({
+    principalId,
+    providerAssetRowIds,
+    canonicalTransfers,
+    derivedLegs,
+    linkedProviderTransfers,
+    linkedCanonicalTransfers,
+    derivedLegRecordedUses,
+  }: {
+    readonly principalId: string
+    readonly providerAssetRowIds: ReadonlyArray<string>
+    readonly canonicalTransfers: ReadonlyArray<{ readonly assetRepresentationId?: string | null }>
+    readonly derivedLegs: ReadonlyArray<SourceTransactionLegDraft>
+    readonly linkedProviderTransfers: ReadonlyArray<LinkedSourceProviderTransferInput>
+    readonly linkedCanonicalTransfers: ReadonlyArray<LinkedSourceTransferDraft>
+    readonly derivedLegRecordedUses: RecordedSourceRepresentationUses
+  }) =>
+    Effect.gen(function* () {
+      const derivedLegAssetRepresentationIds = derivedLegs.flatMap(({ assetRepresentationId }) =>
+        assetRepresentationId === null || assetRepresentationId === undefined
+          ? []
+          : [assetRepresentationId]
+      )
+      const sourceRepresentationUseIds = [
+        ...linkedProviderTransfers.flatMap(({ linked }) =>
+          linked.sourceRepresentationUseId === null ||
+          linked.processingMode === "evidence_only" ||
+          linked.processingMode === "stale"
+            ? []
+            : [linked.sourceRepresentationUseId]
+        ),
+        ...linkedCanonicalTransfers.flatMap(({ sourceRepresentationUseId }) =>
+          sourceRepresentationUseId === null ? [] : [sourceRepresentationUseId]
+        ),
+        ...derivedLegAssetRepresentationIds.flatMap((assetRepresentationId) => {
+          const sourceRepresentationUseId =
+            derivedLegRecordedUses.idByAssetRepresentationId.get(assetRepresentationId)
+          return sourceRepresentationUseId === undefined ? [] : [sourceRepresentationUseId]
+        }),
+      ]
+      const decisions = yield* principalAssetOverrideDecisionLoader.load({
+        principalId,
+        assetRepresentationIds: [...canonicalTransfers, ...derivedLegs].flatMap(
+          ({ assetRepresentationId }) =>
+            assetRepresentationId === null || assetRepresentationId === undefined
+              ? []
+              : [assetRepresentationId]
+        ),
+        sourceRepresentationUseIds,
+        providerAssetRowIds,
+      })
+      const exactProviderAssetRowIds = new Set([
+        ...linkedProviderTransfers.flatMap(({ linked }) =>
+          linked.sourceRepresentationUseId === null ||
+          linked.providerAssetId === null ||
+          linked.processingMode === "evidence_only" ||
+          linked.processingMode === "stale"
+            ? []
+            : [linked.providerAssetId]
+        ),
+        ...linkedCanonicalTransfers.flatMap(({ providerAssetRowId, sourceRepresentationUseId }) =>
+          sourceRepresentationUseId === null || providerAssetRowId === null
+            ? []
+            : [providerAssetRowId]
+        ),
+        ...derivedLegs.flatMap(({ assetRepresentationId, providerAssetRowId }) =>
+          assetRepresentationId === null ||
+          assetRepresentationId === undefined ||
+          providerAssetRowId === null ||
+          providerAssetRowId === undefined
+            ? []
+            : [providerAssetRowId]
+        ),
+      ])
+
+      return { decisions, exactProviderAssetRowIds, sourceRepresentationUseIds }
+    })
 
   const persistNormalizedArtifacts = <E>(
     params: PersistNormalizedSourceArtifactsParams<E>
@@ -2240,6 +2379,8 @@ const make = Effect.gen(function* () {
                   providerTransfers: persistedProviderTransfers,
                   providerTransferByDraft,
                   canonicalTransfers: systemCanonicalTransfers,
+                  resolveProviderAssetDecision: (providerAssetRowId) =>
+                    resolveSourceProviderAssetDecision({ decisions, providerAssetRowId }),
                 })
               : params.legs
           const derivedLegAssetRepresentationIds = derivedLegs.flatMap(
@@ -2254,15 +2395,26 @@ const make = Effect.gen(function* () {
             assetRepresentationIds: derivedLegAssetRepresentationIds,
             sourceId: persistedTransaction.sourceId,
           })
-          const completeDecisions =
-            yield* principalAssetOverrideDecisionLoader.includeSystemRepresentations({
-              decisions,
-              assetRepresentationIds: derivedLegAssetRepresentationIds,
-            })
+          const {
+            decisions: completeDecisions,
+            exactProviderAssetRowIds,
+            sourceRepresentationUseIds,
+          } = yield* preparePrincipalAssetDecisionApplication({
+            principalId: params.transaction.principalId,
+            providerAssetRowIds: params.providerAssetRowIds,
+            canonicalTransfers,
+            derivedLegs,
+            linkedProviderTransfers,
+            linkedCanonicalTransfers,
+            derivedLegRecordedUses,
+          })
           const providerDecisionResult = applyPrincipalProviderAssetDecisions({
             decisions: completeDecisions,
+            exactProviderAssetRowIds,
             legs: derivedLegs,
+            providerAssetRowIds: params.providerAssetRowIds,
             providerTransfers: persistedProviderTransfers,
+            sourceRepresentationUseIds,
           })
           const effectiveLegs = providerDecisionResult.legs
           const sourceTransferIds = [
@@ -2339,7 +2491,9 @@ const make = Effect.gen(function* () {
 
           const hasCompletedStatus = hasCompletedProviderStatus(params.transaction.providerStatus)
           const hasFailedStatus = hasFailedProviderStatus(params.transaction.providerStatus)
-          const materializesProviderMovements = hasCompletedStatus || hasFailedStatus
+          const materializesProviderMovements =
+            (hasCompletedStatus || hasFailedStatus) &&
+            !providerDecisionResult.withholdsAccountingFacts
           const currentProviderTransferIds = new Set(
             persistedProviderTransfers.map((providerTransfer) => providerTransfer.id)
           )
@@ -2357,6 +2511,7 @@ const make = Effect.gen(function* () {
               currentProviderTransferIds,
             })
             yield* persistProviderInventoryMovements({
+              decisions: completeDecisions,
               executor: tx,
               transaction: persistedTransaction,
               providerTransfers: persistedProviderTransfers,

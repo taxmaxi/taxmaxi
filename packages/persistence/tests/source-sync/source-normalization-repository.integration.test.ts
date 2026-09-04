@@ -44,6 +44,7 @@ import {
   CoinbaseSourceSyncProvider,
   CoinbaseSourceSyncProviderLive,
   CoinbaseSyncClient,
+  resolveCoinbasePrimaryAsset,
 } from "@my/sync-engine/providers/coinbase"
 import type { SourceRawRecord, SourceSyncSource } from "@my/sync-engine/services"
 
@@ -202,6 +203,8 @@ const PROVIDER_ASSET_ROW_A_ID = "00000000-0000-4000-8000-000000000492"
 const PROVIDER_ASSET_ROW_B_ID = "00000000-0000-4000-8000-000000000493"
 const PROVIDER_ASSET_ROW_EXCLUDED_ID = "00000000-0000-4000-8000-000000000494"
 const PROVIDER_ASSET_ROW_USER_EXCLUDED_ID = "00000000-0000-4000-8000-000000000495"
+const PROVIDER_ASSET_ROW_UNRESOLVED_ID = "00000000-0000-4000-8000-000000000498"
+const PROVIDER_ASSET_ROW_UNSUPPORTED_ID = "00000000-0000-4000-8000-000000000499"
 
 const seedExactIdentityOverride = ({
   fixture,
@@ -692,6 +695,164 @@ const buildSeededRawRecord = ({
   updatedAt: occurredAt,
 })
 
+const makeCoinbaseReceivePayload = ({
+  id,
+  timestamp,
+}: {
+  readonly id: string
+  readonly timestamp: Date
+}) => ({
+  id,
+  type: "receive",
+  status: "completed",
+  amount: { amount: "0.25000000", currency: "BTC" },
+  native_amount: { amount: "2500.00", currency: "EUR" },
+  created_at: timestamp.toISOString(),
+  resource_path: `/v2/accounts/coinbase-account-1/transactions/${id}`,
+  from: { resource: "user", id: "coinbase-external-user" },
+})
+
+const seedCoinbaseReplayRecords = ({
+  historicalRawRecordId,
+  historicalPayload,
+  occurredAt,
+  laterRawRecordId,
+  laterPayload,
+  laterOccurredAt,
+}: {
+  readonly historicalRawRecordId: string
+  readonly historicalPayload: unknown
+  readonly occurredAt: Date
+  readonly laterRawRecordId: string
+  readonly laterPayload: unknown
+  readonly laterOccurredAt: Date
+}) =>
+  Effect.gen(function* () {
+    yield* seedRawRecord({
+      rawRecordId: historicalRawRecordId,
+      externalRecordId: "raw-coinbase-policy-excluded-history",
+      occurredAt,
+      payload: historicalPayload,
+    })
+    yield* seedRawRecord({
+      rawRecordId: laterRawRecordId,
+      externalRecordId: "raw-coinbase-policy-excluded-later",
+      occurredAt: laterOccurredAt,
+      payload: laterPayload,
+    })
+  })
+
+const markCoinbaseBtcProviderAssetExcluded = Effect.gen(function* () {
+  const db = yield* drizzle
+  const [providerAsset] = yield* db
+    .select({ id: schema.providerAssets.id })
+    .from(schema.providerAssets)
+    .where(eq(schema.providerAssets.currencyCode, "BTC"))
+    .limit(1)
+  if (providerAsset === undefined) return yield* Effect.die("Missing Coinbase BTC provider asset")
+
+  yield* db
+    .update(schema.providerAssetMappings)
+    .set({ canonicalAssetId: null, assetRepresentationId: null, mappingStatus: "excluded" })
+    .where(eq(schema.providerAssetMappings.providerAssetRowId, providerAsset.id))
+  yield* db
+    .delete(schema.assetResolutionCurrentState)
+    .where(eq(schema.assetResolutionCurrentState.providerAssetRowId, providerAsset.id))
+
+  return providerAsset.id
+})
+
+const insertCoinbaseProviderOverrides = ({
+  actorUserId,
+  providerAssetRowId,
+}: {
+  readonly actorUserId: string
+  readonly providerAssetRowId: string
+}) =>
+  Effect.gen(function* () {
+    const db = yield* drizzle
+    yield* db.insert(schema.assets).values({
+      id: PROVIDER_OVERRIDE_ASSET_ID,
+      name: "Principal-selected excluded asset",
+      symbol: "SELECTED",
+      type: "fungible",
+    })
+    const [target] = yield* db
+      .insert(schema.principalAssetOverrideTargets)
+      .values({
+        principalId: TEST_PRINCIPAL_ID,
+        targetKind: "provider_asset",
+        providerAssetRowId,
+      })
+      .returning({ id: schema.principalAssetOverrideTargets.id })
+    if (target === undefined) return yield* Effect.die("Failed to create Coinbase override target")
+
+    yield* db.insert(schema.principalAssetOverrides).values([
+      {
+        principalId: TEST_PRINCIPAL_ID,
+        targetId: target.id,
+        kind: "identity",
+        operation: "create",
+        inspectedSystemRevision: "coinbase-policy-excluded-v1",
+        inspectedSystemIdentity: "unresolved",
+        replacementAssetId: PROVIDER_OVERRIDE_ASSET_ID,
+        actorUserId,
+        reason: "Resolve the excluded Coinbase row for this principal",
+      },
+      {
+        principalId: TEST_PRINCIPAL_ID,
+        targetId: target.id,
+        kind: "inclusion",
+        operation: "create",
+        inspectedSystemRevision: "coinbase-policy-excluded-v1",
+        inspectedSystemInclusion: "excluded",
+        replacementInclusion: "included",
+        actorUserId,
+        reason: "Include the sound excluded Coinbase row for this principal",
+      },
+    ])
+  })
+
+const loadCoinbasePreOverrideState = (transactionId: string) =>
+  Effect.gen(function* () {
+    const db = yield* drizzle
+    const targetLinks = yield* db
+      .select({ providerAssetRowId: schema.providerAssetTransactionUses.providerAssetRowId })
+      .from(schema.providerAssetTransactionUses)
+      .where(eq(schema.providerAssetTransactionUses.transactionId, transactionId))
+    const movements = yield* db
+      .select({ id: schema.inventoryMovements.id })
+      .from(schema.inventoryMovements)
+      .where(eq(schema.inventoryMovements.transactionId, transactionId))
+    return { movements, targetLinks }
+  })
+
+const loadCoinbasePostOverrideState = ({
+  providerAssetRowId,
+  transactionIds,
+}: {
+  readonly providerAssetRowId: string
+  readonly transactionIds: ReadonlyArray<string>
+}) =>
+  Effect.gen(function* () {
+    const db = yield* drizzle
+    const movements = yield* db
+      .select({
+        assetId: schema.inventoryMovements.assetId,
+        transactionId: schema.inventoryMovements.transactionId,
+      })
+      .from(schema.inventoryMovements)
+      .where(inArray(schema.inventoryMovements.transactionId, transactionIds))
+    const [mapping] = yield* db
+      .select({
+        canonicalAssetId: schema.providerAssetMappings.canonicalAssetId,
+        mappingStatus: schema.providerAssetMappings.mappingStatus,
+      })
+      .from(schema.providerAssetMappings)
+      .where(eq(schema.providerAssetMappings.providerAssetRowId, providerAssetRowId))
+    return { mapping, movements }
+  })
+
 const persistCoinbaseNormalization = ({
   source,
   sourceRecord,
@@ -700,6 +861,7 @@ const persistCoinbaseNormalization = ({
   providerTransferRole,
   includeOriginlessSibling = false,
   invalidProviderOrigin,
+  refreshReferenceData = true,
 }: {
   readonly source: SourceSyncSource
   readonly sourceRecord: SourceRawRecord
@@ -708,13 +870,16 @@ const persistCoinbaseNormalization = ({
   readonly providerTransferRole?: "principal" | "fee"
   readonly includeOriginlessSibling?: boolean
   readonly invalidProviderOrigin?: "mismatched_transaction" | "dual_origin"
+  readonly refreshReferenceData?: boolean
 }) =>
   Effect.gen(function* () {
     const referenceDataService = yield* CoinbaseReferenceDataService
     const coinbaseSourceSyncProvider = yield* CoinbaseSourceSyncProvider
     const sourceNormalizationRepository = yield* SourceNormalizationRepository
 
-    yield* referenceDataService.refreshReferenceData
+    if (refreshReferenceData) {
+      yield* referenceDataService.refreshReferenceData
+    }
     const lookups = yield* coinbaseSourceSyncProvider.loadNormalizationLookups
     const prepared = yield* coinbaseSourceSyncProvider.prepareNormalization({
       source,
@@ -734,7 +899,9 @@ const persistCoinbaseNormalization = ({
     const providerTransfers = primaryProviderTransfer === null ? [] : [primaryProviderTransfer]
 
     return yield* sourceNormalizationRepository.persistNormalizedArtifacts(
-      prepared.legDerivationStrategy === "derive" && !skipLegDerivation
+      (prepared.legDerivationStrategy === "derive" ||
+        prepared.assetDecisionLegDerivationCandidate !== null) &&
+        !skipLegDerivation
         ? {
             transaction: prepared.transaction,
             venueContext: prepared.venueContext,
@@ -748,6 +915,7 @@ const persistCoinbaseNormalization = ({
               venueContext,
               providerTransferByDraft,
               canonicalTransfers,
+              resolveProviderAssetDecision,
             }) => {
               const persistedPrimaryProviderTransfer =
                 primaryProviderTransfer === null
@@ -760,11 +928,18 @@ const persistCoinbaseNormalization = ({
                 return Effect.die("Missing persisted primary provider transfer")
               }
 
+              const primaryAssetResult = resolveCoinbasePrimaryAsset({
+                candidate: prepared.assetDecisionLegDerivationCandidate,
+                primaryAsset: prepared.primaryAsset,
+                resolveProviderAssetDecision,
+              })
+              if (primaryAssetResult._tag === "withheld") return Effect.succeed([])
+
               return coinbaseSourceSyncProvider
                 .deriveLegs({
                   transaction,
                   venueContext,
-                  primaryAsset: prepared.primaryAsset,
+                  primaryAsset: primaryAssetResult.asset,
                   primaryProviderTransferId: persistedPrimaryProviderTransfer?.id ?? null,
                   canonicalTransfers,
                   deriveMainLeg: prepared.deriveMainLeg,
@@ -914,6 +1089,7 @@ describe("SourceNormalizationRepositoryLive", () => {
           providerAssetId: "duplicate-row-a",
           currencyCode: "DUP",
           name: "Duplicate row A",
+          exponent: 8,
           providerType: "crypto",
           rawProviderPayload: { row: "a" },
           retrievedAt: occurredAt,
@@ -924,6 +1100,7 @@ describe("SourceNormalizationRepositoryLive", () => {
           providerAssetId: "duplicate-row-b",
           currencyCode: "DUP",
           name: "Duplicate row B",
+          exponent: 8,
           providerType: "crypto",
           rawProviderPayload: { row: "b" },
           retrievedAt: occurredAt,
@@ -934,6 +1111,7 @@ describe("SourceNormalizationRepositoryLive", () => {
           providerAssetId: "globally-excluded-row",
           currencyCode: "EXCLUDED",
           name: "Globally excluded row",
+          exponent: 8,
           providerType: "crypto",
           rawProviderPayload: { row: "excluded" },
           retrievedAt: occurredAt,
@@ -944,6 +1122,7 @@ describe("SourceNormalizationRepositoryLive", () => {
           providerAssetId: "user-excluded-row",
           currencyCode: "USER-EXCLUDED",
           name: "User excluded row",
+          exponent: 8,
           providerType: "crypto",
           rawProviderPayload: { row: "user-excluded" },
           retrievedAt: occurredAt,
@@ -1058,6 +1237,17 @@ describe("SourceNormalizationRepositoryLive", () => {
           replacementAssetId: SECOND_PROVIDER_OVERRIDE_ASSET_ID,
           actorUserId: fixture.userId,
           reason: "Select the second duplicate provider row",
+        },
+        {
+          principalId: TEST_PRINCIPAL_ID,
+          targetId: excludedTarget,
+          kind: "identity",
+          operation: "create",
+          inspectedSystemRevision: "provider-row-excluded-v1",
+          inspectedSystemIdentity: "unresolved",
+          replacementAssetId: PROVIDER_OVERRIDE_ASSET_ID,
+          actorUserId: fixture.userId,
+          reason: "Resolve the excluded observation for principal accounting",
         },
         {
           principalId: TEST_PRINCIPAL_ID,
@@ -1861,6 +2051,110 @@ describe("SourceNormalizationRepositoryLive", () => {
     })
   )
 
+  it.effect("replays a sound exact representation after a principal includes it", () =>
+    Effect.gen(function* () {
+      const occurredAt = DateTime.toDateUtc(DateTime.makeUnsafe("2025-02-01T10:15:00.000Z"))
+      yield* Effect.promise(() =>
+        runPg(
+          Effect.gen(function* () {
+            const db = yield* drizzle
+            yield* db
+              .update(schema.assetRepresentations)
+              .set({ isSpam: true })
+              .where(eq(schema.assetRepresentations.id, TEST_BTC_REPRESENTATION_ID))
+          })
+        )
+      )
+
+      const beforeOverride = yield* Effect.promise(() =>
+        persistExactOverrideArtifact({
+          externalId: "exact-policy-excluded",
+          fixture,
+          occurredAt,
+        })
+      )
+      expect(beforeOverride.legs).toEqual([])
+
+      const exactUse = yield* Effect.promise(() =>
+        runPg(
+          Effect.gen(function* () {
+            const db = yield* drizzle
+            const [use] = yield* db
+              .select({ id: schema.sourceRepresentationUses.id })
+              .from(schema.sourceRepresentationUses)
+              .where(eq(schema.sourceRepresentationUses.sourceId, TEST_SOURCE_ID))
+            return use
+          })
+        )
+      )
+      expect(exactUse?.id).toBeDefined()
+
+      yield* Effect.promise(() =>
+        runPg(
+          Effect.gen(function* () {
+            const db = yield* drizzle
+            const { targetId } = yield* seedExactIdentityOverride({
+              fixture,
+              reason: "Keep the principal-selected identity for the included representation",
+            })
+            yield* db.insert(schema.principalAssetOverrides).values({
+              principalId: TEST_PRINCIPAL_ID,
+              targetId,
+              kind: "inclusion",
+              operation: "create",
+              inspectedSystemRevision: "exact-policy-excluded-v1",
+              inspectedSystemInclusion: "excluded",
+              replacementInclusion: "included",
+              actorUserId: fixture.userId,
+              reason: "Include this sound representation for the principal",
+            })
+          })
+        )
+      )
+
+      const replayed = yield* Effect.promise(() =>
+        persistExactOverrideArtifact({
+          externalId: "exact-policy-excluded",
+          fixture,
+          occurredAt,
+        })
+      )
+      const storedState = yield* Effect.promise(() =>
+        runPg(
+          Effect.gen(function* () {
+            const db = yield* drizzle
+            const [globalRepresentation] = yield* db
+              .select({
+                assetId: schema.assetRepresentations.assetId,
+                isSpam: schema.assetRepresentations.isSpam,
+              })
+              .from(schema.assetRepresentations)
+              .where(eq(schema.assetRepresentations.id, TEST_BTC_REPRESENTATION_ID))
+            const [leg] = yield* db
+              .select({
+                sourceRepresentationUseId: schema.transactionLegs.sourceRepresentationUseId,
+              })
+              .from(schema.transactionLegs)
+              .where(eq(schema.transactionLegs.externalId, "exact-policy-excluded-leg"))
+            return { globalRepresentation, leg }
+          })
+        )
+      )
+
+      expect(storedState.leg?.sourceRepresentationUseId).toBe(exactUse?.id)
+      expect(replayed.legs).toEqual([
+        expect.objectContaining({
+          assetId: OVERRIDE_ASSET_ID,
+          assetRepresentationId: TEST_BTC_REPRESENTATION_ID,
+        }),
+      ])
+      expect(storedState.globalRepresentation).toEqual({
+        assetId: TEST_BTC_ASSET_ID,
+        isSpam: true,
+      })
+    })
+  )
+
   it.effect("keeps exact identity ahead of a provider fallback", () =>
     Effect.gen(function* () {
       const occurredAt = DateTime.toDateUtc(DateTime.makeUnsafe("2025-02-01T10:20:00.000Z"))
@@ -1889,7 +2183,7 @@ describe("SourceNormalizationRepositoryLive", () => {
     })
   )
 
-  it.effect("does not let a principal inclusion reverse global provider exclusion", () =>
+  it.effect("lets a sound principal inclusion reverse global provider exclusion", () =>
     Effect.gen(function* () {
       const occurredAt = DateTime.toDateUtc(DateTime.makeUnsafe("2025-02-01T10:20:00.000Z"))
       yield* Effect.promise(() => seedProviderDecisionFixture(occurredAt))
@@ -1907,8 +2201,332 @@ describe("SourceNormalizationRepositoryLive", () => {
         })
       )
 
-      expect(result.legs).toEqual([])
+      const targetLinks = yield* Effect.promise(() =>
+        runPg(
+          Effect.gen(function* () {
+            const db = yield* drizzle
+            return yield* db
+              .select({
+                providerAssetRowId: schema.providerAssetTransactionUses.providerAssetRowId,
+              })
+              .from(schema.providerAssetTransactionUses)
+              .where(eq(schema.providerAssetTransactionUses.transactionId, result.transaction.id))
+          })
+        )
+      )
+
+      expect(targetLinks).toEqual([{ providerAssetRowId: PROVIDER_ASSET_ROW_EXCLUDED_ID }])
+      expect(result.legs).toEqual([
+        expect.objectContaining({
+          assetId: PROVIDER_OVERRIDE_ASSET_ID,
+          providerAssetRowId: PROVIDER_ASSET_ROW_EXCLUDED_ID,
+        }),
+      ])
     })
+  )
+
+  it.effect("withholds missing-decimal, unresolved, and unsupported provider rows", () =>
+    Effect.gen(function* () {
+      const occurredAt = DateTime.toDateUtc(DateTime.makeUnsafe("2025-02-01T10:22:00.000Z"))
+      yield* Effect.promise(() => seedProviderDecisionFixture(occurredAt))
+      yield* Effect.promise(() =>
+        runPg(
+          Effect.gen(function* () {
+            const db = yield* drizzle
+            yield* db
+              .update(schema.providerAssets)
+              .set({ exponent: null })
+              .where(eq(schema.providerAssets.id, PROVIDER_ASSET_ROW_A_ID))
+            yield* db.insert(schema.providerAssets).values([
+              {
+                id: PROVIDER_ASSET_ROW_UNRESOLVED_ID,
+                provider: "coinbase",
+                providerAssetId: "unresolved-row",
+                currencyCode: "UNRESOLVED",
+                name: "Unresolved row",
+                exponent: 8,
+                providerType: "crypto",
+                rawProviderPayload: { row: "unresolved" },
+                retrievedAt: occurredAt,
+              },
+              {
+                id: PROVIDER_ASSET_ROW_UNSUPPORTED_ID,
+                provider: "coinbase",
+                providerAssetId: "unsupported-row",
+                currencyCode: "UNSUPPORTED",
+                name: "Unsupported row",
+                exponent: 8,
+                providerType: "collectible",
+                rawProviderPayload: { row: "unsupported" },
+                retrievedAt: occurredAt,
+              },
+            ])
+            yield* db.insert(schema.providerAssetMappings).values([
+              {
+                providerAssetRowId: PROVIDER_ASSET_ROW_UNRESOLVED_ID,
+                mappingKind: "asset",
+                canonicalAssetId: null,
+                mappingStatus: "pending_review",
+              },
+              {
+                providerAssetRowId: PROVIDER_ASSET_ROW_UNSUPPORTED_ID,
+                mappingKind: "asset",
+                canonicalAssetId: null,
+                mappingStatus: "pending_review",
+              },
+            ])
+            const [unsupportedTarget] = yield* db
+              .insert(schema.principalAssetOverrideTargets)
+              .values({
+                principalId: TEST_PRINCIPAL_ID,
+                targetKind: "provider_asset",
+                providerAssetRowId: PROVIDER_ASSET_ROW_UNSUPPORTED_ID,
+              })
+              .returning({ id: schema.principalAssetOverrideTargets.id })
+            if (unsupportedTarget === undefined) {
+              return yield* Effect.die("Failed to seed unsupported provider target")
+            }
+            yield* db.insert(schema.principalAssetOverrides).values({
+              principalId: TEST_PRINCIPAL_ID,
+              targetId: unsupportedTarget.id,
+              kind: "identity",
+              operation: "create",
+              inspectedSystemRevision: "unsupported-provider-row-v1",
+              inspectedSystemIdentity: "unresolved",
+              replacementAssetId: PROVIDER_OVERRIDE_ASSET_ID,
+              actorUserId: fixture.userId,
+              reason: "Identity cannot bypass an unsupported provider asset type",
+            })
+          })
+        )
+      )
+
+      const cases = [
+        {
+          externalId: "provider-missing-decimals",
+          providerAssetRowId: PROVIDER_ASSET_ROW_A_ID,
+        },
+        {
+          externalId: "provider-unresolved",
+          providerAssetRowId: PROVIDER_ASSET_ROW_UNRESOLVED_ID,
+        },
+        {
+          externalId: "provider-unsupported",
+          providerAssetRowId: PROVIDER_ASSET_ROW_UNSUPPORTED_ID,
+        },
+      ] as const
+      const results = yield* Effect.forEach(cases, ({ externalId, providerAssetRowId }) =>
+        Effect.promise(() =>
+          persistProviderDecisionArtifacts({
+            occurredAt,
+            externalId,
+            legs: [{ externalId: `${externalId}-leg`, providerAssetRowId }],
+          })
+        )
+      )
+      const storedState = yield* Effect.promise(() =>
+        runPg(
+          Effect.gen(function* () {
+            const db = yield* drizzle
+            const targetLinks = yield* db
+              .select({
+                providerAssetRowId: schema.providerAssetTransactionUses.providerAssetRowId,
+                transactionId: schema.providerAssetTransactionUses.transactionId,
+              })
+              .from(schema.providerAssetTransactionUses)
+              .where(
+                inArray(
+                  schema.providerAssetTransactionUses.transactionId,
+                  results.map(({ transaction }) => transaction.id)
+                )
+              )
+            const evidence = yield* db
+              .select({
+                id: schema.providerAssets.id,
+                rawProviderPayload: schema.providerAssets.rawProviderPayload,
+              })
+              .from(schema.providerAssets)
+              .where(
+                inArray(schema.providerAssets.id, [
+                  PROVIDER_ASSET_ROW_A_ID,
+                  PROVIDER_ASSET_ROW_UNRESOLVED_ID,
+                  PROVIDER_ASSET_ROW_UNSUPPORTED_ID,
+                ])
+              )
+            return { evidence, targetLinks }
+          })
+        )
+      )
+
+      expect(storedState.targetLinks.map(({ providerAssetRowId }) => providerAssetRowId)).toEqual(
+        expect.arrayContaining(cases.map(({ providerAssetRowId }) => providerAssetRowId))
+      )
+      expect(results.flatMap(({ legs }) => legs)).toEqual([])
+      expect(storedState.evidence).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ id: PROVIDER_ASSET_ROW_A_ID }),
+          {
+            id: PROVIDER_ASSET_ROW_UNRESOLVED_ID,
+            rawProviderPayload: { row: "unresolved" },
+          },
+          {
+            id: PROVIDER_ASSET_ROW_UNSUPPORTED_ID,
+            rawProviderPayload: { row: "unsupported" },
+          },
+        ])
+      )
+    })
+  )
+
+  it.effect(
+    "replays and later derives a Coinbase asset-decision candidate through its exact provider row",
+    () =>
+      Effect.gen(function* () {
+        const occurredAt = DateTime.toDateUtc(DateTime.makeUnsafe("2025-02-01T10:25:00.000Z"))
+        const laterOccurredAt = DateTime.toDateUtc(DateTime.makeUnsafe("2025-02-02T10:25:00.000Z"))
+        const historicalRawRecordId = "00000000-0000-4000-8000-000000000496"
+        const laterRawRecordId = "00000000-0000-4000-8000-000000000497"
+        const historicalPayload = makeCoinbaseReceivePayload({
+          id: "coinbase-policy-excluded-history",
+          timestamp: occurredAt,
+        })
+        const laterPayload = makeCoinbaseReceivePayload({
+          id: "coinbase-policy-excluded-later",
+          timestamp: laterOccurredAt,
+        })
+
+        yield* Effect.promise(() =>
+          runPg(
+            seedCoinbaseReplayRecords({
+              historicalRawRecordId,
+              historicalPayload,
+              occurredAt,
+              laterRawRecordId,
+              laterPayload,
+              laterOccurredAt,
+            })
+          )
+        )
+        yield* Effect.promise(() =>
+          runCoinbaseNormalization(
+            Effect.flatMap(
+              CoinbaseReferenceDataService,
+              ({ refreshReferenceData }) => refreshReferenceData
+            )
+          )
+        )
+        const providerAssetRowId = yield* Effect.promise(() =>
+          runPg(markCoinbaseBtcProviderAssetExcluded)
+        )
+        const source = buildCoinbaseSource({ cexAccountId: fixture.cexAccountId })
+        const historicalSourceRecord = buildSeededRawRecord({
+          rawRecordId: historicalRawRecordId,
+          externalRecordId: "raw-coinbase-policy-excluded-history",
+          occurredAt,
+          payload: historicalPayload,
+        })
+        const prepared = yield* Effect.promise(() =>
+          runCoinbaseNormalization(
+            Effect.gen(function* () {
+              const provider = yield* CoinbaseSourceSyncProvider
+              const lookups = yield* provider.loadNormalizationLookups
+              return yield* provider.prepareNormalization({
+                source,
+                sourceRecord: historicalSourceRecord,
+                lookups,
+              })
+            })
+          )
+        )
+        expect(prepared).toMatchObject({
+          legDerivationStrategy: "skip",
+          assetDecisionLegDerivationCandidate: {
+            providerAssetRowId,
+            currencyCode: "BTC",
+          },
+        })
+
+        const beforeOverride = yield* Effect.promise(() =>
+          runCoinbaseNormalization(
+            persistCoinbaseNormalization({
+              source,
+              sourceRecord: historicalSourceRecord,
+              refreshReferenceData: false,
+            })
+          )
+        )
+        const beforeOverrideState = yield* Effect.promise(() =>
+          runPg(loadCoinbasePreOverrideState(beforeOverride.transaction.id))
+        )
+        expect(beforeOverrideState.targetLinks).toEqual([{ providerAssetRowId }])
+        expect(beforeOverride.legs).toEqual([])
+        expect(beforeOverride.providerTransfers).toHaveLength(1)
+        expect(beforeOverrideState.movements).toEqual([])
+
+        yield* Effect.promise(() =>
+          runPg(
+            insertCoinbaseProviderOverrides({
+              actorUserId: fixture.userId,
+              providerAssetRowId,
+            })
+          )
+        )
+
+        const replayed = yield* Effect.promise(() =>
+          runCoinbaseNormalization(
+            persistCoinbaseNormalization({
+              source,
+              sourceRecord: historicalSourceRecord,
+              refreshReferenceData: false,
+            })
+          )
+        )
+        const later = yield* Effect.promise(() =>
+          runCoinbaseNormalization(
+            persistCoinbaseNormalization({
+              source,
+              sourceRecord: buildSeededRawRecord({
+                rawRecordId: laterRawRecordId,
+                externalRecordId: "raw-coinbase-policy-excluded-later",
+                occurredAt: laterOccurredAt,
+                payload: laterPayload,
+              }),
+              refreshReferenceData: false,
+            })
+          )
+        )
+        const afterOverrideState = yield* Effect.promise(() =>
+          runPg(
+            loadCoinbasePostOverrideState({
+              providerAssetRowId,
+              transactionIds: [replayed.transaction.id, later.transaction.id],
+            })
+          )
+        )
+
+        expect(replayed.legs).toEqual([
+          expect.objectContaining({
+            assetId: PROVIDER_OVERRIDE_ASSET_ID,
+            providerAssetRowId,
+          }),
+        ])
+        expect(later.legs).toEqual([
+          expect.objectContaining({
+            assetId: PROVIDER_OVERRIDE_ASSET_ID,
+            providerAssetRowId,
+          }),
+        ])
+        expect(afterOverrideState.movements).toEqual(
+          expect.arrayContaining([
+            { assetId: PROVIDER_OVERRIDE_ASSET_ID, transactionId: replayed.transaction.id },
+            { assetId: PROVIDER_OVERRIDE_ASSET_ID, transactionId: later.transaction.id },
+          ])
+        )
+        expect(afterOverrideState.mapping).toEqual({
+          canonicalAssetId: null,
+          mappingStatus: "excluded",
+        })
+      })
   )
 
   it.effect("withholds all accounting legs when a principal exclusion applies", () =>

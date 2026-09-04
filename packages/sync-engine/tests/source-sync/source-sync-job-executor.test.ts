@@ -608,6 +608,7 @@ const makeExecutorLayer = ({
             providerTransfers: [],
             providerTransferByDraft: new Map(),
             canonicalTransfers: [],
+            resolveProviderAssetDecision: () => ({ _tag: "blocked" }),
           })
         }
         if (params.transaction.sourceRawRecordId !== null) {

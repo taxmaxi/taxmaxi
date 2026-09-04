@@ -10,6 +10,7 @@ import {
   CoinbaseSourceSyncProvider,
   type CoinbaseRecoverableNormalizationError,
   type CoinbaseSourceSyncProviderShape,
+  resolveCoinbasePrimaryAsset,
 } from "../providers/coinbase/services/CoinbaseSourceSyncProvider.ts"
 import {
   type HeliusSolanaRecoverableNormalizationError,
@@ -108,8 +109,15 @@ const makeCoinbaseProviderModule = (
               transactionReview: prepared.transactionReview,
               resolvedTransactionType: prepared.resolvedTransactionType,
               deriveLegs:
-                prepared.legDerivationStrategy === "derive"
-                  ? ({ transaction, venueContext, providerTransferByDraft, canonicalTransfers }) =>
+                prepared.legDerivationStrategy === "derive" ||
+                prepared.assetDecisionLegDerivationCandidate !== null
+                  ? ({
+                      transaction,
+                      venueContext,
+                      providerTransferByDraft,
+                      canonicalTransfers,
+                      resolveProviderAssetDecision,
+                    }) =>
                       Effect.gen(function* () {
                         const primaryProviderTransfer =
                           prepared.primaryProviderTransfer === null
@@ -127,10 +135,17 @@ const makeCoinbaseProviderModule = (
                           })
                         }
 
+                        const primaryAssetResult = resolveCoinbasePrimaryAsset({
+                          candidate: prepared.assetDecisionLegDerivationCandidate,
+                          primaryAsset: prepared.primaryAsset,
+                          resolveProviderAssetDecision,
+                        })
+                        if (primaryAssetResult._tag === "withheld") return []
+
                         return yield* coinbaseSourceSyncProvider.deriveLegs({
                           transaction,
                           venueContext,
-                          primaryAsset: prepared.primaryAsset,
+                          primaryAsset: primaryAssetResult.asset,
                           primaryProviderTransferId: primaryProviderTransfer?.id ?? null,
                           canonicalTransfers,
                           deriveMainLeg: prepared.deriveMainLeg,

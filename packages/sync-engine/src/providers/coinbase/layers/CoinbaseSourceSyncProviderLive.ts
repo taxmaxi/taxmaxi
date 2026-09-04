@@ -1141,10 +1141,22 @@ const make = Effect.gen(function* () {
         normalized.transaction.providerTransactionType !== "tx" ||
         (hasSuccessfulProviderStatus(normalized.transaction.providerStatus) &&
           !isZeroAmount(normalizedMetadata.amount.amount))
+      const hasAssetDecisionOnlySkip =
+        primaryAssetResolution.excluded ||
+        primaryAssetResolution.requiresReview ||
+        excludedAssetCurrencies.size > 0 ||
+        unresolvedAssetCurrencies.length > 0
+      const assetDecisionLegDerivationCandidate =
+        shouldDeriveLegs && hasAssetDecisionOnlySkip && primaryProviderAssetId !== null
+          ? {
+              providerAssetRowId: primaryProviderAssetId,
+              currencyCode: normalized.primaryAssetCurrency.toUpperCase(),
+            }
+          : null
       const shouldDeriveMainLeg =
-        !primaryAssetResolution.excluded &&
-        (normalized.transaction.providerTransactionType !== "tx" ||
-          Option.isSome(maybePrimaryAsset))
+        assetDecisionLegDerivationCandidate !== null ||
+        normalized.transaction.providerTransactionType !== "tx" ||
+        Option.isSome(maybePrimaryAsset)
 
       return {
         providerAssetRowIds,
@@ -1168,13 +1180,8 @@ const make = Effect.gen(function* () {
         transactionReview,
         resolvedTransactionType,
         primaryAsset: Option.getOrNull(maybePrimaryAsset),
-        legDerivationStrategy:
-          primaryAssetResolution.excluded ||
-          excludedAssetCurrencies.size > 0 ||
-          unresolvedAssetCurrencies.length > 0 ||
-          !shouldDeriveLegs
-            ? "skip"
-            : "derive",
+        legDerivationStrategy: !shouldDeriveLegs || hasAssetDecisionOnlySkip ? "skip" : "derive",
+        assetDecisionLegDerivationCandidate,
         deriveMainLeg: shouldDeriveMainLeg,
       }
     })

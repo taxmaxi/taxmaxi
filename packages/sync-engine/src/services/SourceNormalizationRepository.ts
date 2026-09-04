@@ -352,6 +352,12 @@ export interface PersistNormalizedSourceArtifactsResult {
   readonly legs: ReadonlyArray<PersistedSourceLeg>
 }
 
+/** Principal-scoped provider asset decision available to in-transaction leg derivation. */
+export type SourceProviderAssetDecision =
+  | { readonly _tag: "included"; readonly assetId: string }
+  | { readonly _tag: "excluded" }
+  | { readonly _tag: "blocked" }
+
 /**
  * PersistNormalizedSourceArtifactsContext - Persisted pre-leg artifacts available
  * to provider-specific leg derivation inside the repository transaction.
@@ -366,6 +372,8 @@ export interface PersistNormalizedSourceArtifactsContext {
     PersistedSourceProviderTransfer
   >
   readonly canonicalTransfers: ReadonlyArray<PersistedSourceTransfer>
+  /** Resolves the principal's effective decision for an exact recorded provider row. */
+  readonly resolveProviderAssetDecision: (providerAssetRowId: string) => SourceProviderAssetDecision
 }
 
 /**
