@@ -2036,9 +2036,6 @@ const make = Effect.gen(function* () {
     db
       .transaction((tx) =>
         Effect.gen(function* () {
-          const overrideHistorySnapshot = yield* principalAssetOverrideDecisionLoader.loadHistory({
-            principalId: params.transaction.principalId,
-          })
           const networkMovementLockKeys = [
             ...new Set(
               params.providerTransfers
@@ -2085,6 +2082,10 @@ const make = Effect.gen(function* () {
               error: `Principal ${params.transaction.principalId} no longer exists`,
             })
           }
+
+          const overrideHistorySnapshot = yield* principalAssetOverrideDecisionLoader.loadHistory({
+            principalId: params.transaction.principalId,
+          })
 
           const [ownedSource] = yield* tx
             .select({ id: schema.sources.id })
