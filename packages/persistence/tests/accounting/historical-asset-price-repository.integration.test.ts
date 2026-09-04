@@ -92,6 +92,7 @@ describe("HistoricalAssetPriceRepositoryLive", () => {
                 amount: "2",
                 kind: "acquisition",
                 provenance: "deterministic",
+                originKind: "none" as const,
               },
               {
                 sourceId: TEST_ONCHAIN_SOURCE_ID,
@@ -102,6 +103,7 @@ describe("HistoricalAssetPriceRepositoryLive", () => {
                 amount: "1",
                 kind: "income",
                 provenance: "deterministic",
+                originKind: "none" as const,
               },
               {
                 sourceId: TEST_ONCHAIN_SOURCE_ID,
@@ -112,6 +114,7 @@ describe("HistoricalAssetPriceRepositoryLive", () => {
                 amount: "1",
                 kind: "disposal",
                 provenance: "deterministic",
+                originKind: "none" as const,
               },
               {
                 sourceId: TEST_ONCHAIN_SOURCE_ID,
@@ -122,6 +125,7 @@ describe("HistoricalAssetPriceRepositoryLive", () => {
                 amount: "1",
                 kind: "fee",
                 provenance: "deterministic",
+                originKind: "none" as const,
               },
               {
                 sourceId: TEST_CEX_SOURCE_ID,
@@ -132,6 +136,7 @@ describe("HistoricalAssetPriceRepositoryLive", () => {
                 amount: "1",
                 kind: "disposal",
                 provenance: "deterministic",
+                originKind: "none" as const,
               },
             ])
             yield* db.insert(schema.assetPrices).values({

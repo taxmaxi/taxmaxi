@@ -132,6 +132,7 @@ describe("CalculationRunServiceLive", () => {
               amount: "1",
               kind: "acquisition",
               provenance: "deterministic",
+              originKind: "none" as const,
               transactionId: transaction.id,
             })
 
@@ -303,6 +304,7 @@ describe("CalculationRunServiceLive", () => {
                 amount: "1",
                 kind: "acquisition",
                 provenance: "deterministic",
+                originKind: "none" as const,
                 metadata: { providerAssetRowId: PROVIDER_ASSET_ROW_ID },
                 transactionId: transaction.id,
               })

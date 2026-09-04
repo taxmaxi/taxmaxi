@@ -397,7 +397,7 @@ const networkFeeDirection = (transaction: CoinbaseTransaction): "inbound" | "out
     ? movementDirectionFromSignedAmount(transaction.amount.amount)
     : principalTransferDirection(transaction)
 
-const buildPrincipalProviderTransfers = ({
+const derivePrincipalProviderTransfer = ({
   normalizeParams,
   transaction,
   timestamp,
@@ -406,13 +406,13 @@ const buildPrincipalProviderTransfers = ({
   readonly transaction: CoinbaseTransaction
   readonly timestamp: Date
 }): Effect.Effect<
-  ReadonlyArray<CoinbaseRecordNormalizationResult["providerTransfers"][number]>,
+  CoinbaseRecordNormalizationResult["primaryProviderTransfer"],
   CoinbaseRecordNormalizationError
 > =>
   Effect.gen(function* () {
     const direction = principalTransferDirection(transaction)
     if (direction === null) {
-      return []
+      return null
     }
 
     // Only an outbound row carries the fee inside its debit; an inbound row's
@@ -425,16 +425,14 @@ const buildPrincipalProviderTransfers = ({
         : normalizeUnsignedAmount(transaction.amount.amount)
 
     return isZeroAmount(amount)
-      ? []
-      : [
-          buildPrincipalProviderTransfer({
-            normalizeParams,
-            transaction,
-            timestamp,
-            direction,
-            amount,
-          }),
-        ]
+      ? null
+      : buildPrincipalProviderTransfer({
+          normalizeParams,
+          transaction,
+          timestamp,
+          direction,
+          amount,
+        })
   })
 
 /**
@@ -590,11 +588,12 @@ const normalizeCoinbaseRecord = (params: NormalizeCoinbaseRecordParams) =>
         )
       )
     )
-    const providerTransfers = yield* buildPrincipalProviderTransfers({
+    const primaryProviderTransfer = yield* derivePrincipalProviderTransfer({
       normalizeParams: params,
       transaction: transactionPayload,
       timestamp: createdAt,
     })
+    const providerTransfers = primaryProviderTransfer === null ? [] : [primaryProviderTransfer]
     const unresolvedAssetCurrencies = Array.from(
       new Set(
         feeTransferResults.flatMap((result) =>
@@ -653,6 +652,7 @@ const normalizeCoinbaseRecord = (params: NormalizeCoinbaseRecordParams) =>
         },
       },
       providerTransfers,
+      primaryProviderTransfer,
       canonicalTransfers,
       feeProviderAssetRowIds,
       unresolvedAssetCurrencies,

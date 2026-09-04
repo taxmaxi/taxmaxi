@@ -1128,6 +1128,15 @@ const make = Effect.gen(function* () {
       const providerAssetRowIds = Array.from(
         new Set([primaryProviderAssetId, ...normalized.feeProviderAssetRowIds])
       )
+      const primaryProviderTransfer =
+        normalized.primaryProviderTransfer === null
+          ? null
+          : {
+              ...normalized.primaryProviderTransfer,
+              providerAssetId:
+                normalized.primaryProviderTransfer.providerAssetId ?? primaryProviderAssetId,
+            }
+      const providerTransfers = primaryProviderTransfer === null ? [] : [primaryProviderTransfer]
       const shouldDeriveLegs =
         normalized.transaction.providerTransactionType !== "tx" ||
         (hasSuccessfulProviderStatus(normalized.transaction.providerStatus) &&
@@ -1152,10 +1161,8 @@ const make = Effect.gen(function* () {
           },
         },
         venueContext: normalized.venueContext,
-        providerTransfers: normalized.providerTransfers.map((providerTransfer) => ({
-          ...providerTransfer,
-          providerAssetId: providerTransfer.providerAssetId ?? primaryProviderAssetId,
-        })),
+        providerTransfers,
+        primaryProviderTransfer,
         canonicalTransfers: normalized.canonicalTransfers,
         transactionReview,
         resolvedTransactionType,
@@ -1175,6 +1182,7 @@ const make = Effect.gen(function* () {
     transaction,
     venueContext,
     primaryAsset,
+    primaryProviderTransferId,
     canonicalTransfers,
     deriveMainLeg,
   }) =>
@@ -1203,6 +1211,7 @@ const make = Effect.gen(function* () {
         transaction,
         venueContext,
         primaryAsset,
+        primaryProviderTransferId,
         feeTransfers: resolvedFeeTransfers,
         deriveMainLeg,
       })

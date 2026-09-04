@@ -494,6 +494,11 @@ const buildMainLeg = (
         venueSide: params.venueContext?.side ?? null,
       },
       transactionId: params.transaction.id,
+      originKind:
+        params.primaryProviderTransferId === null
+          ? ("none" as const)
+          : ("provider_transfer" as const),
+      providerTransferId: params.primaryProviderTransferId,
       sourceTransferId: null,
       fiatAmount: amounts.fiatAmount,
       fiatCurrency: amounts.fiatCurrency,
@@ -548,6 +553,8 @@ const buildFeeLegs = (
           transferType: transfer.type,
         },
         transactionId: params.transaction.id,
+        originKind: "canonical_transfer",
+        providerTransferId: null,
         sourceTransferId: transfer.id,
         fiatAmount: valuation.fiatAmount,
         fiatCurrency: valuation.fiatCurrency,

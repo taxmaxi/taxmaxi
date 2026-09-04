@@ -109,16 +109,33 @@ const makeCoinbaseProviderModule = (
               resolvedTransactionType: prepared.resolvedTransactionType,
               deriveLegs:
                 prepared.legDerivationStrategy === "derive"
-                  ? ({ transaction, venueContext, canonicalTransfers }) =>
-                      coinbaseSourceSyncProvider
-                        .deriveLegs({
+                  ? ({ transaction, venueContext, providerTransferByDraft, canonicalTransfers }) =>
+                      Effect.gen(function* () {
+                        const primaryProviderTransfer =
+                          prepared.primaryProviderTransfer === null
+                            ? null
+                            : providerTransferByDraft.get(prepared.primaryProviderTransfer)
+                        if (
+                          prepared.primaryProviderTransfer !== null &&
+                          primaryProviderTransfer === undefined
+                        ) {
+                          return yield* new SyncEngineStorageError({
+                            operation:
+                              "sourceProviderRegistry.coinbase.resolvePrimaryProviderTransfer",
+                            cause:
+                              "Persistence did not return the row for the exact Coinbase principal movement draft",
+                          })
+                        }
+
+                        return yield* coinbaseSourceSyncProvider.deriveLegs({
                           transaction,
                           venueContext,
                           primaryAsset: prepared.primaryAsset,
+                          primaryProviderTransferId: primaryProviderTransfer?.id ?? null,
                           canonicalTransfers,
                           deriveMainLeg: prepared.deriveMainLeg,
                         })
-                        .pipe(Effect.mapError(toCoinbaseRecoverableNormalizationError))
+                      }).pipe(Effect.mapError(toCoinbaseRecoverableNormalizationError))
                   : () => Effect.succeed([]),
             } as const
           })

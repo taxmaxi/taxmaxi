@@ -58,6 +58,8 @@ interface PersistedSourceLegRecord {
   readonly assetRepresentationId: string | null
   readonly sourceRepresentationUseId: string | null
   readonly providerAssetRowId: string | null
+  readonly originKind: "provider_transfer" | "canonical_transfer" | "none"
+  readonly providerTransferId: string | null
   readonly amount: string
   readonly kind: "acquisition" | "disposal" | "income" | "fee"
   readonly fiatAmount: string | null
@@ -82,6 +84,11 @@ type LinkedSourceProviderTransferDraft = SourceProviderTransferDraft & {
   readonly sourceRepresentationUseId: string | null
 }
 
+interface LinkedSourceProviderTransferInput {
+  readonly draft: SourceProviderTransferDraft
+  readonly linked: LinkedSourceProviderTransferDraft
+}
+
 type LinkedSourceTransferDraft = SourceTransferDraft & {
   readonly sourceRepresentationUseId: string | null
   readonly providerAssetRowId: string | null
@@ -90,6 +97,8 @@ type LinkedSourceTransferDraft = SourceTransferDraft & {
 type LinkedSourceTransactionLegDraft = SourceTransactionLegDraft & {
   readonly sourceRepresentationUseId: string | null
   readonly providerAssetRowId: string | null
+  readonly originKind: "provider_transfer" | "canonical_transfer" | "none"
+  readonly providerTransferId: string | null
 }
 
 /**
@@ -423,6 +432,8 @@ const make = Effect.gen(function* () {
     assetRepresentationId: schema.transactionLegs.assetRepresentationId,
     sourceRepresentationUseId: schema.transactionLegs.sourceRepresentationUseId,
     providerAssetRowId: schema.transactionLegs.providerAssetRowId,
+    originKind: schema.transactionLegs.originKind,
+    providerTransferId: schema.transactionLegs.providerTransferId,
     amount: schema.transactionLegs.amount,
     kind: schema.transactionLegs.kind,
     fiatAmount: schema.transactionLegs.fiatAmount,
@@ -1087,9 +1098,9 @@ const make = Effect.gen(function* () {
   }: {
     readonly executor: SourceNormalizationExecutor
     readonly transactionId: string
-    readonly providerTransfers: ReadonlyArray<LinkedSourceProviderTransferDraft>
+    readonly providerTransfers: ReadonlyArray<LinkedSourceProviderTransferInput>
   }) =>
-    Effect.forEach(providerTransfers, (providerTransfer) =>
+    Effect.forEach(providerTransfers, ({ draft, linked: providerTransfer }) =>
       Effect.gen(function* () {
         const now = nowDate()
         const incomingObservedRepresentationIsAbsent = sql`
@@ -1216,11 +1227,23 @@ const make = Effect.gen(function* () {
           operation: "sourceNormalizationRepository.upsertProviderTransfers.amount",
         })
 
-        return {
+        const persistedProviderTransfer = {
           ...persisted,
           amount,
         } satisfies PersistedSourceProviderTransfer
+
+        return {
+          draft,
+          persisted: persistedProviderTransfer,
+        } as const
       })
+    ).pipe(
+      Effect.map((pairs) => ({
+        providerTransfers: pairs.map(({ persisted }) => persisted),
+        providerTransferByDraft: new Map(
+          pairs.map(({ draft, persisted }) => [draft, persisted] as const)
+        ),
+      }))
     )
 
   const upsertTransactionLegs = ({
@@ -1259,6 +1282,8 @@ const make = Effect.gen(function* () {
               derivationRule: sql.raw("excluded.derivation_rule"),
               metadata: sql.raw("excluded.metadata"),
               transactionId: sql.raw("excluded.transaction_id"),
+              originKind: sql.raw("excluded.origin_kind"),
+              providerTransferId: sql.raw("excluded.provider_transfer_id"),
               sourceTransferId: sql.raw("excluded.source_transfer_id"),
               fiatAmount: sql.raw("excluded.fiat_amount"),
               fiatCurrency: sql.raw("excluded.fiat_currency"),
@@ -1295,6 +1320,74 @@ const make = Effect.gen(function* () {
         } satisfies PersistedSourceLegRecord
       })
     )
+
+  const finalizeTransactionLegOrigins = ({
+    legs,
+    providerTransfers,
+  }: {
+    readonly legs: ReadonlyArray<
+      SourceTransactionLegDraft & {
+        readonly sourceRepresentationUseId: string | null
+        readonly providerAssetRowId: string | null
+      }
+    >
+    readonly providerTransfers: ReadonlyArray<PersistedSourceProviderTransfer>
+  }): Effect.Effect<ReadonlyArray<LinkedSourceTransactionLegDraft>, SyncEngineStorageError> => {
+    const providerTransferById = new Map(
+      providerTransfers.map((providerTransfer) => [providerTransfer.id, providerTransfer] as const)
+    )
+
+    return Effect.forEach(legs, (leg) => {
+      const originKind =
+        leg.originKind ?? (leg.sourceTransferId === null ? null : "canonical_transfer")
+      if (originKind === null) {
+        return Effect.fail(
+          toSyncEngineStorageError({
+            operation: "sourceNormalizationRepository.finalizeTransactionLegOrigins.kind",
+            error: `Leg ${leg.externalId ?? "without external id"} has no explicit transfer origin kind`,
+          })
+        )
+      }
+
+      const providerTransferId = leg.providerTransferId ?? null
+      const originIsValid =
+        (originKind === "provider_transfer" &&
+          providerTransferId !== null &&
+          leg.sourceTransferId === null &&
+          leg.transactionId !== null) ||
+        (originKind === "canonical_transfer" &&
+          providerTransferId === null &&
+          leg.sourceTransferId !== null) ||
+        (originKind === "none" && providerTransferId === null && leg.sourceTransferId === null)
+
+      if (!originIsValid) {
+        return Effect.fail(
+          toSyncEngineStorageError({
+            operation: "sourceNormalizationRepository.finalizeTransactionLegOrigins.links",
+            error: `Leg ${leg.externalId ?? "without external id"} has transfer links that do not match ${originKind}`,
+          })
+        )
+      }
+
+      if (providerTransferId !== null) {
+        const providerTransfer = providerTransferById.get(providerTransferId)
+        if (
+          providerTransfer === undefined ||
+          providerTransfer.sourceId !== leg.sourceId ||
+          providerTransfer.transactionId !== leg.transactionId
+        ) {
+          return Effect.fail(
+            toSyncEngineStorageError({
+              operation: "sourceNormalizationRepository.finalizeTransactionLegOrigins.scope",
+              error: `Provider transfer ${providerTransferId} does not belong to leg source ${leg.sourceId} and transaction ${leg.transactionId ?? "null"}`,
+            })
+          )
+        }
+      }
+
+      return Effect.succeed({ ...leg, originKind, providerTransferId })
+    })
+  }
 
   const upsertTransactionReview = ({
     executor,
@@ -2094,8 +2187,11 @@ const make = Effect.gen(function* () {
                   recordedUses,
                 }),
                 (sourceRepresentationUseId) => ({
-                  ...providerTransfer,
-                  sourceRepresentationUseId,
+                  draft: providerTransfer,
+                  linked: {
+                    ...providerTransfer,
+                    sourceRepresentationUseId,
+                  },
                 })
               )
           )
@@ -2114,11 +2210,12 @@ const make = Effect.gen(function* () {
               })
             )
           )
-          const persistedProviderTransfers = yield* upsertProviderTransfers({
-            executor: tx,
-            transactionId: persistedTransaction.id,
-            providerTransfers: linkedProviderTransfers,
-          })
+          const { providerTransfers: persistedProviderTransfers, providerTransferByDraft } =
+            yield* upsertProviderTransfers({
+              executor: tx,
+              transactionId: persistedTransaction.id,
+              providerTransfers: linkedProviderTransfers,
+            })
           const persistedCanonicalTransfers = yield* upsertCanonicalTransfers({
             executor: tx,
             canonicalTransfers: linkedCanonicalTransfers,
@@ -2137,6 +2234,7 @@ const make = Effect.gen(function* () {
                   transaction: persistedTransaction,
                   venueContext: persistedVenueContext,
                   providerTransfers: persistedProviderTransfers,
+                  providerTransferByDraft,
                   canonicalTransfers: systemCanonicalTransfers,
                 })
               : params.legs
@@ -2189,7 +2287,7 @@ const make = Effect.gen(function* () {
           const sourceTransferTargetById = new Map(
             sourceTransferTargets.map((target) => [target.id, target])
           )
-          const linkedLegs = yield* Effect.forEach(effectiveLegs, (leg) =>
+          const linkedLegTargets = yield* Effect.forEach(effectiveLegs, (leg) =>
             Effect.gen(function* () {
               const sourceTransferTarget =
                 leg.sourceTransferId === null
@@ -2213,6 +2311,10 @@ const make = Effect.gen(function* () {
               }
             })
           )
+          const linkedLegs = yield* finalizeTransactionLegOrigins({
+            legs: linkedLegTargets,
+            providerTransfers: persistedProviderTransfers,
+          })
           const persistedLegs = yield* upsertTransactionLegs({
             executor: tx,
             legs: linkedLegs,

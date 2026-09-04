@@ -140,6 +140,7 @@ describe("SourceReplayRepositoryLive", () => {
                   derivationRule: "spot_buy",
                   metadata: { provider: "coinbase" },
                   transactionId: null,
+                  originKind: "none",
                   sourceTransferId: null,
                   fiatAmount: "10000.00000000",
                   fiatCurrency: "EUR",

@@ -39,6 +39,8 @@ export interface DeriveCoinbaseLegsParams {
   readonly transaction: PersistedSourceTransaction
   readonly venueContext: PersistedSourceVenueContext | null
   readonly primaryAsset: CoinbaseDerivedAsset | null
+  /** Exact persisted provider movement selected by the producer for the main leg. */
+  readonly primaryProviderTransferId: string | null
   readonly feeTransfers: ReadonlyArray<CoinbaseResolvedFeeTransfer>
   /** Whether the primary Coinbase amount should produce an inventory leg. */
   readonly deriveMainLeg: boolean
