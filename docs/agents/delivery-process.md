@@ -11,6 +11,22 @@ How work moves from idea to merged code: capture, triage, definition, execution,
 5. **Human time goes to gates.** Grilling answers, report approvals, harvest review. Agents do everything between gates.
 6. **Weight by lane.** When unsure which lane, pick the lighter one.
 
+## Skills by stage
+
+Every stage of the pipeline has a skill. The skill is the operational how-to; this document is the why and the rules.
+
+| Stage | Skill |
+| --- | --- |
+| Capture a finding as a gap issue | `capture` (model-invocable — any session files findings the moment they surface) |
+| Triage the queue | `triage` |
+| Ground a roadmap item | `research`, Explore scans |
+| Grill the one-way doors | `grilling`, `grill-with-docs` |
+| Upgrade a gap into a spec | `spec` |
+| Arm a spec for execution | `arm` (templates live in its directory) |
+| Execute one task | generated `implement-NNN` (bug lane: `implement`) |
+| Close the spec | `harvest` |
+| Brief the founder afterward | `spec-walkthrough` |
+
 ## Durable homes
 
 | Knowledge | Home |
@@ -59,7 +75,7 @@ The issue number never changes. The body grows from problem statement to full sp
 
 ## Gap issue template
 
-Captured at the moment of discovery. Problem only — no solutions.
+Captured at the moment of discovery by the `capture` skill — in any session, including mid-conversation, because a finding that lives only in chat is a finding lost. Problem only — no solutions.
 
 ```markdown
 ## Context
@@ -210,8 +226,8 @@ The mandatory final checklist task of every spec. Steps:
    meets the bar: quoted cross-spec → ADR; changes user-visible numbers →
    legal reference data / treatment codes / ADR; rule of conduct →
    `AGENTS.md`; new term → glossary.
-2. File every remaining gap as a new `needs-triage` issue using the gap
-   template. Link them from the roadmap.
+2. File every remaining gap as a new `needs-triage` issue via the `capture`
+   skill. Link them from the roadmap.
 3. Delete the spec's `implement-NNN` skill (and symlink) and its
    orchestrator prompt.
 4. Update the reusable templates and skills with what the epic taught.
