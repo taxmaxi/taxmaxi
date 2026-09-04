@@ -1,6 +1,8 @@
 import * as DateTime from "effect/DateTime"
 import { asc, eq, inArray, sql } from "drizzle-orm"
 import * as Effect from "effect/Effect"
+import * as Fiber from "effect/Fiber"
+import * as Latch from "effect/Latch"
 import * as Layer from "effect/Layer"
 import * as Option from "effect/Option"
 import { beforeEach, describe, expect, it } from "@effect/vitest"
@@ -290,6 +292,7 @@ const seedAdditionalOverrideSource = ({
   })
 
 interface ExactOverrideArtifactOptions {
+  readonly beforePersist?: Effect.Effect<void>
   readonly sourceId?: string
   readonly cexAccountId?: string
   readonly includeCanonicalTransfer?: boolean
@@ -310,6 +313,7 @@ const persistExactOverrideArtifact = ({
   principalId = TEST_PRINCIPAL_ID,
   providerObservedRepresentationType = "token",
   sourceRawRecordId = null,
+  beforePersist,
 }: ExactOverrideArtifactOptions & {
   readonly externalId: string
   readonly fixture: SyncEngineRepositoryFixture
@@ -318,6 +322,7 @@ const persistExactOverrideArtifact = ({
   runRepository(
     Effect.flatMap(SourceNormalizationRepository, (repository) =>
       repository.persistNormalizedArtifacts({
+        ...(beforePersist === undefined ? {} : { beforePersist }),
         transaction: {
           sourceId,
           sourceRawRecordId,
@@ -447,6 +452,8 @@ const persistExactOverrideCallbackArtifact = ({
   principalId = TEST_PRINCIPAL_ID,
   providerAssetRowId = null,
   legUsesSourceTransferTargetOnly = false,
+  includeCanonicalTransfer = true,
+  beforePersist,
 }: {
   readonly externalId: string
   readonly fixture: SyncEngineRepositoryFixture
@@ -458,10 +465,13 @@ const persistExactOverrideCallbackArtifact = ({
   readonly principalId?: string
   readonly providerAssetRowId?: string | null
   readonly legUsesSourceTransferTargetOnly?: boolean
+  readonly includeCanonicalTransfer?: boolean
+  readonly beforePersist?: Effect.Effect<void>
 }) =>
   runRepository(
     Effect.flatMap(SourceNormalizationRepository, (repository) =>
       repository.persistNormalizedArtifacts({
+        ...(beforePersist === undefined ? {} : { beforePersist }),
         transaction: {
           sourceId,
           sourceRawRecordId: null,
@@ -494,39 +504,46 @@ const persistExactOverrideCallbackArtifact = ({
           metadata: { evidence: externalId },
         },
         providerTransfers: [],
-        canonicalTransfers: [
-          {
-            sourceId,
-            principalId,
-            sourceRawRecordId: null,
-            externalId: `${externalId}-transfer`,
-            externalGroupId: externalId,
-            addressId: null,
-            blockchainId: fixture.bitcoinBlockchainId,
-            txHash: null,
-            timestamp: occurredAt,
-            type: "cex",
-            fromAddress: null,
-            toAddress: null,
-            fromAccountRef: "external",
-            toAccountRef: "owned",
-            fromPartyType: null,
-            fromPartyResourcePath: null,
-            toPartyType: null,
-            toPartyResourcePath: null,
-            assetId: TEST_BTC_ASSET_ID,
-            assetRepresentationId: TEST_BTC_REPRESENTATION_ID,
-            providerAssetRowId,
-            amount: "1",
-            tokenId: null,
-            notes: null,
-            metadata: { evidence: externalId },
-          },
-        ],
+        canonicalTransfers: includeCanonicalTransfer
+          ? [
+              {
+                sourceId,
+                principalId,
+                sourceRawRecordId: null,
+                externalId: `${externalId}-transfer`,
+                externalGroupId: externalId,
+                addressId: null,
+                blockchainId: fixture.bitcoinBlockchainId,
+                txHash: null,
+                timestamp: occurredAt,
+                type: "cex",
+                fromAddress: null,
+                toAddress: null,
+                fromAccountRef: "external",
+                toAccountRef: "owned",
+                fromPartyType: null,
+                fromPartyResourcePath: null,
+                toPartyType: null,
+                toPartyResourcePath: null,
+                assetId: TEST_BTC_ASSET_ID,
+                assetRepresentationId: TEST_BTC_REPRESENTATION_ID,
+                providerAssetRowId,
+                amount: "1",
+                tokenId: null,
+                notes: null,
+                metadata: { evidence: externalId },
+              },
+            ]
+          : [],
         providerAssetRowIds: providerAssetRowId === null ? [] : [providerAssetRowId],
         deriveLegs: ({ transaction, canonicalTransfers }) => {
           const [transfer] = canonicalTransfers
-          if (transfer === undefined) return Effect.die("Missing callback transfer")
+          if (includeCanonicalTransfer && transfer === undefined) {
+            return Effect.die("Missing callback transfer")
+          }
+          const assetId = transfer?.assetId ?? TEST_BTC_ASSET_ID
+          const assetRepresentationId =
+            transfer?.assetRepresentationId ?? TEST_BTC_REPRESENTATION_ID
 
           return Effect.succeed([
             {
@@ -537,17 +554,18 @@ const persistExactOverrideCallbackArtifact = ({
               timestamp: occurredAt,
               principalId,
               addressId: null,
-              assetId: transfer.assetId,
-              assetRepresentationId: legUsesSourceTransferTargetOnly
-                ? null
-                : transfer.assetRepresentationId,
+              assetId,
+              assetRepresentationId: legUsesSourceTransferTargetOnly ? null : assetRepresentationId,
               amount: "1",
               kind,
               provenance: "deterministic" as const,
               derivationRule: "callback_exact_override_fixture",
-              metadata: { derivedFromAssetId: transfer.assetId },
+              metadata: { derivedFromAssetId: assetId },
               transactionId: transaction.id,
-              sourceTransferId: transfer.id,
+              sourceTransferId: transfer?.id ?? null,
+              ...(transfer === undefined
+                ? { originKind: "none" as const, providerTransferId: null }
+                : {}),
               fiatAmount: null,
               fiatCurrency: null,
               feeForTransactionId: kind === "fee" ? transaction.id : null,
@@ -1518,6 +1536,143 @@ describe("SourceNormalizationRepositoryLive", () => {
       const recreated = yield* Effect.promise(() => persist("corrected-stable-external-id"))
 
       expect(recreated.transaction.id).toBe(first.transaction.id)
+    })
+  )
+
+  it.effect("uses one override history snapshot for a racing source write", () =>
+    Effect.gen(function* () {
+      const occurredAt = DateTime.toDateUtc(DateTime.makeUnsafe("2025-02-01T09:30:00.000Z"))
+      const reachedPersistHook = yield* Latch.make()
+      const releasePersistHook = yield* Latch.make()
+      const sourceWrite = yield* Effect.forkChild(
+        Effect.promise(() =>
+          persistExactOverrideArtifact({
+            externalId: "racing-override-snapshot",
+            fixture,
+            occurredAt,
+            beforePersist: Effect.gen(function* () {
+              yield* reachedPersistHook.open
+              yield* releasePersistHook.await
+            }),
+          })
+        )
+      )
+
+      yield* reachedPersistHook.await
+      yield* Effect.promise(() =>
+        runPg(
+          seedExactIdentityOverride({
+            fixture,
+            reason: "Commit after the source captured its override history",
+          })
+        )
+      )
+      yield* releasePersistHook.open
+
+      const racingResult = yield* Fiber.join(sourceWrite)
+      expect(racingResult.canonicalTransfers[0]).toMatchObject({
+        assetId: TEST_BTC_ASSET_ID,
+        assetRepresentationId: TEST_BTC_REPRESENTATION_ID,
+      })
+      expect(racingResult.legs[0]?.assetId).toBe(TEST_BTC_ASSET_ID)
+
+      const laterResult = yield* Effect.promise(() =>
+        persistExactOverrideArtifact({
+          externalId: "after-racing-override-snapshot",
+          fixture,
+          occurredAt,
+        })
+      )
+      expect(laterResult.canonicalTransfers[0]?.assetId).toBe(OVERRIDE_ASSET_ID)
+      expect(laterResult.legs[0]?.assetId).toBe(OVERRIDE_ASSET_ID)
+    })
+  )
+
+  it.effect("applies captured history to a callback-derived representation", () =>
+    Effect.gen(function* () {
+      const occurredAt = DateTime.toDateUtc(DateTime.makeUnsafe("2025-02-01T09:35:00.000Z"))
+      const activeOverride = yield* Effect.promise(() =>
+        runPg(
+          seedExactIdentityOverride({
+            fixture,
+            reason: "Use the first selected asset for callback-derived facts",
+          })
+        )
+      )
+      yield* Effect.promise(() =>
+        runPg(
+          Effect.gen(function* () {
+            const db = yield* drizzle
+            yield* db.insert(schema.assets).values({
+              id: PROVIDER_OVERRIDE_ASSET_ID,
+              name: "Later principal-selected asset",
+              symbol: "LATER",
+              type: "fungible",
+            })
+          })
+        )
+      )
+
+      const reachedPersistHook = yield* Latch.make()
+      const releasePersistHook = yield* Latch.make()
+      const sourceWrite = yield* Effect.forkChild(
+        Effect.promise(() =>
+          persistExactOverrideCallbackArtifact({
+            externalId: "racing-callback-override-snapshot",
+            fixture,
+            kind: "acquisition",
+            occurredAt,
+            providerStatus: "pending",
+            includeCanonicalTransfer: false,
+            beforePersist: Effect.gen(function* () {
+              yield* reachedPersistHook.open
+              yield* releasePersistHook.await
+            }),
+          })
+        )
+      )
+
+      yield* reachedPersistHook.await
+      yield* Effect.promise(() =>
+        runPg(
+          Effect.gen(function* () {
+            const db = yield* drizzle
+            yield* db.insert(schema.principalAssetOverrides).values({
+              principalId: TEST_PRINCIPAL_ID,
+              targetId: activeOverride.targetId,
+              kind: "identity",
+              operation: "replace",
+              inspectedSystemRevision: "exact-override-system-v1",
+              inspectedSystemIdentity: "resolved",
+              inspectedSystemAssetId: TEST_BTC_ASSET_ID,
+              replacementAssetId: PROVIDER_OVERRIDE_ASSET_ID,
+              actorUserId: fixture.userId,
+              reason: "Commit a later identity after the source captured history",
+              supersedesOverrideId: activeOverride.overrideId,
+            })
+          })
+        )
+      )
+      yield* releasePersistHook.open
+
+      const racingResult = yield* Fiber.join(sourceWrite)
+      expect(racingResult.canonicalTransfers).toEqual([])
+      expect(racingResult.legs[0]).toMatchObject({
+        assetId: OVERRIDE_ASSET_ID,
+        assetRepresentationId: TEST_BTC_REPRESENTATION_ID,
+      })
+
+      const laterResult = yield* Effect.promise(() =>
+        persistExactOverrideCallbackArtifact({
+          externalId: "after-racing-callback-override-snapshot",
+          fixture,
+          kind: "acquisition",
+          occurredAt,
+          providerStatus: "pending",
+          includeCanonicalTransfer: false,
+        })
+      )
+      expect(laterResult.legs[0]?.assetId).toBe(PROVIDER_OVERRIDE_ASSET_ID)
     })
   )
 
