@@ -19,6 +19,7 @@ import {
 } from "@my/core/accounting"
 import { createHash } from "node:crypto"
 import { eq, sql } from "drizzle-orm"
+import * as DateTime from "effect/DateTime"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import * as Schema from "effect/Schema"
@@ -136,9 +137,6 @@ const isConcurrentFactChange = (error: unknown): boolean => {
   return metadata?.code === "23503" && metadata.constraint === BLOCKER_PROVIDER_ASSET_FOREIGN_KEY
 }
 
-const isThroughTaxYear = (blocker: FactualLedgerInputBlocker, taxYear: number): boolean =>
-  blocker.occurredAt.getTime() < Date.UTC(taxYear + 1, 0, 1)
-
 const make = Effect.gen(function* () {
   const db = yield* drizzle
   const calculationRunRepository = yield* CalculationRunRepository
@@ -170,6 +168,9 @@ const make = Effect.gen(function* () {
           const factualLedger = yield* factualLedgerRepository.load({
             principalId: params.principalId,
             reportingCurrency: params.reportingCurrency,
+            occurredBefore: DateTime.toDateUtc(
+              DateTime.makeUnsafe(Date.UTC(params.taxYear + 1, 0, 1))
+            ),
           })
           const inputLedgerRevision = makeLedgerRevision({
             snapshotTransactionId,
@@ -222,9 +223,7 @@ const make = Effect.gen(function* () {
         valuationFacts: snapshot.factualLedger.valuationFacts,
       }).pipe(
         Effect.flatMap((result) => {
-          const inputBlockers = snapshot.factualLedger.inputBlockers.filter((blocker) =>
-            isThroughTaxYear(blocker, params.taxYear)
-          )
+          const inputBlockers = snapshot.factualLedger.inputBlockers
           const combinedResult: CalculationRunResult =
             inputBlockers.length === 0
               ? result

@@ -82,21 +82,24 @@ const calculationRunServiceWithPersist = (
   )
 }
 
-const recomputeEffect = (id: string) =>
+const recomputeEffect = (id: string, taxYear = 2025) =>
   Effect.flatMap(CalculationRunService, (service) =>
     service.recompute({
       id: CalculationRunId.make(id),
       principalId: PRINCIPAL_ID,
       jurisdiction: JurisdictionCode.make("DE"),
-      taxYear: TaxYear.make(2025),
+      taxYear: TaxYear.make(taxYear),
       reportingCurrency: EUR,
       accountingChoices: [],
     })
   )
 
-const recompute = (id: string) =>
+const recompute = (id: string, taxYear = 2025) =>
   Effect.runPromise(
-    context.runWithLayer({ effect: recomputeEffect(id), layer: CalculationRunServiceTestLive })
+    context.runWithLayer({
+      effect: recomputeEffect(id, taxYear),
+      layer: CalculationRunServiceTestLive,
+    })
   )
 
 const createOverride = ({
@@ -142,11 +145,13 @@ const seedProviderAsset = ({
   exponent = 8,
   id,
   mappingStatus = "approved",
+  providerType = "crypto",
 }: {
   readonly canonicalAssetId?: string | null
   readonly exponent?: number | null
   readonly id: string
   readonly mappingStatus?: "approved" | "excluded"
+  readonly providerType?: string
 }) =>
   Effect.gen(function* () {
     const db = yield* drizzle
@@ -158,7 +163,7 @@ const seedProviderAsset = ({
       currencyCode: "APP",
       name: "Application asset",
       exponent,
-      providerType: "crypto",
+      providerType,
       rawProviderPayload: { asset_id: id },
       evidenceRevision: 1,
       discoveredAt: occurredAt,
@@ -266,6 +271,8 @@ const seedProviderTransaction = ({
         amount: "1",
         kind: "acquisition",
         provenance: "deterministic",
+        originKind: "provider_transfer",
+        providerTransferId: providerTransfer.id,
         transactionId: transaction.id,
       })
     }
@@ -440,6 +447,7 @@ describe("principal asset override application", () => {
               amount: "1",
               kind: "acquisition",
               provenance: "deterministic",
+              originKind: "none",
               transactionId: transaction.id,
             })
           })
@@ -627,6 +635,7 @@ describe("principal asset override application", () => {
                 amount: "1",
                 kind: "disposal" as const,
                 provenance: "deterministic" as const,
+                originKind: "none" as const,
                 transactionId: transaction.id,
               },
               {
@@ -639,6 +648,7 @@ describe("principal asset override application", () => {
                 amount: "2",
                 kind: "acquisition" as const,
                 provenance: "deterministic" as const,
+                originKind: "none" as const,
                 transactionId: transaction.id,
               },
             ])
@@ -702,6 +712,7 @@ describe("principal asset override application", () => {
                 amount: "1",
                 kind: "disposal" as const,
                 provenance: "deterministic" as const,
+                originKind: "none" as const,
                 transactionId: transaction.id,
               },
               {
@@ -715,6 +726,7 @@ describe("principal asset override application", () => {
                 amount: "1",
                 kind: "acquisition" as const,
                 provenance: "deterministic" as const,
+                originKind: "none" as const,
                 transactionId: transaction.id,
               },
             ])
@@ -767,6 +779,7 @@ describe("principal asset override application", () => {
                 amount: "1",
                 kind: "acquisition" as const,
                 provenance: "deterministic" as const,
+                originKind: "none" as const,
                 derivationRule: "internal_transfer_in" as const,
                 transactionId: transaction.id,
               },
@@ -781,6 +794,7 @@ describe("principal asset override application", () => {
                 amount: "1",
                 kind: "disposal" as const,
                 provenance: "deterministic" as const,
+                originKind: "none" as const,
                 transactionId: transaction.id,
               },
             ])
@@ -848,6 +862,7 @@ describe("principal asset override application", () => {
                 amount: "1",
                 kind: "acquisition" as const,
                 provenance: "deterministic" as const,
+                originKind: "none" as const,
                 transactionId: operation.id,
               },
               {
@@ -861,6 +876,7 @@ describe("principal asset override application", () => {
                 amount: "0.01",
                 kind: "fee" as const,
                 provenance: "deterministic" as const,
+                originKind: "none" as const,
                 transactionId: feeTransaction.id,
                 feeForTransactionId: operation.id,
               },
@@ -911,6 +927,7 @@ describe("principal asset override application", () => {
                 amount: "1",
                 kind: "acquisition" as const,
                 provenance: "deterministic" as const,
+                originKind: "none" as const,
                 transactionId: operation.id,
               },
               {
@@ -924,6 +941,7 @@ describe("principal asset override application", () => {
                 amount: "0.01",
                 kind: "fee" as const,
                 provenance: "deterministic" as const,
+                originKind: "none" as const,
                 feeForTransactionId: operation.id,
               },
             ])
@@ -971,6 +989,7 @@ describe("principal asset override application", () => {
               amount: "1",
               kind: "acquisition",
               provenance: "deterministic",
+              originKind: "none",
               transactionId: transaction.id,
             })
           })
@@ -1112,6 +1131,7 @@ describe("principal asset override application", () => {
               amount: "1",
               kind: "acquisition",
               provenance: "deterministic",
+              originKind: "none",
               transactionId: preCatalogTransaction.id,
             })
 
@@ -1150,6 +1170,7 @@ describe("principal asset override application", () => {
               amount: "1",
               kind: "acquisition",
               provenance: "deterministic",
+              originKind: "none",
               transactionId: fiat.transactionId,
             })
 
@@ -1281,6 +1302,7 @@ describe("principal asset override application", () => {
                 amount: "1",
                 kind: "acquisition",
                 provenance: "deterministic",
+                originKind: "none",
               })
               .returning({ id: schema.transactionLegs.id })
             if (linkless === undefined) return yield* Effect.die("Failed to create linkless leg")
@@ -1313,6 +1335,7 @@ describe("principal asset override application", () => {
                 amount: "1",
                 kind: "acquisition",
                 provenance: "deterministic",
+                originKind: "canonical_transfer",
                 sourceTransferId: sourceTransfer.id,
               })
               .returning({ id: schema.transactionLegs.id })
@@ -1506,6 +1529,7 @@ describe("principal asset override application", () => {
                 amount: "1",
                 kind: "acquisition",
                 provenance: "deterministic",
+                originKind: "none",
                 transactionId: transaction.id,
               })
               .returning({ id: schema.transactionLegs.id })
@@ -1751,26 +1775,75 @@ describe("principal asset override application", () => {
     })
   )
 
-  it.effect("does not add post-tax-year fact blockers to an earlier run", () =>
+  it.effect("stores unsupported-type blockers while unrelated facts still calculate", () =>
     Effect.gen(function* () {
-      yield* Effect.promise(() =>
+      const blockedSiblingId = "10000000-0000-4000-8000-000000000123"
+      const unrelatedLegId = "10000000-0000-4000-8000-000000000124"
+      const providerTransferId = yield* Effect.promise(() =>
         runPg(
           Effect.gen(function* () {
             yield* seedProviderAsset({
               id: UNRESOLVED_PROVIDER_ASSET_ID,
               canonicalAssetId: null,
+              providerType: "unsupported-provider-type",
             })
-            yield* seedProviderTransaction({
-              externalId: "future-unresolved-provider-row",
+            yield* seedProviderAsset({ id: INCLUDED_PROVIDER_ASSET_ID })
+            const blocked = yield* seedProviderTransaction({
+              externalId: "unsupported-provider-type",
               inventoryAssetId: null,
-              occurredAt: DateTime.toDateUtc(DateTime.makeUnsafe("2026-02-10T10:00:00.000Z")),
               providerAssetRowId: UNRESOLVED_PROVIDER_ASSET_ID,
             })
+            yield* seedProviderTransaction({
+              externalId: "unrelated-supported-asset",
+              legId: unrelatedLegId,
+              providerAssetRowId: INCLUDED_PROVIDER_ASSET_ID,
+            })
+            const db = yield* drizzle
+            yield* db.insert(schema.transactionLegs).values({
+              id: blockedSiblingId,
+              sourceId: SOURCE_ID,
+              externalId: "unsupported-provider-type-sibling",
+              timestamp: DateTime.toDateUtc(DateTime.makeUnsafe("2025-02-10T10:00:00.000Z")),
+              principalId: PRINCIPAL_ID,
+              assetId: TEST_BTC_ASSET_ID,
+              sourceRepresentationUseId: SOURCE_USE_ID,
+              amount: "1",
+              kind: "acquisition",
+              provenance: "deterministic",
+              originKind: "none",
+              transactionId: blocked.transactionId,
+            })
+            yield* db.insert(schema.assetPrices).values({
+              assetId: TEST_BTC_ASSET_ID,
+              timestamp: DateTime.toDateUtc(DateTime.makeUnsafe("2025-02-10T00:00:00.000Z")),
+              price: "50000",
+              currency: "EUR",
+              source: "coingecko",
+            })
+            return blocked.providerTransferId
           })
         )
       )
 
-      const runId = "00000000-0000-4000-8000-000000000924"
+      const ledger = yield* Effect.promise(loadLedger)
+      expect(ledger.events.map(({ id }) => id)).toEqual([unrelatedLegId])
+      expect(ledger.inputBlockers).toHaveLength(2)
+      expect(ledger.inputBlockers).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            code: "unresolved_identity",
+            eventId: providerTransferId,
+            providerAssetRowId: UNRESOLVED_PROVIDER_ASSET_ID,
+          }),
+          expect.objectContaining({
+            code: "unsupported_asset_type",
+            eventId: providerTransferId,
+            providerAssetRowId: UNRESOLVED_PROVIDER_ASSET_ID,
+          }),
+        ])
+      )
+
+      const runId = "00000000-0000-4000-8000-000000000931"
       yield* Effect.promise(() => recompute(runId))
       const stored = yield* Effect.promise(() =>
         runPg(
@@ -1784,12 +1857,140 @@ describe("principal asset override application", () => {
               .select({ code: schema.calculationRunBlockers.code })
               .from(schema.calculationRunBlockers)
               .where(eq(schema.calculationRunBlockers.runId, runId))
-            return { blockers, run }
+            const lots = yield* db
+              .select({ acquisitionEventId: schema.calculationRunDerivedLots.acquisitionEventId })
+              .from(schema.calculationRunDerivedLots)
+              .where(eq(schema.calculationRunDerivedLots.runId, runId))
+            return { blockers, lots, run }
+          })
+        )
+      )
+      expect(stored.run).toEqual({ status: "partial" })
+      expect(stored.lots).toEqual([{ acquisitionEventId: unrelatedLegId }])
+      expect(stored.blockers).toHaveLength(2)
+      expect(stored.blockers).toEqual(
+        expect.arrayContaining([
+          { code: "unresolved_identity" },
+          { code: "unsupported_asset_type" },
+        ])
+      )
+    })
+  )
+
+  it.effect("scopes blockers and atomic withholding to the calculation tax year", () =>
+    Effect.gen(function* () {
+      const earlierLegId = "10000000-0000-4000-8000-000000000121"
+      yield* Effect.promise(() =>
+        runPg(
+          Effect.gen(function* () {
+            const earlierAt = DateTime.toDateUtc(DateTime.makeUnsafe("2025-12-30T10:00:00.000Z"))
+            const futureAt = DateTime.toDateUtc(DateTime.makeUnsafe("2026-02-10T10:00:00.000Z"))
+            yield* seedProviderAsset({ id: INCLUDED_PROVIDER_ASSET_ID })
+            yield* seedProviderAsset({
+              id: UNRESOLVED_PROVIDER_ASSET_ID,
+              canonicalAssetId: null,
+            })
+            const earlier = yield* seedProviderTransaction({
+              externalId: "tax-year-operation",
+              legId: earlierLegId,
+              occurredAt: earlierAt,
+              providerAssetRowId: INCLUDED_PROVIDER_ASSET_ID,
+            })
+            const db = yield* drizzle
+            const [futureTransaction] = yield* db
+              .insert(schema.transactions)
+              .values({
+                sourceId: SOURCE_ID,
+                externalId: "post-tax-year-blocked-fee",
+                timestamp: futureAt,
+                transactionType: "fee",
+                principalId: PRINCIPAL_ID,
+              })
+              .returning({ id: schema.transactions.id })
+            if (futureTransaction === undefined) {
+              return yield* Effect.die("Failed to create post-tax-year fee transaction")
+            }
+            yield* db.insert(schema.transactionLegs).values({
+              id: "10000000-0000-4000-8000-000000000122",
+              sourceId: SOURCE_ID,
+              externalId: "post-tax-year-blocked-fee-leg",
+              timestamp: futureAt,
+              principalId: PRINCIPAL_ID,
+              assetId: TEST_BTC_ASSET_ID,
+              providerAssetRowId: UNRESOLVED_PROVIDER_ASSET_ID,
+              amount: "0.01",
+              kind: "fee",
+              provenance: "deterministic",
+              originKind: "none",
+              transactionId: futureTransaction.id,
+              feeForTransactionId: earlier.transactionId,
+            })
+            yield* db.insert(schema.assetPrices).values({
+              assetId: TEST_BTC_ASSET_ID,
+              timestamp: DateTime.toDateUtc(DateTime.makeUnsafe("2025-12-30T00:00:00.000Z")),
+              price: "50000",
+              currency: "EUR",
+              source: "coingecko",
+            })
           })
         )
       )
 
-      expect(stored).toEqual({ blockers: [], run: { status: "complete" } })
+      const earlierRunId = "00000000-0000-4000-8000-000000000928"
+      const laterRunId = "00000000-0000-4000-8000-000000000929"
+      yield* Effect.promise(() => recompute(earlierRunId, 2025))
+      const earlierStored = yield* Effect.promise(() =>
+        runPg(
+          Effect.gen(function* () {
+            const db = yield* drizzle
+            const [run] = yield* db
+              .select({ status: schema.calculationRuns.status })
+              .from(schema.calculationRuns)
+              .where(eq(schema.calculationRuns.id, earlierRunId))
+            const blockers = yield* db
+              .select({ code: schema.calculationRunBlockers.code })
+              .from(schema.calculationRunBlockers)
+              .where(eq(schema.calculationRunBlockers.runId, earlierRunId))
+            const lots = yield* db
+              .select({ acquisitionEventId: schema.calculationRunDerivedLots.acquisitionEventId })
+              .from(schema.calculationRunDerivedLots)
+              .where(eq(schema.calculationRunDerivedLots.runId, earlierRunId))
+            return { blockers, lots, run }
+          })
+        )
+      )
+      expect(earlierStored).toEqual({
+        blockers: [],
+        lots: [{ acquisitionEventId: earlierLegId }],
+        run: { status: "complete" },
+      })
+
+      yield* Effect.promise(() => recompute(laterRunId, 2026))
+      const laterStored = yield* Effect.promise(() =>
+        runPg(
+          Effect.gen(function* () {
+            const db = yield* drizzle
+            const [run] = yield* db
+              .select({ status: schema.calculationRuns.status })
+              .from(schema.calculationRuns)
+              .where(eq(schema.calculationRuns.id, laterRunId))
+            const blockers = yield* db
+              .select({ code: schema.calculationRunBlockers.code })
+              .from(schema.calculationRunBlockers)
+              .where(eq(schema.calculationRunBlockers.runId, laterRunId))
+            const lots = yield* db
+              .select({ acquisitionEventId: schema.calculationRunDerivedLots.acquisitionEventId })
+              .from(schema.calculationRunDerivedLots)
+              .where(eq(schema.calculationRunDerivedLots.runId, laterRunId))
+            return { blockers, lots, run }
+          })
+        )
+      )
+      expect(laterStored).toEqual({
+        blockers: [{ code: "unresolved_identity" }],
+        lots: [],
+        run: { status: "partial" },
+      })
     })
   )
 

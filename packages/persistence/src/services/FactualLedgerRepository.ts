@@ -17,6 +17,8 @@ import type { PersistenceError } from "../errors/RepositoryError.ts"
 export interface LoadFactualLedgerParams {
   readonly principalId: PrincipalId
   readonly reportingCurrency: CurrencyCode
+  /** Exclusive event-time boundary used by scoped calculation runs. */
+  readonly occurredBefore?: Date
 }
 
 /** Current factual mapping from one custody source to its accounting inventory unit. */

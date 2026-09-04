@@ -114,6 +114,9 @@ const isPositiveQuantity = (value: string): boolean => {
   return quantity !== undefined && BigDecimal.isPositive(quantity)
 }
 
+const isBeforeCutoff = (occurredAt: Date, occurredBefore: Date | undefined): boolean =>
+  occurredBefore === undefined || occurredAt.getTime() < occurredBefore.getTime()
+
 const validateReportingCurrency = (reportingCurrency: CurrencyCode) =>
   CURRENCIES_BY_CODE.has(reportingCurrency)
     ? Effect.succeed(reportingCurrency)
@@ -428,18 +431,20 @@ const make = Effect.gen(function* () {
     principalId,
     reconciliationPairs,
     reconciledCanonicalTransferIds,
-    reconciledProviderTransactionIds,
+    reconciledProviderTransferIds,
+    occurredBefore,
     withheldTransactionIds,
   }: Pick<LoadParams, "principalId"> & {
     readonly custodyUnitIdBySource: ReadonlyMap<string, CustodyUnitId>
     readonly decisions: PrincipalAssetOverrideDecisions
     readonly inputBlockerByKey: Map<string, FactualLedgerInputBlocker>
+    readonly occurredBefore: Date | undefined
     readonly reconciliationPairs: ReadonlyArray<{
       readonly canonicalTransactionId: string | null
       readonly providerTransactionId: string
     }>
     readonly reconciledCanonicalTransferIds: ReadonlySet<string>
-    readonly reconciledProviderTransactionIds: ReadonlySet<string>
+    readonly reconciledProviderTransferIds: ReadonlySet<string>
     readonly withheldTransactionIds: Set<string>
   }) =>
     Effect.gen(function* () {
@@ -456,6 +461,8 @@ const make = Effect.gen(function* () {
           amount: schema.transactionLegs.amount,
           kind: schema.transactionLegs.kind,
           derivationRule: schema.transactionLegs.derivationRule,
+          originKind: schema.transactionLegs.originKind,
+          providerTransferId: schema.transactionLegs.providerTransferId,
           sourceTransferId: schema.transactionLegs.sourceTransferId,
           transactionId: schema.transactions.id,
           externalId: schema.transactions.externalId,
@@ -497,6 +504,7 @@ const make = Effect.gen(function* () {
         .orderBy(asc(schema.transactionLegs.timestamp), asc(schema.transactionLegs.id))
         .pipe(wrapSqlError("factualLedgerRepository.load.legs"))
 
+      const includedRows = rows.filter(({ timestamp }) => isBeforeCutoff(timestamp, occurredBefore))
       const events: AccountingEvent[] = []
       const eventRows: Array<{
         readonly event: AccountingEvent
@@ -512,13 +520,14 @@ const make = Effect.gen(function* () {
       const effectiveAssetByLegId = new Map<string, string>()
       const isReconciledEconomicLeg = (row: (typeof rows)[number]) =>
         row.kind !== "fee" &&
-        ((row.sourceTransferId !== null &&
+        ((row.originKind === "canonical_transfer" &&
+          row.sourceTransferId !== null &&
           reconciledCanonicalTransferIds.has(row.sourceTransferId)) ||
-          (row.sourceTransferId === null &&
-            row.transactionId !== null &&
-            reconciledProviderTransactionIds.has(row.transactionId)))
+          (row.originKind === "provider_transfer" &&
+            row.providerTransferId !== null &&
+            reconciledProviderTransferIds.has(row.providerTransferId)))
 
-      for (const row of rows) {
+      for (const row of includedRows) {
         if (row.transactionId !== null && row.feeTransactionId !== null) {
           feeTransactionPairs.push({
             canonicalTransactionId: row.transactionId,
@@ -532,7 +541,7 @@ const make = Effect.gen(function* () {
           requiresTarget:
             row.sourceRawRecordId !== null ||
             row.assetRepresentationId !== null ||
-            row.sourceTransferId !== null ||
+            row.originKind !== "none" ||
             row.providerAssetRowId !== null,
           sourceRepresentationUseId: row.sourceRepresentationUseId,
           storedAssetId: row.assetId,
@@ -631,7 +640,7 @@ const make = Effect.gen(function* () {
         withheldTransactionIds,
       })
 
-      for (const row of rows) {
+      for (const row of includedRows) {
         if (
           withheldLegIds.has(row.id) ||
           (row.transactionId !== null && withheldTransactionIds.has(row.transactionId)) ||
@@ -653,7 +662,7 @@ const make = Effect.gen(function* () {
         }
       }
 
-      for (const row of rows) {
+      for (const row of includedRows) {
         if (
           withheldLegIds.has(row.id) ||
           (row.transactionId !== null && withheldTransactionIds.has(row.transactionId)) ||
@@ -728,6 +737,7 @@ const make = Effect.gen(function* () {
     decisions,
     handledProviderTransferIds,
     inputBlockerByKey,
+    occurredBefore,
     principalId,
     withheldTransactionIds,
   }: Pick<LoadParams, "principalId"> & {
@@ -735,6 +745,7 @@ const make = Effect.gen(function* () {
     readonly decisions: PrincipalAssetOverrideDecisions
     readonly handledProviderTransferIds: ReadonlySet<string>
     readonly inputBlockerByKey: Map<string, FactualLedgerInputBlocker>
+    readonly occurredBefore: Date | undefined
     readonly withheldTransactionIds: Set<string>
   }) =>
     Effect.gen(function* () {
@@ -792,6 +803,7 @@ const make = Effect.gen(function* () {
         .pipe(wrapSqlError("factualLedgerRepository.load.providerInputs"))
 
       for (const row of rows) {
+        if (!isBeforeCutoff(row.timestamp, occurredBefore)) continue
         if (handledProviderTransferIds.has(row.id)) continue
 
         const isFinalizedReconciliation =
@@ -878,6 +890,7 @@ const make = Effect.gen(function* () {
         .pipe(wrapSqlError("factualLedgerRepository.load.providerTransactionUses"))
 
       for (const row of transactionUseRows) {
+        if (!isBeforeCutoff(row.timestamp, occurredBefore)) continue
         const outcome = selectFactDecision({
           decisions,
           providerAssetRowId: row.providerAssetRowId,
@@ -919,12 +932,14 @@ const make = Effect.gen(function* () {
     custodyUnitIdBySource,
     decisions,
     inputBlockerByKey,
+    occurredBefore,
     principalId,
     withheldTransactionIds,
   }: Pick<LoadParams, "principalId"> & {
     readonly custodyUnitIdBySource: ReadonlyMap<string, CustodyUnitId>
     readonly decisions: PrincipalAssetOverrideDecisions
     readonly inputBlockerByKey: Map<string, FactualLedgerInputBlocker>
+    readonly occurredBefore: Date | undefined
     readonly withheldTransactionIds: Set<string>
   }) =>
     Effect.gen(function* () {
@@ -1021,7 +1036,7 @@ const make = Effect.gen(function* () {
         readonly providerTransactionId: string
       }> = []
       const reconciledCanonicalTransferIds = new Set<string>()
-      const reconciledProviderTransactionIds = new Set<string>()
+      const reconciledProviderTransferIds = new Set<string>()
       const handledProviderTransferIds = new Set<string>()
       const seenCanonicalTransferIds = new Set<string>()
       const pairs: Array<{
@@ -1030,6 +1045,10 @@ const make = Effect.gen(function* () {
       }> = []
       for (const row of rows) {
         if (row.canonicalTransferId === null) continue
+        handledProviderTransferIds.add(row.providerTransferId)
+        reconciledCanonicalTransferIds.add(row.canonicalTransferId)
+        reconciledProviderTransferIds.add(row.providerTransferId)
+        if (!isBeforeCutoff(row.canonicalTimestamp, occurredBefore)) continue
         if (seenCanonicalTransferIds.has(row.canonicalTransferId)) {
           return yield* new PersistenceError({
             operation: "factualLedgerRepository.load.duplicateCustodyMovement",
@@ -1037,9 +1056,6 @@ const make = Effect.gen(function* () {
           })
         }
         seenCanonicalTransferIds.add(row.canonicalTransferId)
-        handledProviderTransferIds.add(row.providerTransferId)
-        reconciledCanonicalTransferIds.add(row.canonicalTransferId)
-        reconciledProviderTransactionIds.add(row.providerTransactionId)
         pairs.push({
           canonicalTransactionId: row.canonicalTransactionId,
           providerTransactionId: row.providerTransactionId,
@@ -1197,7 +1213,7 @@ const make = Effect.gen(function* () {
         handledProviderTransferIds,
         pairs,
         reconciledCanonicalTransferIds,
-        reconciledProviderTransactionIds,
+        reconciledProviderTransferIds,
       }
     })
 
@@ -1354,7 +1370,11 @@ const make = Effect.gen(function* () {
       return valuationFacts
     })
 
-  const load: FactualLedgerRepositoryShape["load"] = ({ principalId, reportingCurrency }) =>
+  const load: FactualLedgerRepositoryShape["load"] = ({
+    occurredBefore,
+    principalId,
+    reportingCurrency,
+  }) =>
     Effect.gen(function* () {
       const supportedReportingCurrency = yield* validateReportingCurrency(reportingCurrency)
       const legTargetRows = yield* db
@@ -1458,6 +1478,7 @@ const make = Effect.gen(function* () {
         custodyUnitIdBySource,
         decisions,
         inputBlockerByKey,
+        occurredBefore,
         principalId,
         withheldTransactionIds,
       })
@@ -1466,6 +1487,7 @@ const make = Effect.gen(function* () {
         decisions,
         handledProviderTransferIds: custodyMovementEvents.handledProviderTransferIds,
         inputBlockerByKey,
+        occurredBefore,
         principalId,
         withheldTransactionIds,
       })
@@ -1473,10 +1495,11 @@ const make = Effect.gen(function* () {
         custodyUnitIdBySource,
         decisions,
         inputBlockerByKey,
+        occurredBefore,
         principalId,
         reconciliationPairs: custodyMovementEvents.pairs,
         reconciledCanonicalTransferIds: custodyMovementEvents.reconciledCanonicalTransferIds,
-        reconciledProviderTransactionIds: custodyMovementEvents.reconciledProviderTransactionIds,
+        reconciledProviderTransferIds: custodyMovementEvents.reconciledProviderTransferIds,
         withheldTransactionIds,
       })
       const custodyEvents = custodyMovementEvents.eventRows

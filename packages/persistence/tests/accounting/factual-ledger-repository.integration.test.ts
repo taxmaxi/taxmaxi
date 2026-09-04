@@ -56,6 +56,17 @@ const loadFactualLedgerInCurrency = (reportingCurrency: CurrencyCode) =>
 
 const loadFactualLedger = () => loadFactualLedgerInCurrency(CurrencyCode.make("EUR"))
 
+const loadFactualLedgerBefore = (occurredBefore: Date) =>
+  runRepository(
+    Effect.flatMap(FactualLedgerRepository, (repository) =>
+      repository.load({
+        principalId: TEST_PRINCIPAL_ID,
+        reportingCurrency: CurrencyCode.make("EUR"),
+        occurredBefore,
+      })
+    )
+  )
+
 const loadFactualLedgerError = (reportingCurrency = CurrencyCode.make("EUR")) =>
   runRepository(
     Effect.flip(
@@ -510,6 +521,7 @@ const seedCustodyReconciliation = ({
 
     return {
       providerTransferId: providerTransfer.id,
+      providerSourceRepresentationUseId,
       providerTransactionId: providerTransaction.id,
       canonicalTransactionId: canonicalTransaction.id,
       canonicalTransferId: canonicalTransfer.id,
@@ -2417,6 +2429,20 @@ describe("FactualLedgerRepositoryLive", () => {
             }
             yield* db.insert(schema.transactionLegs).values([
               {
+                id: "10000000-0000-4000-8000-000000000014",
+                sourceId: TEST_CUSTODY_SOURCE_ID,
+                externalId: "custody-unrelated-provider-sibling",
+                timestamp: providerTimestamp,
+                principalId: TEST_PRINCIPAL_ID,
+                assetId: TEST_BTC_ASSET_ID,
+                sourceRepresentationUseId: finalized.providerSourceRepresentationUseId,
+                amount: "0.25",
+                kind: "acquisition",
+                provenance: "deterministic",
+                originKind: "none",
+                transactionId: finalized.providerTransactionId,
+              },
+              {
                 id: "10000000-0000-4000-8000-000000000017",
                 sourceId: TEST_CUSTODY_SOURCE_ID,
                 externalId: "custody-provider-disposition-leg",
@@ -2529,12 +2555,16 @@ describe("FactualLedgerRepositoryLive", () => {
 
       const result = yield* Effect.promise(loadFactualLedger)
 
-      expect(result.events).toHaveLength(3)
+      expect(result.events).toHaveLength(4)
       expect(result.events[0]).toMatchObject({
+        _tag: "acquisition",
+        id: "10000000-0000-4000-8000-000000000014",
+      })
+      expect(result.events[1]).toMatchObject({
         _tag: "acquisition",
         id: "10000000-0000-4000-8000-000000000015",
       })
-      expect(result.events[1]).toMatchObject({
+      expect(result.events[2]).toMatchObject({
         _tag: "custody_movement",
         id: "10000000-0000-4000-8000-000000000020",
         assetId: TEST_BTC_ASSET_ID,
@@ -2542,14 +2572,14 @@ describe("FactualLedgerRepositoryLive", () => {
         toCustodySourceId: TEST_DESTINATION_SOURCE_ID,
         transactionReference: "custody-canonical-transaction",
       })
-      expect(result.events[1]?.occurredAt.toISOString()).toBe("2025-03-04T10:02:00.000Z")
+      expect(result.events[2]?.occurredAt.toISOString()).toBe("2025-03-04T10:02:00.000Z")
       expect(
         BigDecimal.equals(
-          result.events[1]?.quantity ?? BigDecimal.fromBigInt(0n),
+          result.events[2]?.quantity ?? BigDecimal.fromBigInt(0n),
           BigDecimal.fromStringUnsafe("0.75")
         )
       ).toBe(true)
-      expect(result.events[2]).toMatchObject({
+      expect(result.events[3]).toMatchObject({
         _tag: "custody_movement",
         id: "10000000-0000-4000-8000-000000000023",
         assetId: TEST_BTC_ASSET_ID,
@@ -2557,12 +2587,74 @@ describe("FactualLedgerRepositoryLive", () => {
         toCustodySourceId: TEST_DESTINATION_SOURCE_ID,
         transactionReference: "custody-inbound-canonical-transaction",
       })
-      expect(result.events[2]?.occurredAt.toISOString()).toBe("2025-03-04T11:02:00.000Z")
-      expect(result.valuationFacts).toHaveLength(1)
-      expect(result.valuationFacts[0]).toMatchObject({
-        _tag: "market_quote",
-        eventId: "10000000-0000-4000-8000-000000000015",
-      })
+      expect(result.events[3]?.occurredAt.toISOString()).toBe("2025-03-04T11:02:00.000Z")
+      expect(result.valuationFacts).toHaveLength(2)
+      expect(result.valuationFacts.map(({ eventId }) => eventId)).toEqual([
+        "10000000-0000-4000-8000-000000000014",
+        "10000000-0000-4000-8000-000000000015",
+      ])
+    })
+  )
+
+  it.effect("keeps an out-of-scope custody event from exposing its earlier origin leg", () =>
+    Effect.gen(function* () {
+      const providerTimestamp = DateTime.toDateUtc(DateTime.makeUnsafe("2025-12-31T23:58:00.000Z"))
+      const canonicalTimestamp = DateTime.toDateUtc(DateTime.makeUnsafe("2026-01-01T00:02:00.000Z"))
+
+      yield* Effect.promise(() =>
+        runPg(
+          Effect.gen(function* () {
+            const db = yield* drizzle
+            yield* seedCexSource({
+              sourceId: TEST_DESTINATION_SOURCE_ID,
+              fixtureName: "Cross-year custody destination",
+            })
+            const reconciliation = yield* seedCustodyReconciliation({
+              reconciliationId: "10000000-0000-4000-8000-000000000033",
+              fixtureName: "cross-year-custody",
+              providerSourceId: TEST_CUSTODY_SOURCE_ID,
+              canonicalSourceId: TEST_DESTINATION_SOURCE_ID,
+              providerTimestamp,
+              canonicalTimestamp,
+              direction: "outbound",
+              amount: "0.5",
+              reconciliationStatus: "matched",
+              status: "approved",
+              deterministic: false,
+            })
+            yield* db.insert(schema.transactionLegs).values({
+              id: "10000000-0000-4000-8000-000000000034",
+              sourceId: TEST_CUSTODY_SOURCE_ID,
+              externalId: "cross-year-provider-origin-leg",
+              timestamp: providerTimestamp,
+              principalId: TEST_PRINCIPAL_ID,
+              assetId: TEST_BTC_ASSET_ID,
+              sourceRepresentationUseId: reconciliation.providerSourceRepresentationUseId,
+              amount: "0.5",
+              kind: "disposal",
+              provenance: "deterministic",
+              originKind: "provider_transfer",
+              providerTransferId: reconciliation.providerTransferId,
+              transactionId: reconciliation.providerTransactionId,
+            })
+          })
+        )
+      )
+
+      const earlierLedger = yield* Effect.promise(() =>
+        loadFactualLedgerBefore(DateTime.toDateUtc(DateTime.makeUnsafe("2026-01-01T00:00:00.000Z")))
+      )
+      expect(earlierLedger.events).toEqual([])
+      expect(earlierLedger.inputBlockers).toEqual([])
+
+      const laterLedger = yield* Effect.promise(loadFactualLedger)
+      expect(laterLedger.events).toEqual([
+        expect.objectContaining({
+          _tag: "custody_movement",
+          id: "10000000-0000-4000-8000-000000000033",
+        }),
+      ])
+      expect(laterLedger.inputBlockers).toEqual([])
     })
   )
 
