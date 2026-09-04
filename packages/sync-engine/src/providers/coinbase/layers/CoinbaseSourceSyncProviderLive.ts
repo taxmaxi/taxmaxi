@@ -1141,10 +1141,22 @@ const make = Effect.gen(function* () {
         normalized.transaction.providerTransactionType !== "tx" ||
         (hasSuccessfulProviderStatus(normalized.transaction.providerStatus) &&
           !isZeroAmount(normalizedMetadata.amount.amount))
+      const hasAssetDecisionOnlySkip =
+        primaryAssetResolution.excluded ||
+        primaryAssetResolution.requiresReview ||
+        excludedAssetCurrencies.size > 0 ||
+        unresolvedAssetCurrencies.length > 0
+      const assetDecisionLegDerivationCandidate =
+        shouldDeriveLegs && hasAssetDecisionOnlySkip && primaryProviderAssetId !== null
+          ? {
+              providerAssetRowId: primaryProviderAssetId,
+              currencyCode: normalized.primaryAssetCurrency.toUpperCase(),
+            }
+          : null
       const shouldDeriveMainLeg =
-        !primaryAssetResolution.excluded &&
-        (normalized.transaction.providerTransactionType !== "tx" ||
-          Option.isSome(maybePrimaryAsset))
+        assetDecisionLegDerivationCandidate !== null ||
+        normalized.transaction.providerTransactionType !== "tx" ||
+        Option.isSome(maybePrimaryAsset)
 
       return {
         providerAssetRowIds,
@@ -1166,15 +1178,11 @@ const make = Effect.gen(function* () {
         canonicalTransfers: normalized.canonicalTransfers,
         feeTransferCandidates: normalized.feeTransferCandidates,
         transactionReview,
+        transactionReviewWithoutProviderAssetMapping: baseTransactionReview,
         resolvedTransactionType,
         primaryAsset: Option.getOrNull(maybePrimaryAsset),
-        legDerivationStrategy:
-          primaryAssetResolution.excluded ||
-          excludedAssetCurrencies.size > 0 ||
-          unresolvedAssetCurrencies.length > 0 ||
-          !shouldDeriveLegs
-            ? "skip"
-            : "derive",
+        legDerivationStrategy: !shouldDeriveLegs || hasAssetDecisionOnlySkip ? "skip" : "derive",
+        assetDecisionLegDerivationCandidate,
         deriveMainLeg: shouldDeriveMainLeg,
       }
     })
@@ -1217,8 +1225,12 @@ const make = Effect.gen(function* () {
         deriveMainLeg,
       })
 
-      return derived.legs
-    })
+      return { _tag: "derived", legs: derived.legs } as const
+    }).pipe(
+      Effect.catchTag("CoinbaseLegDerivationError", () =>
+        Effect.succeed({ _tag: "withheld", reason: "malformed_movement" } as const)
+      )
+    )
 
   const fetchRawBatch: CoinbaseSourceSyncProviderShape["fetchRawBatch"] = (
     params: FetchProviderRawBatchParams

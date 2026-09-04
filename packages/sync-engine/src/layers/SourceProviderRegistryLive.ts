@@ -10,6 +10,7 @@ import {
   CoinbaseSourceSyncProvider,
   type CoinbaseRecoverableNormalizationError,
   type CoinbaseSourceSyncProviderShape,
+  resolveCoinbasePrimaryAsset,
 } from "../providers/coinbase/services/CoinbaseSourceSyncProvider.ts"
 import {
   type HeliusSolanaRecoverableNormalizationError,
@@ -108,9 +109,52 @@ const makeCoinbaseProviderModule = (
               transactionReview: prepared.transactionReview,
               resolvedTransactionType: prepared.resolvedTransactionType,
               deriveLegs:
-                prepared.legDerivationStrategy === "derive"
-                  ? ({ transaction, venueContext, providerTransferByDraft, canonicalTransfers }) =>
+                prepared.legDerivationStrategy === "derive" ||
+                prepared.assetDecisionLegDerivationCandidate !== null
+                  ? ({
+                      transaction,
+                      venueContext,
+                      providerTransferByDraft,
+                      canonicalTransfers,
+                      resolveProviderAssetDecision,
+                      persistProviderAssetTransferCandidate,
+                      recordProviderAssetTransferCandidateIdentity,
+                      recordTransactionReviewWithoutProviderAssetMapping,
+                      withholdAccountingFacts,
+                    }) =>
                       Effect.gen(function* () {
+                        recordTransactionReviewWithoutProviderAssetMapping(
+                          prepared.transactionReviewWithoutProviderAssetMapping
+                        )
+                        const feeTransferCandidates = yield* Effect.forEach(
+                          prepared.feeTransferCandidates,
+                          (candidate) =>
+                            Effect.gen(function* () {
+                              if (
+                                candidate.transfer.externalId === null ||
+                                candidate.transfer.sourceId !== transaction.sourceId
+                              ) {
+                                return yield* new SyncEngineStorageError({
+                                  operation:
+                                    "sourceProviderRegistry.coinbase.recordFeeTransferCandidateIdentity",
+                                  cause:
+                                    "Coinbase fee transfer candidate is missing its stable source identity",
+                                })
+                              }
+                              recordProviderAssetTransferCandidateIdentity({
+                                sourceId: candidate.transfer.sourceId,
+                                externalId: candidate.transfer.externalId,
+                              })
+                              return {
+                                _tag: "provider_asset_transfer_candidate" as const,
+                                target: {
+                                  _tag: "provider_asset_transaction_use" as const,
+                                  providerAssetRowId: candidate.providerAssetRowId,
+                                },
+                                transfer: candidate.transfer,
+                              }
+                            })
+                        )
                         const primaryProviderTransfer =
                           prepared.primaryProviderTransfer === null
                             ? null
@@ -127,16 +171,66 @@ const makeCoinbaseProviderModule = (
                           })
                         }
 
-                        return yield* coinbaseSourceSyncProvider.deriveLegs({
+                        const primaryAssetResult = resolveCoinbasePrimaryAsset({
+                          candidate: prepared.assetDecisionLegDerivationCandidate,
+                          primaryAsset: prepared.primaryAsset,
+                          providerAssetTarget:
+                            primaryProviderTransfer?.providerAssetId === null ||
+                            primaryProviderTransfer?.providerAssetId === undefined
+                              ? prepared.assetDecisionLegDerivationCandidate === null
+                                ? null
+                                : {
+                                    _tag: "provider_asset_transaction_use",
+                                    providerAssetRowId:
+                                      prepared.assetDecisionLegDerivationCandidate
+                                        .providerAssetRowId,
+                                  }
+                              : {
+                                  _tag: "provider_transfer",
+                                  providerAssetRowId: primaryProviderTransfer.providerAssetId,
+                                  sourceRepresentationUseId:
+                                    primaryProviderTransfer.sourceRepresentationUseId,
+                                },
+                          resolveProviderAssetDecision,
+                        })
+                        if (primaryAssetResult._tag === "withheld") return []
+
+                        const feeTransferDecisions = feeTransferCandidates.map((candidate) =>
+                          resolveProviderAssetDecision(candidate.target)
+                        )
+                        if (feeTransferDecisions.some(({ _tag }) => _tag !== "included")) return []
+
+                        const feeTransferResults = yield* Effect.forEach(
+                          feeTransferCandidates,
+                          persistProviderAssetTransferCandidate,
+                          { concurrency: 1 }
+                        )
+                        if (feeTransferResults.some(({ _tag }) => _tag !== "included")) return []
+                        const resolvedFeeTransfers = feeTransferResults.flatMap((result) =>
+                          result._tag === "included" ? [result.transfer] : []
+                        )
+
+                        const legDerivation = yield* coinbaseSourceSyncProvider.deriveLegs({
                           transaction,
                           venueContext,
-                          primaryAsset: prepared.primaryAsset,
+                          primaryAsset: primaryAssetResult.asset,
                           primaryProviderTransferId: primaryProviderTransfer?.id ?? null,
-                          canonicalTransfers,
+                          canonicalTransfers: [...canonicalTransfers, ...resolvedFeeTransfers],
                           deriveMainLeg: prepared.deriveMainLeg,
                         })
+                        if (legDerivation._tag === "withheld") {
+                          withholdAccountingFacts(legDerivation.reason)
+                          return []
+                        }
+                        return legDerivation.legs
                       }).pipe(Effect.mapError(toCoinbaseRecoverableNormalizationError))
-                  : () => Effect.succeed([]),
+                  : ({ recordTransactionReviewWithoutProviderAssetMapping }) =>
+                      Effect.sync(() => {
+                        recordTransactionReviewWithoutProviderAssetMapping(
+                          prepared.transactionReviewWithoutProviderAssetMapping
+                        )
+                        return []
+                      }),
             } as const
           })
     )
