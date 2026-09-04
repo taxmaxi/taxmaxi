@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it } from "@effect/vitest"
 import { JurisdictionCode, TaxYear } from "@my/core/accounting"
 import { CurrencyCode } from "@my/core/currency"
 import { PrincipalId } from "@my/core/ownership"
-import { SourceReplayRepository } from "@my/sync-engine/services"
+import { SourceNormalizationRepository, SourceReplayRepository } from "@my/sync-engine/services"
 import { eq } from "drizzle-orm"
 import * as DateTime from "effect/DateTime"
 import * as Effect from "effect/Effect"
@@ -12,6 +12,7 @@ import { CalculationRunServiceLive } from "../../src/layers/CalculationRunServic
 import { FactualLedgerRepositoryLive } from "../../src/layers/FactualLedgerRepositoryLive.ts"
 import { drizzle } from "../../src/layers/PgClientLive.ts"
 import { SourceReplayRepositoryLive } from "../../src/layers/SourceReplayRepositoryLive.ts"
+import { SourceNormalizationRepositoryLive } from "../../src/layers/SourceNormalizationRepositoryLive.ts"
 import { schema } from "../../src/schema/index.ts"
 import { PersistenceError } from "../../src/errors/RepositoryError.ts"
 import {
@@ -47,6 +48,9 @@ const runPg = context.runPg
 
 const runFactualLedger = <A, E>(effect: Effect.Effect<A, E, FactualLedgerRepository>) =>
   Effect.runPromise(context.runWithLayer({ effect, layer: FactualLedgerRepositoryLive }))
+
+const runSourceNormalization = <A, E>(effect: Effect.Effect<A, E, SourceNormalizationRepository>) =>
+  Effect.runPromise(context.runWithLayer({ effect, layer: SourceNormalizationRepositoryLive }))
 
 const loadLedger = () =>
   runFactualLedger(
@@ -955,52 +959,36 @@ describe("principal asset override application", () => {
     })
   )
 
-  it.effect("lets exact inclusion reverse representation spam but not global exclusion", () =>
+  it.effect("lets exact inclusion reverse representation spam but not a fiat-row exclusion", () =>
     Effect.gen(function* () {
+      const occurredAt = DateTime.toDateUtc(DateTime.makeUnsafe("2025-02-10T11:30:00.000Z"))
       yield* Effect.promise(() =>
         runPg(
           Effect.gen(function* () {
             const db = yield* drizzle
-            const occurredAt = DateTime.toDateUtc(DateTime.makeUnsafe("2025-02-10T11:30:00.000Z"))
             yield* db
               .update(schema.assetRepresentations)
               .set({ isSpam: true })
               .where(eq(schema.assetRepresentations.id, TEST_BTC_REPRESENTATION_ID))
-            const [transaction] = yield* db
-              .insert(schema.transactions)
-              .values({
-                sourceId: SOURCE_ID,
-                externalId: "exact-inclusion",
-                timestamp: occurredAt,
-                transactionType: "buy_fiat",
-                principalId: PRINCIPAL_ID,
-              })
-              .returning({ id: schema.transactions.id })
-            if (transaction === undefined) return yield* Effect.die("Failed to create transaction")
-            yield* db.insert(schema.transactionLegs).values({
-              id: "10000000-0000-4000-8000-000000000106",
-              sourceId: SOURCE_ID,
-              externalId: "exact-inclusion-leg",
-              timestamp: occurredAt,
-              principalId: PRINCIPAL_ID,
-              assetId: TEST_BTC_ASSET_ID,
-              assetRepresentationId: TEST_BTC_REPRESENTATION_ID,
-              sourceRepresentationUseId: SOURCE_USE_ID,
-              amount: "1",
-              kind: "acquisition",
-              provenance: "deterministic",
-              originKind: "none",
-              transactionId: transaction.id,
+            yield* db.insert(schema.providerAssets).values({
+              id: INCLUDED_PROVIDER_ASSET_ID,
+              provider: "coinbase",
+              providerAssetId: "excluded-fiat-exact-evidence",
+              currencyCode: "EUR",
+              name: "Euro",
+              exponent: 2,
+              providerType: "fiat",
+              rawProviderPayload: { asset_id: "excluded-fiat-exact-evidence" },
+              evidenceRevision: 1,
+              discoveredAt: occurredAt,
+              retrievedAt: occurredAt,
             })
-          })
-        )
-      )
-      expect((yield* Effect.promise(loadLedger)).events).toEqual([])
-
-      yield* Effect.promise(() =>
-        runPg(
-          Effect.gen(function* () {
-            const db = yield* drizzle
+            yield* db.insert(schema.providerAssetMappings).values({
+              providerAssetRowId: INCLUDED_PROVIDER_ASSET_ID,
+              mappingKind: "fiat",
+              canonicalFiatCurrency: "EUR",
+              mappingStatus: "approved",
+            })
             const [representation] = yield* db
               .select({
                 blockchainId: schema.assetRepresentations.blockchainId,
@@ -1035,21 +1023,120 @@ describe("principal asset override application", () => {
         )
       )
 
+      yield* Effect.promise(() =>
+        runSourceNormalization(
+          Effect.flatMap(SourceNormalizationRepository, (repository) =>
+            repository.persistNormalizedArtifacts({
+              transaction: {
+                sourceId: SOURCE_ID,
+                sourceRawRecordId: null,
+                externalId: "exact-inclusion",
+                externalGroupId: null,
+                timestamp: occurredAt,
+                transactionType: "buy_fiat",
+                providerTransactionType: "buy",
+                providerStatus: "completed",
+                providerResourcePath: null,
+                providerDescription: "Exact-linked fiat exclusion fixture",
+                providerCreatedAt: occurredAt,
+                providerUpdatedAt: occurredAt,
+                metadata: null,
+                providerFiatAmount: null,
+                providerFiatCurrency: null,
+                principalId: PRINCIPAL_ID,
+              },
+              venueContext: {
+                venueType: "cex",
+                cexAccountId: null,
+                externalAccountId: "owned-account",
+                externalOrderId: null,
+                externalFillId: null,
+                side: "buy",
+                instrument: "BTC-EUR",
+                fillPrice: "50000",
+                commissionAmount: null,
+                commissionCurrency: null,
+                metadata: null,
+              },
+              providerTransfers: [],
+              canonicalTransfers: [],
+              providerAssetRowIds: [INCLUDED_PROVIDER_ASSET_ID],
+              deriveLegs: ({ transaction }) =>
+                Effect.succeed([
+                  {
+                    sourceId: SOURCE_ID,
+                    sourceRawRecordId: null,
+                    externalId: "exact-inclusion-leg",
+                    txHash: null,
+                    timestamp: occurredAt,
+                    principalId: PRINCIPAL_ID,
+                    addressId: null,
+                    assetId: TEST_BTC_ASSET_ID,
+                    assetRepresentationId: TEST_BTC_REPRESENTATION_ID,
+                    amount: "1",
+                    kind: "acquisition" as const,
+                    provenance: "deterministic" as const,
+                    derivationRule: "exact_fiat_exclusion_fixture",
+                    providerAssetRowId: INCLUDED_PROVIDER_ASSET_ID,
+                    metadata: null,
+                    transactionId: transaction.id,
+                    originKind: "none" as const,
+                    providerTransferId: null,
+                    sourceTransferId: null,
+                    fiatAmount: null,
+                    fiatCurrency: null,
+                    feeForTransactionId: null,
+                  },
+                ]),
+              transactionReview: null,
+              resolvedTransactionType: {
+                providerTransactionType: "buy",
+                transactionType: "buy_fiat",
+                inventoryEffect: "acquisition",
+                taxTreatment: "non_taxable_by_default",
+                resolutionStrategy: "static",
+                pairedRecordRequired: false,
+                mappingStatus: "approved",
+              },
+            })
+          )
+        )
+      )
+
+      const [storedTarget] = yield* Effect.promise(() =>
+        runPg(
+          Effect.gen(function* () {
+            const db = yield* drizzle
+            return yield* db
+              .select({
+                providerAssetRowId: schema.transactionLegs.providerAssetRowId,
+                sourceRepresentationUseId: schema.transactionLegs.sourceRepresentationUseId,
+              })
+              .from(schema.transactionLegs)
+              .where(eq(schema.transactionLegs.externalId, "exact-inclusion-leg"))
+          })
+        )
+      )
+      expect(storedTarget).toEqual({
+        providerAssetRowId: INCLUDED_PROVIDER_ASSET_ID,
+        sourceRepresentationUseId: SOURCE_USE_ID,
+      })
+
       const ledger = yield* Effect.promise(loadLedger)
-      expect(ledger.events.map(({ id }) => id)).toEqual(["10000000-0000-4000-8000-000000000106"])
+      expect(ledger.events.map(({ transactionReference }) => transactionReference)).toEqual([
+        "exact-inclusion",
+      ])
 
       yield* Effect.promise(() =>
         runPg(
           Effect.gen(function* () {
-            yield* seedProviderAsset({
-              id: INCLUDED_PROVIDER_ASSET_ID,
-              mappingStatus: "excluded",
-            })
             const db = yield* drizzle
             yield* db
-              .update(schema.transactionLegs)
-              .set({ providerAssetRowId: INCLUDED_PROVIDER_ASSET_ID })
-              .where(eq(schema.transactionLegs.id, "10000000-0000-4000-8000-000000000106"))
+              .update(schema.providerAssetMappings)
+              .set({ mappingStatus: "excluded" })
+              .where(
+                eq(schema.providerAssetMappings.providerAssetRowId, INCLUDED_PROVIDER_ASSET_ID)
+              )
           })
         )
       )
@@ -1877,14 +1964,14 @@ describe("principal asset override application", () => {
     })
   )
 
-  it.effect("scopes blockers and atomic withholding to the calculation tax year", () =>
+  it.effect("scopes blockers and atomic withholding at the German civil-year boundary", () =>
     Effect.gen(function* () {
       const earlierLegId = "10000000-0000-4000-8000-000000000121"
       yield* Effect.promise(() =>
         runPg(
           Effect.gen(function* () {
-            const earlierAt = DateTime.toDateUtc(DateTime.makeUnsafe("2025-12-30T10:00:00.000Z"))
-            const futureAt = DateTime.toDateUtc(DateTime.makeUnsafe("2026-02-10T10:00:00.000Z"))
+            const earlierAt = DateTime.toDateUtc(DateTime.makeUnsafe("2025-12-31T22:59:59.999Z"))
+            const futureAt = DateTime.toDateUtc(DateTime.makeUnsafe("2025-12-31T23:00:00.000Z"))
             yield* seedProviderAsset({ id: INCLUDED_PROVIDER_ASSET_ID })
             yield* seedProviderAsset({
               id: UNRESOLVED_PROVIDER_ASSET_ID,
@@ -1927,7 +2014,7 @@ describe("principal asset override application", () => {
             })
             yield* db.insert(schema.assetPrices).values({
               assetId: TEST_BTC_ASSET_ID,
-              timestamp: DateTime.toDateUtc(DateTime.makeUnsafe("2025-12-30T00:00:00.000Z")),
+              timestamp: DateTime.toDateUtc(DateTime.makeUnsafe("2025-12-31T00:00:00.000Z")),
               price: "50000",
               currency: "EUR",
               source: "coingecko",

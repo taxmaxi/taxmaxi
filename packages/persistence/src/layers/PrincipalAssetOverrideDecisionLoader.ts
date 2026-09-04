@@ -336,9 +336,28 @@ const makeProviderAssetDecisionMap = ({
 
   return new Map(
     providerMappings.flatMap((providerMapping) => {
-      if (providerMapping.mappingKind === "fiat") return []
-
       const { providerAssetRowId } = providerMapping
+      if (providerMapping.mappingKind === "fiat") {
+        if (systemInclusion(providerMapping) !== "excluded") return []
+
+        const effectiveDecision = decidePrincipalAssetOverride({
+          systemIdentity: { _tag: "unresolved" },
+          systemInclusion: "excluded",
+          identityReplacement: null,
+          inclusionReplacement: null,
+          technicalBlockers: [],
+        })
+        const excludedDecision: PrincipalProviderAssetDecision = {
+          systemAssetId: null,
+          systemInclusion: "excluded",
+          effectiveAssetId: null,
+          inclusion: "excluded",
+          technicalBlockers: [],
+          effectiveDecision,
+        }
+        return [[providerAssetRowId, excludedDecision] as const]
+      }
+
       const identityLeaf = leavesByStream.get(`${providerAssetRowId}\0identity`)
       const inclusionLeaf = leavesByStream.get(`${providerAssetRowId}\0inclusion`)
       const catalogAssetId = systemAssetId(providerMapping)

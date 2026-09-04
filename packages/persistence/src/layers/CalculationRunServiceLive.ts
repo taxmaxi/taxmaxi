@@ -9,6 +9,7 @@ import {
   AccountingChoiceResolutionError,
   calculate,
   GERMAN_RULE_SET_VERSION,
+  germanTaxYearEndExclusive,
   type TaxAccountingError,
   UnsupportedJurisdictionError,
 } from "@my/accounting"
@@ -19,7 +20,6 @@ import {
 } from "@my/core/accounting"
 import { createHash } from "node:crypto"
 import { eq, sql } from "drizzle-orm"
-import * as DateTime from "effect/DateTime"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import * as Schema from "effect/Schema"
@@ -168,9 +168,7 @@ const make = Effect.gen(function* () {
           const factualLedger = yield* factualLedgerRepository.load({
             principalId: params.principalId,
             reportingCurrency: params.reportingCurrency,
-            occurredBefore: DateTime.toDateUtc(
-              DateTime.makeUnsafe(Date.UTC(params.taxYear + 1, 0, 1))
-            ),
+            occurredBefore: germanTaxYearEndExclusive(params.taxYear).toDate(),
           })
           const inputLedgerRevision = makeLedgerRevision({
             snapshotTransactionId,
