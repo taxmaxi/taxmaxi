@@ -5,6 +5,7 @@
  */
 
 import type { AccountingEvent, CustodyUnitId, ValuationFact } from "@my/core/accounting"
+import type { PrincipalAssetTechnicalBlocker } from "@my/core/assets"
 import type { CurrencyCode } from "@my/core/currency"
 import type { PrincipalId } from "@my/core/ownership"
 import type { SourceId } from "@my/core/source"
@@ -16,6 +17,8 @@ import type { PersistenceError } from "../errors/RepositoryError.ts"
 export interface LoadFactualLedgerParams {
   readonly principalId: PrincipalId
   readonly reportingCurrency: CurrencyCode
+  /** Exclusive event-time boundary used by scoped calculation runs. */
+  readonly occurredBefore?: Date
 }
 
 /** Current factual mapping from one custody source to its accounting inventory unit. */
@@ -23,6 +26,29 @@ export interface CustodyUnitMembership {
   readonly sourceId: SourceId
   readonly custodyUnitId: CustodyUnitId
 }
+
+/** Fact-layer reason a stored movement cannot become an accounting event. */
+export type FactualLedgerInputBlockerCode = PrincipalAssetTechnicalBlocker | "unresolved_identity"
+
+/** At least one stored target that identifies the blocked fact. */
+export type FactualLedgerInputBlockerTarget =
+  | {
+      readonly assetId: string
+      readonly providerAssetRowId?: string | null
+    }
+  | {
+      readonly assetId?: null
+      readonly providerAssetRowId: string
+    }
+
+/** Machine-readable fact-layer blocker stored beside engine blockers on a run. */
+export type FactualLedgerInputBlocker = {
+  readonly code: FactualLedgerInputBlockerCode
+  readonly eventId: AccountingEvent["id"]
+  readonly occurredAt: Date
+  readonly custodyUnitId: CustodyUnitId
+  readonly missingQuantity: null
+} & FactualLedgerInputBlockerTarget
 
 /**
  * Canonical identity-override stream leaf read while adapting factual rows.
@@ -41,12 +67,12 @@ export type PrincipalAssetOverrideRevisionRecord =
         readonly contractAddress: string | null
         readonly mintAddress: string | null
       }
-      readonly kind: "identity"
+      readonly kind: "identity" | "inclusion"
       readonly overrideId: string
       readonly operation: "create" | "replace" | "withdraw"
       readonly supersedesOverrideId: string | null
       readonly replacementAssetId: string | null
-      readonly replacementInclusion: null
+      readonly replacementInclusion: "included" | "excluded" | null
     }
   | {
       readonly target: {
@@ -65,6 +91,7 @@ export type PrincipalAssetOverrideRevisionRecord =
 /** Stored accounting facts ready for the pure tax-accounting engine. */
 export interface FactualLedger {
   readonly events: ReadonlyArray<AccountingEvent>
+  readonly inputBlockers: ReadonlyArray<FactualLedgerInputBlocker>
   readonly valuationFacts: ReadonlyArray<ValuationFact>
   readonly custodyUnitMembership: ReadonlyArray<CustodyUnitMembership>
   readonly principalAssetOverrideRevision: ReadonlyArray<PrincipalAssetOverrideRevisionRecord>

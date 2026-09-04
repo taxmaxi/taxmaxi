@@ -40,6 +40,7 @@ import {
   germanAcquisitionIncomeTreatment,
   germanDispositionBlocker,
   germanPrivateDisposalTreatment,
+  germanTaxYearEndExclusive,
   germanTaxYearOf,
   IllegalGermanAccountingChoiceError,
   isGermanJurisdiction,
@@ -50,7 +51,7 @@ import {
 /** Version recorded for every result produced by this engine contract. */
 export const ACCOUNTING_ENGINE_VERSION = "1"
 
-export { GERMAN_RULE_SET_VERSION }
+export { GERMAN_RULE_SET_VERSION, germanTaxYearEndExclusive }
 
 type ChoiceKind = AccountingChoice["_tag"]
 
