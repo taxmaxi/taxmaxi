@@ -224,29 +224,39 @@ const withProviderIdentityConflictReview = ({
 
 const applyPrincipalProviderAssetDecisions = ({
   decisions,
-  exactProviderAssetRowIds,
   legs,
   providerAssetRowIds,
   providerTransfers,
   sourceRepresentationUseIds,
 }: {
   readonly decisions: PrincipalAssetOverrideDecisions
-  readonly exactProviderAssetRowIds: ReadonlySet<string>
-  readonly legs: ReadonlyArray<SourceTransactionLegDraft>
+  readonly legs: ReadonlyArray<
+    SourceTransactionLegDraft & {
+      readonly sourceRepresentationUseId: string | null
+      readonly providerAssetRowId: string | null
+    }
+  >
   readonly providerAssetRowIds: ReadonlyArray<string>
-  readonly providerTransfers: ReadonlyArray<PersistedSourceProviderTransfer>
+  readonly providerTransfers: ReadonlyArray<PersistedSourceProviderTransferWithTarget>
   readonly sourceRepresentationUseIds: ReadonlyArray<string>
 }): {
   readonly hasIdentityConflict: boolean
   readonly withholdsAccountingFacts: boolean
-  readonly legs: ReadonlyArray<SourceTransactionLegDraft>
+  readonly legs: ReadonlyArray<
+    SourceTransactionLegDraft & {
+      readonly sourceRepresentationUseId: string | null
+      readonly providerAssetRowId: string | null
+    }
+  >
   readonly systemAssetIds: ReadonlyArray<string>
 } => {
-  const hasExactTransactionObservation = providerTransfers.some(
-    ({ observedBlockchainId }) => observedBlockchainId !== null
-  )
   const effectiveAssetBySystemAsset = new Map<string, string>()
-  const effectiveLegs: SourceTransactionLegDraft[] = []
+  const effectiveLegs: Array<
+    SourceTransactionLegDraft & {
+      readonly sourceRepresentationUseId: string | null
+      readonly providerAssetRowId: string | null
+    }
+  > = []
   const systemAssetIds: string[] = []
   let hasIdentityConflict = false
   const hasBlockedOrExcludedExactUse = sourceRepresentationUseIds.some(
@@ -259,17 +269,52 @@ const applyPrincipalProviderAssetDecisions = ({
       return inclusion === "excluded" || assetId === null
     }
   )
-  const hasBlockedOrExcludedProviderUse = providerAssetRowIds.some((providerAssetRowId) => {
+  const providerDecisionBlocks = ({
+    providerAssetRowId,
+    sourceRepresentationUseId,
+  }: {
+    readonly providerAssetRowId: string | null
+    readonly sourceRepresentationUseId: string | null
+  }): boolean => {
+    if (providerAssetRowId === null) return false
+
     const providerDecision = decisions.providerAssetDecisionById.get(providerAssetRowId)
-    if (
-      exactProviderAssetRowIds.has(providerAssetRowId) ||
-      decisions.ignoredProviderAssetRowIds.has(providerAssetRowId)
-    ) {
+    if (sourceRepresentationUseId !== null) {
       return providerDecision?.systemInclusion === "excluded"
     }
+    if (decisions.ignoredProviderAssetRowIds.has(providerAssetRowId)) return false
 
     return providerDecision?.effectiveDecision._tag !== "included"
-  })
+  }
+  const referencedProviderAssetRowIds = new Set([
+    ...legs.flatMap(({ providerAssetRowId }) =>
+      providerAssetRowId === null || providerAssetRowId === undefined ? [] : [providerAssetRowId]
+    ),
+    ...providerTransfers.flatMap(({ providerAssetId }) =>
+      providerAssetId === null ? [] : [providerAssetId]
+    ),
+  ])
+  const hasBlockedOrExcludedProviderUse =
+    legs.some(({ providerAssetRowId, sourceRepresentationUseId }) =>
+      providerDecisionBlocks({
+        providerAssetRowId: providerAssetRowId ?? null,
+        sourceRepresentationUseId,
+      })
+    ) ||
+    providerTransfers.some(
+      ({ processingMode, providerAssetId, sourceRepresentationUseId }) =>
+        processingMode !== "evidence_only" &&
+        processingMode !== "stale" &&
+        providerDecisionBlocks({
+          providerAssetRowId: providerAssetId,
+          sourceRepresentationUseId,
+        })
+    ) ||
+    providerAssetRowIds.some(
+      (providerAssetRowId) =>
+        !referencedProviderAssetRowIds.has(providerAssetRowId) &&
+        providerDecisionBlocks({ providerAssetRowId, sourceRepresentationUseId: null })
+    )
 
   for (const leg of legs) {
     const providerAssetRowId = leg.providerAssetRowId ?? null
@@ -280,24 +325,33 @@ const applyPrincipalProviderAssetDecisions = ({
     const mayUseProviderFallback =
       providerAssetRowId !== null &&
       leg.assetRepresentationId === null &&
-      !hasExactTransactionObservation
-    const representationSystemAssetId = resolveSystemAssetId({
-      decisions,
-      assetId: leg.assetId,
-      assetRepresentationId: leg.assetRepresentationId,
-    })
+      leg.sourceRepresentationUseId === null
+    const exactDecision =
+      leg.sourceRepresentationUseId === null
+        ? undefined
+        : decisions.sourceRepresentationUseDecisionById.get(leg.sourceRepresentationUseId)
+    const representationSystemAssetId =
+      exactDecision?.systemAssetId ??
+      resolveSystemAssetId({
+        decisions,
+        assetId: leg.assetId,
+        assetRepresentationId: leg.assetRepresentationId,
+      })
     const systemAssetId = mayUseProviderFallback
       ? (providerDecision?.systemAssetId ??
         (providerDecision?.effectiveDecision._tag === "included"
           ? providerDecision.effectiveDecision.assetId
           : representationSystemAssetId))
       : representationSystemAssetId
-    const assetId = resolvePrincipalAssetId({
-      decisions,
-      systemAssetId,
-      assetRepresentationId: leg.assetRepresentationId,
-      providerAssetRowId: mayUseProviderFallback ? providerAssetRowId : null,
-    })
+    const assetId =
+      exactDecision === undefined
+        ? resolvePrincipalAssetId({
+            decisions,
+            systemAssetId,
+            assetRepresentationId: leg.assetRepresentationId,
+            providerAssetRowId: mayUseProviderFallback ? providerAssetRowId : null,
+          })
+        : (exactDecision.identityReplacementAssetId ?? systemAssetId)
     const earlierAssetId = effectiveAssetBySystemAsset.get(systemAssetId)
     if (earlierAssetId !== undefined && earlierAssetId !== assetId) {
       hasIdentityConflict = true
@@ -322,11 +376,26 @@ const applyPrincipalProviderAssetDecisions = ({
 const resolveSourceProviderAssetDecision = ({
   decisions,
   providerAssetRowId,
+  sourceRepresentationUseId,
 }: {
   readonly decisions: PrincipalAssetOverrideDecisions
   readonly providerAssetRowId: string
+  readonly sourceRepresentationUseId: string | null
 }): SourceProviderAssetDecision => {
-  const decision = decisions.providerAssetDecisionById.get(providerAssetRowId)?.effectiveDecision
+  const providerDecision = decisions.providerAssetDecisionById.get(providerAssetRowId)
+  if (sourceRepresentationUseId !== null) {
+    const exactDecision =
+      decisions.sourceRepresentationUseDecisionById.get(sourceRepresentationUseId)
+    if (exactDecision === undefined || providerDecision?.systemInclusion === "excluded") {
+      return { _tag: "blocked" }
+    }
+    const inclusion = exactDecision.inclusionReplacement ?? exactDecision.systemInclusion
+    if (inclusion === "excluded") return { _tag: "excluded" }
+    const assetId = exactDecision.identityReplacementAssetId ?? exactDecision.systemAssetId
+    return assetId === null ? { _tag: "blocked" } : { _tag: "included", assetId }
+  }
+
+  const decision = providerDecision?.effectiveDecision
   if (decision === undefined || decision._tag === "blocked") return { _tag: "blocked" }
   if (decision._tag === "excluded") return { _tag: "excluded" }
   return { _tag: "included", assetId: decision.assetId }
@@ -2097,22 +2166,17 @@ const make = Effect.gen(function* () {
     derivedLegs,
     persistedProviderTransfers,
     linkedCanonicalTransfers,
-    derivedLegRecordedUses,
   }: {
     readonly principalId: string
     readonly providerAssetRowIds: ReadonlyArray<string>
     readonly canonicalTransfers: ReadonlyArray<{ readonly assetRepresentationId?: string | null }>
-    readonly derivedLegs: ReadonlyArray<SourceTransactionLegDraft>
+    readonly derivedLegs: ReadonlyArray<
+      SourceTransactionLegDraft & { readonly sourceRepresentationUseId: string | null }
+    >
     readonly persistedProviderTransfers: ReadonlyArray<PersistedSourceProviderTransferWithTarget>
     readonly linkedCanonicalTransfers: ReadonlyArray<LinkedSourceTransferDraft>
-    readonly derivedLegRecordedUses: RecordedSourceRepresentationUses
   }) =>
     Effect.gen(function* () {
-      const derivedLegAssetRepresentationIds = derivedLegs.flatMap(({ assetRepresentationId }) =>
-        assetRepresentationId === null || assetRepresentationId === undefined
-          ? []
-          : [assetRepresentationId]
-      )
       const sourceRepresentationUseIds = [
         ...persistedProviderTransfers.flatMap((providerTransfer) =>
           providerTransfer.sourceRepresentationUseId === null ||
@@ -2124,11 +2188,9 @@ const make = Effect.gen(function* () {
         ...linkedCanonicalTransfers.flatMap(({ sourceRepresentationUseId }) =>
           sourceRepresentationUseId === null ? [] : [sourceRepresentationUseId]
         ),
-        ...derivedLegAssetRepresentationIds.flatMap((assetRepresentationId) => {
-          const sourceRepresentationUseId =
-            derivedLegRecordedUses.idByAssetRepresentationId.get(assetRepresentationId)
-          return sourceRepresentationUseId === undefined ? [] : [sourceRepresentationUseId]
-        }),
+        ...derivedLegs.flatMap(({ sourceRepresentationUseId }) =>
+          sourceRepresentationUseId === null ? [] : [sourceRepresentationUseId]
+        ),
       ]
       const decisions = yield* principalAssetOverrideDecisionLoader.load({
         principalId,
@@ -2139,33 +2201,22 @@ const make = Effect.gen(function* () {
               : [assetRepresentationId]
         ),
         sourceRepresentationUseIds,
-        providerAssetRowIds,
+        providerAssetRowIds: [
+          ...providerAssetRowIds,
+          ...persistedProviderTransfers.flatMap(({ providerAssetId }) =>
+            providerAssetId === null ? [] : [providerAssetId]
+          ),
+          ...linkedCanonicalTransfers.flatMap(({ providerAssetRowId }) =>
+            providerAssetRowId === null ? [] : [providerAssetRowId]
+          ),
+          ...derivedLegs.flatMap(({ providerAssetRowId }) =>
+            providerAssetRowId === null || providerAssetRowId === undefined
+              ? []
+              : [providerAssetRowId]
+          ),
+        ],
       })
-      const exactProviderAssetRowIds = new Set([
-        ...persistedProviderTransfers.flatMap((providerTransfer) =>
-          providerTransfer.sourceRepresentationUseId === null ||
-          providerTransfer.providerAssetId === null ||
-          providerTransfer.processingMode === "evidence_only" ||
-          providerTransfer.processingMode === "stale"
-            ? []
-            : [providerTransfer.providerAssetId]
-        ),
-        ...linkedCanonicalTransfers.flatMap(({ providerAssetRowId, sourceRepresentationUseId }) =>
-          sourceRepresentationUseId === null || providerAssetRowId === null
-            ? []
-            : [providerAssetRowId]
-        ),
-        ...derivedLegs.flatMap(({ assetRepresentationId, providerAssetRowId }) =>
-          assetRepresentationId === null ||
-          assetRepresentationId === undefined ||
-          providerAssetRowId === null ||
-          providerAssetRowId === undefined
-            ? []
-            : [providerAssetRowId]
-        ),
-      ])
-
-      return { decisions, exactProviderAssetRowIds, sourceRepresentationUseIds }
+      return { decisions, sourceRepresentationUseIds }
     })
 
   const persistNormalizedArtifacts = <E>(
@@ -2361,6 +2412,25 @@ const make = Effect.gen(function* () {
               transactionId: persistedTransaction.id,
               providerTransfers: linkedProviderTransfers,
             })
+          const preDerivationSourceRepresentationUseIds = persistedProviderTransfers.flatMap(
+            ({ sourceRepresentationUseId }) =>
+              sourceRepresentationUseId === null ? [] : [sourceRepresentationUseId]
+          )
+          const derivationDecisions = yield* principalAssetOverrideDecisionLoader.load({
+            principalId: params.transaction.principalId,
+            assetRepresentationIds: canonicalTransfers.flatMap(({ assetRepresentationId }) =>
+              assetRepresentationId === null || assetRepresentationId === undefined
+                ? []
+                : [assetRepresentationId]
+            ),
+            sourceRepresentationUseIds: preDerivationSourceRepresentationUseIds,
+            providerAssetRowIds: [
+              ...params.providerAssetRowIds,
+              ...persistedProviderTransfers.flatMap(({ providerAssetId }) =>
+                providerAssetId === null ? [] : [providerAssetId]
+              ),
+            ],
+          })
           const persistedCanonicalTransfers = yield* upsertCanonicalTransfers({
             executor: tx,
             canonicalTransfers: linkedCanonicalTransfers,
@@ -2368,7 +2438,7 @@ const make = Effect.gen(function* () {
           const systemCanonicalTransfers = persistedCanonicalTransfers.map((transfer) => ({
             ...transfer,
             assetId: resolveSystemAssetId({
-              decisions,
+              decisions: derivationDecisions,
               assetId: transfer.assetId,
               assetRepresentationId: transfer.assetRepresentationId,
             }),
@@ -2381,8 +2451,18 @@ const make = Effect.gen(function* () {
                   providerTransfers: persistedProviderTransfers,
                   providerTransferByDraft,
                   canonicalTransfers: systemCanonicalTransfers,
-                  resolveProviderAssetDecision: (providerAssetRowId) =>
-                    resolveSourceProviderAssetDecision({ decisions, providerAssetRowId }),
+                  resolveProviderAssetDecision: (providerAssetRowId) => {
+                    const persistedTarget = persistedProviderTransfers.find(
+                      (providerTransfer) =>
+                        providerTransfer.providerAssetId === providerAssetRowId &&
+                        providerTransfer.sourceRepresentationUseId !== null
+                    )
+                    return resolveSourceProviderAssetDecision({
+                      decisions: derivationDecisions,
+                      providerAssetRowId,
+                      sourceRepresentationUseId: persistedTarget?.sourceRepresentationUseId ?? null,
+                    })
+                  },
                 })
               : params.legs
           const derivedLegAssetRepresentationIds = derivedLegs.flatMap(
@@ -2397,31 +2477,9 @@ const make = Effect.gen(function* () {
             assetRepresentationIds: derivedLegAssetRepresentationIds,
             sourceId: persistedTransaction.sourceId,
           })
-          const {
-            decisions: completeDecisions,
-            exactProviderAssetRowIds,
-            sourceRepresentationUseIds,
-          } = yield* preparePrincipalAssetDecisionApplication({
-            principalId: params.transaction.principalId,
-            providerAssetRowIds: params.providerAssetRowIds,
-            canonicalTransfers,
-            derivedLegs,
-            persistedProviderTransfers,
-            linkedCanonicalTransfers,
-            derivedLegRecordedUses,
-          })
-          const providerDecisionResult = applyPrincipalProviderAssetDecisions({
-            decisions: completeDecisions,
-            exactProviderAssetRowIds,
-            legs: derivedLegs,
-            providerAssetRowIds: params.providerAssetRowIds,
-            providerTransfers: persistedProviderTransfers,
-            sourceRepresentationUseIds,
-          })
-          const effectiveLegs = providerDecisionResult.legs
           const sourceTransferIds = [
             ...new Set(
-              effectiveLegs.flatMap(({ sourceTransferId }) =>
+              derivedLegs.flatMap(({ sourceTransferId }) =>
                 sourceTransferId === null ? [] : [sourceTransferId]
               )
             ),
@@ -2445,15 +2503,27 @@ const make = Effect.gen(function* () {
           const sourceTransferTargetById = new Map(
             sourceTransferTargets.map((target) => [target.id, target])
           )
-          const linkedLegTargets = yield* Effect.forEach(effectiveLegs, (leg) =>
+          const providerTransferTargetById = new Map(
+            persistedProviderTransfers.map((providerTransfer) => [
+              providerTransfer.id,
+              providerTransfer,
+            ])
+          )
+          const linkedLegTargets = yield* Effect.forEach(derivedLegs, (leg) =>
             Effect.gen(function* () {
               const sourceTransferTarget =
                 leg.sourceTransferId === null
                   ? undefined
                   : sourceTransferTargetById.get(leg.sourceTransferId)
+              const providerTransferTarget =
+                leg.providerTransferId === null || leg.providerTransferId === undefined
+                  ? undefined
+                  : providerTransferTargetById.get(leg.providerTransferId)
               const sourceRepresentationUseId =
                 leg.assetRepresentationId === null || leg.assetRepresentationId === undefined
-                  ? (sourceTransferTarget?.sourceRepresentationUseId ?? null)
+                  ? (sourceTransferTarget?.sourceRepresentationUseId ??
+                    providerTransferTarget?.sourceRepresentationUseId ??
+                    null)
                   : yield* sourceRepresentationUseIdForAssetRepresentation({
                       assetRepresentationId: leg.assetRepresentationId,
                       recordedUses: derivedLegRecordedUses,
@@ -2465,12 +2535,32 @@ const make = Effect.gen(function* () {
                 ...leg,
                 sourceRepresentationUseId,
                 providerAssetRowId:
-                  leg.providerAssetRowId ?? sourceTransferTarget?.providerAssetRowId ?? null,
+                  leg.providerAssetRowId ??
+                  sourceTransferTarget?.providerAssetRowId ??
+                  providerTransferTarget?.providerAssetId ??
+                  null,
               }
             })
           )
-          const linkedLegs = yield* finalizeTransactionLegOrigins({
+          const { decisions: completeDecisions, sourceRepresentationUseIds } =
+            yield* preparePrincipalAssetDecisionApplication({
+              principalId: params.transaction.principalId,
+              providerAssetRowIds: params.providerAssetRowIds,
+              canonicalTransfers,
+              derivedLegs: linkedLegTargets,
+              persistedProviderTransfers,
+              linkedCanonicalTransfers,
+            })
+          const providerDecisionResult = applyPrincipalProviderAssetDecisions({
+            decisions: completeDecisions,
             legs: linkedLegTargets,
+            providerAssetRowIds: params.providerAssetRowIds,
+            providerTransfers: persistedProviderTransfers,
+            sourceRepresentationUseIds,
+          })
+          const effectiveLegs = providerDecisionResult.legs
+          const linkedLegs = yield* finalizeTransactionLegOrigins({
+            legs: effectiveLegs,
             providerTransfers: persistedProviderTransfers,
           })
           const persistedLegs = yield* upsertTransactionLegs({

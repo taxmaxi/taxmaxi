@@ -870,6 +870,8 @@ const persistCoinbaseNormalization = ({
   sourceRecord,
   skipLegDerivation = false,
   omitProviderTransfers = false,
+  omitProviderTransferObservation = false,
+  providerTransferObservedBlockchainId,
   providerTransferRole,
   includeOriginlessSibling = false,
   invalidProviderOrigin,
@@ -879,6 +881,8 @@ const persistCoinbaseNormalization = ({
   readonly sourceRecord: SourceRawRecord
   readonly skipLegDerivation?: boolean
   readonly omitProviderTransfers?: boolean
+  readonly omitProviderTransferObservation?: boolean
+  readonly providerTransferObservedBlockchainId?: string
   readonly providerTransferRole?: "principal" | "fee"
   readonly includeOriginlessSibling?: boolean
   readonly invalidProviderOrigin?: "mismatched_transaction" | "dual_origin"
@@ -903,6 +907,23 @@ const persistCoinbaseNormalization = ({
         ? null
         : {
             ...prepared.primaryProviderTransfer,
+            ...(omitProviderTransferObservation
+              ? {
+                  observedBlockchainId: null,
+                  observedRepresentationType: null,
+                  observedContractAddress: null,
+                  observedMintAddress: null,
+                  observedDecimals: null,
+                }
+              : providerTransferObservedBlockchainId === undefined
+                ? {}
+                : {
+                    observedBlockchainId: providerTransferObservedBlockchainId,
+                    observedRepresentationType: "token" as const,
+                    observedContractAddress: "sync-engine-btc-fixture",
+                    observedMintAddress: null,
+                    observedDecimals: 8,
+                  }),
             metadata:
               providerTransferRole === undefined
                 ? prepared.primaryProviderTransfer.metadata
@@ -1326,6 +1347,7 @@ describe("SourceNormalizationRepositoryLive", () => {
     readonly legs: ReadonlyArray<{
       readonly externalId: string
       readonly providerAssetRowId: string
+      readonly assetRepresentationId?: string | null
       readonly kind?: "acquisition" | "fee"
     }>
   }) =>
@@ -1401,7 +1423,7 @@ describe("SourceNormalizationRepositoryLive", () => {
                 principalId,
                 addressId: null,
                 assetId: TEST_BTC_ASSET_ID,
-                assetRepresentationId: null,
+                assetRepresentationId: leg.assetRepresentationId ?? null,
                 amount: "1",
                 kind: leg.kind ?? "acquisition",
                 provenance: "deterministic" as const,
@@ -2183,7 +2205,7 @@ describe("SourceNormalizationRepositoryLive", () => {
           externalId: "provider-exact-wins",
           providerTransfers: [
             {
-              providerAssetId: PROVIDER_ASSET_ROW_A_ID,
+              providerAssetId: PROVIDER_ASSET_ROW_USER_EXCLUDED_ID,
               observedBlockchainId: fixture.bitcoinBlockchainId,
             },
           ],
@@ -2191,6 +2213,7 @@ describe("SourceNormalizationRepositoryLive", () => {
             {
               externalId: "provider-exact-wins-leg",
               providerAssetRowId: PROVIDER_ASSET_ROW_A_ID,
+              assetRepresentationId: TEST_BTC_REPRESENTATION_ID,
             },
           ],
         })
@@ -2310,6 +2333,7 @@ describe("SourceNormalizationRepositoryLive", () => {
           {
             externalId: "provider-exact-retry-leg",
             providerAssetRowId: PROVIDER_ASSET_ROW_USER_EXCLUDED_ID,
+            assetRepresentationId: TEST_BTC_REPRESENTATION_ID,
           },
         ],
       } as const
@@ -2350,6 +2374,40 @@ describe("SourceNormalizationRepositoryLive", () => {
       )
       expect(retriedUseId).toBe(firstUseId)
       expect(retried.legs.map(({ assetId }) => assetId)).toEqual([TEST_BTC_ASSET_ID])
+    })
+  )
+
+  it.effect("withholds an exact leg with a chainless excluded sibling", () =>
+    Effect.gen(function* () {
+      const occurredAt = DateTime.toDateUtc(DateTime.makeUnsafe("2025-02-01T10:20:00.000Z"))
+      yield* Effect.promise(() => seedProviderDecisionFixture(occurredAt))
+
+      const result = yield* Effect.promise(() =>
+        persistProviderDecisionArtifacts({
+          occurredAt,
+          externalId: "provider-exact-with-chainless-sibling",
+          providerTransfers: [
+            {
+              providerAssetId: PROVIDER_ASSET_ROW_USER_EXCLUDED_ID,
+              observedBlockchainId: fixture.bitcoinBlockchainId,
+              processingMode: "accounting_and_evidence",
+            },
+          ],
+          legs: [
+            {
+              externalId: "provider-exact-with-chainless-sibling-exact",
+              providerAssetRowId: PROVIDER_ASSET_ROW_USER_EXCLUDED_ID,
+              assetRepresentationId: TEST_BTC_REPRESENTATION_ID,
+            },
+            {
+              externalId: "provider-exact-with-chainless-sibling-chainless",
+              providerAssetRowId: PROVIDER_ASSET_ROW_USER_EXCLUDED_ID,
+            },
+          ],
+        })
+      )
+
+      expect(result.legs).toEqual([])
     })
   )
 
@@ -2696,6 +2754,120 @@ describe("SourceNormalizationRepositoryLive", () => {
           canonicalAssetId: null,
           mappingStatus: "excluded",
         })
+      })
+  )
+
+  it.effect(
+    "uses a persisted exact target when a Coinbase candidate retry omits observation fields",
+    () =>
+      Effect.gen(function* () {
+        const occurredAt = DateTime.toDateUtc(DateTime.makeUnsafe("2025-02-01T10:25:00.000Z"))
+        const rawRecordId = "00000000-0000-4000-8000-000000000498"
+        const payload = makeCoinbaseReceivePayload({
+          id: "coinbase-exact-candidate-retry",
+          timestamp: occurredAt,
+        })
+        yield* Effect.promise(() =>
+          runPg(
+            seedRawRecord({
+              rawRecordId,
+              externalRecordId: "raw-coinbase-exact-candidate-retry",
+              occurredAt,
+              payload,
+            })
+          )
+        )
+        yield* Effect.promise(() =>
+          runCoinbaseNormalization(
+            Effect.flatMap(
+              CoinbaseReferenceDataService,
+              ({ refreshReferenceData }) => refreshReferenceData
+            )
+          )
+        )
+        const providerAssetRowId = yield* Effect.promise(() =>
+          runPg(
+            Effect.gen(function* () {
+              const db = yield* drizzle
+              const [providerAsset] = yield* db
+                .select({ id: schema.providerAssets.id })
+                .from(schema.providerAssets)
+                .where(eq(schema.providerAssets.currencyCode, "BTC"))
+                .limit(1)
+              if (providerAsset === undefined) {
+                return yield* Effect.die("Missing Coinbase BTC provider asset")
+              }
+              yield* db
+                .update(schema.providerAssetMappings)
+                .set({
+                  canonicalAssetId: null,
+                  assetRepresentationId: null,
+                  mappingStatus: "pending_review",
+                })
+                .where(eq(schema.providerAssetMappings.providerAssetRowId, providerAsset.id))
+              yield* db
+                .delete(schema.assetResolutionCurrentState)
+                .where(eq(schema.assetResolutionCurrentState.providerAssetRowId, providerAsset.id))
+              return providerAsset.id
+            })
+          )
+        )
+        yield* Effect.promise(() =>
+          runPg(
+            insertCoinbaseProviderOverrides({
+              actorUserId: fixture.userId,
+              providerAssetRowId,
+            })
+          )
+        )
+        const source = buildCoinbaseSource({ cexAccountId: fixture.cexAccountId })
+        const sourceRecord = buildSeededRawRecord({
+          rawRecordId,
+          externalRecordId: "raw-coinbase-exact-candidate-retry",
+          occurredAt,
+          payload,
+        })
+
+        const first = yield* Effect.promise(() =>
+          runCoinbaseNormalization(
+            persistCoinbaseNormalization({
+              source,
+              sourceRecord,
+              providerTransferObservedBlockchainId: fixture.bitcoinBlockchainId,
+              refreshReferenceData: false,
+            })
+          )
+        )
+        const providerTransferExternalId = first.providerTransfers[0]?.externalId
+        if (providerTransferExternalId === null || providerTransferExternalId === undefined) {
+          return yield* Effect.die("Missing Coinbase provider transfer external id")
+        }
+        const firstUseId = yield* Effect.promise(() =>
+          loadProviderTransferSourceUseId(providerTransferExternalId)
+        )
+        expect(firstUseId).not.toBeNull()
+        expect(first.legs).toEqual([
+          expect.objectContaining({ assetId: TEST_BTC_ASSET_ID, providerAssetRowId }),
+        ])
+
+        const retried = yield* Effect.promise(() =>
+          runCoinbaseNormalization(
+            persistCoinbaseNormalization({
+              source,
+              sourceRecord,
+              omitProviderTransferObservation: true,
+              refreshReferenceData: false,
+            })
+          )
+        )
+        const retriedUseId = yield* Effect.promise(() =>
+          loadProviderTransferSourceUseId(providerTransferExternalId)
+        )
+
+        expect(retriedUseId).toBe(firstUseId)
+        expect(retried.legs).toEqual([
+          expect.objectContaining({ assetId: TEST_BTC_ASSET_ID, providerAssetRowId }),
+        ])
       })
   )
 
