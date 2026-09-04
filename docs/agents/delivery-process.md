@@ -161,10 +161,25 @@ Delivery checklist rules:
 
 ## Execution
 
-The `arm` step generates two files from templates: an `implement-NNN` worker
-skill (reading list, scope fence, seams, gates, coordination rules) and an
-orchestrator prompt (role, state, judgment rules, operating loop, stop
-conditions). The orchestrator loop:
+The `arm` step generates two files from templates that live inside the
+`arm` skill directory (`.agents/skills/arm/`), the way `domain-modeling`
+carries its format files:
+
+- **`implement-NNN` worker skill**: fixed reading list, allowed tasks, scope
+  fence, result classification, domain rules that bite, seams, done
+  criteria, coordination rules when several streams run.
+- **Orchestrator prompt**: role and operating loop, judgment rules, stop
+  conditions. Two template rules are non-negotiable: the orchestrator
+  **never edits code** — every change goes through a spawned worker — and
+  the prompt **carries no project state** — the tracker is the state, read
+  fresh each turn, and the newest recorded decision always wins over the
+  prompt and the skill file.
+
+Both generated files are spec-scoped scaffolding: the harvest deletes them.
+Until the `arm` skill exists, the live orchestrator prompts sit in
+`.agents/prompts/`; the `arm` templates are seeded from them. To start an
+orchestrator, paste the prompt file's content into a new session.
+The orchestrator loop:
 
 ```mermaid
 flowchart TD
@@ -201,6 +216,11 @@ The mandatory final checklist task of every spec. Steps:
    orchestrator prompt.
 4. Update the reusable templates and skills with what the epic taught.
 5. Post a closing summary comment (an event) and close the issue.
+
+After the harvest, the founder can run `/spec-walkthrough` on the closed
+spec: a tech-lead briefing built from the final body and the merged PRs'
+result classifications — what changed, which numbers changed on purpose,
+and a manual test plan. It reads state, not the comment log.
 
 Reports containing real user data follow `docs/agents/issue-tracker.md`:
 redacted summary on the issue, full report in a local file.
