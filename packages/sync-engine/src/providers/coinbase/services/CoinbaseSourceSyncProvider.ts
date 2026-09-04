@@ -26,7 +26,10 @@ import {
 } from "../../../shared/SourceProviderRawBatch.ts"
 import { SyncEngineStorageError } from "../../../services/SyncEngineStorageError.ts"
 import type { CoinbaseLegDerivationError } from "./CoinbaseLegDerivationService.ts"
-import type { CoinbaseRecordNormalizationError } from "./CoinbaseRecordNormalizer.ts"
+import type {
+  CoinbaseAssetDecisionFeeTransferCandidate,
+  CoinbaseRecordNormalizationError,
+} from "./CoinbaseRecordNormalizer.ts"
 import type {
   RefreshCoinbaseDefaultMappingsResult,
   RefreshCoinbaseReferenceDataResult,
@@ -65,6 +68,8 @@ export interface PreparedCoinbaseNormalization {
   /** Exact principal movement draft that may produce the main accounting leg. */
   readonly primaryProviderTransfer: SourceProviderTransferDraft | null
   readonly canonicalTransfers: ReadonlyArray<SourceTransferDraft>
+  /** Inert writer-built fees carried for the later source-rebuild decision seam. */
+  readonly feeTransferCandidates: ReadonlyArray<CoinbaseAssetDecisionFeeTransferCandidate>
   readonly transactionReview: SourceTransactionReviewDraft | null
   readonly resolvedTransactionType: CoinbaseResolvedTransactionTypeMapping
   readonly primaryAsset: SyncEngineAsset | null

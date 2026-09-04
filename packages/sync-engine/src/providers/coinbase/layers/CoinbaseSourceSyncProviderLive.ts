@@ -1164,6 +1164,7 @@ const make = Effect.gen(function* () {
         providerTransfers,
         primaryProviderTransfer,
         canonicalTransfers: normalized.canonicalTransfers,
+        feeTransferCandidates: normalized.feeTransferCandidates,
         transactionReview,
         resolvedTransactionType,
         primaryAsset: Option.getOrNull(maybePrimaryAsset),
