@@ -12,8 +12,9 @@ import {
   type DispositionCause,
   type InventoryScope,
   type InventoryScopeChoice,
+  type TaxYear,
 } from "@my/core/accounting"
-import type { Timestamp } from "@my/core/shared/values/Timestamp"
+import { fromDateTime, type Timestamp } from "@my/core/shared/values/Timestamp"
 import * as DateTime from "effect/DateTime"
 import * as Effect from "effect/Effect"
 import * as Schema from "effect/Schema"
@@ -89,6 +90,17 @@ const GERMAN_TIME_ZONE = "Europe/Berlin"
 /** German civil-calendar year containing a source-recorded event instant. */
 export const germanTaxYearOf = (timestamp: Timestamp): number =>
   DateTime.toParts(DateTime.setZoneNamedUnsafe(timestamp.toDateTime(), GERMAN_TIME_ZONE)).year
+
+/** Exclusive UTC instant ending a German civil-calendar tax year. */
+export const germanTaxYearEndExclusive = (taxYear: TaxYear): Timestamp =>
+  fromDateTime(
+    DateTime.toUtc(
+      DateTime.makeZonedUnsafe(
+        { year: taxYear + 1, month: 1, day: 1 },
+        { timeZone: GERMAN_TIME_ZONE, adjustForTimeZone: true }
+      )
+    )
+  )
 
 /** German treatment codes attached to private-assets results. */
 export type GermanTreatmentCode =

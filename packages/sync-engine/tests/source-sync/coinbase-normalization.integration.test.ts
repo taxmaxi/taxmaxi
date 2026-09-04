@@ -1968,6 +1968,115 @@ describe("coinbase normalization persistence", () => {
     })
   )
 
+  it.effect(
+    "carries the writer-built fee candidate through provider preparation without changing results",
+    () =>
+      Effect.gen(function* () {
+        activeCryptoCurrencies = [...defaultCryptoCurrencies, hypeCryptoCurrency]
+        const providerRecord = makeBtcWithHypeFeeSyncRecords().find(
+          (record) => record.recordType === "coinbase_transaction"
+        )
+        if (providerRecord === undefined) {
+          return yield* Effect.die("Missing BTC transaction with HYPE fee fixture")
+        }
+
+        const source: SourceSyncSource = {
+          id: sourceId,
+          principalId,
+          providerKey: "coinbase",
+          cexAccountId: null,
+          addressId: null,
+          walletAddress: null,
+        }
+        const sourceRecord: SourceRawRecord = {
+          id: "00000000-0000-4000-8000-000000000211",
+          sourceId,
+          provider: "coinbase",
+          recordType: providerRecord.recordType,
+          externalAccountId: providerRecord.externalAccountId,
+          externalRecordId: providerRecord.externalRecordId,
+          externalParentId: providerRecord.externalParentId,
+          occurredAt: providerRecord.occurredAt,
+          payload: providerRecord.payload,
+          importedAt: providerRecord.occurredAt,
+          normalizedAt: null,
+          normalizationError: null,
+          createdAt: providerRecord.occurredAt,
+          updatedAt: providerRecord.occurredAt,
+        }
+
+        const fixture = yield* Effect.gen(function* () {
+          const provider = yield* CoinbaseSourceSyncProvider
+          yield* provider.refreshReferenceData
+          const lookups = yield* provider.loadNormalizationLookups
+          const db = yield* drizzle
+          const [providerAsset] = yield* db
+            .select({ id: schema.providerAssets.id })
+            .from(schema.providerAssets)
+            .where(
+              and(
+                eq(schema.providerAssets.provider, "coinbase"),
+                eq(schema.providerAssets.currencyCode, "HYPE")
+              )
+            )
+            .limit(1)
+          if (providerAsset === undefined) {
+            return yield* Effect.die("Missing HYPE fee provider asset fixture")
+          }
+
+          const unresolved = yield* provider.prepareNormalization({
+            source,
+            sourceRecord,
+            lookups,
+          })
+          yield* excludeProviderAssetMapping({ currencyCode: "HYPE" })
+          const excluded = yield* provider.prepareNormalization({
+            source,
+            sourceRecord,
+            lookups,
+          })
+
+          return { excluded, providerAssetRowId: providerAsset.id, unresolved }
+        }).pipe(Effect.provide(TestLayer))
+
+        const expectedCandidate = {
+          _tag: "asset_decision_fee_transfer",
+          providerAssetRowId: fixture.providerAssetRowId,
+          transfer: expect.objectContaining({
+            sourceId,
+            principalId,
+            sourceRawRecordId: sourceRecord.id,
+            externalId: "tx-btc-with-hype-fee:network_fee",
+            externalGroupId: "tx-btc-with-hype-fee",
+            blockchainId: expect.any(String),
+            timestamp: providerRecord.occurredAt,
+            type: "fee",
+            fromAccountRef: "coinbase-account-1",
+            toAccountRef: "coinbase:network",
+            toPartyType: "fee",
+            assetRepresentationId: null,
+            amount: "0.10000000",
+            notes: "Coinbase network transaction fee",
+          }),
+        }
+
+        expect(fixture.unresolved.feeTransferCandidates).toEqual([expectedCandidate])
+        expect(fixture.excluded.feeTransferCandidates).toEqual([expectedCandidate])
+        expect(fixture.unresolved.canonicalTransfers).toEqual([])
+        expect(fixture.excluded.canonicalTransfers).toEqual([])
+        expect(fixture.unresolved.providerTransfers).toEqual([])
+        expect(fixture.excluded.providerTransfers).toEqual([])
+        expect(fixture.unresolved.legDerivationStrategy).toBe("skip")
+        expect(fixture.excluded.legDerivationStrategy).toBe("skip")
+        expect(fixture.unresolved.transactionReview).toMatchObject({
+          matchedLayer: "provider_asset_mapping",
+          reviewStatus: "needs_review",
+        })
+        expect(fixture.excluded.transactionReview).toBeNull()
+      }),
+    15_000
+  )
+
   it.effect("records source use for a pending fee provider asset", () =>
     Effect.gen(function* () {
       activeSyncRecords = makeBtcWithHypeFeeSyncRecords()

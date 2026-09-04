@@ -12,6 +12,7 @@ import * as Schema from "effect/Schema"
 import { isZeroAmount, subtractFeeFromDebit } from "../shared/CoinbaseDecimal.ts"
 import { feeIsPartOfDebit } from "../shared/CoinbaseNetworkFee.ts"
 import {
+  type CoinbaseAssetDecisionFeeTransferCandidate,
   type CoinbaseRecordNormalizationResult,
   CoinbaseRecordNormalizationError,
   CoinbaseRecordNormalizer,
@@ -229,6 +230,7 @@ const partyAddress = (party: CoinbaseTransaction["from"]): string | null =>
 
 interface CoinbaseFeeTransferBuildResult {
   readonly transfer: CoinbaseRecordNormalizationResult["canonicalTransfers"][number] | null
+  readonly candidate: CoinbaseAssetDecisionFeeTransferCandidate | null
   readonly providerAssetRowId: string | null
   readonly unresolvedAssetCurrency: string | null
 }
@@ -454,20 +456,13 @@ const buildFeeTransfer = (params: {
     ) {
       return {
         transfer: null,
+        candidate: null,
         providerAssetRowId: null,
         unresolvedAssetCurrency: null,
       } satisfies CoinbaseFeeTransferBuildResult
     }
 
     const resolvedAsset = yield* params.normalizeParams.resolveAsset(params.money.currency)
-
-    if (Option.isNone(resolvedAsset.assetId)) {
-      return {
-        transfer: null,
-        providerAssetRowId: resolvedAsset.providerAssetRowId,
-        unresolvedAssetCurrency: params.money.currency.toUpperCase(),
-      } satisfies CoinbaseFeeTransferBuildResult
-    }
 
     const networkName = params.transaction.network?.network_name ?? params.transaction.network?.name
     const blockchainId = Option.getOrNull(
@@ -476,43 +471,61 @@ const buildFeeTransfer = (params: {
       )
     )
 
+    const transfer = {
+      sourceId: params.normalizeParams.sourceRecord.sourceId,
+      principalId: params.normalizeParams.source.principalId,
+      sourceRawRecordId: params.normalizeParams.sourceRecord.id,
+      externalId: `${params.transaction.id}:${params.externalSuffix}`,
+      externalGroupId: params.transaction.id,
+      addressId: params.normalizeParams.source.addressId,
+      blockchainId,
+      txHash: null,
+      timestamp: params.timestamp,
+      type: "fee" as const,
+      fromAddress: partyAddress(params.transaction.from),
+      toAddress: null,
+      fromAccountRef: ownAccountRef({
+        explicitAccountRef: partyAccountRef(params.transaction.from),
+        fallback: params.normalizeParams.sourceRecord.externalAccountId ?? "coinbase:account",
+      }),
+      toAccountRef: params.toAccountRef,
+      fromPartyType: toNullable(params.transaction.from?.resource),
+      fromPartyResourcePath: toNullable(params.transaction.from?.resource_path),
+      toPartyType: "fee",
+      toPartyResourcePath: null,
+      assetRepresentationId: null,
+      amount: params.money.amount,
+      tokenId: null,
+      notes: params.notes,
+      metadata: {
+        provider: "coinbase",
+        principalId: params.normalizeParams.source.principalId,
+        coinbaseTransactionId: params.transaction.id,
+        providerStatus: params.transaction.status,
+        networkHash: params.transaction.network?.hash ?? null,
+      },
+    } satisfies CoinbaseAssetDecisionFeeTransferCandidate["transfer"]
+
+    if (Option.isNone(resolvedAsset.assetId)) {
+      return {
+        transfer: null,
+        candidate: {
+          _tag: "asset_decision_fee_transfer",
+          providerAssetRowId: resolvedAsset.providerAssetRowId,
+          transfer,
+        },
+        providerAssetRowId: resolvedAsset.providerAssetRowId,
+        unresolvedAssetCurrency: params.money.currency.toUpperCase(),
+      } satisfies CoinbaseFeeTransferBuildResult
+    }
+
     return {
       transfer: {
-        sourceId: params.normalizeParams.sourceRecord.sourceId,
-        principalId: params.normalizeParams.source.principalId,
-        sourceRawRecordId: params.normalizeParams.sourceRecord.id,
-        externalId: `${params.transaction.id}:${params.externalSuffix}`,
-        externalGroupId: params.transaction.id,
-        addressId: params.normalizeParams.source.addressId,
-        blockchainId,
-        txHash: null,
-        timestamp: params.timestamp,
-        type: "fee",
-        fromAddress: partyAddress(params.transaction.from),
-        toAddress: null,
-        fromAccountRef: ownAccountRef({
-          explicitAccountRef: partyAccountRef(params.transaction.from),
-          fallback: params.normalizeParams.sourceRecord.externalAccountId ?? "coinbase:account",
-        }),
-        toAccountRef: params.toAccountRef,
-        fromPartyType: toNullable(params.transaction.from?.resource),
-        fromPartyResourcePath: toNullable(params.transaction.from?.resource_path),
-        toPartyType: "fee",
-        toPartyResourcePath: null,
+        ...transfer,
         assetId: resolvedAsset.assetId.value,
-        assetRepresentationId: null,
         providerAssetRowId: resolvedAsset.providerAssetRowId,
-        amount: params.money.amount,
-        tokenId: null,
-        notes: params.notes,
-        metadata: {
-          provider: "coinbase",
-          principalId: params.normalizeParams.source.principalId,
-          coinbaseTransactionId: params.transaction.id,
-          providerStatus: params.transaction.status,
-          networkHash: params.transaction.network?.hash ?? null,
-        },
       },
+      candidate: null,
       providerAssetRowId: resolvedAsset.providerAssetRowId,
       unresolvedAssetCurrency: null,
     } satisfies CoinbaseFeeTransferBuildResult
@@ -580,6 +593,9 @@ const normalizeCoinbaseRecord = (params: NormalizeCoinbaseRecordParams) =>
 
     const canonicalTransfers = feeTransferResults.flatMap((result) =>
       result.transfer === null ? [] : [result.transfer]
+    )
+    const feeTransferCandidates = feeTransferResults.flatMap((result) =>
+      result.candidate === null ? [] : [result.candidate]
     )
     const feeProviderAssetRowIds = Array.from(
       new Set(
@@ -654,6 +670,7 @@ const normalizeCoinbaseRecord = (params: NormalizeCoinbaseRecordParams) =>
       providerTransfers,
       primaryProviderTransfer,
       canonicalTransfers,
+      feeTransferCandidates,
       feeProviderAssetRowIds,
       unresolvedAssetCurrencies,
       primaryAssetCurrency: transactionPayload.amount.currency,

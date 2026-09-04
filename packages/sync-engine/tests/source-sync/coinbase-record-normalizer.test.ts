@@ -175,3 +175,130 @@ it.effect("keeps each same-currency fee paired with its resolved provider row", 
     )
   }).pipe(Effect.provide(CoinbaseRecordNormalizerLive))
 )
+
+it.effect("retains an unresolved non-native fee as a writer-built candidate", () =>
+  Effect.gen(function* () {
+    const providerAssetRowId = "00000000-0000-4000-8000-000000000515"
+    const normalizer = yield* CoinbaseRecordNormalizer
+    const result = yield* normalizer.normalize({
+      source,
+      sourceRecord: sourceRecord({
+        ...advancedTradeFill({ type: "buy", side: "BUY", amount: "0.01" }),
+        network: {
+          status: "confirmed",
+          hash: "unresolved-fee-hash",
+          network_name: "base",
+          transaction_fee: { amount: "0.1", currency: "HYPE" },
+        },
+      }),
+      resolveAsset: () =>
+        Effect.succeed({
+          assetId: Option.none(),
+          providerAssetRowId,
+        }),
+      resolveBlockchainId: () => Option.some("00000000-0000-4000-8000-000000000516"),
+    })
+
+    expect(result.feeTransferCandidates).toEqual([
+      {
+        _tag: "asset_decision_fee_transfer",
+        providerAssetRowId,
+        transfer: {
+          sourceId: source.id,
+          principalId: source.principalId,
+          sourceRawRecordId: "00000000-0000-4000-8000-000000000401",
+          externalId: "advanced-trade-fill-1:network_fee",
+          externalGroupId: "advanced-trade-fill-1",
+          addressId: null,
+          blockchainId: "00000000-0000-4000-8000-000000000516",
+          txHash: null,
+          timestamp: observedAt,
+          type: "fee",
+          fromAddress: null,
+          toAddress: null,
+          fromAccountRef: "coinbase-account-1",
+          toAccountRef: "coinbase:network",
+          fromPartyType: null,
+          fromPartyResourcePath: null,
+          toPartyType: "fee",
+          toPartyResourcePath: null,
+          assetRepresentationId: null,
+          amount: "0.1",
+          tokenId: null,
+          notes: "Coinbase network transaction fee",
+          metadata: {
+            provider: "coinbase",
+            principalId: source.principalId,
+            coinbaseTransactionId: "advanced-trade-fill-1",
+            providerStatus: "completed",
+            networkHash: "unresolved-fee-hash",
+          },
+        },
+      },
+    ])
+    expect(result.canonicalTransfers).toEqual([])
+    expect(result.providerTransfers).toEqual([])
+    expect(result.unresolvedAssetCurrencies).toEqual(["HYPE"])
+    expect(result.feeProviderAssetRowIds).toEqual([providerAssetRowId])
+  }).pipe(Effect.provide(CoinbaseRecordNormalizerLive))
+)
+
+it.effect("keeps same-currency fee candidates paired with their writer-supplied rows", () =>
+  Effect.gen(function* () {
+    const firstProviderAssetRowId = "00000000-0000-4000-8000-000000000517"
+    const secondProviderAssetRowId = "00000000-0000-4000-8000-000000000518"
+    const providerAssetRowIds = [firstProviderAssetRowId, secondProviderAssetRowId] as const
+    let resolutionIndex = 0
+    const normalizer = yield* CoinbaseRecordNormalizer
+    const result = yield* normalizer.normalize({
+      source,
+      sourceRecord: sourceRecord({
+        ...advancedTradeFill(),
+        network: {
+          status: "confirmed",
+          hash: "unresolved-dual-fee-hash",
+          network_name: "bitcoin",
+          transaction_fee: { amount: "0.0001", currency: "BTC" },
+        },
+        advanced_trade_fill: {
+          ...advancedTradeFill().advanced_trade_fill,
+          commission: { amount: "0.0002", currency: "BTC" },
+        },
+      }),
+      resolveAsset: () =>
+        Effect.gen(function* () {
+          const providerAssetRowId = providerAssetRowIds[resolutionIndex]
+          resolutionIndex += 1
+          if (providerAssetRowId === undefined) {
+            return yield* Effect.die("Unexpected extra fee resolution")
+          }
+          return { assetId: Option.none(), providerAssetRowId }
+        }),
+      resolveBlockchainId: () => Option.none(),
+    })
+
+    expect(
+      result.feeTransferCandidates.map((candidate) => ({
+        externalId: candidate.transfer.externalId,
+        amount: candidate.transfer.amount,
+        providerAssetRowId: candidate.providerAssetRowId,
+      }))
+    ).toEqual([
+      {
+        externalId: "advanced-trade-fill-1:network_fee",
+        amount: "0.0001",
+        providerAssetRowId: firstProviderAssetRowId,
+      },
+      {
+        externalId: "advanced-trade-fill-1:commission",
+        amount: "0.0002",
+        providerAssetRowId: secondProviderAssetRowId,
+      },
+    ])
+    expect(result.canonicalTransfers).toEqual([])
+    expect(result.feeProviderAssetRowIds).toEqual([
+      firstProviderAssetRowId,
+      secondProviderAssetRowId,
+    ])
+  }).pipe(Effect.provide(CoinbaseRecordNormalizerLive))
+)

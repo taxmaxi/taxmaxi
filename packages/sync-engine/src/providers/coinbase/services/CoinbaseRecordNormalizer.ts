@@ -25,6 +25,16 @@ export interface CoinbaseResolvedAssetObservation {
 }
 
 /**
+ * CoinbaseAssetDecisionFeeTransferCandidate - Complete fee transfer input retained when the
+ * provider asset decision does not supply an economic asset.
+ */
+export interface CoinbaseAssetDecisionFeeTransferCandidate {
+  readonly _tag: "asset_decision_fee_transfer"
+  readonly providerAssetRowId: string
+  readonly transfer: Omit<SourceTransferDraft, "assetId" | "providerAssetRowId">
+}
+
+/**
  * NormalizeCoinbaseRecordParams - Input required to normalize one Coinbase raw row.
  */
 export interface NormalizeCoinbaseRecordParams {
@@ -46,6 +56,8 @@ export interface CoinbaseRecordNormalizationResult {
   /** Exact principal movement draft which may produce the main accounting leg. */
   readonly primaryProviderTransfer: SourceProviderTransferDraft | null
   readonly canonicalTransfers: ReadonlyArray<SourceTransferDraft>
+  /** Writer-built fees waiting for a later effective asset decision. */
+  readonly feeTransferCandidates: ReadonlyArray<CoinbaseAssetDecisionFeeTransferCandidate>
   readonly feeProviderAssetRowIds: ReadonlyArray<string>
   readonly unresolvedAssetCurrencies: ReadonlyArray<string>
   readonly primaryAssetCurrency: string

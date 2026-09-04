@@ -11,7 +11,7 @@ import {
 } from "@my/core/accounting"
 import * as Effect from "effect/Effect"
 import * as Schema from "effect/Schema"
-import { calculate } from "../src/index.ts"
+import { calculate, germanTaxYearEndExclusive } from "../src/index.ts"
 
 const decodeChoice = Schema.decodeUnknownSync(AccountingChoice)
 const decodeEvent = Schema.decodeUnknownSync(AccountingEvent)
@@ -88,6 +88,12 @@ const calculateDisposalTreatment = ({
   })
 
 describe("German private-assets jurisdiction", () => {
+  it("ends a tax year at midnight in Europe/Berlin", () => {
+    expect(germanTaxYearEndExclusive(TaxYear.make(2025)).toISOString()).toBe(
+      "2025-12-31T23:00:00.000Z"
+    )
+  })
+
   it.effect("uses the German FIFO and per-custody-unit defaults", () =>
     Effect.gen(function* () {
       const result = yield* calculateGerman()

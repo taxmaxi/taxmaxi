@@ -9,6 +9,7 @@ import {
   AccountingChoiceResolutionError,
   calculate,
   GERMAN_RULE_SET_VERSION,
+  germanTaxYearEndExclusive,
   type TaxAccountingError,
   UnsupportedJurisdictionError,
 } from "@my/accounting"
@@ -22,11 +23,13 @@ import { eq, sql } from "drizzle-orm"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import * as Schema from "effect/Schema"
+import { databaseErrorMetadata } from "../errors/DatabaseErrorMetadata.ts"
 import { PersistenceError } from "../errors/RepositoryError.ts"
 import { schema } from "../schema/index.ts"
 import {
   CalculationRunAlreadyStoredError,
   CalculationRunCurrencyMismatchError,
+  type CalculationRunResult,
   InputLedgerRevision,
   CalculationRunRepository,
   ValuationRevision,
@@ -38,11 +41,14 @@ import {
 import {
   FactualLedgerRepository,
   type CustodyUnitMembership,
+  type FactualLedgerInputBlocker,
   type PrincipalAssetOverrideRevisionRecord,
 } from "../services/FactualLedgerRepository.ts"
 import { drizzle } from "./PgClientLive.ts"
 
 const CALCULATION_FAILED_CODE = "calculation_failed"
+const CALCULATION_STALE_RECOMPUTED_CODE = "calculation_stale_recomputed"
+const BLOCKER_PROVIDER_ASSET_FOREIGN_KEY = "calculation_run_blockers_DSx7wqqyVAYZ_fkey"
 
 const IllegalAccountingChoiceErrorTag = Schema.TaggedStruct("IllegalAccountingChoiceError", {})
 
@@ -78,6 +84,17 @@ const canonicalValuationFact = (fact: ValuationFact): ReadonlyArray<string | num
         fact.source,
       ]
 
+const canonicalInputBlocker = (
+  blocker: FactualLedgerInputBlocker
+): ReadonlyArray<string | number | null> => [
+  blocker.code,
+  blocker.eventId,
+  blocker.occurredAt.getTime(),
+  blocker.assetId ?? null,
+  "providerAssetRowId" in blocker ? (blocker.providerAssetRowId ?? null) : null,
+  blocker.custodyUnitId,
+]
+
 const sha256 = (domain: string, value: unknown): string =>
   createHash("sha256").update(domain).update("\0").update(JSON.stringify(value)).digest("hex")
 
@@ -85,18 +102,23 @@ const makeLedgerRevision = ({
   snapshotTransactionId,
   snapshotVisibility,
   events,
+  inputBlockers,
   custodyUnitMembership,
   principalAssetOverrideRevision,
 }: {
   readonly snapshotTransactionId: string
   readonly snapshotVisibility: string
   readonly events: ReadonlyArray<AccountingEvent>
+  readonly inputBlockers: ReadonlyArray<FactualLedgerInputBlocker>
   readonly custodyUnitMembership: ReadonlyArray<CustodyUnitMembership>
   readonly principalAssetOverrideRevision: ReadonlyArray<PrincipalAssetOverrideRevisionRecord>
 }): InputLedgerRevision =>
   InputLedgerRevision.make(
     `v2:${snapshotTransactionId}:${snapshotVisibility}:${sha256("taxmaxi:factual-ledger:v2", {
       events: events.map(canonicalEvent),
+      inputBlockers: inputBlockers
+        .map(canonicalInputBlocker)
+        .sort((left, right) => JSON.stringify(left).localeCompare(JSON.stringify(right))),
       custodyUnitMembership: custodyUnitMembership.map(({ sourceId, custodyUnitId }) => [
         sourceId,
         custodyUnitId,
@@ -109,6 +131,11 @@ const makeValuationRevision = (valuationFacts: ReadonlyArray<ValuationFact>): Va
   ValuationRevision.make(
     `sha256:${sha256("taxmaxi:valuation-facts:v1", valuationFacts.map(canonicalValuationFact))}`
   )
+
+const isConcurrentFactChange = (error: unknown): boolean => {
+  const metadata = databaseErrorMetadata(error)
+  return metadata?.code === "23503" && metadata.constraint === BLOCKER_PROVIDER_ASSET_FOREIGN_KEY
+}
 
 const make = Effect.gen(function* () {
   const db = yield* drizzle
@@ -141,11 +168,13 @@ const make = Effect.gen(function* () {
           const factualLedger = yield* factualLedgerRepository.load({
             principalId: params.principalId,
             reportingCurrency: params.reportingCurrency,
+            occurredBefore: germanTaxYearEndExclusive(params.taxYear).toDate(),
           })
           const inputLedgerRevision = makeLedgerRevision({
             snapshotTransactionId,
             snapshotVisibility,
             events: factualLedger.events,
+            inputBlockers: factualLedger.inputBlockers,
             custodyUnitMembership: factualLedger.custodyUnitMembership,
             principalAssetOverrideRevision: factualLedger.principalAssetOverrideRevision,
           })
@@ -191,22 +220,34 @@ const make = Effect.gen(function* () {
         accountingChoices: params.accountingChoices,
         valuationFacts: snapshot.factualLedger.valuationFacts,
       }).pipe(
-        Effect.flatMap((result) =>
-          calculationRunRepository.persist({
+        Effect.flatMap((result) => {
+          const inputBlockers = snapshot.factualLedger.inputBlockers
+          const combinedResult: CalculationRunResult =
+            inputBlockers.length === 0
+              ? result
+              : {
+                  ...result,
+                  status: "partial",
+                  blockers: [...inputBlockers, ...result.blockers],
+                }
+
+          return calculationRunRepository.persist({
             id: params.id,
             principalId: params.principalId,
             reportingCurrency: params.reportingCurrency,
             inputLedgerRevision: snapshot.inputLedgerRevision,
             valuationRevision: snapshot.valuationRevision,
-            result,
+            result: combinedResult,
           })
-        ),
+        }),
         Effect.onError((originalCause) =>
           calculationRunRepository
             .fail({
               id: params.id,
               principalId: params.principalId,
-              failureCode: CALCULATION_FAILED_CODE,
+              failureCode: isConcurrentFactChange(originalCause)
+                ? CALCULATION_STALE_RECOMPUTED_CODE
+                : CALCULATION_FAILED_CODE,
             })
             .pipe(
               Effect.catchCause((settlementCause) =>

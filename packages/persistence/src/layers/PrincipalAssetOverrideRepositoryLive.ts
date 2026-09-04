@@ -53,6 +53,7 @@ const MAPPING_ASSET = alias(schema.assets, "principal_override_mapping_asset")
 const REQUESTED_REPLAY_JOB = alias(schema.processingJobs, "principal_override_requested_replay_job")
 const FOLLOW_UP_REPLAY_JOB = alias(schema.processingJobs, "principal_override_follow_up_replay_job")
 const CHECKED_TECHNICAL_BLOCKER_KINDS = [
+  "malformed_movement",
   "missing_decimals",
   "unsupported_asset_type",
 ] as const satisfies ReadonlyArray<PrincipalAssetTechnicalBlocker>
