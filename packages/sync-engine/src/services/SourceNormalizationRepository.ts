@@ -406,6 +406,9 @@ export type SourceProviderAssetTransferCandidateResult =
       readonly reason: SourceProviderAssetBlockedReason
     }
 
+/** Typed provider derivation outcome that withholds accounting facts without failing the raw row. */
+export type SourceLegDerivationWithholdingReason = "malformed_movement"
+
 /**
  * PersistNormalizedSourceArtifactsContext - Persisted pre-leg artifacts available
  * to provider-specific leg derivation inside the repository transaction.
@@ -428,6 +431,8 @@ export interface PersistNormalizedSourceArtifactsContext {
   readonly persistProviderAssetTransferCandidate: (
     candidate: SourceProviderAssetTransferCandidate
   ) => Effect.Effect<SourceProviderAssetTransferCandidateResult, SyncEngineStorageError>
+  /** Records a provider-derived blocker while keeping the transaction and provider evidence. */
+  readonly withholdAccountingFacts: (reason: SourceLegDerivationWithholdingReason) => void
 }
 
 /**

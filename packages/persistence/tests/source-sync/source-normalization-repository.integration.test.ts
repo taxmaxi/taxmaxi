@@ -978,6 +978,7 @@ const persistCoinbaseNormalization = ({
               canonicalTransfers,
               resolveProviderAssetDecision,
               persistProviderAssetTransferCandidate,
+              withholdAccountingFacts,
             }) => {
               const persistedPrimaryProviderTransfer =
                 primaryProviderTransfer === null
@@ -1032,7 +1033,7 @@ const persistCoinbaseNormalization = ({
                 const resolvedFeeTransfers = feeTransferResults.flatMap((result) =>
                   result._tag === "included" ? [result.transfer] : []
                 )
-                const legs = yield* coinbaseSourceSyncProvider.deriveLegs({
+                const legDerivation = yield* coinbaseSourceSyncProvider.deriveLegs({
                   transaction,
                   venueContext,
                   primaryAsset: primaryAssetResult.asset,
@@ -1040,7 +1041,11 @@ const persistCoinbaseNormalization = ({
                   canonicalTransfers: [...canonicalTransfers, ...resolvedFeeTransfers],
                   deriveMainLeg: prepared.deriveMainLeg,
                 })
-                return legs
+                if (legDerivation._tag === "withheld") {
+                  withholdAccountingFacts(legDerivation.reason)
+                  return []
+                }
+                return legDerivation.legs
               }).pipe(
                 Effect.map((legs) => {
                   const completeLegs = includeOriginlessSibling
@@ -1504,6 +1509,194 @@ describe("SourceNormalizationRepositoryLive", () => {
               }))
             ),
           transactionReview: null,
+          resolvedTransactionType: APPROVED_MAPPING,
+        })
+      )
+    )
+
+  const persistExactPrimaryWithChainlessFeeCandidate = ({
+    occurredAt,
+    externalId,
+    providerAssetRowId,
+  }: {
+    readonly occurredAt: Date
+    readonly externalId: string
+    readonly providerAssetRowId: string
+  }) =>
+    runRepository(
+      Effect.flatMap(SourceNormalizationRepository, (repository) =>
+        repository.persistNormalizedArtifacts({
+          transaction: {
+            sourceId: TEST_SOURCE_ID,
+            sourceRawRecordId: null,
+            externalId,
+            externalGroupId: externalId,
+            timestamp: occurredAt,
+            transactionType: "staking_reward",
+            providerTransactionType: "staking_reward",
+            providerStatus: "completed",
+            providerResourcePath: `/test/${externalId}`,
+            providerDescription: "Exact principal movement with a chainless fee candidate",
+            providerCreatedAt: occurredAt,
+            providerUpdatedAt: occurredAt,
+            metadata: { evidence: externalId },
+            providerFiatAmount: null,
+            providerFiatCurrency: null,
+            principalId: TEST_PRINCIPAL_ID,
+          },
+          venueContext: {
+            venueType: "cex",
+            cexAccountId: fixture.cexAccountId,
+            externalAccountId: "coinbase-account-1",
+            externalOrderId: null,
+            externalFillId: null,
+            side: null,
+            instrument: null,
+            fillPrice: null,
+            commissionAmount: null,
+            commissionCurrency: null,
+            metadata: { evidence: externalId },
+          },
+          providerTransfers: [
+            {
+              sourceId: TEST_SOURCE_ID,
+              sourceRawRecordId: null,
+              externalId: `${externalId}-principal-provider-transfer`,
+              externalGroupId: externalId,
+              providerAssetId: providerAssetRowId,
+              timestamp: occurredAt,
+              direction: "inbound",
+              processingMode: "accounting_and_evidence",
+              fromAccountRef: "external",
+              toAccountRef: "owned",
+              fromAddress: null,
+              toAddress: null,
+              networkName: "bitcoin",
+              networkHash: `${externalId}-hash`,
+              observedBlockchainId: fixture.bitcoinBlockchainId,
+              observedRepresentationType: "token",
+              observedContractAddress: "sync-engine-btc-fixture",
+              observedMintAddress: null,
+              observedDecimals: 8,
+              amount: "1",
+              metadata: { role: "principal" },
+            },
+          ],
+          canonicalTransfers: [],
+          providerAssetRowIds: [providerAssetRowId],
+          deriveLegs: ({
+            transaction,
+            providerTransfers,
+            resolveProviderAssetDecision,
+            persistProviderAssetTransferCandidate,
+          }) =>
+            Effect.gen(function* () {
+              const [principalProviderTransfer] = providerTransfers
+              if (principalProviderTransfer === undefined) {
+                return yield* Effect.die("Missing exact principal provider transfer")
+              }
+              const target = {
+                _tag: "provider_asset_transaction_use" as const,
+                providerAssetRowId,
+              }
+              const feeDecision = resolveProviderAssetDecision(target)
+              if (feeDecision._tag !== "included") return []
+
+              const feeTransfer = yield* persistProviderAssetTransferCandidate({
+                _tag: "provider_asset_transfer_candidate",
+                target,
+                transfer: {
+                  sourceId: TEST_SOURCE_ID,
+                  principalId: TEST_PRINCIPAL_ID,
+                  sourceRawRecordId: null,
+                  externalId: `${externalId}-fee-transfer`,
+                  externalGroupId: externalId,
+                  addressId: null,
+                  blockchainId: null,
+                  txHash: null,
+                  timestamp: occurredAt,
+                  type: "cex",
+                  fromAddress: null,
+                  toAddress: null,
+                  fromAccountRef: "owned",
+                  toAccountRef: "provider",
+                  fromPartyType: null,
+                  fromPartyResourcePath: null,
+                  toPartyType: null,
+                  toPartyResourcePath: null,
+                  assetRepresentationId: null,
+                  amount: "0.01",
+                  tokenId: null,
+                  notes: null,
+                  metadata: { role: "fee" },
+                },
+              })
+              if (feeTransfer._tag !== "included") return []
+
+              return [
+                {
+                  sourceId: TEST_SOURCE_ID,
+                  sourceRawRecordId: null,
+                  externalId: `${externalId}-principal-leg`,
+                  txHash: null,
+                  timestamp: occurredAt,
+                  principalId: TEST_PRINCIPAL_ID,
+                  addressId: null,
+                  assetId: TEST_BTC_ASSET_ID,
+                  assetRepresentationId: null,
+                  amount: "1",
+                  kind: "income" as const,
+                  provenance: "deterministic" as const,
+                  derivationRule: "exact_principal_with_chainless_fee_fixture",
+                  providerAssetRowId,
+                  metadata: null,
+                  transactionId: transaction.id,
+                  originKind: "provider_transfer" as const,
+                  providerTransferId: principalProviderTransfer.id,
+                  sourceTransferId: null,
+                  fiatAmount: null,
+                  fiatCurrency: null,
+                  feeForTransactionId: null,
+                },
+                {
+                  sourceId: TEST_SOURCE_ID,
+                  sourceRawRecordId: null,
+                  externalId: `${externalId}-fee-leg`,
+                  txHash: null,
+                  timestamp: occurredAt,
+                  principalId: TEST_PRINCIPAL_ID,
+                  addressId: null,
+                  assetId: feeTransfer.transfer.assetId,
+                  assetRepresentationId: null,
+                  amount: "0.01",
+                  kind: "fee" as const,
+                  provenance: "deterministic" as const,
+                  derivationRule: "exact_principal_with_chainless_fee_fixture",
+                  providerAssetRowId,
+                  metadata: null,
+                  transactionId: transaction.id,
+                  originKind: "canonical_transfer" as const,
+                  providerTransferId: null,
+                  sourceTransferId: feeTransfer.transfer.id,
+                  fiatAmount: null,
+                  fiatCurrency: null,
+                  feeForTransactionId: transaction.id,
+                },
+              ]
+            }),
+          transactionReview: {
+            principalId: TEST_PRINCIPAL_ID,
+            reviewStatus: "needs_review",
+            originalTypeKey: "staking_reward",
+            originalConfidence: null,
+            currentTypeKey: "staking_reward",
+            legalRuleSetVersion: null,
+            categorizationReason: "provider fixture review",
+            matchedLayer: "provider_fixture",
+            needsReview: true,
+            userNotes: null,
+            reviewedAt: null,
+          },
           resolvedTransactionType: APPROVED_MAPPING,
         })
       )
@@ -2714,6 +2907,97 @@ describe("SourceNormalizationRepositoryLive", () => {
     })
   )
 
+  it.effect(
+    "preflights a recorded chainless target even when an exact sibling shares its row",
+    () =>
+      Effect.gen(function* () {
+        const occurredAt = DateTime.toDateUtc(DateTime.makeUnsafe("2025-02-01T10:20:00.000Z"))
+        yield* Effect.promise(() => seedProviderDecisionFixture(occurredAt))
+
+        const result = yield* Effect.promise(() =>
+          persistExactPrimaryWithChainlessFeeCandidate({
+            occurredAt,
+            externalId: "exact-primary-with-excluded-chainless-fee",
+            providerAssetRowId: PROVIDER_ASSET_ROW_USER_EXCLUDED_ID,
+          })
+        )
+        const state = yield* Effect.promise(() =>
+          runPg(
+            Effect.gen(function* () {
+              const db = yield* drizzle
+              const movements = yield* db
+                .select({ id: schema.inventoryMovements.id })
+                .from(schema.inventoryMovements)
+                .where(eq(schema.inventoryMovements.transactionId, result.transaction.id))
+              const [review] = yield* db
+                .select({ matchedLayer: schema.transactionReviews.matchedLayer })
+                .from(schema.transactionReviews)
+                .where(eq(schema.transactionReviews.transactionId, result.transaction.id))
+              return { movements, review }
+            })
+          )
+        )
+
+        expect(result.providerTransfers).toEqual([
+          expect.objectContaining({
+            providerAssetId: PROVIDER_ASSET_ROW_USER_EXCLUDED_ID,
+            sourceRepresentationUseId: expect.any(String),
+          }),
+        ])
+        expect(result.canonicalTransfers).toEqual([])
+        expect(result.legs).toEqual([])
+        expect(state.movements).toEqual([])
+        expect(state.review?.matchedLayer).toContain("provider_fixture")
+      })
+  )
+
+  it.effect("keeps exact and provider fallback identities separate for one provider row", () =>
+    Effect.gen(function* () {
+      const occurredAt = DateTime.toDateUtc(DateTime.makeUnsafe("2025-02-01T10:20:00.000Z"))
+      yield* Effect.promise(() => seedProviderDecisionFixture(occurredAt))
+
+      const result = yield* Effect.promise(() =>
+        persistExactPrimaryWithChainlessFeeCandidate({
+          occurredAt,
+          externalId: "exact-primary-with-provider-identity-fee",
+          providerAssetRowId: PROVIDER_ASSET_ROW_A_ID,
+        })
+      )
+      const inventory = yield* Effect.promise(() =>
+        runPg(
+          Effect.gen(function* () {
+            const db = yield* drizzle
+            return yield* db
+              .select({
+                assetId: schema.inventoryMovements.assetId,
+                purpose: schema.inventoryMovements.purpose,
+              })
+              .from(schema.inventoryMovements)
+              .where(eq(schema.inventoryMovements.transactionId, result.transaction.id))
+          })
+        )
+      )
+
+      expect(result.legs).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            kind: "income",
+            assetId: TEST_BTC_ASSET_ID,
+          }),
+          expect.objectContaining({
+            kind: "fee",
+            assetId: PROVIDER_OVERRIDE_ASSET_ID,
+          }),
+        ])
+      )
+      expect(result.canonicalTransfers).toEqual([
+        expect.objectContaining({ assetId: PROVIDER_OVERRIDE_ASSET_ID }),
+      ])
+      expect(inventory).toHaveLength(2)
+      expect(inventory.every(({ assetId }) => assetId === TEST_BTC_ASSET_ID)).toBe(true)
+    })
+  )
+
   it.effect("lets a sound principal inclusion reverse global provider exclusion", () =>
     Effect.gen(function* () {
       const occurredAt = DateTime.toDateUtc(DateTime.makeUnsafe("2025-02-01T10:20:00.000Z"))
@@ -3307,7 +3591,7 @@ describe("SourceNormalizationRepositoryLive", () => {
     })
   )
 
-  it.effect("withholds contradictory duplicate provider rows and preserves evidence", () =>
+  it.effect("keeps different recorded provider targets independent", () =>
     Effect.gen(function* () {
       const occurredAt = DateTime.toDateUtc(DateTime.makeUnsafe("2025-02-01T10:20:00.000Z"))
       yield* Effect.promise(() => seedProviderDecisionFixture(occurredAt))
@@ -3330,11 +3614,11 @@ describe("SourceNormalizationRepositoryLive", () => {
       )
       const stored = yield* Effect.promise(loadProviderDecisionEvidence)
 
-      expect(result.legs).toEqual([])
-      expect(stored.review).toEqual({
-        reviewStatus: "needs_review",
-        matchedLayer: "principal_asset_override",
-      })
+      expect(result.legs.map(({ assetId }) => assetId)).toEqual([
+        PROVIDER_OVERRIDE_ASSET_ID,
+        SECOND_PROVIDER_OVERRIDE_ASSET_ID,
+      ])
+      expect(stored.review).toBeUndefined()
       expect(stored.mappings).toEqual(
         expect.arrayContaining([
           expect.objectContaining({

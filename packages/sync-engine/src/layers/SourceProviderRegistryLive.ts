@@ -118,6 +118,7 @@ const makeCoinbaseProviderModule = (
                       canonicalTransfers,
                       resolveProviderAssetDecision,
                       persistProviderAssetTransferCandidate,
+                      withholdAccountingFacts,
                     }) =>
                       Effect.gen(function* () {
                         const primaryProviderTransfer =
@@ -185,7 +186,7 @@ const makeCoinbaseProviderModule = (
                           result._tag === "included" ? [result.transfer] : []
                         )
 
-                        return yield* coinbaseSourceSyncProvider.deriveLegs({
+                        const legDerivation = yield* coinbaseSourceSyncProvider.deriveLegs({
                           transaction,
                           venueContext,
                           primaryAsset: primaryAssetResult.asset,
@@ -193,6 +194,11 @@ const makeCoinbaseProviderModule = (
                           canonicalTransfers: [...canonicalTransfers, ...resolvedFeeTransfers],
                           deriveMainLeg: prepared.deriveMainLeg,
                         })
+                        if (legDerivation._tag === "withheld") {
+                          withholdAccountingFacts(legDerivation.reason)
+                          return []
+                        }
+                        return legDerivation.legs
                       }).pipe(Effect.mapError(toCoinbaseRecoverableNormalizationError))
                   : () => Effect.succeed([]),
             } as const

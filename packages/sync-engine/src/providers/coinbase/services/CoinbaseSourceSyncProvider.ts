@@ -29,7 +29,6 @@ import {
   type SourceSyncProviderError,
 } from "../../../shared/SourceProviderRawBatch.ts"
 import { SyncEngineStorageError } from "../../../services/SyncEngineStorageError.ts"
-import type { CoinbaseLegDerivationError } from "./CoinbaseLegDerivationService.ts"
 import type {
   CoinbaseAssetDecisionFeeTransferCandidate,
   CoinbaseRecordNormalizationError,
@@ -136,6 +135,11 @@ export interface DeriveCoinbaseProviderLegsParams {
   readonly deriveMainLeg: boolean
 }
 
+/** Coinbase leg derivation either returns facts or a reviewable movement blocker. */
+export type CoinbaseProviderLegDerivationResult =
+  | { readonly _tag: "derived"; readonly legs: ReadonlyArray<SourceTransactionLegDraft> }
+  | { readonly _tag: "withheld"; readonly reason: "malformed_movement" }
+
 /**
  * CoinbaseRecoverableNormalizationError - Provider errors that fail one raw row without aborting the job.
  */
@@ -143,7 +147,6 @@ export type CoinbaseRecoverableNormalizationError =
   | CoinbaseRecordNormalizationError
   | CoinbasePendingTransactionTypeMappingError
   | CoinbaseBrokenApprovedProviderAssetMappingError
-  | CoinbaseLegDerivationError
 
 /**
  * CoinbaseSourceSyncProviderShape - Coinbase provider surface consumed by orchestration.
@@ -177,10 +180,7 @@ export interface CoinbaseSourceSyncProviderShape {
 
   readonly deriveLegs: (
     params: DeriveCoinbaseProviderLegsParams
-  ) => Effect.Effect<
-    ReadonlyArray<SourceTransactionLegDraft>,
-    CoinbaseLegDerivationError | SyncEngineStorageError
-  >
+  ) => Effect.Effect<CoinbaseProviderLegDerivationResult, SyncEngineStorageError>
 }
 
 /**

@@ -614,6 +614,7 @@ const makeExecutorLayer = ({
             }),
             persistProviderAssetTransferCandidate: () =>
               Effect.succeed({ _tag: "blocked", reason: { _tag: "unresolved_identity" } }),
+            withholdAccountingFacts: () => undefined,
           })
         }
         if (params.transaction.sourceRawRecordId !== null) {

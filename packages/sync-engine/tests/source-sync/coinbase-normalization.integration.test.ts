@@ -724,14 +724,21 @@ const persistDualFeeNormalization = (normalized: CoinbaseRecordNormalizationResu
       ],
       transactionReview: null,
       resolvedTransactionType: DUAL_FEE_RESOLVED_TRANSACTION_TYPE,
-      deriveLegs: ({ transaction, venueContext, canonicalTransfers }) =>
-        provider.deriveLegs({
-          transaction,
-          venueContext,
-          primaryAsset: null,
-          primaryProviderTransferId: null,
-          canonicalTransfers,
-          deriveMainLeg: false,
+      deriveLegs: ({ transaction, venueContext, canonicalTransfers, withholdAccountingFacts }) =>
+        Effect.gen(function* () {
+          const legDerivation = yield* provider.deriveLegs({
+            transaction,
+            venueContext,
+            primaryAsset: null,
+            primaryProviderTransferId: null,
+            canonicalTransfers,
+            deriveMainLeg: false,
+          })
+          if (legDerivation._tag === "withheld") {
+            withholdAccountingFacts(legDerivation.reason)
+            return []
+          }
+          return legDerivation.legs
         }),
     })
   }).pipe(Effect.provide(TestLayer))
@@ -2630,6 +2637,68 @@ describe("coinbase normalization persistence", () => {
         expect(replayedCounts.transfers).toHaveLength(repairedCounts.transfers.length)
         expect(replayedCounts.legs).toHaveLength(repairedCounts.legs.length)
       })
+    })
+  )
+
+  it.effect("withholds a malformed derived movement while preserving evidence and review", () =>
+    Effect.gen(function* () {
+      activeSyncRecords = [
+        makeCoinbaseRecord({
+          recordType: "coinbase_account",
+          externalRecordId: "coinbase-account-1",
+          occurredAt: DateTime.toDateUtc(DateTime.makeUnsafe("2025-01-01T00:00:00.000Z")),
+          payload: {
+            id: "coinbase-account-1",
+            created_at: "2025-01-01T00:00:00.000Z",
+            updated_at: "2025-01-01T00:00:00.000Z",
+          },
+        }),
+        makeCoinbaseRecord({
+          externalRecordId: "tx-negative-reward",
+          occurredAt: DateTime.toDateUtc(DateTime.makeUnsafe("2025-05-02T10:00:00.000Z")),
+          payload: {
+            id: "tx-negative-reward",
+            type: "staking_reward",
+            status: "completed",
+            amount: { amount: "-0.01000000", currency: "BTC" },
+            native_amount: { amount: "-100.00", currency: "EUR" },
+            created_at: "2025-05-02T10:00:00.000Z",
+            resource_path: "/v2/accounts/coinbase-account-1/transactions/tx-negative-reward",
+            description: "Invalid negative staking reward",
+          },
+        }),
+      ]
+
+      const summary = yield* runSync()
+      const job = yield* fetchJobDetails({ jobId: summary.jobId })
+      const counts = yield* fetchCounts()
+      const inventory = yield* Effect.gen(function* () {
+        const db = yield* drizzle
+        return yield* db
+          .select({ id: schema.inventoryMovements.id })
+          .from(schema.inventoryMovements)
+          .where(eq(schema.inventoryMovements.sourceId, sourceId))
+      }).pipe(Effect.provide(TestPgClientLive))
+      const rawRow = counts.rawRows.find(
+        ({ externalRecordId }) => externalRecordId === "tx-negative-reward"
+      )
+
+      expect(job.status).toBe("completed")
+      expect(job.normalizedRecords).toBe(2)
+      expect(job.failedRecords).toBe(0)
+      expect(rawRow?.normalizedAt).not.toBeNull()
+      expect(rawRow?.normalizationError).toBeNull()
+      expect(counts.transactions).toEqual([
+        expect.objectContaining({ externalId: "tx-negative-reward" }),
+      ])
+      expect(counts.legs).toEqual([])
+      expect(inventory).toEqual([])
+      expect(counts.transactionReviews).toEqual([
+        expect.objectContaining({
+          categorizationReason: expect.stringContaining("malformed_movement"),
+          matchedLayer: expect.stringContaining("principal_asset_override"),
+        }),
+      ])
     })
   )
 

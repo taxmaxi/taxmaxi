@@ -1224,8 +1224,12 @@ const make = Effect.gen(function* () {
         deriveMainLeg,
       })
 
-      return derived.legs
-    })
+      return { _tag: "derived", legs: derived.legs } as const
+    }).pipe(
+      Effect.catchTag("CoinbaseLegDerivationError", () =>
+        Effect.succeed({ _tag: "withheld", reason: "malformed_movement" } as const)
+      )
+    )
 
   const fetchRawBatch: CoinbaseSourceSyncProviderShape["fetchRawBatch"] = (
     params: FetchProviderRawBatchParams
