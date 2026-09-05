@@ -11,6 +11,7 @@ import { TransactionListRepository } from "@my/persistence/services"
 import * as Effect from "effect/Effect"
 import * as Option from "effect/Option"
 import { InternalServerError } from "../definitions/ApiErrors.ts"
+import { SourceNotFoundError } from "../definitions/SourcesApi.ts"
 import { TaxMaxiApi } from "../definitions/TaxMaxiApi.ts"
 import {
   TransactionBadRequestError,
@@ -42,6 +43,7 @@ export const TransactionsApiLive = HttpApiBuilder.group(TaxMaxiApi, "transaction
             principalId: principal.id,
             jurisdiction: GERMAN_JURISDICTION,
             reportingCurrency: EUR,
+            sourceId: query.sourceId ?? null,
             cursor: query.cursor ?? null,
             limit: query.limit ?? defaultPageLimit,
           })
@@ -49,7 +51,9 @@ export const TransactionsApiLive = HttpApiBuilder.group(TaxMaxiApi, "transaction
             Effect.mapError((error) =>
               error._tag === "TransactionListInvalidCursorError"
                 ? new TransactionBadRequestError({ message: error.message })
-                : internalError("Failed to load transactions.")
+                : error._tag === "TransactionListSourceNotFoundError"
+                  ? new SourceNotFoundError({ message: error.message })
+                  : internalError("Failed to load transactions.")
             )
           )
 

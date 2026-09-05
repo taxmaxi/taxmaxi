@@ -17,11 +17,17 @@ import { schema } from "../schema/index.ts"
 import {
   TransactionListInvalidCursorError,
   TransactionListRepository,
+  TransactionListSourceNotFoundError,
   type TransactionListItem,
   type TransactionListMovement,
   type TransactionListRepositoryService,
 } from "../services/TransactionListRepository.ts"
 import { drizzle } from "./PgClientLive.ts"
+
+interface TransactionReadScope {
+  readonly principalId: string
+  readonly sourceId: string | null
+}
 
 interface CursorParts {
   readonly timestamp: Date
@@ -65,24 +71,39 @@ const activeRunScope = (scope: CalculationReadScope) =>
 const matchingEventTaxYear = eq(schema.activeCalculationRuns.taxYear, eventTaxYear)
 
 const TransactionCursorPayload = Schema.Struct({
-  version: Schema.Literal(1),
+  version: Schema.Literal(2),
+  principalId: Schema.String.check(Schema.isUUID()),
+  sourceId: Schema.NullOr(Schema.String.check(Schema.isUUID())),
   timestamp: Schema.DateFromString,
   id: Schema.String.check(Schema.isUUID()),
 })
 
 const TransactionCursor = Schema.fromJsonString(TransactionCursorPayload)
 
-const makeCursor = ({ timestamp, id }: CursorParts): string =>
-  Schema.encodeSync(TransactionCursor)({ version: 1, timestamp, id })
+const makeCursor = ({
+  timestamp,
+  id,
+  scope,
+}: CursorParts & { readonly scope: TransactionReadScope }): string =>
+  Schema.encodeSync(TransactionCursor)({ version: 2, timestamp, id, ...scope })
 
-const parseCursor = (
-  cursor: string | null
-): Effect.Effect<Option.Option<CursorParts>, TransactionListInvalidCursorError> =>
+const parseCursor = ({
+  cursor,
+  scope,
+}: {
+  readonly cursor: string | null
+  readonly scope: TransactionReadScope
+}): Effect.Effect<Option.Option<CursorParts>, TransactionListInvalidCursorError> =>
   cursor === null
     ? Effect.succeed(Option.none())
     : Schema.decodeEffect(TransactionCursor)(cursor).pipe(
-        Effect.map(({ id, timestamp }) => Option.some({ id, timestamp })),
-        Effect.mapError(() => new TransactionListInvalidCursorError({ cursor }))
+        Effect.mapError(() => new TransactionListInvalidCursorError({ cursor })),
+        Effect.flatMap((payload) =>
+          payload.principalId.toLowerCase() === scope.principalId &&
+          (payload.sourceId?.toLowerCase() ?? null) === scope.sourceId
+            ? Effect.succeed(Option.some({ id: payload.id, timestamp: payload.timestamp }))
+            : Effect.fail(new TransactionListInvalidCursorError({ cursor }))
+        )
       )
 
 const decodeDecimal = ({
@@ -108,24 +129,33 @@ const make = Effect.gen(function* () {
   const canonicalTransactionTable = aliasedTable(schema.transactions, "list_canonical_transaction")
   type TransactionListExecutor = Pick<typeof db, "execute" | "select" | "selectDistinct">
 
-  const ownedScope = (executor: TransactionListExecutor, principalId: string) =>
+  const ownedLeg = (principalId: string) =>
     and(
+      eq(schema.transactionLegs.transactionId, schema.transactions.id),
+      eq(schema.transactionLegs.principalId, principalId),
       eq(schema.transactions.principalId, principalId),
-      eq(schema.sources.principalId, principalId),
+      eq(schema.transactionLegs.sourceId, schema.transactions.sourceId)
+    )
+
+  const ownedScope = (executor: TransactionListExecutor, scope: TransactionReadScope) =>
+    and(
+      eq(schema.transactions.principalId, scope.principalId),
+      eq(schema.sources.principalId, scope.principalId),
+      scope.sourceId === null ? undefined : eq(schema.transactions.sourceId, scope.sourceId),
       exists(
         executor
           .select({ id: schema.transactionLegs.id })
           .from(schema.transactionLegs)
-          .where(eq(schema.transactionLegs.transactionId, schema.transactions.id))
+          .where(ownedLeg(scope.principalId))
       )
     )
 
-  const loadTotalCount = (executor: TransactionListExecutor, principalId: string) =>
+  const loadTotalCount = (executor: TransactionListExecutor, scope: TransactionReadScope) =>
     executor
       .select({ count: count(schema.transactions.id) })
       .from(schema.transactions)
       .innerJoin(schema.sources, eq(schema.transactions.sourceId, schema.sources.id))
-      .where(ownedScope(executor, principalId))
+      .where(ownedScope(executor, scope))
       .pipe(
         wrapSqlError("transactionListRepository.list.count"),
         Effect.map((rows) => rows[0]?.count ?? 0)
@@ -135,12 +165,12 @@ const make = Effect.gen(function* () {
     cursor,
     executor,
     limit,
-    principalId,
+    scope,
   }: {
     readonly cursor: Option.Option<CursorParts>
     readonly executor: TransactionListExecutor
     readonly limit: number
-    readonly principalId: string
+    readonly scope: TransactionReadScope
   }) => {
     const cursorPredicate = Option.match(cursor, {
       onNone: () => undefined,
@@ -153,7 +183,7 @@ const make = Effect.gen(function* () {
           )
         ),
     })
-    const scope = ownedScope(executor, principalId)
+    const predicate = ownedScope(executor, scope)
 
     return executor
       .select({
@@ -168,16 +198,21 @@ const make = Effect.gen(function* () {
       })
       .from(schema.transactions)
       .innerJoin(schema.sources, eq(schema.transactions.sourceId, schema.sources.id))
-      .where(cursorPredicate === undefined ? scope : and(scope, cursorPredicate))
+      .where(cursorPredicate === undefined ? predicate : and(predicate, cursorPredicate))
       .orderBy(desc(schema.transactions.timestamp), desc(schema.transactions.id))
       .limit(limit + 1)
       .pipe(wrapSqlError("transactionListRepository.list.transactions"))
   }
 
-  const loadMovements = (
-    executor: TransactionListExecutor,
-    transactionIds: ReadonlyArray<string>
-  ) =>
+  const loadMovements = ({
+    executor,
+    principalId,
+    transactionIds,
+  }: {
+    readonly executor: TransactionListExecutor
+    readonly principalId: string
+    readonly transactionIds: ReadonlyArray<string>
+  }) =>
     Effect.gen(function* () {
       if (transactionIds.length === 0) {
         return new Map<string, ReadonlyArray<TransactionListMovement>>()
@@ -191,6 +226,7 @@ const make = Effect.gen(function* () {
           kind: schema.transactionLegs.kind,
         })
         .from(schema.transactionLegs)
+        .innerJoin(schema.transactions, ownedLeg(principalId))
         .innerJoin(schema.assets, eq(schema.transactionLegs.assetId, schema.assets.id))
         .where(inArray(schema.transactionLegs.transactionId, transactionIds))
         .orderBy(asc(schema.transactionLegs.timestamp), asc(schema.transactionLegs.id))
@@ -253,8 +289,12 @@ const make = Effect.gen(function* () {
         )
         .innerJoin(
           schema.transactionLegs,
-          eq(schema.calculationRunRealizedResults.dispositionEventId, schema.transactionLegs.id)
+          and(
+            eq(schema.calculationRunRealizedResults.dispositionEventId, schema.transactionLegs.id),
+            eq(schema.calculationRunRealizedResults.sourceId, schema.transactionLegs.sourceId)
+          )
         )
+        .innerJoin(schema.transactions, ownedLeg(scope.principalId))
         .where(
           and(
             activeRunScope(scope),
@@ -331,10 +371,15 @@ const make = Effect.gen(function* () {
       } satisfies RunBackedGainLoss
     })
 
-  const loadReviewStates = (
-    executor: TransactionListExecutor,
-    transactionIds: ReadonlyArray<string>
-  ) =>
+  const loadReviewStates = ({
+    executor,
+    principalId,
+    transactionIds,
+  }: {
+    readonly executor: TransactionListExecutor
+    readonly principalId: string
+    readonly transactionIds: ReadonlyArray<string>
+  }) =>
     transactionIds.length === 0
       ? Effect.succeed(new Map<string, boolean>())
       : executor
@@ -343,7 +388,12 @@ const make = Effect.gen(function* () {
             needsReview: schema.transactionReviews.needsReview,
           })
           .from(schema.transactionReviews)
-          .where(inArray(schema.transactionReviews.transactionId, transactionIds))
+          .where(
+            and(
+              eq(schema.transactionReviews.principalId, principalId),
+              inArray(schema.transactionReviews.transactionId, transactionIds)
+            )
+          )
           .pipe(
             wrapSqlError("transactionListRepository.list.reviews"),
             Effect.map(
@@ -545,6 +595,7 @@ const make = Effect.gen(function* () {
           taxYear: eventTaxYear,
         })
         .from(schema.transactionLegs)
+        .innerJoin(schema.transactions, ownedLeg(scope.principalId))
         .where(inArray(schema.transactionLegs.transactionId, transactionIds))
         .pipe(wrapSqlError("transactionListRepository.list.calculationStateEvents"))
 
@@ -657,17 +708,39 @@ const make = Effect.gen(function* () {
 
   const list: TransactionListRepositoryService["list"] = (params) =>
     Effect.gen(function* () {
-      const cursor = yield* parseCursor(params.cursor)
+      const scope = {
+        principalId: params.principalId.toLowerCase(),
+        sourceId: params.sourceId?.toLowerCase() ?? null,
+      }
+      const cursor = yield* parseCursor({ cursor: params.cursor, scope })
       return yield* db
         .transaction((tx) =>
           Effect.gen(function* () {
             yield* tx.execute(sql`set transaction isolation level repeatable read`)
-            const totalCount = yield* loadTotalCount(tx, params.principalId)
+            if (scope.sourceId !== null) {
+              const sources = yield* tx
+                .select({ id: schema.sources.id })
+                .from(schema.sources)
+                .where(
+                  and(
+                    eq(schema.sources.id, scope.sourceId),
+                    eq(schema.sources.principalId, scope.principalId)
+                  )
+                )
+                .limit(1)
+                .pipe(wrapSqlError("transactionListRepository.list.source"))
+              if (sources.length === 0) {
+                return yield* Effect.fail(
+                  new TransactionListSourceNotFoundError({ sourceId: scope.sourceId })
+                )
+              }
+            }
+            const totalCount = yield* loadTotalCount(tx, scope)
             const rows = yield* loadPageRows({
               cursor,
               executor: tx,
               limit: params.limit,
-              principalId: params.principalId,
+              scope,
             })
             const pageRows = rows.slice(0, params.limit)
             const transactionIds = pageRows.map((row) => row.transactionId)
@@ -678,9 +751,9 @@ const make = Effect.gen(function* () {
             } satisfies CalculationReadScope
             const [movements, gainLoss, reviewStates] = yield* Effect.all(
               [
-                loadMovements(tx, transactionIds),
+                loadMovements({ executor: tx, principalId: scope.principalId, transactionIds }),
                 loadGainLoss({ executor: tx, scope: calculationScope, transactionIds }),
-                loadReviewStates(tx, transactionIds),
+                loadReviewStates({ executor: tx, principalId: scope.principalId, transactionIds }),
               ],
               { concurrency: 1 }
             )
@@ -721,7 +794,7 @@ const make = Effect.gen(function* () {
               hasMore,
               nextCursor:
                 hasMore && last !== undefined
-                  ? makeCursor({ timestamp: last.timestamp, id: last.transactionId })
+                  ? makeCursor({ timestamp: last.timestamp, id: last.transactionId, scope })
                   : null,
               totalCount,
             }
@@ -729,7 +802,7 @@ const make = Effect.gen(function* () {
         )
         .pipe(
           Effect.mapError((cause) =>
-            isPersistenceError(cause)
+            isPersistenceError(cause) || Schema.is(TransactionListSourceNotFoundError)(cause)
               ? cause
               : new PersistenceError({
                   operation: "transactionListRepository.list.snapshot",
