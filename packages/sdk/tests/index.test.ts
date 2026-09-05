@@ -671,6 +671,47 @@ describe("TaxMaxi Promise client", () => {
     })
   )
 
+  it.effect("passes an owned source filter and preserves canonical partial rows", () =>
+    Effect.gen(function* () {
+      const capturedRequests: Array<CapturedRequest> = []
+      const sourceId = "00000000-0000-4000-8000-000000000001"
+      const response = {
+        transactions: [
+          {
+            transactionId: "00000000-0000-4000-8000-000000000002",
+            timestamp: "2025-03-05T12:00:00.000Z",
+            source: { sourceId, name: "Wallet", kind: "onchain" },
+            transactionType: "buy_fiat",
+            description: null,
+            externalId: null,
+            movements: [{ amount: "0.1", assetSymbol: "BTC", kind: "acquisition" }],
+            realizedGainLoss: null,
+            fiatCurrency: null,
+            calculationState: "partial",
+            needsReview: false,
+          },
+        ],
+        totalCount: 2,
+        page: { nextCursor: "next-source-cursor", hasMore: true },
+      } as const
+      const taxmaxi = new TaxMaxi({
+        apiKey: "tm_transactions",
+        baseUrl: "https://sdk.example.test",
+        fetch: makeFetch(capturedRequests, encodeJson(response)),
+      })
+      yield* Effect.promise(() =>
+        expect(
+          taxmaxi.transactions.list({ sourceId, cursor: "source-cursor", limit: 1 })
+        ).resolves.toEqual(response)
+      )
+      expect(capturedRequests).toEqual([
+        expect.objectContaining({
+          url: `https://sdk.example.test/v1/transactions?sourceId=${sourceId}&cursor=source-cursor&limit=1`,
+        }),
+      ])
+    })
+  )
+
   it.effect("plumbs successful resource responses through Promise methods", () =>
     Effect.gen(function* () {
       const capturedRequests: Array<CapturedRequest> = []

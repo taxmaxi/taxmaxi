@@ -7,6 +7,7 @@ export type Transactions = Schema.Codec.Encoded<typeof TransactionListResponse>
 export type TransactionListItem = Transactions["transactions"][number]
 
 export type TransactionListInput = {
+  readonly sourceId?: string
   readonly cursor?: string | null
   readonly limit?: number
 }
@@ -29,6 +30,7 @@ export const makeTransactionsEffectResource = (
       Effect.flatMap(client, (resolved) =>
         resolved.transactions.listTransactions({
           query: {
+            sourceId: input.sourceId,
             cursor: input.cursor ?? undefined,
             limit: input.limit,
           },

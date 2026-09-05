@@ -11,7 +11,7 @@ import type { JurisdictionCode } from "@my/core/accounting"
 import type { CurrencyCode } from "@my/core/currency"
 import type { PersistenceError } from "../errors/RepositoryError.ts"
 
-/** The supplied transaction cursor is malformed. */
+/** The supplied transaction cursor is malformed or belongs to another list scope. */
 export class TransactionListInvalidCursorError extends Schema.TaggedError<TransactionListInvalidCursorError>()(
   "TransactionListInvalidCursorError",
   { cursor: Schema.String }
@@ -21,7 +21,20 @@ export class TransactionListInvalidCursorError extends Schema.TaggedError<Transa
   }
 }
 
-export type TransactionListRepositoryError = TransactionListInvalidCursorError | PersistenceError
+/** The requested source is absent or belongs to another principal. */
+export class TransactionListSourceNotFoundError extends Schema.TaggedError<TransactionListSourceNotFoundError>()(
+  "TransactionListSourceNotFoundError",
+  { sourceId: Schema.String }
+) {
+  override get message(): string {
+    return "Source not found."
+  }
+}
+
+export type TransactionListRepositoryError =
+  | TransactionListInvalidCursorError
+  | TransactionListSourceNotFoundError
+  | PersistenceError
 
 /** Compact source facts displayed with a transaction row. */
 export interface TransactionListSource {
@@ -64,6 +77,7 @@ export interface TransactionListParams {
   readonly principalId: string
   readonly jurisdiction: JurisdictionCode
   readonly reportingCurrency: CurrencyCode
+  readonly sourceId: string | null
   readonly cursor: string | null
   readonly limit: number
 }

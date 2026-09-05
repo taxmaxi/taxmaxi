@@ -7,6 +7,7 @@
 import { HttpApiEndpoint, HttpApiGroup, OpenApi } from "effect/unstable/httpapi"
 import * as Schema from "effect/Schema"
 import { InternalServerError } from "./ApiErrors.ts"
+import { SourceNotFoundError } from "./SourcesApi.ts"
 import { AuthMiddleware } from "./AuthMiddleware.ts"
 
 export class TransactionBadRequestError extends Schema.TaggedError<TransactionBadRequestError>()(
@@ -16,6 +17,7 @@ export class TransactionBadRequestError extends Schema.TaggedError<TransactionBa
 ) {}
 
 export const TransactionListQuery = Schema.Struct({
+  sourceId: Schema.optional(Schema.String.check(Schema.isUUID())),
   cursor: Schema.optional(Schema.String),
   limit: Schema.optional(
     Schema.FiniteFromString.check(
@@ -78,12 +80,12 @@ export class TransactionListResponse extends Schema.Class<TransactionListRespons
 const listTransactions = HttpApiEndpoint.get("listTransactions", "/transactions", {
   query: TransactionListQuery,
   success: TransactionListResponse,
-  error: [TransactionBadRequestError, InternalServerError],
+  error: [TransactionBadRequestError, SourceNotFoundError, InternalServerError],
 }).annotateMerge(
   OpenApi.annotations({
     summary: "List transactions",
     description:
-      "Returns a stable cursor page of compact transactions owned by the authenticated principal.",
+      "Returns a stable cursor page of compact accounting transactions owned by the authenticated principal, optionally restricted to one owned source. Rows and totalCount exclude provider activity without accounting movements.",
   })
 )
 
