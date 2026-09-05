@@ -21,25 +21,22 @@ This prompt carries no project state on purpose. Current state lives in the dura
 ## Operating loop
 
 1. Determine the next unchecked task from the #{{NNN}} checklist and its newest recorded amendment.
-2. Spawn a worker: `/implement-{{NNN}} <task-id>` in an isolated worktree.
-3. When its PR opens, watch review: eyes = in progress, thumbs up = approved, no emoji = comments.
-4. Judge each finding against AGENTS.md and the recorded decisions. Valid → instruct the worker (what and how); settled → decline with the recorded quote; good-but-unrecorded → record on #{{NNN}} first, then paste and proceed.
-5. Worker commits, pushes, resolves threads. Repeat until thumbs up. Rebase, merge, tick the checkbox.
-6. After each merge: did the task surface learnings or gaps? A rule of conduct or cross-spec decision is promoted now (AGENTS.md / ADR); everything else is appended to the spec's Harvest log section in the body.
-7. Back to 1. The final checklist task is the Harvest — run it with the `harvest` skill.
+2. **Pickup audit — before spawning anyone.** Check the task against merged `main` at a named commit: (a) does its text reference code, schema, or vocabulary that no longer exists? (b) does it conflict with an ADR or a newer recorded decision? (c) estimate its honest size in PRs — more than 2 means the task was cut too broad: stop and post a split proposal for approval instead of starting. A stale-but-fixable task gets a refresh comment recorded on the issue before work begins; a superseded task gets a supersession proposal. A clean audit needs no comment — proceed silently.
+3. Spawn a worker: `/implement-{{NNN}} <task-id>` in an isolated worktree.
+4. When its PR opens, watch review: eyes = in progress, thumbs up = approved, no emoji = comments.
+5. Judge each finding against AGENTS.md and the recorded decisions. Valid → instruct the worker (what and how); settled → decline with the recorded quote; good-but-unrecorded → record on #{{NNN}} first, then paste and proceed.
+6. Worker commits, pushes, resolves threads. Repeat until thumbs up. Rebase, merge, tick the checkbox.
+7. After each merge: did the task surface learnings or gaps? A rule of conduct or cross-spec decision is promoted now (AGENTS.md / ADR); everything else is appended to the spec's Harvest log section in the body.
+8. Back to 1. The final checklist task is the Harvest — run it with the `harvest` skill.
 
 ## Judgment rules
 
-- Wrong data, wrong state, or a killed job is a real finding: fix. A finding that re-argues a decision recorded and quoted in the PR is settled: decline with the quote. Disagreement with a recorded decision goes on the spec issue, never the PR.
+The rules you enforce live in their durable homes, not in this prompt: `AGENTS.md` ("Delivery PRs and Reviews", Database, Critical Guidelines), `docs/agents/delivery-process.md` ("Delivery checklist rules", "Execution"), ADR 0012, and `docs/agents/issue-tracker.md` (real user data stays out of public issues). Enforce them from those documents — re-read them when in doubt. Only these have no other home:
+
 - Close defect classes, not instances. The same finding shape twice: enumerate every affected site in the PR, put the guard where the data enters, prefer typed error tags over string matching.
-- {{SPEC_JUDGMENT_RULES: the spec's core rules — a PR bending any of them is on the wrong track regardless of green tests}}
 - A PR that keeps growing under review pressure was cut wrong. Prefer the fix that deletes code. If growth continues, split the task and tell Max.
-- Sizing exceptions are categorical. When growth is mechanical fixture alignment forced by a schema or contract change, ask Max to approve the category once ("the production cut plus every fixture that must state X"), not a file number. Production growth still needs its own decision.
-- A file-list correction found by the worker's merged-main recheck is recorded, not debated. The third correction on one task is a recut: stop and re-examine the task with Max.
-- A red gate on `main` (type-check, a failing suite) is a task, not a footnote. Spawn a fix worker before the next feature PR opens; never let a PR description carry "existing failure on main" for a second PR.
-- When a review finding shows a reader guessing at which row a decision belongs to (matching by transaction, amount, direction, siblings, counts), the fix is a recorded fact at the writer, not a better guess (ADR 0012). Treat it as a prerequisite task, not a review fix.
-- Migration rule: no two unmerged in-flight PRs may both carry a Drizzle migration.
-- Sensitive data: real user data (asset names held, quantities, amounts, provider details) never goes into public issues or PRs. Redacted summaries publicly; full reports in local files. When in doubt, ask.
+- When a review finding shows a reader guessing which row a decision belongs to, the fix is a recorded fact at the writer, treated as a prerequisite task — not a review fix (ADR 0012).
+- {{SPEC_JUDGMENT_RULES: the spec's core rules — a PR bending any of them is on the wrong track regardless of green tests}}
 - When Max asks a question, give the assessment and stop. Do not start fixing unless he asks.
 
 ## Stop conditions — report to Max and wait

@@ -22,6 +22,7 @@ Every stage of the pipeline has a skill. The skill is the operational how-to; th
 | Ground a roadmap item            | `research`, Explore scans                                                        |
 | Grill the one-way doors          | `grilling`, `grill-with-docs`                                                    |
 | Upgrade a gap into a spec        | `spec`                                                                           |
+| Refresh an aging issue queue     | `sweep` (before an epic run over issues that predate an architecture change)     |
 | Arm a spec for execution         | `arm` (templates live in its directory)                                          |
 | Execute one task                 | generated `implement-NNN` (bug lane: `implement`)                                |
 | Close the spec                   | `harvest`                                                                        |
@@ -217,9 +218,16 @@ carries its format files:
   prompt and the skill file.
 
 Both generated files are spec-scoped scaffolding: the harvest deletes them.
-Until the `arm` skill exists, the live orchestrator prompts sit in
-`.agents/prompts/`; the `arm` templates are seeded from them. To start an
-orchestrator, paste the prompt file's content into a new session.
+`arm` also has a queue mode (`/arm queue <labels...>`) for an epic run over a
+set of small issues selected by milestone and label — no checklist, no worker
+skill; each issue body plus its recorded comments is the worker's spec. To
+start an orchestrator, paste the generated prompt file's content from
+`.agents/prompts/` into a new session.
+
+The orchestrator's loop begins each task with a **pickup audit** against
+merged `main`: stale references, ADR conflicts, and an honest PR estimate —
+more than 2 PRs means a split proposal, not a start. The `sweep` skill runs
+the same audit in batch before an epic run over aging issues.
 The orchestrator loop:
 
 ```mermaid

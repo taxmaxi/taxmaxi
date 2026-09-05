@@ -8,6 +8,7 @@ Generate the two execution files for one approved spec issue, from the templates
 
 - `worker-skill-template.md` → `.agents/skills/implement-NNN/SKILL.md` (plus a relative symlink at `.claude/skills/implement-NNN`, matching the existing links)
 - `orchestrator-prompt-template.md` → `.agents/prompts/NNN-orchestrator.md`
+- `queue-orchestrator-template.md` → `.agents/prompts/<name>-orchestrator.md` — the second mode, for an epic **queue** instead of a spec: a set of small issues selected by milestone and label, no delivery checklist. Invoke as `/arm queue <labels...>`; fill {{EPICS}}, {{QUEUE}}, {{HISTORY}}, {{TITLE}}. Queue runs have no worker skill — the issue body plus recorded comments are each worker's spec, under AGENTS.md delivery rules.
 
 Both are spec-scoped scaffolding; the harvest deletes them.
 
