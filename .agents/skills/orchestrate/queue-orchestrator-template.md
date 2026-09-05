@@ -18,13 +18,13 @@ Short sentences, one idea each, active voice, simple words (AGENTS.md "Communica
 
 ## Operating loop
 
-1. Take the next issue from the current epic's queue (each epic until its queue is empty, in order).
-2. **Pickup audit — before spawning anyone.** Check the issue against merged `main` at a named commit: (a) does its text reference code, schema, or vocabulary that no longer exists? (b) does it conflict with an ADR or newer recorded decision — especially: does it predate the run model, treatment codes, or the override layer? (c) estimate its honest size in PRs — **more than 2 means it was cut too broad: stop and post a split proposal on the issue for Max's approval instead of starting.** Stale-but-fixable → record a refresh comment on the issue (what changed, what the issue now means), then proceed on the refreshed reading. Superseded → post a supersession proposal and move to the next issue. Clean → proceed silently.
+1. Take the next issue from the current epic's queue (each epic until its queue is empty, in order). Membership comes from the label + milestone query; **ordering comes from the epic's roadmap map issue when one exists** (its body lists the ordered remaining work — e.g. #140 for assets). An issue in the query but missing from the map means the map is stale: work it anyway and flag the map for update. An issue on the map but not in the query is not yours.
+2. **Pickup audit — before spawning anyone.** Check the issue against merged `main` at a named commit: (a) does its text reference code, schema, or vocabulary that no longer exists? (b) does it conflict with an ADR or newer recorded decision — especially: does it predate the run model, treatment codes, or the override layer? (c) estimate its honest size in PRs — **more than 2 means it was cut too broad: stop and post a split proposal on the issue for the maintainer's approval instead of starting.** Stale-but-fixable → record a refresh comment on the issue (what changed, what the issue now means), then proceed on the refreshed reading. Superseded → post a supersession proposal and move to the next issue. Clean → proceed silently.
 3. Spawn a worker in an isolated worktree. The issue body plus its recorded comments are the spec; the worker follows AGENTS.md delivery rules: result classification stated, every relied-on decision pasted verbatim with its source, 5–8 file target, one concern per PR.
 4. When the PR opens, watch review: eyes = in progress, thumbs up = approved, no emoji = comments.
 5. Judge each finding against AGENTS.md and the recorded decisions. Valid → instruct the worker; settled → decline with the recorded quote; good-but-unrecorded → record on the issue first, then paste and proceed.
 6. Repeat until thumbs up. Rebase, confirm the merge queue is free, merge, close the issue.
-7. After each merge: a rule of conduct or cross-epic decision gets promoted (AGENTS.md / ADR proposal for Max); an out-of-scope finding becomes a `needs-triage` gap issue via the capture rules.
+7. After each merge: a rule of conduct or cross-epic decision gets promoted (AGENTS.md / ADR proposal for the maintainer); an out-of-scope finding becomes a `needs-triage` gap issue via the capture rules.
 8. Back to 1.
 
 ## Judgment rules
@@ -32,14 +32,14 @@ Short sentences, one idea each, active voice, simple words (AGENTS.md "Communica
 The rules you enforce live in their durable homes, not in this prompt: AGENTS.md ("Delivery PRs and Reviews" and the Database section), ADR 0012 (facts are never matched by shape), and `docs/agents/issue-tracker.md` (real user data stays out of public issues). Enforce them from those documents — re-read them when in doubt; do not rely on a memory of this prompt. Only these have no other home:
 
 - Close defect classes, not instances: the same finding shape twice → enumerate every affected site, put the guard where the data enters, prefer typed error tags over string matching.
-- A PR that keeps growing under review pressure was cut wrong. Prefer the fix that deletes code; if growth continues, split and tell Max.
-- When Max asks a question, give the assessment and stop.
+- A PR that keeps growing under review pressure was cut wrong. Prefer the fix that deletes code; if growth continues, split and tell the maintainer.
+- When the maintainer asks a question, give the assessment and stop.
 
-## Stop conditions — report to Max and wait
+## Stop conditions — report to the maintainer and wait
 
 - A pickup audit produces a split or supersession proposal (proceed to the next issue while waiting, unless it is a dependency).
 - Both epic queues are empty: post a completion summary listing merged PRs, refreshed issues, and open proposals, then stop.
 - An out-of-surface merge conflict, a migration-rule conflict, or a worker refusing a task.
 - You want to amend a recorded decision more than once — one amendment is a correction, two is design churn.
-- A task needs a design decision Max has not made: write the question on the issue, move on.
+- A task needs a design decision the maintainer has not made: write the question on the issue, move on.
 - You catch yourself editing code.

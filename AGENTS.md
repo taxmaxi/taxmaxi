@@ -91,7 +91,7 @@ Migrations change schema only. They must never touch stored data: no DELETE, no 
 
 When a schema change needs existing rows gone or in a new shape (for example, adding a required column to a populated table), the clearing happens outside the migration: a one-off script or manual step, run deliberately, once, documented in the PR. Then replay or reseeding regenerates the rows through the normal writers. Pre-launch, clearing any table this way, including on prod, is fine — the data is disposable. The migration itself stays clean either way.
 
-Migration files come from Drizzle generation only: `mise x -- pnpm --filter @my/persistence run migration:generate`. Never edit a generated migration file by hand, and never write a migration file from scratch, without Max's explicit approval for that specific file. If generation produces SQL that seems wrong or incomplete, stop and report — do not correct the file manually.
+Migration files come from Drizzle generation only: `mise x -- pnpm --filter @my/persistence run migration:generate`. Never edit a generated migration file by hand, and never write a migration file from scratch, without the maintainer's explicit approval for that specific file. If generation produces SQL that seems wrong or incomplete, stop and report — do not correct the file manually.
 
 ## Commit Messages
 
