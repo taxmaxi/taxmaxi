@@ -99,7 +99,8 @@ const parseCursor = ({
     : Schema.decodeEffect(TransactionCursor)(cursor).pipe(
         Effect.mapError(() => new TransactionListInvalidCursorError({ cursor })),
         Effect.flatMap((payload) =>
-          payload.principalId === scope.principalId && payload.sourceId === scope.sourceId
+          payload.principalId.toLowerCase() === scope.principalId &&
+          (payload.sourceId?.toLowerCase() ?? null) === scope.sourceId
             ? Effect.succeed(Option.some({ id: payload.id, timestamp: payload.timestamp }))
             : Effect.fail(new TransactionListInvalidCursorError({ cursor }))
         )
@@ -128,6 +129,14 @@ const make = Effect.gen(function* () {
   const canonicalTransactionTable = aliasedTable(schema.transactions, "list_canonical_transaction")
   type TransactionListExecutor = Pick<typeof db, "execute" | "select" | "selectDistinct">
 
+  const ownedLeg = (principalId: string) =>
+    and(
+      eq(schema.transactionLegs.transactionId, schema.transactions.id),
+      eq(schema.transactionLegs.principalId, principalId),
+      eq(schema.transactions.principalId, principalId),
+      eq(schema.transactionLegs.sourceId, schema.transactions.sourceId)
+    )
+
   const ownedScope = (executor: TransactionListExecutor, scope: TransactionReadScope) =>
     and(
       eq(schema.transactions.principalId, scope.principalId),
@@ -137,7 +146,7 @@ const make = Effect.gen(function* () {
         executor
           .select({ id: schema.transactionLegs.id })
           .from(schema.transactionLegs)
-          .where(eq(schema.transactionLegs.transactionId, schema.transactions.id))
+          .where(ownedLeg(scope.principalId))
       )
     )
 
@@ -195,10 +204,15 @@ const make = Effect.gen(function* () {
       .pipe(wrapSqlError("transactionListRepository.list.transactions"))
   }
 
-  const loadMovements = (
-    executor: TransactionListExecutor,
-    transactionIds: ReadonlyArray<string>
-  ) =>
+  const loadMovements = ({
+    executor,
+    principalId,
+    transactionIds,
+  }: {
+    readonly executor: TransactionListExecutor
+    readonly principalId: string
+    readonly transactionIds: ReadonlyArray<string>
+  }) =>
     Effect.gen(function* () {
       if (transactionIds.length === 0) {
         return new Map<string, ReadonlyArray<TransactionListMovement>>()
@@ -212,6 +226,7 @@ const make = Effect.gen(function* () {
           kind: schema.transactionLegs.kind,
         })
         .from(schema.transactionLegs)
+        .innerJoin(schema.transactions, ownedLeg(principalId))
         .innerJoin(schema.assets, eq(schema.transactionLegs.assetId, schema.assets.id))
         .where(inArray(schema.transactionLegs.transactionId, transactionIds))
         .orderBy(asc(schema.transactionLegs.timestamp), asc(schema.transactionLegs.id))
@@ -274,8 +289,12 @@ const make = Effect.gen(function* () {
         )
         .innerJoin(
           schema.transactionLegs,
-          eq(schema.calculationRunRealizedResults.dispositionEventId, schema.transactionLegs.id)
+          and(
+            eq(schema.calculationRunRealizedResults.dispositionEventId, schema.transactionLegs.id),
+            eq(schema.calculationRunRealizedResults.sourceId, schema.transactionLegs.sourceId)
+          )
         )
+        .innerJoin(schema.transactions, ownedLeg(scope.principalId))
         .where(
           and(
             activeRunScope(scope),
@@ -352,10 +371,15 @@ const make = Effect.gen(function* () {
       } satisfies RunBackedGainLoss
     })
 
-  const loadReviewStates = (
-    executor: TransactionListExecutor,
-    transactionIds: ReadonlyArray<string>
-  ) =>
+  const loadReviewStates = ({
+    executor,
+    principalId,
+    transactionIds,
+  }: {
+    readonly executor: TransactionListExecutor
+    readonly principalId: string
+    readonly transactionIds: ReadonlyArray<string>
+  }) =>
     transactionIds.length === 0
       ? Effect.succeed(new Map<string, boolean>())
       : executor
@@ -364,7 +388,12 @@ const make = Effect.gen(function* () {
             needsReview: schema.transactionReviews.needsReview,
           })
           .from(schema.transactionReviews)
-          .where(inArray(schema.transactionReviews.transactionId, transactionIds))
+          .where(
+            and(
+              eq(schema.transactionReviews.principalId, principalId),
+              inArray(schema.transactionReviews.transactionId, transactionIds)
+            )
+          )
           .pipe(
             wrapSqlError("transactionListRepository.list.reviews"),
             Effect.map(
@@ -566,6 +595,7 @@ const make = Effect.gen(function* () {
           taxYear: eventTaxYear,
         })
         .from(schema.transactionLegs)
+        .innerJoin(schema.transactions, ownedLeg(scope.principalId))
         .where(inArray(schema.transactionLegs.transactionId, transactionIds))
         .pipe(wrapSqlError("transactionListRepository.list.calculationStateEvents"))
 
@@ -678,7 +708,10 @@ const make = Effect.gen(function* () {
 
   const list: TransactionListRepositoryService["list"] = (params) =>
     Effect.gen(function* () {
-      const scope = { principalId: params.principalId, sourceId: params.sourceId }
+      const scope = {
+        principalId: params.principalId.toLowerCase(),
+        sourceId: params.sourceId?.toLowerCase() ?? null,
+      }
       const cursor = yield* parseCursor({ cursor: params.cursor, scope })
       return yield* db
         .transaction((tx) =>
@@ -718,9 +751,9 @@ const make = Effect.gen(function* () {
             } satisfies CalculationReadScope
             const [movements, gainLoss, reviewStates] = yield* Effect.all(
               [
-                loadMovements(tx, transactionIds),
+                loadMovements({ executor: tx, principalId: scope.principalId, transactionIds }),
                 loadGainLoss({ executor: tx, scope: calculationScope, transactionIds }),
-                loadReviewStates(tx, transactionIds),
+                loadReviewStates({ executor: tx, principalId: scope.principalId, transactionIds }),
               ],
               { concurrency: 1 }
             )
