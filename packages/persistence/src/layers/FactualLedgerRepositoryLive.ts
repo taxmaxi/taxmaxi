@@ -58,7 +58,24 @@ const EXCHANGE_TYPES = new Set([
   "nft_sell",
 ])
 
-const acquisitionCause = (transactionType: string | null): AcquisitionCause => {
+const acquisitionCause = ({
+  providerKey,
+  providerTransactionType,
+  transactionType,
+}: {
+  readonly providerKey: string | null
+  readonly providerTransactionType: string | null
+  readonly transactionType: string | null
+}): AcquisitionCause => {
+  if (
+    providerKey === "coinbase" &&
+    ((transactionType === "staking_reward" &&
+      (providerTransactionType === "staking_reward" ||
+        providerTransactionType === "earn_payout")) ||
+      (transactionType === "interest_received" && providerTransactionType === "interest"))
+  ) {
+    return "passive_staking_reward"
+  }
   if (transactionType === "gift_received") return "gift"
   if (transactionType === "airdrop") return "airdrop"
   if (transactionType === "mining_reward") return "mining_reward"
@@ -452,6 +469,7 @@ const make = Effect.gen(function* () {
         .select({
           id: schema.transactionLegs.id,
           sourceId: schema.transactionLegs.sourceId,
+          providerKey: schema.sources.providerKey,
           timestamp: schema.transactionLegs.timestamp,
           assetId: schema.transactionLegs.assetId,
           assetRepresentationId: schema.transactionLegs.assetRepresentationId,
@@ -468,6 +486,7 @@ const make = Effect.gen(function* () {
           externalId: schema.transactions.externalId,
           externalGroupId: schema.transactions.externalGroupId,
           transactionType: schema.transactions.transactionType,
+          providerTransactionType: schema.transactions.providerTransactionType,
           providerResourcePath: schema.transactions.providerResourcePath,
           transactionSourceRawRecordId: schema.transactions.sourceRawRecordId,
           providerFiatAmount: schema.transactions.providerFiatAmount,
@@ -704,7 +723,11 @@ const make = Effect.gen(function* () {
               _tag: "acquisition",
               ...common,
               custodySourceId: row.sourceId,
-              cause: acquisitionCause(row.transactionType),
+              cause: acquisitionCause({
+                providerKey: row.providerKey,
+                providerTransactionType: row.providerTransactionType,
+                transactionType: row.transactionType,
+              }),
             },
             operation: "factualLedgerRepository.load.event",
           })
