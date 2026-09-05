@@ -5,7 +5,7 @@ import { Effect } from "effect"
 import type { Source, Transactions } from "taxmaxi"
 import type { CliSession } from "../../session.ts"
 import { fetchSourceTransactions } from "../controller.ts"
-import { formatAmount, formatDate, formatDateTime, formatFiat, truncateText } from "../format.ts"
+import { formatAmount, formatDate, formatDateTime, truncateText } from "../format.ts"
 import { createListViewport, createPagedList } from "../paging.ts"
 import { theme } from "../theme.ts"
 import { Field } from "../ui/Field.tsx"
@@ -18,7 +18,7 @@ type Movement = TransactionRow["movements"][number]
 
 // Rows used by everything around the transaction list: app header, panel
 // chrome, key hints, the list status line, and the detail pane.
-const RESERVED_ROWS = 26
+const RESERVED_ROWS = 27
 const MAX_DETAIL_MOVEMENTS = 4
 const DESCRIPTION_LENGTH = 36
 
@@ -34,6 +34,13 @@ const movementKindColor = (kind: Movement["kind"]): string => {
 
 const movementLabel = (movement: Movement): string =>
   `${formatAmount(movement.amount)} ${movement.assetSymbol}`
+
+// Canonical decimals are already displayable strings. Keep every digit,
+// including fractions smaller than a cent, and append only the currency.
+const gainLossLabel = (row: TransactionRow): string =>
+  row.realizedGainLoss === null
+    ? "Unknown"
+    : `${row.realizedGainLoss}${row.fiatCurrency === null ? "" : ` ${row.fiatCurrency}`}`
 
 function TransactionLine(props: {
   readonly row: TransactionRow
@@ -52,6 +59,11 @@ function TransactionLine(props: {
       <ListItemText selected={props.selected} color={theme.accent}>
         {`${props.row.movements.length} legs`}
       </ListItemText>
+      <Show when={props.row.needsReview}>
+        <ListItemText selected={props.selected} color={theme.warning}>
+          Needs review
+        </ListItemText>
+      </Show>
       <Show when={props.row.description} keyed>
         {(description: string) => (
           <ListItemText selected={props.selected} muted>
@@ -266,14 +278,10 @@ export function SourceTransactionsScreen(props: {
                     value={row.calculationState === "partial" ? "Partial" : "Complete"}
                     color={row.calculationState === "partial" ? theme.warning : theme.textSecondary}
                   />
-                  <Field
-                    label="realized gain/loss"
-                    value={
-                      row.realizedGainLoss === null
-                        ? "Unknown"
-                        : formatFiat(row.realizedGainLoss, row.fiatCurrency)
-                    }
-                  />
+                  <Show when={row.needsReview}>
+                    <Field label="review" value="Needs review" color={theme.warning} />
+                  </Show>
+                  <Field label="realized gain/loss" value={gainLossLabel(row)} />
                   <Show when={row.description} keyed>
                     {(description: string) => <Field label="description" value={description} />}
                   </Show>

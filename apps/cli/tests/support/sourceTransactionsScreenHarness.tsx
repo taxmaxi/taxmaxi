@@ -40,26 +40,36 @@ const partialRow: TransactionListItem = {
   fiatCurrency: null,
   needsReview: true,
 }
-const firstRows =
-  scenario === "empty"
-    ? []
-    : scenario === "partial"
-      ? [partialRow]
-      : scenario === "zero"
-        ? [{ ...row, realizedGainLoss: "0" }]
-        : scenario === "short-terminal"
-          ? Array.from({ length: 8 }, (_, index) => ({
-              ...partialRow,
-              transactionId: `short-${index}`,
-              description: `Partial trade ${index}`,
-              movements: [
-                ...row.movements,
-                { amount: "1", assetSymbol: "BTC", kind: "acquisition" as const },
-                { amount: "0.5", assetSymbol: "ETH", kind: "income" as const },
-                { amount: "0.01", assetSymbol: "SOL", kind: "fee" as const },
-              ],
-            }))
-          : [row]
+const exactValues: Readonly<Record<string, string>> = {
+  "large-gain": "9007199254740993",
+  "exact-loss": "-9007199254740993.125",
+  "tiny-gain": "0.000000000000000001",
+}
+const exactValue = exactValues[scenario ?? ""]
+const isShortTerminal = scenario === "short-terminal" || scenario === "short-review"
+const firstRows: ReadonlyArray<TransactionListItem> = (() => {
+  if (scenario === "empty") return []
+  if (scenario === "partial") return [partialRow]
+  if (scenario === "zero") return [{ ...row, realizedGainLoss: "0" }]
+  if (exactValue !== undefined) return [{ ...row, realizedGainLoss: exactValue }]
+  if (scenario === "complete-review") return [{ ...row, needsReview: true }]
+  if (isShortTerminal) {
+    return Array.from({ length: 8 }, (_, index) => ({
+      ...(scenario === "short-review" ? row : partialRow),
+      needsReview: true,
+      transactionId: `short-${index}`,
+      description: `Trade ${index}`,
+      movements: [
+        ...row.movements,
+        { amount: "1", assetSymbol: "BTC", kind: "acquisition" },
+        { amount: "0.5", assetSymbol: "ETH", kind: "income" },
+        { amount: "0.01", assetSymbol: "SOL", kind: "fee" },
+      ],
+    }))
+  }
+  return [row]
+})()
+
 const firstPage: Transactions = {
   transactions: firstRows,
   totalCount: scenario === "paginated" ? 2 : firstRows.length,
@@ -102,7 +112,7 @@ const setup = await testRender(
       onSessionExpired={() => expiredCount++}
     />
   ),
-  { width: 110, height: scenario === "short-terminal" ? 24 : 32 }
+  { width: 110, height: isShortTerminal ? 24 : 32 }
 )
 
 try {
@@ -124,7 +134,18 @@ try {
   }
   if (scenario === "zero") {
     assert.match(frame, /calculation\s+Complete/)
-    assert.match(frame, /realized gain\/loss\s+0\.00 EUR/)
+    assert.match(frame, /realized gain\/loss\s+0 EUR/)
+  }
+  if (exactValue !== undefined) {
+    assert.ok(frame.includes(`${exactValue} EUR`), frame)
+  }
+  if (scenario === "complete-review" || scenario === "short-review") {
+    assert.match(frame, /calculation\s+Complete/)
+    assert.match(frame, /review\s+Needs review/)
+    assert.match(frame, /1 legs Needs review|4 legs Needs review/)
+  }
+  if (scenario === "zero") {
+    assert.doesNotMatch(frame, /Needs review/)
   }
   if (scenario === "paginated") {
     assert.match(frame, /1\/1 ready accounting transactions · \[m\] load more/)
@@ -149,14 +170,15 @@ try {
     assert.equal(requests.length, 3)
     assert.equal(new URL(requests[2]?.url ?? "").searchParams.has("cursor"), false)
   }
-  if (scenario === "short-terminal") {
+  if (isShortTerminal) {
     assert.match(frame, /fee\s+0\.01 SOL/)
     await setup.mockInput.pressKeys(["ARROW_DOWN", "ARROW_DOWN", "ARROW_DOWN", "ARROW_DOWN"])
     const selected = await setup.waitForFrame((text) =>
       text.includes("5/8 ready accounting transactions")
     )
-    assert.match(selected, /description\s+Partial trade 4/)
+    assert.match(selected, /description\s+Trade 4/)
     assert.match(selected, /fee\s+0\.01 SOL/)
+    assert.match(selected, /review\s+Needs review/)
     assert.match(selected, /\[b\] back/)
   }
   setup.mockInput.pressKey("b")

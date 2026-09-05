@@ -40,7 +40,18 @@ afterAll(async () => {
 })
 
 describe("source transaction screen frames and keyboard input", () => {
-  it.each(["empty", "paginated", "partial", "zero", "short-terminal"])(
+  it.each([
+    "empty",
+    "paginated",
+    "partial",
+    "zero",
+    "large-gain",
+    "exact-loss",
+    "tiny-gain",
+    "complete-review",
+    "short-terminal",
+    "short-review",
+  ])(
     "renders %s canonical results",
     async (scenario) => {
       assert.ok(bundleDirectory, "Screen harness was not built")
