@@ -18,6 +18,10 @@ import type {
   SourceTransferDraft,
   SourceVenueContextDraft,
 } from "../../../services/SourceNormalizationRepository.ts"
+import type {
+  SourceProviderAssetDecision,
+  SourceProviderAssetDecisionTarget,
+} from "../../../services/SourceNormalizationRepository.ts"
 import type { SourceRawRecord, SourceSyncSource } from "../../../services/SourceSyncModels.ts"
 import {
   FetchProviderRawBatchParams,
@@ -25,7 +29,6 @@ import {
   type SourceSyncProviderError,
 } from "../../../shared/SourceProviderRawBatch.ts"
 import { SyncEngineStorageError } from "../../../services/SyncEngineStorageError.ts"
-import type { CoinbaseLegDerivationError } from "./CoinbaseLegDerivationService.ts"
 import type {
   CoinbaseAssetDecisionFeeTransferCandidate,
   CoinbaseRecordNormalizationError,
@@ -58,6 +61,46 @@ export interface PrepareCoinbaseNormalizationParams {
 }
 
 /**
+ * CoinbaseAssetDecisionLegDerivationCandidate - Primary movement input retained when only an
+ * asset decision prevents normal leg derivation.
+ */
+export interface CoinbaseAssetDecisionLegDerivationCandidate {
+  readonly providerAssetRowId: string
+  readonly currencyCode: string
+}
+
+/**
+ * Resolve the Coinbase primary movement to an economic asset after persistence has loaded the
+ * principal's effective decision for the recorded provider row.
+ */
+export const resolveCoinbasePrimaryAsset = ({
+  candidate,
+  primaryAsset,
+  providerAssetTarget,
+  resolveProviderAssetDecision,
+}: {
+  readonly candidate: CoinbaseAssetDecisionLegDerivationCandidate | null
+  readonly primaryAsset: Pick<SyncEngineAsset, "id" | "symbol"> | null
+  readonly providerAssetTarget: SourceProviderAssetDecisionTarget | null
+  readonly resolveProviderAssetDecision: (
+    target: SourceProviderAssetDecisionTarget
+  ) => SourceProviderAssetDecision
+}):
+  | { readonly _tag: "ready"; readonly asset: Pick<SyncEngineAsset, "id" | "symbol"> | null }
+  | { readonly _tag: "withheld" } => {
+  if (candidate === null) return { _tag: "ready", asset: primaryAsset }
+  if (providerAssetTarget === null) return { _tag: "withheld" }
+
+  const providerAssetDecision = resolveProviderAssetDecision(providerAssetTarget)
+  if (providerAssetDecision._tag !== "included") return { _tag: "withheld" }
+
+  return {
+    _tag: "ready",
+    asset: { id: providerAssetDecision.assetId, symbol: candidate.currencyCode },
+  }
+}
+
+/**
  * PreparedCoinbaseNormalization - Canonical Coinbase artifacts ready for persistence.
  */
 export interface PreparedCoinbaseNormalization {
@@ -71,9 +114,13 @@ export interface PreparedCoinbaseNormalization {
   /** Inert writer-built fees carried for the later source-rebuild decision seam. */
   readonly feeTransferCandidates: ReadonlyArray<CoinbaseAssetDecisionFeeTransferCandidate>
   readonly transactionReview: SourceTransactionReviewDraft | null
+  /** The writer's review before provider-asset mapping details are added. */
+  readonly transactionReviewWithoutProviderAssetMapping: SourceTransactionReviewDraft | null
   readonly resolvedTransactionType: CoinbaseResolvedTransactionTypeMapping
   readonly primaryAsset: SyncEngineAsset | null
   readonly legDerivationStrategy: "derive" | "skip"
+  /** Present only when non-asset facts allow the real derivation callback to run. */
+  readonly assetDecisionLegDerivationCandidate: CoinbaseAssetDecisionLegDerivationCandidate | null
   /** False for a settled primary exclusion; approved secondary fees still derive. */
   readonly deriveMainLeg: boolean
 }
@@ -84,11 +131,16 @@ export interface PreparedCoinbaseNormalization {
 export interface DeriveCoinbaseProviderLegsParams {
   readonly transaction: PersistedSourceTransaction
   readonly venueContext: PersistedSourceVenueContext | null
-  readonly primaryAsset: SyncEngineAsset | null
+  readonly primaryAsset: Pick<SyncEngineAsset, "id" | "symbol"> | null
   readonly primaryProviderTransferId: string | null
   readonly canonicalTransfers: ReadonlyArray<PersistedSourceTransfer>
   readonly deriveMainLeg: boolean
 }
+
+/** Coinbase leg derivation either returns facts or a reviewable movement blocker. */
+export type CoinbaseProviderLegDerivationResult =
+  | { readonly _tag: "derived"; readonly legs: ReadonlyArray<SourceTransactionLegDraft> }
+  | { readonly _tag: "withheld"; readonly reason: "malformed_movement" }
 
 /**
  * CoinbaseRecoverableNormalizationError - Provider errors that fail one raw row without aborting the job.
@@ -97,7 +149,6 @@ export type CoinbaseRecoverableNormalizationError =
   | CoinbaseRecordNormalizationError
   | CoinbasePendingTransactionTypeMappingError
   | CoinbaseBrokenApprovedProviderAssetMappingError
-  | CoinbaseLegDerivationError
 
 /**
  * CoinbaseSourceSyncProviderShape - Coinbase provider surface consumed by orchestration.
@@ -131,10 +182,7 @@ export interface CoinbaseSourceSyncProviderShape {
 
   readonly deriveLegs: (
     params: DeriveCoinbaseProviderLegsParams
-  ) => Effect.Effect<
-    ReadonlyArray<SourceTransactionLegDraft>,
-    CoinbaseLegDerivationError | SyncEngineStorageError
-  >
+  ) => Effect.Effect<CoinbaseProviderLegDerivationResult, SyncEngineStorageError>
 }
 
 /**

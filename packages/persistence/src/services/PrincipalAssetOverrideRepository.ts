@@ -63,13 +63,21 @@ export interface PrincipalAssetOverrideReplayJob {
   readonly failureCode: string | null
 }
 
-/** Durable recomputation work currently visible for one override target. */
+/** Calculation run whose factual snapshot covers the current override work. */
+export interface PrincipalAssetOverrideCalculationRun {
+  readonly runId: string
+  readonly status: "running" | "complete" | "partial" | "failed"
+  readonly failureCode: string | null
+}
+
+/** Durable replay and calculation work currently visible for one override target. */
 export type PrincipalAssetOverrideRecomputation =
   | { readonly status: "not_scheduled" }
   | {
-      readonly status: "updating" | "failed"
+      readonly status: "updating" | "complete" | "partial" | "failed"
       readonly overrideIds: ReadonlyArray<string>
       readonly sourceJobs: ReadonlyArray<PrincipalAssetOverrideReplayJob>
+      readonly calculationRun: PrincipalAssetOverrideCalculationRun | null
     }
 
 /** The current principal-scoped answer for one owned target. */
@@ -85,10 +93,7 @@ export interface PrincipalAssetOverrideProjection {
   readonly identityOverrideUsesStaleSystemRevision: boolean
   readonly inclusionOverrideUsesStaleSystemRevision: boolean
   readonly history: ReadonlyArray<PrincipalAssetOverrideHistoryRecord>
-  /**
-   * Remains updating after replay completion until calculation revisions cover
-   * the override snapshot read by the factual-ledger adapter.
-   */
+  /** Replay progress and the calculation run whose snapshot covers that work. */
   readonly recomputation: PrincipalAssetOverrideRecomputation
 }
 

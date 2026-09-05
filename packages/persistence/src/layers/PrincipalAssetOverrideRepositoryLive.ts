@@ -12,7 +12,20 @@ import {
 } from "@my/core/assets"
 import type { AuthUserId } from "@my/core/authentication"
 import type { PrincipalId } from "@my/core/ownership"
-import { and, asc, eq, inArray, isNull, or, sql, type SQLWrapper } from "drizzle-orm"
+import {
+  and,
+  asc,
+  desc,
+  eq,
+  inArray,
+  isNotNull,
+  isNull,
+  ne,
+  notExists,
+  or,
+  sql,
+  type SQLWrapper,
+} from "drizzle-orm"
 import { alias } from "drizzle-orm/pg-core"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
@@ -26,6 +39,7 @@ import {
   PrincipalAssetOverrideConflictError,
   PrincipalAssetOverrideReplacementValidationError,
   PrincipalAssetOverrideRepository,
+  type PrincipalAssetOverrideCalculationRun,
   type PrincipalAssetOverrideHistoryRecord,
   type PrincipalAssetOverrideProjection,
   type PrincipalAssetOverrideRecomputation,
@@ -518,6 +532,22 @@ const replayJobProjection = (row: {
   }
 }
 
+const calculationRunProjection = (row: {
+  readonly runId: string
+  readonly status: (typeof schema.calculationRunStatusEnum.enumValues)[number]
+  readonly failureCode: string | null
+}): PrincipalAssetOverrideCalculationRun | null => {
+  switch (row.status) {
+    case "running":
+    case "complete":
+    case "partial":
+    case "failed":
+      return { runId: row.runId, status: row.status, failureCode: row.failureCode }
+    case "pending":
+      return null
+  }
+}
+
 const make = Effect.gen(function* () {
   const db = yield* drizzle
   type PrincipalAssetOverrideExecutor = Pick<typeof db, "insert" | "select" | "selectDistinct">
@@ -968,15 +998,128 @@ const make = Effect.gen(function* () {
     return stream.find((record) => !supersededIds.has(record.id)) ?? null
   }
 
+  const loadCoveringCalculationRun = ({
+    executor,
+    overrideIds,
+    principalId,
+  }: {
+    readonly executor: PrincipalAssetOverrideExecutor
+    readonly overrideIds: ReadonlyArray<string>
+    readonly principalId: string
+  }): Effect.Effect<
+    PrincipalAssetOverrideCalculationRun | null,
+    import("../errors/RepositoryError.ts").PersistenceError
+  > => {
+    const runSnapshot = sql`replace(
+      split_part(${schema.calculationRuns.inputLedgerRevision}, ':', 3),
+      '.',
+      ':'
+    )::pg_snapshot`
+
+    return executor
+      .select({
+        runId: schema.calculationRuns.id,
+        status: schema.calculationRuns.status,
+        failureCode: schema.calculationRuns.failureCode,
+      })
+      .from(schema.calculationRuns)
+      .where(
+        and(
+          eq(schema.calculationRuns.principalId, principalId),
+          ne(schema.calculationRuns.status, "pending"),
+          sql`split_part(${schema.calculationRuns.inputLedgerRevision}, ':', 1) = 'v2'`,
+          // A run covers the override only when its recorded snapshot can see
+          // every selected history row. The override history is immutable, so
+          // the row's insert transaction is the revision that matters.
+          notExists(
+            executor
+              .select({ id: schema.principalAssetOverrides.id })
+              .from(schema.principalAssetOverrides)
+              .where(
+                and(
+                  inArray(schema.principalAssetOverrides.id, overrideIds),
+                  sql`not pg_visible_in_snapshot(
+                    ${schema.principalAssetOverrides}.xmin::text::xid8,
+                    ${runSnapshot}
+                  )`
+                )
+              )
+          ),
+          // Job status and follow-up changes create new row versions. The run
+          // snapshot must see the current requested row and either its completed
+          // state or the completed current row of its durable follow-up.
+          notExists(
+            executor
+              .select({ overrideId: schema.principalAssetOverrideApplications.overrideId })
+              .from(schema.principalAssetOverrideApplications)
+              .leftJoin(
+                REQUESTED_REPLAY_JOB,
+                eq(
+                  REQUESTED_REPLAY_JOB.id,
+                  schema.principalAssetOverrideApplications.processingJobId
+                )
+              )
+              .leftJoin(
+                FOLLOW_UP_REPLAY_JOB,
+                eq(FOLLOW_UP_REPLAY_JOB.id, REQUESTED_REPLAY_JOB.followUpJobId)
+              )
+              .where(
+                and(
+                  inArray(schema.principalAssetOverrideApplications.overrideId, overrideIds),
+                  or(
+                    isNull(REQUESTED_REPLAY_JOB.id),
+                    sql`not pg_visible_in_snapshot(
+                      ${REQUESTED_REPLAY_JOB}.xmin::text::xid8,
+                      ${runSnapshot}
+                    )`,
+                    and(
+                      isNull(REQUESTED_REPLAY_JOB.followUpJobId),
+                      ne(REQUESTED_REPLAY_JOB.status, "completed")
+                    ),
+                    and(
+                      isNotNull(REQUESTED_REPLAY_JOB.followUpJobId),
+                      or(
+                        isNull(FOLLOW_UP_REPLAY_JOB.id),
+                        ne(FOLLOW_UP_REPLAY_JOB.status, "completed"),
+                        sql`not pg_visible_in_snapshot(
+                          ${FOLLOW_UP_REPLAY_JOB}.xmin::text::xid8,
+                          ${runSnapshot}
+                        )`
+                      )
+                    )
+                  )
+                )
+              )
+          )
+        )
+      )
+      .orderBy(
+        desc(
+          sql<number>`split_part(${schema.calculationRuns.inputLedgerRevision}, ':', 2)::numeric`
+        ),
+        desc(schema.calculationRuns.id)
+      )
+      .limit(1)
+      .pipe(
+        Effect.map((rows) => {
+          const row = rows[0]
+          return row === undefined ? null : calculationRunProjection(row)
+        }),
+        wrapSqlError("principalAssetOverrideRepository.loadCoveringCalculationRun")
+      )
+  }
+
   const loadRecomputation = ({
     executor = db,
     history,
     overrideId,
+    principalId,
   }: {
     readonly executor?: PrincipalAssetOverrideExecutor
     readonly history: ReadonlyArray<PrincipalAssetOverrideHistoryRecord>
     /** Bind a mutation response to the record appended by that transaction. */
     readonly overrideId: string | undefined
+    readonly principalId: string
   }): Effect.Effect<
     PrincipalAssetOverrideRecomputation,
     import("../errors/RepositoryError.ts").PersistenceError
@@ -997,48 +1140,61 @@ const make = Effect.gen(function* () {
       return Effect.succeed({ status: "not_scheduled" })
     }
 
-    return executor
-      .select({
-        overrideId: schema.principalAssetOverrideApplications.overrideId,
-        sourceId: schema.principalAssetOverrideApplications.sourceId,
-        requestedJobId: REQUESTED_REPLAY_JOB.id,
-        requestedStatus: REQUESTED_REPLAY_JOB.status,
-        requestedCreditReasonCode: REQUESTED_REPLAY_JOB.creditReasonCode,
-        followUpJobId: FOLLOW_UP_REPLAY_JOB.id,
-        followUpStatus: FOLLOW_UP_REPLAY_JOB.status,
-        followUpCreditReasonCode: FOLLOW_UP_REPLAY_JOB.creditReasonCode,
-      })
-      .from(schema.principalAssetOverrideApplications)
-      .leftJoin(
-        REQUESTED_REPLAY_JOB,
-        eq(REQUESTED_REPLAY_JOB.id, schema.principalAssetOverrideApplications.processingJobId)
-      )
-      .leftJoin(
-        FOLLOW_UP_REPLAY_JOB,
-        eq(FOLLOW_UP_REPLAY_JOB.id, REQUESTED_REPLAY_JOB.followUpJobId)
-      )
-      .where(inArray(schema.principalAssetOverrideApplications.overrideId, selectedOverrideIds))
-      .orderBy(
-        asc(schema.principalAssetOverrideApplications.overrideId),
-        asc(schema.principalAssetOverrideApplications.sourceId)
-      )
-      .pipe(
-        Effect.map((rows): PrincipalAssetOverrideRecomputation => {
-          if (rows.length === 0) return { status: "not_scheduled" }
+    return Effect.gen(function* () {
+      const rows = yield* executor
+        .select({
+          overrideId: schema.principalAssetOverrideApplications.overrideId,
+          sourceId: schema.principalAssetOverrideApplications.sourceId,
+          requestedJobId: REQUESTED_REPLAY_JOB.id,
+          requestedStatus: REQUESTED_REPLAY_JOB.status,
+          requestedCreditReasonCode: REQUESTED_REPLAY_JOB.creditReasonCode,
+          followUpJobId: FOLLOW_UP_REPLAY_JOB.id,
+          followUpStatus: FOLLOW_UP_REPLAY_JOB.status,
+          followUpCreditReasonCode: FOLLOW_UP_REPLAY_JOB.creditReasonCode,
+        })
+        .from(schema.principalAssetOverrideApplications)
+        .leftJoin(
+          REQUESTED_REPLAY_JOB,
+          eq(REQUESTED_REPLAY_JOB.id, schema.principalAssetOverrideApplications.processingJobId)
+        )
+        .leftJoin(
+          FOLLOW_UP_REPLAY_JOB,
+          eq(FOLLOW_UP_REPLAY_JOB.id, REQUESTED_REPLAY_JOB.followUpJobId)
+        )
+        .where(inArray(schema.principalAssetOverrideApplications.overrideId, selectedOverrideIds))
+        .orderBy(
+          asc(schema.principalAssetOverrideApplications.overrideId),
+          asc(schema.principalAssetOverrideApplications.sourceId)
+        )
+        .pipe(wrapSqlError("principalAssetOverrideRepository.loadRecomputation.sourceJobs"))
 
-          const sourceJobs = rows.map(replayJobProjection)
-          return {
-            status: sourceJobs.some(
-              ({ status }) => status === "failed" || status === "credit_required"
-            )
-              ? "failed"
-              : "updating",
-            overrideIds: [...new Set(sourceJobs.map(({ overrideId }) => overrideId))],
-            sourceJobs,
-          }
-        }),
-        wrapSqlError("principalAssetOverrideRepository.loadRecomputation")
-      )
+      if (rows.length === 0) return { status: "not_scheduled" } as const
+
+      const sourceJobs = rows.map(replayJobProjection)
+      const overrideIds = [...new Set(sourceJobs.map(({ overrideId }) => overrideId))]
+      if (sourceJobs.some(({ status }) => status === "failed" || status === "credit_required")) {
+        return { status: "failed" as const, overrideIds, sourceJobs, calculationRun: null }
+      }
+      if (sourceJobs.some(({ status }) => status !== "complete")) {
+        return { status: "updating" as const, overrideIds, sourceJobs, calculationRun: null }
+      }
+
+      const calculationRun = yield* loadCoveringCalculationRun({
+        executor,
+        overrideIds: selectedOverrideIds,
+        principalId,
+      })
+      if (calculationRun === null) {
+        return { status: "updating" as const, overrideIds, sourceJobs, calculationRun }
+      }
+
+      return {
+        status: calculationRun.status === "running" ? ("updating" as const) : calculationRun.status,
+        overrideIds,
+        sourceJobs,
+        calculationRun,
+      }
+    })
   }
 
   const activeOverride = ({
@@ -1077,6 +1233,7 @@ const make = Effect.gen(function* () {
         executor,
         history,
         overrideId: recomputationOverrideId,
+        principalId,
       })
       const activeIdentityOverride = activeOverride({ history, kind: "identity" })
       const activeInclusionOverride = activeOverride({ history, kind: "inclusion" })

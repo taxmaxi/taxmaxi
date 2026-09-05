@@ -31,6 +31,7 @@ const ids = {
   actor: "00000000-0000-4000-8000-000000000105",
   inclusionOverride: "00000000-0000-4000-8000-000000000108",
   job: "00000000-0000-4000-8000-000000000106",
+  run: "00000000-0000-4000-8000-000000000109",
   replacementAsset: "00000000-0000-4000-8000-000000000103",
   providerAsset: "00000000-0000-4000-8000-000000000104",
   source: "00000000-0000-4000-8000-000000000107",
@@ -122,7 +123,56 @@ const updatingRecomputation = {
       failureCode: null,
     },
   ],
+  calculationRun: null,
 } as const
+
+const completedReplayJob = {
+  ...updatingRecomputation.sourceJobs[0],
+  status: "complete",
+} as const
+
+const coveringRunRecomputations = [
+  {
+    status: "updating",
+    overrideIds: [ids.activeOverride],
+    sourceJobs: [completedReplayJob],
+    calculationRun: {
+      runId: ids.run,
+      status: "running",
+      failureCode: null,
+    },
+  },
+  {
+    status: "complete",
+    overrideIds: [ids.activeOverride],
+    sourceJobs: [completedReplayJob],
+    calculationRun: {
+      runId: ids.run,
+      status: "complete",
+      failureCode: null,
+    },
+  },
+  {
+    status: "partial",
+    overrideIds: [ids.activeOverride],
+    sourceJobs: [completedReplayJob],
+    calculationRun: {
+      runId: ids.run,
+      status: "partial",
+      failureCode: null,
+    },
+  },
+  {
+    status: "failed",
+    overrideIds: [ids.activeOverride],
+    sourceJobs: [completedReplayJob],
+    calculationRun: {
+      runId: ids.run,
+      status: "failed",
+      failureCode: "calculation_stale_recomputed",
+    },
+  },
+] as const
 
 const identityCreateResponse = {
   ...currentResponseWithHistory,
@@ -386,6 +436,37 @@ describe("TaxMaxi asset override resources", () => {
         expectedSystemRevision: "identity-revision",
         reason: "Return to TaxMaxi's current conclusion.",
       })
+    })
+  )
+
+  it.effect("decodes covering calculation-run states through both client styles", () =>
+    Effect.gen(function* () {
+      const captured: Array<CapturedRequest> = []
+      const taxmaxi = new TaxMaxi({
+        apiKey: "tm_asset_overrides",
+        baseUrl: "https://sdk.example.test",
+        fetch: makeSequenceFetch({
+          captured,
+          responseBodies: coveringRunRecomputations.map((recomputation) => ({
+            ...currentResponseWithHistory,
+            recomputation,
+          })),
+        }),
+      })
+
+      const running = yield* taxmaxi.effect.assetOverrides.getCurrent(representationTarget)
+      const complete = yield* Effect.promise(() =>
+        taxmaxi.assetOverrides.getCurrent(representationTarget)
+      )
+      const partial = yield* taxmaxi.effect.assetOverrides.getCurrent(representationTarget)
+      const failed = yield* Effect.promise(() =>
+        taxmaxi.assetOverrides.getCurrent(representationTarget)
+      )
+
+      expect(
+        [running, complete, partial, failed].map(({ recomputation }) => recomputation)
+      ).toEqual(coveringRunRecomputations)
+      expect(captured).toHaveLength(4)
     })
   )
 
