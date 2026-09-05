@@ -1,12 +1,15 @@
 import * as DateTime from "effect/DateTime"
 import { HttpClient, HttpClientRequest, HttpRouter } from "effect/unstable/http"
 import { NodeHttpServer } from "@effect/platform-node"
+import { JurisdictionCode, TaxYear } from "@my/core/accounting"
 import {
   AuthService,
   HashedPassword,
   PasswordHasher,
   type AuthServiceShape,
 } from "@my/core/authentication"
+import { CurrencyCode } from "@my/core/currency"
+import { PrincipalId } from "@my/core/ownership"
 import {
   SourceSyncRunService,
   SourceSyncService,
@@ -15,15 +18,26 @@ import {
   type SourceSyncServiceShape,
   type TransferReconciliationServiceShape,
 } from "@my/sync-engine/services"
+import * as BigDecimal from "effect/BigDecimal"
 import * as Chunk from "effect/Chunk"
 import * as ConfigProvider from "effect/ConfigProvider"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
+import * as Schema from "effect/Schema"
 import { beforeEach, describe, expect, it } from "@effect/vitest"
 import { drizzle } from "../../persistence/src/layers/PgClientLive.ts"
 import { eq } from "../../persistence/src/query/index.ts"
 import { RepositoriesLive } from "../../persistence/src/layers/RepositoriesLive.ts"
+import { CalculationRunRepositoryLive } from "../../persistence/src/layers/CalculationRunRepositoryLive.ts"
+import { CalculationRunServiceLive } from "../../persistence/src/layers/CalculationRunServiceLive.ts"
+import { FactualLedgerRepositoryLive } from "../../persistence/src/layers/FactualLedgerRepositoryLive.ts"
+import { PersistenceError } from "../../persistence/src/errors/RepositoryError.ts"
 import { schema } from "../../persistence/src/schema/index.ts"
+import {
+  CalculationRunId,
+  CalculationRunRepository,
+} from "../../persistence/src/services/CalculationRunRepository.ts"
+import { CalculationRunService } from "../../persistence/src/services/CalculationRunService.ts"
 import {
   makeIntegrationTestDatabaseContext,
   seedSyncEngineAssets,
@@ -31,6 +45,8 @@ import {
   TEST_BTC_ASSET_ID,
 } from "../../persistence/tests/support/integration-test-kit.ts"
 import { AnonSessionServiceLive } from "../src/layers/AnonSessionServiceLive.ts"
+import { PortfolioAssetsResponse } from "../src/definitions/PortfolioApi.ts"
+import { SourceFifoLotsResponse, SourceOverviewResponse } from "../src/definitions/SourcesApi.ts"
 import { SimpleTokenValidatorLive } from "../src/layers/AuthMiddlewareLive.ts"
 import { TaxMaxiApiLive } from "../src/layers/TaxMaxiApiLive.ts"
 import { makeX402PaymentValidatorTestLive } from "./support/X402PaymentValidatorTestLive.ts"
@@ -127,6 +143,11 @@ const fixtureIds = {
   factualLegId: "00000000-0000-4000-8000-000000000487",
   otherCustodyUnitId: "00000000-0000-4000-8000-000000000488",
   otherAcquisitionEventId: "00000000-0000-4000-8000-000000000489",
+  unpricedAssetId: "00000000-0000-4000-8000-000000000490",
+  valuedTransactionId: "00000000-0000-4000-8000-000000000491",
+  unpricedTransactionId: "00000000-0000-4000-8000-000000000492",
+  valuedLegId: "00000000-0000-4000-8000-000000000493",
+  unpricedLegId: "00000000-0000-4000-8000-000000000494",
 } as const
 
 const currentGermanTaxYear = DateTime.now.pipe(
@@ -276,6 +297,86 @@ const seedFactualLedgerOnly = Effect.gen(function* () {
   })
 })
 
+const seedValuedAndUnpricedFacts = Effect.gen(function* () {
+  const fixture = yield* seedSyncEngineRepositoryFixture(fixtureIds)
+  yield* seedSyncEngineAssets({
+    baseBlockchainId: fixture.baseBlockchainId,
+    bitcoinBlockchainId: fixture.bitcoinBlockchainId,
+  })
+
+  const db = yield* drizzle
+  const taxYear = yield* currentGermanTaxYear
+  const timestamp = DateTime.toDateUtc(DateTime.makeUnsafe(`${taxYear}-05-01T10:00:00.000Z`))
+  const quoteAt = DateTime.toDateUtc(DateTime.makeUnsafe(`${taxYear}-05-01T00:00:00.000Z`))
+
+  yield* db
+    .update(schema.assets)
+    .set({ coingeckoCoinId: null })
+    .where(eq(schema.assets.id, TEST_BTC_ASSET_ID))
+  yield* db.insert(schema.assets).values({
+    id: fixtureIds.unpricedAssetId,
+    name: "Unpriced T17 asset",
+    symbol: "NOPRICE",
+    coingeckoCoinId: null,
+    type: "fungible",
+  })
+  yield* db.insert(schema.transactions).values([
+    {
+      id: fixtureIds.valuedTransactionId,
+      sourceId: fixture.sourceId,
+      externalId: "t17-valued-acquisition",
+      timestamp,
+      transactionType: "buy_fiat",
+      principalId: fixture.principalId,
+    },
+    {
+      id: fixtureIds.unpricedTransactionId,
+      sourceId: fixture.sourceId,
+      externalId: "t17-unpriced-acquisition",
+      timestamp,
+      transactionType: "buy_fiat",
+      principalId: fixture.principalId,
+    },
+  ])
+  yield* db.insert(schema.transactionLegs).values([
+    {
+      id: fixtureIds.valuedLegId,
+      sourceId: fixture.sourceId,
+      externalId: "t17-valued-acquisition-leg",
+      timestamp,
+      principalId: fixture.principalId,
+      assetId: TEST_BTC_ASSET_ID,
+      amount: "2",
+      kind: "acquisition",
+      provenance: "deterministic",
+      originKind: "none" as const,
+      transactionId: fixtureIds.valuedTransactionId,
+    },
+    {
+      id: fixtureIds.unpricedLegId,
+      sourceId: fixture.sourceId,
+      externalId: "t17-unpriced-acquisition-leg",
+      timestamp,
+      principalId: fixture.principalId,
+      assetId: fixtureIds.unpricedAssetId,
+      amount: "3",
+      kind: "acquisition",
+      provenance: "deterministic",
+      originKind: "none" as const,
+      transactionId: fixtureIds.unpricedTransactionId,
+    },
+  ])
+  yield* db.insert(schema.assetPrices).values({
+    assetId: TEST_BTC_ASSET_ID,
+    timestamp: quoteAt,
+    price: "100",
+    currency: "EUR",
+    source: "t17-daily-quote",
+  })
+
+  return { principalId: fixture.principalId, taxYear }
+})
+
 const seedOtherCustodyUnitPosition = Effect.gen(function* () {
   const db = yield* drizzle
   const timestamp = DateTime.toDateUtc(DateTime.makeUnsafe("2026-05-02T10:00:00.000Z"))
@@ -302,6 +403,53 @@ const seedOtherCustodyUnitPosition = Effect.gen(function* () {
   })
 })
 
+const FailingCalculationRunRepositoryLive = Layer.effect(
+  CalculationRunRepository,
+  Effect.map(CalculationRunRepository, (repository) =>
+    CalculationRunRepository.of({
+      fail: repository.fail,
+      getLatestStatus: repository.getLatestStatus,
+      persist: () =>
+        Effect.fail(
+          new PersistenceError({
+            operation: "portfolioApiLive.t17.persist",
+            cause: "forced T17 calculation persistence failure",
+          })
+        ),
+      settleStaleAndFindRecomputePrincipals: repository.settleStaleAndFindRecomputePrincipals,
+      start: repository.start,
+    })
+  )
+).pipe(Layer.provide(CalculationRunRepositoryLive))
+
+const FailingCalculationRunServiceLive = CalculationRunServiceLive.pipe(
+  Layer.provide(Layer.merge(FailingCalculationRunRepositoryLive, FactualLedgerRepositoryLive))
+)
+
+const CalculationRunServiceTestLive = CalculationRunServiceLive.pipe(
+  Layer.provide(Layer.merge(CalculationRunRepositoryLive, FactualLedgerRepositoryLive))
+)
+
+const makeRecompute = ({
+  principalId,
+  runId,
+  taxYear,
+}: {
+  readonly principalId: string
+  readonly runId: string
+  readonly taxYear: number
+}) =>
+  Effect.flatMap(CalculationRunService, (service) =>
+    service.recompute({
+      id: CalculationRunId.make(runId),
+      principalId: PrincipalId.make(principalId),
+      jurisdiction: JurisdictionCode.make("DE"),
+      taxYear: TaxYear.make(taxYear),
+      reportingCurrency: CurrencyCode.make("EUR"),
+      accountingChoices: [],
+    })
+  )
+
 const getPortfolio = ({
   userId,
   path = "/v1/portfolio/assets",
@@ -314,6 +462,23 @@ const getPortfolio = ({
       HttpClientRequest.bearerToken(`user_${userId}_admin`),
       HttpClient.execute
     )
+    return { status: response.status, body: yield* response.json }
+  })
+
+const getSourceOverview = ({ sourceId, userId }: { sourceId: string; userId: string }) =>
+  Effect.gen(function* () {
+    const response = yield* HttpClientRequest.get(`/v1/sources/${sourceId}/overview`).pipe(
+      HttpClientRequest.bearerToken(`user_${userId}_admin`),
+      HttpClient.execute
+    )
+    return { status: response.status, body: yield* response.json }
+  })
+
+const getSourceFifoLots = ({ sourceId, userId }: { sourceId: string; userId: string }) =>
+  Effect.gen(function* () {
+    const response = yield* HttpClientRequest.get(
+      `/v1/sources/${sourceId}/fifo-lots?limit=100`
+    ).pipe(HttpClientRequest.bearerToken(`user_${userId}_admin`), HttpClient.execute)
     return { status: response.status, body: yield* response.json }
   })
 
@@ -342,14 +507,200 @@ describe("PortfolioApiLive", () => {
           ],
         },
         latestRun: { runId: fixtureIds.latestRunId, status: "running", failureCode: null },
+        summary: {
+          totalValue: null,
+          costBasis: null,
+          profitLoss: null,
+          profitLossPercentage: null,
+        },
         assets: [
           {
             assetId: TEST_BTC_ASSET_ID,
             amount: "2",
+            currentPrice: null,
+            totalValue: null,
             profitLoss: null,
           },
         ],
       })
+    })
+  )
+
+  it.effect("keeps valued facts while an unpriced asset makes the public run partial", () =>
+    Effect.gen(function* () {
+      const { principalId, taxYear } = yield* seedValuedAndUnpricedFacts.pipe(
+        Effect.provide(TestPgClientLive),
+        Effect.scoped
+      )
+      yield* context.runWithLayer({
+        effect: makeRecompute({
+          principalId,
+          runId: fixtureIds.activeRunId,
+          taxYear,
+        }),
+        layer: CalculationRunServiceTestLive,
+      })
+
+      const response = yield* getPortfolio({ userId: fixtureIds.userId }).pipe(
+        Effect.provide(HttpLive),
+        Effect.scoped
+      )
+      const portfolio = yield* Schema.decodeUnknownEffect(PortfolioAssetsResponse)(response.body)
+      const fifoLotsResponse = yield* getSourceFifoLots({
+        sourceId: fixtureIds.sourceId,
+        userId: fixtureIds.userId,
+      }).pipe(Effect.provide(HttpLive), Effect.scoped)
+      const fifoLots = yield* Schema.decodeUnknownEffect(SourceFifoLotsResponse)(
+        fifoLotsResponse.body
+      )
+
+      expect(response.status).toBe(200)
+      expect(portfolio.activeRun).toMatchObject({
+        runId: fixtureIds.activeRunId,
+        status: "partial",
+        blockerCounts: [{ code: "missing_valuation", count: 1 }],
+      })
+      expect(portfolio.latestRun).toMatchObject({
+        runId: fixtureIds.activeRunId,
+        status: "partial",
+        failureCode: null,
+      })
+      expect(
+        portfolio.assets.map(({ assetId, amount, currentPrice, totalValue }) => ({
+          assetId,
+          amount: BigDecimal.format(amount),
+          currentPrice,
+          totalValue,
+        }))
+      ).toEqual([
+        {
+          assetId: TEST_BTC_ASSET_ID,
+          amount: "2",
+          currentPrice: null,
+          totalValue: null,
+        },
+        {
+          assetId: fixtureIds.unpricedAssetId,
+          amount: "3",
+          currentPrice: null,
+          totalValue: null,
+        },
+      ])
+      expect(fifoLotsResponse.status).toBe(200)
+      expect(fifoLots.calculationRunId).toBe(fixtureIds.activeRunId)
+      expect(
+        fifoLots.fifoLots.map(
+          ({ asset, costBasisCurrency, costBasisPerToken, costBasisStatus }) => ({
+            assetId: asset.assetId,
+            costBasisCurrency,
+            costBasisPerToken,
+            costBasisStatus,
+          })
+        )
+      ).toEqual([
+        {
+          assetId: TEST_BTC_ASSET_ID,
+          costBasisCurrency: "EUR",
+          costBasisPerToken: "100",
+          costBasisStatus: "known",
+        },
+        {
+          assetId: fixtureIds.unpricedAssetId,
+          costBasisCurrency: null,
+          costBasisPerToken: null,
+          costBasisStatus: "pending_review",
+        },
+      ])
+    })
+  )
+
+  it.effect("keeps the prior active result readable when a newer calculation fails", () =>
+    Effect.gen(function* () {
+      yield* seedActivePortfolioRun.pipe(Effect.provide(TestPgClientLive), Effect.scoped)
+      const beforePortfolioResponse = yield* getPortfolio({ userId: fixtureIds.userId }).pipe(
+        Effect.provide(HttpLive),
+        Effect.scoped
+      )
+      const beforeOverviewResponse = yield* getSourceOverview({
+        sourceId: fixtureIds.sourceId,
+        userId: fixtureIds.userId,
+      }).pipe(Effect.provide(HttpLive), Effect.scoped)
+      const beforePortfolio = yield* Schema.decodeUnknownEffect(PortfolioAssetsResponse)(
+        beforePortfolioResponse.body
+      )
+      const beforeOverview = yield* Schema.decodeUnknownEffect(SourceOverviewResponse)(
+        beforeOverviewResponse.body
+      )
+      yield* Effect.gen(function* () {
+        const db = yield* drizzle
+        yield* db
+          .delete(schema.calculationRuns)
+          .where(eq(schema.calculationRuns.id, fixtureIds.latestRunId))
+      }).pipe(Effect.provide(TestPgClientLive), Effect.scoped)
+
+      const taxYear = yield* currentGermanTaxYear
+      const failure = yield* context.runWithLayer({
+        effect: makeRecompute({
+          principalId: fixtureIds.principalId,
+          runId: fixtureIds.latestRunId,
+          taxYear,
+        }).pipe(Effect.flip),
+        layer: FailingCalculationRunServiceLive,
+      })
+      expect(failure).toMatchObject({
+        operation: "portfolioApiLive.t17.persist",
+      })
+
+      const portfolio = yield* getPortfolio({ userId: fixtureIds.userId }).pipe(
+        Effect.provide(HttpLive),
+        Effect.scoped
+      )
+      const overview = yield* getSourceOverview({
+        sourceId: fixtureIds.sourceId,
+        userId: fixtureIds.userId,
+      }).pipe(Effect.provide(HttpLive), Effect.scoped)
+      const afterPortfolio = yield* Schema.decodeUnknownEffect(PortfolioAssetsResponse)(
+        portfolio.body
+      )
+      const afterOverview = yield* Schema.decodeUnknownEffect(SourceOverviewResponse)(overview.body)
+
+      expect(portfolio).toMatchObject({
+        status: 200,
+        body: {
+          activeRun: {
+            runId: fixtureIds.activeRunId,
+            status: "partial",
+            blockerCounts: [
+              { code: "missing_valuation", count: 2 },
+              { code: "unknown_cause", count: 1 },
+            ],
+          },
+          latestRun: {
+            runId: fixtureIds.latestRunId,
+            status: "failed",
+            failureCode: "calculation_failed",
+          },
+          assets: [{ assetId: TEST_BTC_ASSET_ID, amount: "2" }],
+        },
+      })
+      expect(overview).toMatchObject({
+        status: 200,
+        body: {
+          calculationRunId: fixtureIds.activeRunId,
+          source: { id: fixtureIds.sourceId },
+          totals: { fifoLotCount: 1 },
+        },
+      })
+      expect({
+        activeRun: afterPortfolio.activeRun,
+        summary: afterPortfolio.summary,
+        assets: afterPortfolio.assets,
+      }).toEqual({
+        activeRun: beforePortfolio.activeRun,
+        summary: beforePortfolio.summary,
+        assets: beforePortfolio.assets,
+      })
+      expect(afterOverview).toEqual(beforeOverview)
     })
   )
 
