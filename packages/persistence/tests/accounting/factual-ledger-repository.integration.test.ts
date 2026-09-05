@@ -25,6 +25,7 @@ const TEST_PRINCIPAL_ID = PrincipalId.make("00000000-0000-4000-8000-000000000183
 const OTHER_USER_ID = "00000000-0000-4000-8000-000000000184"
 const OTHER_PRINCIPAL_ID = PrincipalId.make("00000000-0000-4000-8000-000000000185")
 const OTHER_SOURCE_ID = "00000000-0000-4000-8000-000000000283"
+const NON_COINBASE_SOURCE_ID = "00000000-0000-4000-8000-000000000284"
 const OVERRIDE_ASSET_ID = "00000000-0000-4000-8000-000000000482"
 const PROVIDER_ASSET_ROW_ID = "00000000-0000-4000-8000-000000000701"
 const DUPLICATE_PROVIDER_ASSET_ROW_ID = "00000000-0000-4000-8000-000000000702"
@@ -340,9 +341,11 @@ const seedProviderBoundaryTransaction = ({
 const seedCexSource = ({
   sourceId,
   fixtureName,
+  providerKey = "coinbase",
 }: {
   readonly sourceId: string
   readonly fixtureName: string
+  readonly providerKey?: string
 }) =>
   Effect.gen(function* () {
     const db = yield* drizzle
@@ -378,7 +381,7 @@ const seedCexSource = ({
       id: sourceId,
       principalId: TEST_PRINCIPAL_ID,
       name: fixtureName,
-      providerKey: "coinbase",
+      providerKey,
       sourceableType: "cex",
       cexAccountId: account.id,
     })
@@ -706,6 +709,119 @@ describe("FactualLedgerRepositoryLive", () => {
         )
       ).toBe(true)
       expect(result.valuationFacts).toEqual([])
+    })
+  )
+
+  it.effect("classifies only Coinbase staking payouts as passive staking rewards", () =>
+    Effect.gen(function* () {
+      const occurredAt = DateTime.toDateUtc(DateTime.makeUnsafe("2025-02-03T10:00:00.000Z"))
+
+      yield* Effect.promise(() =>
+        runPg(
+          Effect.gen(function* () {
+            const db = yield* drizzle
+            yield* seedCexSource({
+              sourceId: NON_COINBASE_SOURCE_ID,
+              fixtureName: "Other CEX",
+              providerKey: "other-cex",
+            })
+            const otherSourceUseId = yield* recordRepresentationUse({
+              assetRepresentationId: TEST_BTC_REPRESENTATION_ID,
+              sourceId: NON_COINBASE_SOURCE_ID,
+            })
+            const transactionInputs = [
+              {
+                sourceId: TEST_CUSTODY_SOURCE_ID,
+                externalId: "coinbase-staking-reward",
+                transactionType: "staking_reward",
+                providerTransactionType: "staking_reward",
+              },
+              {
+                sourceId: TEST_CUSTODY_SOURCE_ID,
+                externalId: "coinbase-earn-payout",
+                transactionType: "staking_reward",
+                providerTransactionType: "earn_payout",
+              },
+              {
+                sourceId: TEST_CUSTODY_SOURCE_ID,
+                externalId: "coinbase-interest-received",
+                transactionType: "interest_received",
+                providerTransactionType: "interest",
+              },
+              {
+                sourceId: TEST_CUSTODY_SOURCE_ID,
+                externalId: "coinbase-other-interest",
+                transactionType: "interest_received",
+                providerTransactionType: "lending_interest",
+              },
+              {
+                sourceId: NON_COINBASE_SOURCE_ID,
+                externalId: "other-staking-reward",
+                transactionType: "staking_reward",
+                providerTransactionType: "staking_reward",
+              },
+              {
+                sourceId: NON_COINBASE_SOURCE_ID,
+                externalId: "other-interest-received",
+                transactionType: "interest_received",
+                providerTransactionType: "interest",
+              },
+            ] as const
+            const transactions = yield* db
+              .insert(schema.transactions)
+              .values(
+                transactionInputs.map((transaction) => ({
+                  ...transaction,
+                  timestamp: occurredAt,
+                  principalId: TEST_PRINCIPAL_ID,
+                }))
+              )
+              .returning({
+                id: schema.transactions.id,
+                externalId: schema.transactions.externalId,
+                sourceId: schema.transactions.sourceId,
+              })
+
+            yield* db.insert(schema.transactionLegs).values(
+              transactions.map((transaction, index) => {
+                return {
+                  id: `10000000-0000-4000-8000-00000000001${index}`,
+                  sourceId: transaction.sourceId,
+                  externalId: `${transaction.externalId ?? transaction.id}-leg`,
+                  timestamp: occurredAt,
+                  principalId: TEST_PRINCIPAL_ID,
+                  assetId: TEST_BTC_ASSET_ID,
+                  sourceRepresentationUseId:
+                    transaction.sourceId === TEST_CUSTODY_SOURCE_ID
+                      ? TEST_CUSTODY_SOURCE_USE_ID
+                      : otherSourceUseId,
+                  amount: "1",
+                  kind: "income" as const,
+                  provenance: "deterministic" as const,
+                  originKind: "none" as const,
+                  transactionId: transaction.id,
+                }
+              })
+            )
+          })
+        )
+      )
+
+      const result = yield* Effect.promise(loadFactualLedger)
+
+      expect(
+        result.events.map((event) => ({
+          transactionReference: event.transactionReference,
+          cause: event._tag === "acquisition" ? event.cause : null,
+        }))
+      ).toEqual([
+        { transactionReference: "coinbase-staking-reward", cause: "passive_staking_reward" },
+        { transactionReference: "coinbase-earn-payout", cause: "passive_staking_reward" },
+        { transactionReference: "coinbase-interest-received", cause: "passive_staking_reward" },
+        { transactionReference: "coinbase-other-interest", cause: "reward" },
+        { transactionReference: "other-staking-reward", cause: "staking_reward" },
+        { transactionReference: "other-interest-received", cause: "reward" },
+      ])
     })
   )
 

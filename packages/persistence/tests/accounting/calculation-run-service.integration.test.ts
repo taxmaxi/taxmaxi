@@ -2,7 +2,8 @@ import { beforeEach, describe, expect, it } from "@effect/vitest"
 import { JurisdictionCode, TaxYear } from "@my/core/accounting"
 import { CurrencyCode } from "@my/core/currency"
 import { PrincipalId } from "@my/core/ownership"
-import { eq } from "drizzle-orm"
+import { asc, eq } from "drizzle-orm"
+import * as BigDecimal from "effect/BigDecimal"
 import * as DateTime from "effect/DateTime"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
@@ -68,6 +69,11 @@ const recompute = (id: CalculationRunId) =>
 const factualContentHash = (inputLedgerRevision: string): string | undefined =>
   inputLedgerRevision.split(":").at(-1)
 
+const storedDecimalEquals = (value: string | null | undefined, expected: string): boolean =>
+  value !== null &&
+  value !== undefined &&
+  BigDecimal.equals(BigDecimal.fromStringUnsafe(value), BigDecimal.fromStringUnsafe(expected))
+
 await Effect.runPromise(context.recreateTestDatabase())
 
 beforeEach(() =>
@@ -83,6 +89,185 @@ beforeEach(() =>
 )
 
 describe("CalculationRunServiceLive", () => {
+  it.effect("calculates Coinbase passive staking income and valued FIFO results", () =>
+    Effect.gen(function* () {
+      const stakingEventId = "10000000-0000-4000-8000-000000000021"
+      const saleEventId = "10000000-0000-4000-8000-000000000022"
+      const missingValueEventId = "10000000-0000-4000-8000-000000000023"
+
+      yield* Effect.promise(() =>
+        runPg(
+          Effect.gen(function* () {
+            const db = yield* drizzle
+            const transactionInputs = [
+              {
+                externalId: "coinbase-staking-payout",
+                timestamp: DateTime.toDateUtc(DateTime.makeUnsafe("2025-01-03T10:00:00.000Z")),
+                transactionType: "staking_reward",
+                providerTransactionType: "earn_payout",
+                providerFiatAmount: "25",
+                providerFiatCurrency: "EUR",
+              },
+              {
+                externalId: "coinbase-staking-sale",
+                timestamp: DateTime.toDateUtc(DateTime.makeUnsafe("2025-06-03T10:00:00.000Z")),
+                transactionType: "sell_fiat",
+                providerTransactionType: "sell",
+                providerFiatAmount: "20",
+                providerFiatCurrency: "EUR",
+              },
+              {
+                externalId: "coinbase-interest-without-value",
+                timestamp: DateTime.toDateUtc(DateTime.makeUnsafe("2025-07-03T10:00:00.000Z")),
+                transactionType: "interest_received",
+                providerTransactionType: "interest",
+                providerFiatAmount: null,
+                providerFiatCurrency: null,
+              },
+            ] as const
+            const transactions = yield* db
+              .insert(schema.transactions)
+              .values(
+                transactionInputs.map((transaction) => ({
+                  ...transaction,
+                  sourceId: SOURCE_ID,
+                  principalId: PRINCIPAL_ID,
+                }))
+              )
+              .returning({ id: schema.transactions.id, externalId: schema.transactions.externalId })
+            const transactionByExternalId = new Map(
+              transactions.map((transaction) => [transaction.externalId, transaction.id])
+            )
+            const stakingTransactionId = transactionByExternalId.get("coinbase-staking-payout")
+            const saleTransactionId = transactionByExternalId.get("coinbase-staking-sale")
+            const missingValueTransactionId = transactionByExternalId.get(
+              "coinbase-interest-without-value"
+            )
+            if (
+              stakingTransactionId === undefined ||
+              saleTransactionId === undefined ||
+              missingValueTransactionId === undefined
+            ) {
+              return yield* Effect.die("Failed to create staking calculation transactions")
+            }
+
+            yield* db.insert(schema.transactionLegs).values([
+              {
+                id: stakingEventId,
+                sourceId: SOURCE_ID,
+                externalId: "coinbase-staking-payout-leg",
+                timestamp: transactionInputs[0].timestamp,
+                principalId: PRINCIPAL_ID,
+                assetId: TEST_BTC_ASSET_ID,
+                amount: "1",
+                kind: "income",
+                provenance: "deterministic",
+                originKind: "none" as const,
+                transactionId: stakingTransactionId,
+              },
+              {
+                id: saleEventId,
+                sourceId: SOURCE_ID,
+                externalId: "coinbase-staking-sale-leg",
+                timestamp: transactionInputs[1].timestamp,
+                principalId: PRINCIPAL_ID,
+                assetId: TEST_BTC_ASSET_ID,
+                amount: "0.5",
+                kind: "disposal",
+                provenance: "deterministic",
+                originKind: "none" as const,
+                transactionId: saleTransactionId,
+              },
+              {
+                id: missingValueEventId,
+                sourceId: SOURCE_ID,
+                externalId: "coinbase-interest-without-value-leg",
+                timestamp: transactionInputs[2].timestamp,
+                principalId: PRINCIPAL_ID,
+                assetId: TEST_BTC_ASSET_ID,
+                amount: "0.25",
+                kind: "income",
+                provenance: "deterministic",
+                originKind: "none" as const,
+                transactionId: missingValueTransactionId,
+              },
+            ])
+          })
+        )
+      )
+
+      const result = yield* Effect.promise(() => recompute(FIRST_RUN_ID))
+      const stored = yield* Effect.promise(() =>
+        runPg(
+          Effect.gen(function* () {
+            const db = yield* drizzle
+            const income = yield* db
+              .select({
+                eventId: schema.calculationRunIncomeResults.eventId,
+                value: schema.calculationRunIncomeResults.value,
+                treatmentCodes: schema.calculationRunIncomeResults.treatmentCodes,
+              })
+              .from(schema.calculationRunIncomeResults)
+              .where(eq(schema.calculationRunIncomeResults.runId, FIRST_RUN_ID))
+              .orderBy(asc(schema.calculationRunIncomeResults.sequence))
+            const realized = yield* db
+              .select({
+                dispositionEventId: schema.calculationRunRealizedResults.dispositionEventId,
+                costBasis: schema.calculationRunRealizedResults.costBasis,
+                proceeds: schema.calculationRunRealizedResults.proceeds,
+              })
+              .from(schema.calculationRunRealizedResults)
+              .where(eq(schema.calculationRunRealizedResults.runId, FIRST_RUN_ID))
+              .orderBy(asc(schema.calculationRunRealizedResults.sequence))
+            const lots = yield* db
+              .select({
+                acquisitionEventId: schema.calculationRunDerivedLots.acquisitionEventId,
+                remainingQuantity: schema.calculationRunDerivedLots.remainingQuantity,
+                costBasisPerUnit: schema.calculationRunDerivedLots.costBasisPerUnit,
+              })
+              .from(schema.calculationRunDerivedLots)
+              .where(eq(schema.calculationRunDerivedLots.runId, FIRST_RUN_ID))
+              .orderBy(asc(schema.calculationRunDerivedLots.sequence))
+            const blockers = yield* db
+              .select({
+                eventId: schema.calculationRunBlockers.eventId,
+                code: schema.calculationRunBlockers.code,
+              })
+              .from(schema.calculationRunBlockers)
+              .where(eq(schema.calculationRunBlockers.runId, FIRST_RUN_ID))
+              .orderBy(asc(schema.calculationRunBlockers.sequence))
+
+            return { income, realized, lots, blockers }
+          })
+        )
+      )
+
+      expect(result.status).toBe("partial")
+      expect(stored.income).toHaveLength(1)
+      expect(stored.income[0]).toMatchObject({
+        eventId: stakingEventId,
+        treatmentCodes: ["de.taxable_income_section22_3_staking"],
+      })
+      expect(storedDecimalEquals(stored.income[0]?.value, "25")).toBe(true)
+
+      expect(stored.realized).toHaveLength(1)
+      expect(stored.realized[0]).toMatchObject({ dispositionEventId: saleEventId })
+      expect(storedDecimalEquals(stored.realized[0]?.costBasis, "12.5")).toBe(true)
+      expect(storedDecimalEquals(stored.realized[0]?.proceeds, "20")).toBe(true)
+
+      expect(stored.lots).toHaveLength(2)
+      expect(stored.lots[0]).toMatchObject({ acquisitionEventId: stakingEventId })
+      expect(storedDecimalEquals(stored.lots[0]?.remainingQuantity, "0.5")).toBe(true)
+      expect(storedDecimalEquals(stored.lots[0]?.costBasisPerUnit, "25")).toBe(true)
+      expect(stored.lots[1]).toMatchObject({
+        acquisitionEventId: missingValueEventId,
+        costBasisPerUnit: null,
+      })
+      expect(storedDecimalEquals(stored.lots[1]?.remainingQuantity, "0.25")).toBe(true)
+      expect(stored.blockers).toEqual([{ eventId: missingValueEventId, code: "missing_valuation" }])
+    })
+  )
+
   it.effect("commits the exact override history position to the factual content hash", () =>
     Effect.gen(function* () {
       const occurredAt = DateTime.toDateUtc(DateTime.makeUnsafe("2025-02-03T10:00:00.000Z"))
