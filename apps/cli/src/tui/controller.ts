@@ -17,7 +17,7 @@ import type {
   SourceFifoLots,
   SourceOverview,
   SourceTaxEvents,
-  SourceTransactions,
+  Transactions,
   TaxMaxiTransactionTypeList,
 } from "taxmaxi"
 import {
@@ -203,12 +203,12 @@ export const fetchSourceAssetPnl = (
   )
 
 /**
- * Loads one cursor page of source transactions.
+ * Loads one cursor page of ready accounting transactions for a source.
  */
 export const fetchSourceTransactions = (
   session: CliSession,
   { cursor, sourceId }: { readonly sourceId: string; readonly cursor?: string | null }
-): Promise<ReportResult<SourceTransactions>> =>
+): Promise<ReportResult<Transactions>> =>
   runReport(
     listSourceTransactions({
       apiUrl: session.apiUrl,

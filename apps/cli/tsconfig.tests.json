@@ -1,5 +1,9 @@
 {
   "extends": "@my/typescript-config/tests.json",
   "include": ["src", "tests"],
-  "exclude": ["node_modules", "src/tui"]
+  "exclude": ["node_modules"],
+  "compilerOptions": {
+    "jsx": "preserve",
+    "jsxImportSource": "@opentui/solid"
+  }
 }
