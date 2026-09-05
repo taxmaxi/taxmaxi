@@ -2,7 +2,7 @@ import type { MouseEvent } from "@opentui/core"
 import { useKeyboard, useRenderer, useTerminalDimensions } from "@opentui/solid"
 import { createSignal, For, Match, Show, Switch } from "solid-js"
 import { Effect } from "effect"
-import type { Source, SourceTransactions } from "taxmaxi"
+import type { Source, Transactions } from "taxmaxi"
 import type { CliSession } from "../../session.ts"
 import { fetchSourceTransactions } from "../controller.ts"
 import { formatAmount, formatDate, formatDateTime, formatFiat, truncateText } from "../format.ts"
@@ -13,12 +13,12 @@ import { ListItem, ListItemText } from "../ui/ListItem.tsx"
 import { ScreenFrame } from "../ui/ScreenFrame.tsx"
 import { Spinner } from "../ui/Spinner.tsx"
 
-type TransactionRow = SourceTransactions["transactions"][number]
+type TransactionRow = Transactions["transactions"][number]
 type Movement = TransactionRow["movements"][number]
 
 // Rows used by everything around the transaction list: app header, panel
 // chrome, key hints, the list status line, and the detail pane.
-const RESERVED_ROWS = 24
+const RESERVED_ROWS = 26
 const MAX_DETAIL_MOVEMENTS = 4
 const DESCRIPTION_LENGTH = 36
 
@@ -32,14 +32,8 @@ const movementKindColor = (kind: Movement["kind"]): string => {
   return theme.textMuted
 }
 
-const movementLabel = (movement: Movement): string => {
-  const fiat =
-    movement.fiatAmount === null
-      ? ""
-      : ` (${formatFiat(movement.fiatAmount, movement.fiatCurrency)})`
-  const rule = movement.derivationRule === null ? "" : ` · rule ${movement.derivationRule}`
-  return `${formatAmount(movement.amount)} ${movement.asset.symbol}${fiat} · ${movement.provenance}${rule}`
-}
+const movementLabel = (movement: Movement): string =>
+  `${formatAmount(movement.amount)} ${movement.assetSymbol}`
 
 function TransactionLine(props: {
   readonly row: TransactionRow
@@ -53,12 +47,12 @@ function TransactionLine(props: {
         {formatDate(props.row.timestamp)}
       </ListItemText>
       <ListItemText selected={props.selected}>
-        {(props.row.transactionType ?? props.row.providerTransactionType ?? "unknown").padEnd(14)}
+        {(props.row.transactionType ?? "unknown").padEnd(14)}
       </ListItemText>
       <ListItemText selected={props.selected} color={theme.accent}>
         {`${props.row.movements.length} legs`}
       </ListItemText>
-      <Show when={props.row.providerDescription} keyed>
+      <Show when={props.row.description} keyed>
         {(description: string) => (
           <ListItemText selected={props.selected} muted>
             {truncateText(description, DESCRIPTION_LENGTH)}
@@ -136,7 +130,7 @@ export function SourceTransactionsScreen(props: {
 
   const selectedRow = (): TransactionRow | undefined => rows()[selected()]
 
-  const visibleRows = () => Math.max(4, dimensions().height - RESERVED_ROWS)
+  const visibleRows = () => Math.max(1, dimensions().height - RESERVED_ROWS)
 
   const bounds = () => viewport.bounds({ length: rows().length, visible: visibleRows() })
 
@@ -167,7 +161,7 @@ export function SourceTransactionsScreen(props: {
     if (current === undefined) {
       return ""
     }
-    const position = `${selected() + 1}/${current.rows.length} transactions`
+    const position = `${selected() + 1}/${current.rows.length} ready accounting transactions`
     if (current.loadingMore) {
       return `${position} · loading more…`
     }
@@ -220,14 +214,14 @@ export function SourceTransactionsScreen(props: {
 
   return (
     <ScreenFrame
-      title="Transactions"
+      title="Ready accounting transactions"
       subtitle={props.source.name}
       hints={["[↑/↓] select", "[m] load more", "[r] refresh", "[b] back", "[q] quit"]}
       onMouseScroll={onWheel}
     >
       <Switch>
         <Match when={list.state()._tag === "loading"}>
-          <Spinner label="Loading transactions…" />
+          <Spinner label="Loading ready accounting transactions…" />
         </Match>
         <Match when={errorMessage()}>
           <box flexDirection="column" gap={1}>
@@ -238,7 +232,7 @@ export function SourceTransactionsScreen(props: {
           </box>
         </Match>
         <Match when={list.state()._tag === "ok" && rows().length === 0}>
-          <text fg={theme.textSecondary}>No transactions imported yet.</text>
+          <text fg={theme.textSecondary}>No ready accounting transactions yet.</text>
         </Match>
         <Match when={list.state()._tag === "ok"}>
           <box flexDirection="column" flexGrow={1} gap={1}>
@@ -266,11 +260,21 @@ export function SourceTransactionsScreen(props: {
               {(row: TransactionRow) => (
                 <box flexDirection="column">
                   <text fg={theme.textSecondary}>{formatDateTime(row.timestamp)}</text>
+                  <Field label="type" value={row.transactionType ?? "unknown"} />
                   <Field
-                    label="type"
-                    value={`${row.transactionType ?? "unknown"} · provider ${row.providerTransactionType ?? "unknown"}${row.providerStatus === null ? "" : ` (${row.providerStatus})`}`}
+                    label="calculation"
+                    value={row.calculationState === "partial" ? "Partial" : "Complete"}
+                    color={row.calculationState === "partial" ? theme.warning : theme.textSecondary}
                   />
-                  <Show when={row.providerDescription} keyed>
+                  <Field
+                    label="realized gain/loss"
+                    value={
+                      row.realizedGainLoss === null
+                        ? "Unknown"
+                        : formatFiat(row.realizedGainLoss, row.fiatCurrency)
+                    }
+                  />
+                  <Show when={row.description} keyed>
                     {(description: string) => <Field label="description" value={description} />}
                   </Show>
                   <Show when={row.externalId} keyed>

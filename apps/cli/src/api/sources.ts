@@ -9,7 +9,8 @@ import {
   type SourceSyncJob,
   type SourceSyncStart,
   type SourceTaxEvents,
-  type SourceTransactions,
+  TaxMaxi,
+  type Transactions,
   type TaxCalculation,
 } from "taxmaxi"
 import { TAX_JURISDICTION } from "../config.ts"
@@ -165,20 +166,14 @@ export const listSourceTransactions = ({
   cursor,
   sessionToken,
   sourceId,
-}: SourceReportPageParams): Effect.Effect<SourceTransactions, CliCommandError> =>
-  makeCliTaxMaxiClient({ apiUrl, sessionToken }).pipe(
-    Effect.flatMap((resolved) =>
-      resolved.sources.listSourceTransactions({
-        params: {
-          sourceId,
-        },
-        query: {
-          cursor: cursor ?? undefined,
-        },
-      })
-    ),
-    Effect.mapError(toCliApiError("Failed to load transactions."))
-  )
+}: SourceReportPageParams): Effect.Effect<Transactions, CliCommandError> =>
+  new TaxMaxi({
+    baseUrl: apiUrl,
+    apiKey: sessionToken,
+    headers: { authorization: `Bearer ${sessionToken}` },
+  }).effect.transactions
+    .list({ sourceId, cursor: cursor ?? null })
+    .pipe(Effect.mapError(toCliApiError("Failed to load transactions.")))
 
 export const listSourceTaxEvents = ({
   apiUrl,
