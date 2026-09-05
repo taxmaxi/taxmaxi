@@ -179,6 +179,7 @@ const CalculationRunStatusFailureTestLive = Layer.succeed(
           cause: "forced calculation status read failure",
         })
       ),
+    listActiveTaxYears: () => Effect.die("CalculationRunRepository test stub: listActiveTaxYears"),
     settleStaleAndFindRecomputePrincipals: () =>
       Effect.die("CalculationRunRepository test stub: maintenance"),
     persist: () => Effect.die("CalculationRunRepository test stub: persist"),
@@ -464,6 +465,7 @@ describe("SyncRunsApiLive", () => {
           CalculationRunRepository.of({
             fail: repository.fail,
             getLatestStatus: repository.getLatestStatus,
+            listActiveTaxYears: repository.listActiveTaxYears,
             settleStaleAndFindRecomputePrincipals: repository.settleStaleAndFindRecomputePrincipals,
             persist: (params) =>
               Effect.gen(function* () {

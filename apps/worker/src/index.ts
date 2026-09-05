@@ -86,6 +86,7 @@ const CalculationRunRuntimeLive = CalculationRunServiceLive.pipe(
 
 const CalculationWorkerRuntimeLive = WorkerBullMqCalculationConsumerLive.pipe(
   Layer.provide(CalculationRunRuntimeLive),
+  Layer.provide(CalculationRunRepositoryLive),
   Layer.provide(HistoricalAssetPriceRepositoryLive),
   Layer.provide(CoinGeckoHistoricalPriceClientLive)
 )

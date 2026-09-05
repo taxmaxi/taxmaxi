@@ -96,6 +96,7 @@ const calculationRunServiceWithPersist = (
       CalculationRunRepository.of({
         fail: repository.fail,
         getLatestStatus: repository.getLatestStatus,
+        listActiveTaxYears: repository.listActiveTaxYears,
         settleStaleAndFindRecomputePrincipals: repository.settleStaleAndFindRecomputePrincipals,
         persist: makePersist(repository),
         start: repository.start,
@@ -2007,6 +2008,18 @@ describe("CalculationRunRepositoryLive", () => {
           result: completeResult({ currency: "USD" }),
         })
       )
+
+      const germanEurTaxYears = yield* runRepository(
+        Effect.flatMap(CalculationRunRepository, (repository) =>
+          repository.listActiveTaxYears({
+            principalId: PrincipalId.make(TEST_PRINCIPAL_ID),
+            jurisdiction: JurisdictionCode.make("DE"),
+            reportingCurrency: EUR,
+          })
+        )
+      )
+
+      expect(germanEurTaxYears).toEqual([TaxYear.make(2024), TaxYear.make(2025)])
 
       const active = yield* runPgEffect(
         Effect.gen(function* () {

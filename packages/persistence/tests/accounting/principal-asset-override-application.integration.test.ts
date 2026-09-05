@@ -74,6 +74,7 @@ const calculationRunServiceWithPersist = (
       CalculationRunRepository.of({
         fail: repository.fail,
         getLatestStatus: repository.getLatestStatus,
+        listActiveTaxYears: repository.listActiveTaxYears,
         persist: makePersist(repository),
         settleStaleAndFindRecomputePrincipals: repository.settleStaleAndFindRecomputePrincipals,
         start: repository.start,
