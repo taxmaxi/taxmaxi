@@ -1,6 +1,7 @@
 import { Outlet, createFileRoute, redirect } from "@tanstack/react-router"
 import { useSuspenseQueries, useSuspenseQuery } from "@tanstack/react-query"
 import { useCallback, useMemo } from "react"
+import { z } from "zod"
 import {
   isTaxMaxiUnauthorizedError,
   type Source as TaxMaxiSource,
@@ -17,9 +18,30 @@ import { m } from "#/paraglide/messages"
 import { getLocale } from "#/paraglide/runtime"
 import { clearAuthSessionCookie, getAuthStatus } from "#/server-functions/auth"
 import { queries, queryKeys } from "#/integrations/taxmaxi/queries"
+import {
+  ONBOARDING_PROTOTYPE_ENABLED,
+  ONBOARDING_PROTOTYPE_STEPS,
+  ONBOARDING_PROTOTYPE_VARIANTS,
+  OnboardingPrototype,
+} from "#/components/onboarding-prototype"
+
+// PROTOTYPE (issue #108): dev-only search params to preview onboarding
+// variants. Remove together with onboarding-prototype.tsx.
+const appSearchSchema = z.object({
+  step: z.enum(ONBOARDING_PROTOTYPE_STEPS).optional().catch(undefined),
+  variant: z.enum(ONBOARDING_PROTOTYPE_VARIANTS).optional().catch(undefined),
+})
 
 export const Route = createFileRoute("/app")({
-  beforeLoad: async () => {
+  validateSearch: appSearchSchema,
+  loaderDeps: ({ search }) => ({ prototypeVariant: search.variant }),
+  beforeLoad: async ({ search }) => {
+    // PROTOTYPE (issue #108): the onboarding prototype renders mock data
+    // only, so it skips auth and works without the API running.
+    if (ONBOARDING_PROTOTYPE_ENABLED && search.variant !== undefined) {
+      return
+    }
+
     const { isAuthenticated } = await getAuthStatus()
 
     if (!isAuthenticated) {
@@ -28,7 +50,11 @@ export const Route = createFileRoute("/app")({
       })
     }
   },
-  loader: async ({ context }) => {
+  loader: async ({ context, deps }) => {
+    if (ONBOARDING_PROTOTYPE_ENABLED && deps.prototypeVariant !== undefined) {
+      return { sources: [] }
+    }
+
     const taxmaxi = context.taxmaxi()
     try {
       const sourceList = await taxmaxi.sources.list()
@@ -54,10 +80,29 @@ export const Route = createFileRoute("/app")({
 })
 
 function RouteComponent() {
+  const { step, variant } = Route.useSearch()
+  const onLogout = useAppLogout()
+
+  // PROTOTYPE (issue #108): mock-only onboarding preview; mounts none of the
+  // dashboard data hooks so it renders without a session or the API.
+  if (ONBOARDING_PROTOTYPE_ENABLED && variant !== undefined) {
+    return (
+      <AppWorkspace>
+        <AppHeader>
+          <AccountMenu onLogout={onLogout} />
+        </AppHeader>
+        <OnboardingPrototype step={step} variant={variant} />
+      </AppWorkspace>
+    )
+  }
+
+  return <DashboardRoute onLogout={onLogout} />
+}
+
+function DashboardRoute({ onLogout }: { onLogout: () => Promise<void> }) {
   const { queryClient, taxmaxi } = Route.useRouteContext()
 
   const navigate = Route.useNavigate()
-  const onLogout = useAppLogout()
 
   const {
     data: { sources },
