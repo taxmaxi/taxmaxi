@@ -1,4 +1,3 @@
-DELETE FROM "calculation_runs";--> statement-breakpoint
 ALTER TABLE "calculation_run_income_results" ADD COLUMN "source_id" uuid NOT NULL;--> statement-breakpoint
 ALTER TABLE "calculation_run_realized_results" ADD COLUMN "source_id" uuid NOT NULL;--> statement-breakpoint
 ALTER TABLE "calculation_run_realized_results" ADD COLUMN "allocation_sequence" integer NOT NULL;--> statement-breakpoint

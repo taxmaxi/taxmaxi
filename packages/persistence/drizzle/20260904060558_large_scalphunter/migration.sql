@@ -1,7 +1,4 @@
 CREATE TYPE "transaction_leg_origin_kind" AS ENUM('provider_transfer', 'canonical_transfer', 'none');--> statement-breakpoint
--- transaction_legs is replayable derived state, and origin_kind can only be supplied truthfully by the writer.
--- Delete-and-replay avoids both false defaults and ambiguous nulls before adding the required column.
-DELETE FROM "transaction_legs";--> statement-breakpoint
 ALTER TABLE "transaction_legs" ADD COLUMN "origin_kind" "transaction_leg_origin_kind" NOT NULL;--> statement-breakpoint
 ALTER TABLE "transaction_legs" ADD COLUMN "provider_transfer_id" uuid;--> statement-breakpoint
 CREATE INDEX "idx_transaction_legs_provider_transfer" ON "transaction_legs" ("provider_transfer_id");--> statement-breakpoint
