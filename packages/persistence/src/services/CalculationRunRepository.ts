@@ -169,6 +169,13 @@ export interface GetLatestCalculationRunStatusParams {
   readonly reportingCurrency: CurrencyCode
 }
 
+/** Scope used to list tax years that already have an active-run pointer. */
+export interface ListActiveCalculationRunTaxYearsParams {
+  readonly principalId: PrincipalId
+  readonly jurisdiction: JurisdictionCode
+  readonly reportingCurrency: CurrencyCode
+}
+
 /** Input for one bounded calculation-maintenance pass. */
 export interface MaintainCalculationRunsParams {
   readonly staleBefore: Date
@@ -183,6 +190,11 @@ export interface CalculationRunMaintenanceResult {
 
 /** Persistence contract for atomic, write-once calculation results. */
 export interface CalculationRunRepositoryShape {
+  /** List the tax years with an active-run pointer for one principal and scope. */
+  readonly listActiveTaxYears: (
+    params: ListActiveCalculationRunTaxYearsParams
+  ) => Effect.Effect<ReadonlyArray<TaxYear>, PersistenceError>
+
   /** Read the newest factual revision for one principal and calculation scope. */
   readonly getLatestStatus: (
     params: GetLatestCalculationRunStatusParams

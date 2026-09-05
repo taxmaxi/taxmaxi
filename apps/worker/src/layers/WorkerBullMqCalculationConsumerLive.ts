@@ -19,6 +19,7 @@ import { JurisdictionCode, TaxYear } from "@my/core/accounting"
 import { EUR } from "@my/core/currency"
 import {
   CalculationRunId,
+  CalculationRunRepository,
   CalculationRunService,
   HistoricalAssetPriceRepository,
   type CalculationRunWriteResult,
@@ -59,7 +60,7 @@ export interface WorkerBullMqCalculationJob {
 /** Processor installed into the calculation BullMQ worker. */
 export type WorkerBullMqCalculationProcessor = (
   job: WorkerBullMqCalculationJob
-) => Promise<CalculationRunWriteResult>
+) => Promise<ReadonlyArray<CalculationRunWriteResult>>
 
 /** Small test seam over the BullMQ calculation worker lifecycle. */
 export interface BullMqCalculationRecomputeWorker {
@@ -231,7 +232,6 @@ const processJob = Effect.fn("worker.calculation.process", {
         })
     )
   )
-  const runId = CalculationRunId.make(randomUUID())
 
   yield* Effect.logInfo(
     {
@@ -239,22 +239,54 @@ const processJob = Effect.fn("worker.calculation.process", {
       queueJobId: job.id ?? null,
       workerId: config.workerId,
       principalId: payload.principalId,
-      runId,
     },
     "calculation-worker:job-started"
   )
 
   yield* hydrateCoinGeckoDailyEurPrices(payload.principalId)
-  const taxYear = yield* currentGermanTaxYear
-
-  const result = yield* calculationRunService.recompute({
-    id: runId,
+  const calculationRunRepository = yield* CalculationRunRepository
+  const currentTaxYear = yield* currentGermanTaxYear
+  const activeTaxYears = yield* calculationRunRepository.listActiveTaxYears({
     principalId: payload.principalId,
     jurisdiction: GERMAN_JURISDICTION,
-    taxYear,
     reportingCurrency: EUR,
-    accountingChoices: [],
   })
+  const taxYears = [...new Set([...activeTaxYears, currentTaxYear])].sort(
+    (left, right) => left - right
+  )
+  const results = yield* Effect.forEach(
+    taxYears,
+    (taxYear) => {
+      const runId = CalculationRunId.make(randomUUID())
+
+      return calculationRunService
+        .recompute({
+          id: runId,
+          principalId: payload.principalId,
+          jurisdiction: GERMAN_JURISDICTION,
+          taxYear,
+          reportingCurrency: EUR,
+          accountingChoices: [],
+        })
+        .pipe(
+          Effect.tap((result) =>
+            Effect.logInfo(
+              {
+                queueName: CALCULATION_RECOMPUTE_QUEUE_NAME,
+                queueJobId: job.id ?? null,
+                workerId: config.workerId,
+                principalId: payload.principalId,
+                runId,
+                taxYear,
+                activated: result.activated,
+              },
+              "calculation-worker:tax-year-completed"
+            )
+          )
+        )
+    },
+    { concurrency: 1 }
+  )
 
   yield* Effect.logInfo(
     {
@@ -262,13 +294,12 @@ const processJob = Effect.fn("worker.calculation.process", {
       queueJobId: job.id ?? null,
       workerId: config.workerId,
       principalId: payload.principalId,
-      runId,
-      activated: result.activated,
+      taxYears,
     },
     "calculation-worker:job-completed"
   )
 
-  return result
+  return results
 })
 
 const acquireLiveWorker = (
@@ -288,14 +319,19 @@ const acquireLiveWorker = (
       try: () => {
         const bullMqProcessor: Processor<
           unknown,
-          CalculationRunWriteResult,
+          ReadonlyArray<CalculationRunWriteResult>,
           typeof CALCULATION_RECOMPUTE_JOB_NAME
-        > = (job: Job<unknown, CalculationRunWriteResult, typeof CALCULATION_RECOMPUTE_JOB_NAME>) =>
-          processor(job)
+        > = (
+          job: Job<
+            unknown,
+            ReadonlyArray<CalculationRunWriteResult>,
+            typeof CALCULATION_RECOMPUTE_JOB_NAME
+          >
+        ) => processor(job)
 
         return new Worker<
           unknown,
-          CalculationRunWriteResult,
+          ReadonlyArray<CalculationRunWriteResult>,
           typeof CALCULATION_RECOMPUTE_JOB_NAME
         >(CALCULATION_RECOMPUTE_QUEUE_NAME, bullMqProcessor, {
           connection,
@@ -340,7 +376,7 @@ const acquireLiveQueue = (
       try: () =>
         new Queue<
           CalculationRecomputeQueuePayload,
-          CalculationRunWriteResult,
+          ReadonlyArray<CalculationRunWriteResult>,
           typeof CALCULATION_RECOMPUTE_JOB_NAME
         >(CALCULATION_RECOMPUTE_QUEUE_NAME, {
           connection,
@@ -437,7 +473,10 @@ export const makeWorkerBullMqCalculationConsumerLive = (
     Effect.gen(function* () {
       const config = yield* loadConfig
       const context = yield* Effect.context<
-        CalculationRunService | HistoricalAssetPriceRepository | CoinGeckoHistoricalPriceClient
+        | CalculationRunRepository
+        | CalculationRunService
+        | HistoricalAssetPriceRepository
+        | CoinGeckoHistoricalPriceClient
       >()
       const runPromise = Effect.runPromiseWith(context)
       const acquireWorker = options.acquireWorker ?? acquireLiveWorker

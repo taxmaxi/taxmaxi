@@ -4,7 +4,7 @@
  * @module CalculationRunRepositoryLive
  */
 
-import { format as formatQuantity } from "@my/core/accounting"
+import { format as formatQuantity, TaxYear } from "@my/core/accounting"
 import type { CurrencyCode } from "@my/core/currency"
 import {
   aliasedTable,
@@ -165,6 +165,29 @@ const make = Effect.gen(function* () {
           (cause) =>
             new PersistenceError({
               operation: "calculationRunRepository.getLatestStatus",
+              cause,
+            })
+        )
+      )
+
+  const listActiveTaxYears: CalculationRunRepositoryShape["listActiveTaxYears"] = (params) =>
+    db
+      .select({ taxYear: schema.activeCalculationRuns.taxYear })
+      .from(schema.activeCalculationRuns)
+      .where(
+        and(
+          eq(schema.activeCalculationRuns.principalId, params.principalId),
+          eq(schema.activeCalculationRuns.jurisdiction, params.jurisdiction),
+          eq(schema.activeCalculationRuns.reportingCurrency, params.reportingCurrency)
+        )
+      )
+      .orderBy(asc(schema.activeCalculationRuns.taxYear))
+      .pipe(
+        Effect.map((rows) => rows.map(({ taxYear }) => TaxYear.make(taxYear))),
+        Effect.mapError(
+          (cause) =>
+            new PersistenceError({
+              operation: "calculationRunRepository.listActiveTaxYears",
               cause,
             })
         )
@@ -796,6 +819,7 @@ const make = Effect.gen(function* () {
   return CalculationRunRepository.of({
     fail,
     getLatestStatus,
+    listActiveTaxYears,
     persist,
     settleStaleAndFindRecomputePrincipals,
     start,

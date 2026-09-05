@@ -409,6 +409,7 @@ const FailingCalculationRunRepositoryLive = Layer.effect(
     CalculationRunRepository.of({
       fail: repository.fail,
       getLatestStatus: repository.getLatestStatus,
+      listActiveTaxYears: repository.listActiveTaxYears,
       persist: () =>
         Effect.fail(
           new PersistenceError({

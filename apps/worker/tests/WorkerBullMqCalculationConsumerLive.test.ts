@@ -83,17 +83,28 @@ const unavailableHistoricalPriceClient = CoinGeckoHistoricalPriceClient.of({
   fetchDailyEurPrice: () => Effect.succeed(Option.none()),
 })
 
+const emptyCalculationRunRepository = CalculationRunRepository.of({
+  fail: () => Effect.die("unused fail"),
+  getLatestStatus: () => Effect.die("unused getLatestStatus"),
+  listActiveTaxYears: () => Effect.succeed([]),
+  persist: () => Effect.die("unused persist"),
+  settleStaleAndFindRecomputePrincipals: () => Effect.die("unused maintenance"),
+  start: () => Effect.die("unused start"),
+})
+
 const withCalculationConsumer = <A>({
   effect,
   service,
   acquireWorker,
   historicalPriceRepository = emptyHistoricalPriceRepository,
   historicalPriceClient = unavailableHistoricalPriceClient,
+  calculationRunRepository = emptyCalculationRunRepository,
 }: {
   readonly effect: Effect.Effect<A>
   readonly service: CalculationRunServiceShape
   readonly historicalPriceRepository?: HistoricalAssetPriceRepositoryShape
   readonly historicalPriceClient?: CoinGeckoHistoricalPriceClientShape
+  readonly calculationRunRepository?: CalculationRunRepositoryShape
   readonly acquireWorker: (
     processor: WorkerBullMqCalculationProcessor
   ) => Effect.Effect<BullMqCalculationRecomputeWorker>
@@ -106,6 +117,10 @@ const withCalculationConsumer = <A>({
         }).pipe(
           Layer.provide(
             Layer.mergeAll(
+              Layer.succeed(
+                CalculationRunRepository,
+                CalculationRunRepository.of(calculationRunRepository)
+              ),
               Layer.succeed(CalculationRunService, CalculationRunService.of(service)),
               Layer.succeed(
                 HistoricalAssetPriceRepository,
@@ -129,6 +144,7 @@ const makeMaintenanceRepository = (
   CalculationRunRepository.of({
     fail: () => Effect.die("unused fail"),
     getLatestStatus: () => Effect.die("unused getLatestStatus"),
+    listActiveTaxYears: () => Effect.die("unused listActiveTaxYears"),
     settleStaleAndFindRecomputePrincipals,
     persist: () => Effect.die("unused persist"),
     start: () => Effect.die("unused start"),
@@ -396,6 +412,51 @@ describe("WorkerBullMqCalculationConsumerLive", () => {
       })
       expect(CalculationRunId.make(recomputes[0]?.id ?? "")).toBe(recomputes[0]?.id)
       expect(recomputes[0]?.taxYear).toBe(TaxYear.make(2026))
+    })
+  )
+
+  it.effect("recomputes earlier active German tax years as well as the current year", () =>
+    Effect.gen(function* () {
+      yield* TestClock.setTime(Date.parse("2026-09-01T12:00:00.000Z"))
+      let processor: WorkerBullMqCalculationProcessor | null = null
+      const taxYears: Array<TaxYear> = []
+      const service = CalculationRunService.of({
+        recompute: ({ taxYear }) =>
+          Effect.sync(() => {
+            taxYears.push(taxYear)
+            return writeResult
+          }),
+      })
+      const repository = CalculationRunRepository.of({
+        fail: () => Effect.die("unused fail"),
+        getLatestStatus: () => Effect.die("unused getLatestStatus"),
+        listActiveTaxYears: () =>
+          Effect.succeed([TaxYear.make(2022), TaxYear.make(2024), TaxYear.make(2026)]),
+        persist: () => Effect.die("unused persist"),
+        settleStaleAndFindRecomputePrincipals: () => Effect.die("unused maintenance"),
+        start: () => Effect.die("unused start"),
+      })
+
+      yield* withCalculationConsumer({
+        service,
+        calculationRunRepository: repository,
+        acquireWorker: (acquiredProcessor) =>
+          Effect.sync(() => {
+            processor = acquiredProcessor
+            return { close: Effect.void }
+          }),
+        effect: Effect.gen(function* () {
+          if (processor === null) {
+            return yield* Effect.die(new Error("Processor was not acquired"))
+          }
+          const acquiredProcessor = processor
+          yield* Effect.promise(() =>
+            acquiredProcessor(makeJob(CalculationRecomputeQueuePayload.make({ principalId })))
+          )
+        }),
+      })
+
+      expect(taxYears).toEqual([TaxYear.make(2022), TaxYear.make(2024), TaxYear.make(2026)])
     })
   )
 
