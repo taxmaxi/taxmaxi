@@ -134,11 +134,13 @@ const ids = {
   overrideId: "00000000-0000-4000-8000-000000000811",
   providerAssetId: "00000000-0000-4000-8000-000000000812",
   inclusionOverrideId: "00000000-0000-4000-8000-000000000813",
+  calculationRunId: "00000000-0000-4000-8000-000000000814",
 } as const
 
 const checksumAddress = "0xAbCd000000000000000000000000000000000096"
 const canonicalAddress = checksumAddress.toLowerCase()
 const absentAddress = "0xabcd000000000000000000000000000000000097"
+const revisionHash = "0".repeat(64)
 const date = (value: string) => DateTime.toDateUtc(DateTime.makeUnsafe(value))
 
 const representationQuery = (address: string = checksumAddress) =>
@@ -608,6 +610,106 @@ describe("AssetOverridesApiLive", () => {
           recomputation: {
             status: "failed",
             sourceJobs: [{ status: "credit_required", failureCode: "credits_exhausted" }],
+          },
+        },
+      })
+    })
+  )
+
+  it.effect("exposes a calculation run only after its snapshot covers completed replay", () =>
+    Effect.gen(function* () {
+      yield* seedOwnedRepresentation.pipe(Effect.provide(TestPgClientLive), Effect.scoped)
+      const initial = yield* get({
+        path: `/v1/asset-overrides/current?${representationQuery()}`,
+      }).pipe(Effect.provide(HttpLive), Effect.scoped)
+      const initialProjection = yield* Schema.decodeUnknownEffect(AssetOverrideCurrentResponse)(
+        initial.body
+      )
+      const created = yield* post({
+        path: `/v1/asset-overrides/create?${representationQuery()}`,
+        payload: identityCreatePayload({
+          systemRevision: initialProjection.system.identityRevision,
+        }),
+      }).pipe(Effect.provide(HttpLive), Effect.scoped)
+      const createdProjection = yield* Schema.decodeUnknownEffect(AssetOverrideCurrentResponse)(
+        created.body
+      )
+      if (createdProjection.recomputation.status === "not_scheduled") {
+        return yield* Effect.die("Create did not expose durable replay work")
+      }
+      const jobId = createdProjection.recomputation.sourceJobs[0]?.jobId
+      if (jobId === null || jobId === undefined) {
+        return yield* Effect.die("Create did not expose its replay job")
+      }
+
+      const inputLedgerRevision = yield* Effect.gen(function* () {
+        const db = yield* drizzle
+        yield* db
+          .update(schema.processingJobs)
+          .set({
+            status: "completed",
+            completedAt: date("2026-09-05T09:00:00.000Z"),
+            updatedAt: date("2026-09-05T09:00:00.000Z"),
+          })
+          .where(eq(schema.processingJobs.id, jobId))
+        return yield* db.transaction((tx) =>
+          Effect.gen(function* () {
+            yield* tx.execute(sql`set transaction isolation level repeatable read`)
+            const [snapshot] = yield* tx
+              .select({
+                transactionId: sql<string>`pg_current_xact_id()::text`,
+                visibility: sql<string>`replace(pg_current_snapshot()::text, ':', '.')`,
+              })
+              .from(schema.principals)
+              .where(eq(schema.principals.id, ids.principalId))
+              .limit(1)
+            if (snapshot === undefined) return yield* Effect.die("Missing principal snapshot")
+            return `v2:${snapshot.transactionId}:${snapshot.visibility}:${revisionHash}`
+          })
+        )
+      }).pipe(Effect.provide(TestPgClientLive), Effect.scoped)
+
+      yield* Effect.gen(function* () {
+        const db = yield* drizzle
+        yield* db.insert(schema.calculationRuns).values({
+          id: ids.calculationRunId,
+          principalId: ids.principalId,
+          jurisdiction: "de",
+          taxYear: 2026,
+          reportingCurrency: "eur",
+          engineVersion: "t13-rest-test-engine",
+          ruleSetVersion: "t13-rest-test-rules",
+          inputLedgerRevision,
+          valuationRevision: `sha256:${revisionHash}`,
+          status: "partial",
+          accountingMethod: "fifo",
+          inventoryScope: "per_custody_unit",
+          appliedChoiceIds: [],
+          appliedRules: [],
+          processedEventIds: [],
+          failureCode: null,
+          failureMessage: null,
+          startedAt: date("2026-09-05T09:01:00.000Z"),
+          completedAt: date("2026-09-05T09:02:00.000Z"),
+        })
+      }).pipe(Effect.provide(TestPgClientLive), Effect.scoped)
+
+      expect(
+        yield* get({ path: `/v1/asset-overrides/current?${representationQuery()}` }).pipe(
+          Effect.provide(HttpLive),
+          Effect.scoped
+        )
+      ).toMatchObject({
+        status: 200,
+        body: {
+          recomputation: {
+            status: "partial",
+            sourceJobs: [{ status: "complete" }],
+            calculationRun: {
+              runId: ids.calculationRunId,
+              status: "partial",
+              failureCode: null,
+            },
           },
         },
       })

@@ -38,10 +38,22 @@ const OTHER_SOURCE_ID = "00000000-0000-4000-8000-000000000812"
 const SECOND_SOURCE_ID = "00000000-0000-4000-8000-000000000813"
 const PROVIDER_ASSET_ID = "00000000-0000-4000-8000-000000000814"
 const OTHER_PROVIDER_ASSET_ID = "00000000-0000-4000-8000-000000000823"
+const SECOND_REPRESENTATION_ID = "00000000-0000-4000-8000-000000000824"
+const PRE_OVERRIDE_RUN_ID = "00000000-0000-4000-8000-000000000825"
+const PRE_COMPLETION_RUN_ID = "00000000-0000-4000-8000-000000000826"
+const OTHER_PRINCIPAL_RUN_ID = "00000000-0000-4000-8000-000000000827"
+const RUNNING_RUN_ID = "00000000-0000-4000-8000-000000000828"
+const COMPLETE_RUN_ID = "00000000-0000-4000-8000-000000000829"
+const PARTIAL_RUN_ID = "00000000-0000-4000-8000-000000000830"
+const FAILED_RUN_ID = "00000000-0000-4000-8000-000000000831"
+const PRE_FOLLOW_UP_COMPLETION_RUN_ID = "00000000-0000-4000-8000-000000000832"
+const FOLLOW_UP_COVERING_RUN_ID = "00000000-0000-4000-8000-000000000833"
 const CHAINLESS_TRANSACTION_ID = "00000000-0000-4000-8000-000000000815"
 const EXACT_TRANSACTION_ID = "00000000-0000-4000-8000-000000000816"
 const SECOND_CEX_ACCOUNT_ID = "00000000-0000-4000-8000-000000000817"
 const CONTRACT_ADDRESS = "0xabcd000000000000000000000000000000000109"
+const SECOND_CONTRACT_ADDRESS = "0xabcd000000000000000000000000000000000110"
+const REVISION_HASH = "0".repeat(64)
 const date = (value: string) => DateTime.toDateUtc(DateTime.makeUnsafe(value))
 
 const target: PrincipalAssetOverrideTarget = {
@@ -104,6 +116,72 @@ const findProjection = (
       repository.findProjection({
         principalId: PrincipalId.make(params.principalId ?? PRINCIPAL_ID),
         target: params.target ?? target,
+      })
+    )
+  )
+
+const captureV2Revision = (principalId: string = PRINCIPAL_ID) =>
+  Effect.promise(() =>
+    runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        return yield* db.transaction((tx) =>
+          Effect.gen(function* () {
+            yield* tx.execute(sql`set transaction isolation level repeatable read`)
+            const [snapshot] = yield* tx
+              .select({
+                transactionId: sql<string>`pg_current_xact_id()::text`,
+                visibility: sql<string>`replace(pg_current_snapshot()::text, ':', '.')`,
+              })
+              .from(schema.principals)
+              .where(eq(schema.principals.id, principalId))
+              .limit(1)
+            if (snapshot === undefined) return yield* Effect.die("Missing principal snapshot")
+            return `v2:${snapshot.transactionId}:${snapshot.visibility}:${REVISION_HASH}`
+          })
+        )
+      })
+    )
+  )
+
+const insertCalculationRun = ({
+  id,
+  inputLedgerRevision,
+  principalId = PRINCIPAL_ID,
+  status,
+}: {
+  readonly id: string
+  readonly inputLedgerRevision: string
+  readonly principalId?: string
+  readonly status: "running" | "complete" | "partial" | "failed"
+}) =>
+  Effect.promise(() =>
+    runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const isResult = status === "complete" || status === "partial"
+        const isTerminal = status !== "running"
+        yield* db.insert(schema.calculationRuns).values({
+          id,
+          principalId,
+          jurisdiction: "de",
+          taxYear: 2026,
+          reportingCurrency: "eur",
+          engineVersion: "t13-test-engine",
+          ruleSetVersion: "t13-test-rules",
+          inputLedgerRevision,
+          valuationRevision: `sha256:${REVISION_HASH}`,
+          status,
+          accountingMethod: isResult ? "fifo" : null,
+          inventoryScope: isResult ? "per_custody_unit" : null,
+          appliedChoiceIds: [],
+          appliedRules: [],
+          processedEventIds: [],
+          failureCode: status === "failed" ? "calculation_stale_recomputed" : null,
+          failureMessage: status === "failed" ? "A newer fact revision replaced this run." : null,
+          startedAt: date("2026-09-05T08:00:00.000Z"),
+          completedAt: isTerminal ? date("2026-09-05T08:01:00.000Z") : null,
+        })
       })
     )
   )
@@ -1123,6 +1201,309 @@ describe("PrincipalAssetOverrideRepository mutations", () => {
             failureCode: "credits_exhausted",
           },
         ],
+      })
+    })
+  )
+
+  it.effect("requires the covering run snapshot to see a completed replay follow-up", () =>
+    Effect.gen(function* () {
+      const initial = yield* seedActiveOverrides()
+      const activeJobId = "00000000-0000-4000-8000-000000000834"
+      const followUpJobId = "00000000-0000-4000-8000-000000000835"
+      yield* Effect.promise(() =>
+        runPg(
+          Effect.gen(function* () {
+            const db = yield* drizzle
+            yield* db.insert(schema.processingJobs).values({
+              id: activeJobId,
+              sourceId: SOURCE_ID,
+              principalId: PRINCIPAL_ID,
+              mode: "sync",
+              status: "processing",
+            })
+          })
+        )
+      )
+      yield* replace({
+        expectedActiveOverrideId: IDENTITY_OVERRIDE_ID,
+        expectedSystemRevision: initial.system.identityRevision,
+        replacement: { _tag: "identity", assetId: CURRENT_ASSET_ID },
+      })
+
+      yield* Effect.promise(() =>
+        runPg(
+          Effect.gen(function* () {
+            const db = yield* drizzle
+            yield* db
+              .update(schema.processingJobs)
+              .set({
+                status: "failed",
+                errorMessage: "superseded by durable replay follow-up",
+                updatedAt: date("2026-09-05T07:55:00.000Z"),
+              })
+              .where(eq(schema.processingJobs.id, activeJobId))
+            yield* db.insert(schema.processingJobs).values({
+              id: followUpJobId,
+              sourceId: SOURCE_ID,
+              principalId: PRINCIPAL_ID,
+              mode: "replay",
+              status: "pending",
+            })
+            yield* db
+              .update(schema.processingJobs)
+              .set({ followUpJobId })
+              .where(eq(schema.processingJobs.id, activeJobId))
+          })
+        )
+      )
+      const preFollowUpCompletionRevision = yield* captureV2Revision()
+      yield* Effect.promise(() =>
+        runPg(
+          Effect.gen(function* () {
+            const db = yield* drizzle
+            yield* db
+              .update(schema.processingJobs)
+              .set({
+                status: "completed",
+                completedAt: date("2026-09-05T07:56:00.000Z"),
+                updatedAt: date("2026-09-05T07:56:00.000Z"),
+              })
+              .where(eq(schema.processingJobs.id, followUpJobId))
+          })
+        )
+      )
+      yield* insertCalculationRun({
+        id: PRE_FOLLOW_UP_COMPLETION_RUN_ID,
+        inputLedgerRevision: preFollowUpCompletionRevision,
+        status: "complete",
+      })
+
+      expect(expectProjection(yield* findProjection()).recomputation).toMatchObject({
+        status: "updating",
+        sourceJobs: [{ jobId: followUpJobId, status: "complete" }],
+        calculationRun: null,
+      })
+
+      const coveringRevision = yield* captureV2Revision()
+      yield* insertCalculationRun({
+        id: FOLLOW_UP_COVERING_RUN_ID,
+        inputLedgerRevision: coveringRevision,
+        status: "complete",
+      })
+      expect(expectProjection(yield* findProjection()).recomputation).toMatchObject({
+        status: "complete",
+        sourceJobs: [{ jobId: followUpJobId, status: "complete" }],
+        calculationRun: { runId: FOLLOW_UP_COVERING_RUN_ID, status: "complete" },
+      })
+    })
+  )
+
+  it.effect("attributes only calculation runs whose snapshots cover this target's replay", () =>
+    Effect.gen(function* () {
+      const initial = yield* seedActiveOverrides({ withActiveOverrides: false })
+      const preOverrideRevision = yield* captureV2Revision()
+      const created = expectProjection(
+        yield* create({
+          expectedSystemRevision: initial.system.identityRevision,
+          replacement: { _tag: "identity", assetId: TEST_BTC_ASSET_ID },
+        })
+      )
+      if (created.recomputation.status === "not_scheduled") {
+        return yield* Effect.die("Create did not schedule replay work")
+      }
+      const jobId = created.recomputation.sourceJobs[0]?.jobId
+      if (jobId === null || jobId === undefined) {
+        return yield* Effect.die("Create did not expose its replay job")
+      }
+
+      const preCompletionRevision = yield* captureV2Revision()
+      yield* Effect.promise(() =>
+        runPg(
+          Effect.gen(function* () {
+            const db = yield* drizzle
+            yield* db
+              .update(schema.processingJobs)
+              .set({
+                status: "completed",
+                completedAt: date("2026-09-05T07:59:00.000Z"),
+                updatedAt: date("2026-09-05T07:59:00.000Z"),
+              })
+              .where(eq(schema.processingJobs.id, jobId))
+          })
+        )
+      )
+
+      yield* insertCalculationRun({
+        id: PRE_OVERRIDE_RUN_ID,
+        inputLedgerRevision: preOverrideRevision,
+        status: "complete",
+      })
+      yield* insertCalculationRun({
+        id: PRE_COMPLETION_RUN_ID,
+        inputLedgerRevision: preCompletionRevision,
+        status: "complete",
+      })
+
+      yield* Effect.promise(() =>
+        runPg(
+          seedSyncEngineRepositoryFixture({
+            userId: OTHER_USER_ID,
+            principalId: OTHER_PRINCIPAL_ID,
+            sourceId: OTHER_SOURCE_ID,
+          })
+        )
+      )
+      const coveringRevision = yield* captureV2Revision()
+      yield* insertCalculationRun({
+        id: OTHER_PRINCIPAL_RUN_ID,
+        inputLedgerRevision: coveringRevision,
+        principalId: OTHER_PRINCIPAL_ID,
+        status: "complete",
+      })
+
+      expect(expectProjection(yield* findProjection()).recomputation).toMatchObject({
+        status: "updating",
+        sourceJobs: [{ status: "complete" }],
+        calculationRun: null,
+      })
+
+      yield* insertCalculationRun({
+        id: RUNNING_RUN_ID,
+        inputLedgerRevision: coveringRevision,
+        status: "running",
+      })
+      expect(expectProjection(yield* findProjection()).recomputation).toMatchObject({
+        status: "updating",
+        calculationRun: {
+          runId: RUNNING_RUN_ID,
+          status: "running",
+          failureCode: null,
+        },
+      })
+
+      const completeRevision = yield* captureV2Revision()
+      yield* insertCalculationRun({
+        id: COMPLETE_RUN_ID,
+        inputLedgerRevision: completeRevision,
+        status: "complete",
+      })
+      expect(expectProjection(yield* findProjection()).recomputation).toMatchObject({
+        status: "complete",
+        calculationRun: {
+          runId: COMPLETE_RUN_ID,
+          status: "complete",
+          failureCode: null,
+        },
+      })
+
+      const partialRevision = yield* captureV2Revision()
+      yield* insertCalculationRun({
+        id: PARTIAL_RUN_ID,
+        inputLedgerRevision: partialRevision,
+        status: "partial",
+      })
+      expect(expectProjection(yield* findProjection()).recomputation).toMatchObject({
+        status: "partial",
+        calculationRun: {
+          runId: PARTIAL_RUN_ID,
+          status: "partial",
+          failureCode: null,
+        },
+      })
+
+      const failedRevision = yield* captureV2Revision()
+      yield* insertCalculationRun({
+        id: FAILED_RUN_ID,
+        inputLedgerRevision: failedRevision,
+        status: "failed",
+      })
+      expect(expectProjection(yield* findProjection()).recomputation).toMatchObject({
+        status: "failed",
+        calculationRun: {
+          runId: FAILED_RUN_ID,
+          status: "failed",
+          failureCode: "calculation_stale_recomputed",
+        },
+      })
+
+      const secondTarget: PrincipalAssetOverrideTarget = {
+        _tag: "representation",
+        blockchain: "base",
+        type: "token",
+        contractAddress: SECOND_CONTRACT_ADDRESS,
+        mintAddress: null,
+      }
+      yield* Effect.promise(() =>
+        runPg(
+          Effect.gen(function* () {
+            const db = yield* drizzle
+            const [base] = yield* db
+              .select({ id: schema.blockchains.id })
+              .from(schema.blockchains)
+              .where(eq(schema.blockchains.name, "base"))
+              .limit(1)
+            if (base === undefined) return yield* Effect.die("Missing Base fixture")
+            yield* db.insert(schema.assetRepresentations).values({
+              id: SECOND_REPRESENTATION_ID,
+              assetId: CURRENT_ASSET_ID,
+              blockchainId: base.id,
+              type: "token",
+              contractAddress: SECOND_CONTRACT_ADDRESS,
+              mintAddress: null,
+              decimals: 6,
+              isSpam: false,
+            })
+            yield* db.insert(schema.sourceRepresentationUses).values({
+              sourceId: SOURCE_ID,
+              blockchainId: base.id,
+              representationType: "token",
+              contractAddress: SECOND_CONTRACT_ADDRESS,
+              mintAddress: null,
+            })
+          })
+        )
+      )
+      const secondInitial = expectProjection(yield* findProjection({ target: secondTarget }))
+      const secondCreated = expectProjection(
+        yield* create({
+          expectedSystemRevision: secondInitial.system.identityRevision,
+          replacement: { _tag: "identity", assetId: TEST_BTC_ASSET_ID },
+          target: secondTarget,
+        })
+      )
+      if (secondCreated.recomputation.status === "not_scheduled") {
+        return yield* Effect.die("Second target did not schedule replay work")
+      }
+      const secondJobId = secondCreated.recomputation.sourceJobs[0]?.jobId
+      if (secondJobId === null || secondJobId === undefined) {
+        return yield* Effect.die("Second target did not expose its replay job")
+      }
+      yield* Effect.promise(() =>
+        runPg(
+          Effect.gen(function* () {
+            const db = yield* drizzle
+            yield* db
+              .update(schema.processingJobs)
+              .set({
+                status: "completed",
+                completedAt: date("2026-09-05T08:10:00.000Z"),
+                updatedAt: date("2026-09-05T08:10:00.000Z"),
+              })
+              .where(eq(schema.processingJobs.id, secondJobId))
+          })
+        )
+      )
+
+      expect(
+        expectProjection(yield* findProjection({ target: secondTarget })).recomputation
+      ).toMatchObject({
+        status: "updating",
+        sourceJobs: [{ status: "complete" }],
+        calculationRun: null,
+      })
+      expect(expectProjection(yield* findProjection()).recomputation).toMatchObject({
+        status: "failed",
+        calculationRun: { runId: FAILED_RUN_ID },
       })
     })
   )
