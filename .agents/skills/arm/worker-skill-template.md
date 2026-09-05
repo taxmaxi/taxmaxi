@@ -30,7 +30,11 @@ Implement exactly one task from the delivery checklist of issue #{{NNN}} ({{SPEC
 ## Scope fence
 
 - Do only the one task. Target 5–8 changed files including tests and migrations; going somewhat over is fine when the task genuinely requires it; heading past ~15 files means the task was cut wrong — stop and say so.
+- Before any code, recheck the task's file cut against merged `main`. If the cut is wrong, record a file-list correction on the issue first, then code. A third correction on one task is a recut: stop and report.
+- Fixture alignment forced by a schema or contract change (fixtures stating a fact they already have) is a category, not a count. Include every such test-only file, and list production artifacts separately from fixture files in the PR description. Production growth beyond the cut still stops.
 - State the result classification in the PR description (result-preserving or result-changing) and paste the recorded decision text for every result the PR changes on purpose, with its source.
+- Record facts where they are created; never infer them later from stored rows (ADR 0012). If your fix starts matching, grouping, or counting stored rows to find which decision applies to a fact, stop: a recorded fact is missing.
+- A value must mean what its type says: no placeholder IDs of another kind, no defaults that record false facts, no nullable staging of a required fact.
 
 ## Domain rules that bite
 
@@ -42,7 +46,7 @@ Implement exactly one task from the delivery checklist of issue #{{NNN}} ({{SPEC
 
 ## Done criteria
 
-1. `mise x -- pnpm run type-check`, lint, and the full test suite pass.
+1. `mise x -- pnpm run type-check`, lint, and the full test suite pass. A failure that also exists on untouched `origin/main` may be noted as such, but say so explicitly with the file and line; the orchestrator files a fix task and it is never carried across a second PR.
 2. /code-review the work.
 3. Branch from latest `main`. Conventional commit with `Refs: #{{NNN}}` in the footer.
 4. Open a PR referencing #{{NNN}} and the task ID, stating the result classification, with every relied-on decision pasted verbatim with its source.

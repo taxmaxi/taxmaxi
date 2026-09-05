@@ -14,15 +14,15 @@ Run the harvest for one spec issue — always its last checklist task. The full 
    - Changes user-visible numbers → legal reference data, treatment codes, or an ADR — whichever actually carries it to users and auditors.
    - Rule for how agents work → `AGENTS.md` or `docs/agents/`.
    - New domain term → the owning context's `CONTEXT.md`.
-   A decision that meets no bar dies with the spec; that is the intended outcome for most of them.
+     A decision that meets no bar dies with the spec; that is the intended outcome for most of them.
 
-3. **File the gaps.** Every unresolved finding becomes its own `needs-triage` issue via the `capture` skill — problem only, no solutions, with evidence links back to this spec's PRs and reports. Add each to the relevant roadmap map issue. Real user data stays out of public issues per `docs/agents/issue-tracker.md`.
+3. **File the gaps.** Every unresolved finding becomes its own `needs-triage` issue via the `capture` skill — problem only, no solutions, with evidence links back to this spec's PRs and reports. Add each to the relevant roadmap map issue. Then run the blocker sweep: list the active runs' blocker codes with counts from the live database — every code that has no recorded rule and no open issue gets a gap issue. This check exists because #212's harvest missed its largest blocker (staking classification, over a thousand events) while filing a smaller one. Before trusting the counts, check the active runs' ages against the last fact replay: #149's harvest found the 2022–2025 active runs predated the leg replays, so every one of their blockers pointed at a deleted row. Count from fresh runs only; file staleness as its own gap. Query through `psql` with the `PG*` values from `apps/server/.env`; join `active_calculation_runs` to `calculation_run_blockers` and group by `code`. Real user data stays out of public issues per `docs/agents/issue-tracker.md`.
 
 4. **Delete the scaffolding.** Remove `.agents/skills/implement-NNN/` and its `.claude/skills/` symlink, and the spec's orchestrator prompt in `.agents/prompts/`. They reference dead checklist state; keeping them invites accidental use.
 
 5. **Improve the machinery.** Fold what the epic taught into the reusable homes: the `arm` templates, the `spec`/`harvest`/process docs, AGENTS.md. If a lesson is too big to fold in now, file it as a gap issue instead of dropping it.
 
-6. **Close.** Post one closing summary comment (an event): what shipped, what was promoted where, which gap issues were filed. Tick the harvest checkbox in the body, then close the issue.
+6. **Close.** Post one closing summary comment (an event): what shipped, what was promoted where, which gap issues were filed. Tick the harvest checkbox in the body, then close the issue. A spec written before the current template may have no harvest checkbox and no Harvest log section (#149 had neither); add the checkbox as the last task and tick it, so the body records that the harvest ran.
 
 7. **Offer the walkthrough.** Tell Max the spec is closed and `/spec-walkthrough NNN` is available for the catch-up briefing and manual test plan.
 

@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted, amended by issue 95, amended by issue 143, amended by issue 145
+Accepted, amended by issue 95, amended by issue 143, amended by issue 145, amended by issue 149
 
 ## Context
 
@@ -58,4 +58,5 @@ Trusted identity facts live in the version-controlled [asset reference catalog](
 - Chainless custody data does not invent a blockchain.
 - Duplicate symbols cannot silently merge assets.
 - Review and replay remain deterministic because mappings target IDs, whether a human reviewer or the automatic policy decided the mapping.
+- These mappings and exclusions are global defaults, not the final word for one taxpayer. A principal may replace the effective economic asset or inclusion for their own facts through the append-only override layer in ADR 0011 without changing any row described here.
 - This is a pre-launch hard migration. The old chain-bound asset schema and symbol mapping bridge are removed rather than supported in parallel.

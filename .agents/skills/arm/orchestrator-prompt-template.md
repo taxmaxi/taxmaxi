@@ -34,6 +34,10 @@ This prompt carries no project state on purpose. Current state lives in the dura
 - Close defect classes, not instances. The same finding shape twice: enumerate every affected site in the PR, put the guard where the data enters, prefer typed error tags over string matching.
 - {{SPEC_JUDGMENT_RULES: the spec's core rules — a PR bending any of them is on the wrong track regardless of green tests}}
 - A PR that keeps growing under review pressure was cut wrong. Prefer the fix that deletes code. If growth continues, split the task and tell Max.
+- Sizing exceptions are categorical. When growth is mechanical fixture alignment forced by a schema or contract change, ask Max to approve the category once ("the production cut plus every fixture that must state X"), not a file number. Production growth still needs its own decision.
+- A file-list correction found by the worker's merged-main recheck is recorded, not debated. The third correction on one task is a recut: stop and re-examine the task with Max.
+- A red gate on `main` (type-check, a failing suite) is a task, not a footnote. Spawn a fix worker before the next feature PR opens; never let a PR description carry "existing failure on main" for a second PR.
+- When a review finding shows a reader guessing at which row a decision belongs to (matching by transaction, amount, direction, siblings, counts), the fix is a recorded fact at the writer, not a better guess (ADR 0012). Treat it as a prerequisite task, not a review fix.
 - Migration rule: no two unmerged in-flight PRs may both carry a Drizzle migration.
 - Sensitive data: real user data (asset names held, quantities, amounts, provider details) never goes into public issues or PRs. Redacted summaries publicly; full reports in local files. When in doubt, ask.
 - When Max asks a question, give the assessment and stop. Do not start fixing unless he asks.

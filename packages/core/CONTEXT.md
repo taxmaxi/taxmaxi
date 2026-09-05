@@ -38,6 +38,42 @@ _Avoid_: Wallet FIFO (as a universal assumption), per-wallet and per-account as 
 A recorded, append-only taxpayer election that a jurisdiction legally allows, such as a lot-identification instruction. Changing a choice supersedes the old record and yields a new calculation run.
 _Avoid_: Setting, preference
 
+**Principal asset override**:
+One principal's append-only replacement of a TaxMaxi conclusion about an asset, for that principal's facts only. Two kinds exist: identity (which economic asset) and inclusion (whether it takes part in calculation). Global mappings, raw evidence, and other principals never change (ADR 0011).
+_Avoid_: User mapping, custom asset, principal-scoped mapping
+
+**Override target**:
+What an override points at. The exact representation target is a blockchain plus representation type plus canonical contract, mint, or native identity, and needs no global representation row. The provider-asset target is the principal plus one provider observation row, used only for facts with no exact chain identity.
+_Avoid_: Asset ID (as the target), symbol
+
+**System conclusion**:
+What TaxMaxi currently decides for a target, with the revision the user inspected when they overrode it. When the system conclusion moves on, the override stays active and the projection marks it as made against a stale system revision.
+_Avoid_: Global mapping (when the projection field is meant), default
+
+**Effective decision**:
+The conclusion a principal's calculation actually uses: the active override when one exists, otherwise the system conclusion. Reads expose both halves and the effective result separately.
+_Avoid_: Resolved asset, final asset
+
+**Fact target link**:
+The stored reference a provider transfer, canonical transfer, or transaction leg carries to the source representation use or provider-asset row that produced it. Readers look the link up; they never reconstruct it from amounts, siblings, or counts (ADR 0012).
+_Avoid_: Matched target, inferred target
+
+**Leg origin**:
+The explicit record of what produced a transaction leg: a provider transfer, a canonical transfer, or nothing, each with its exact reference. A leg with no origin says so; a null is never read as a meaning.
+_Avoid_: Leg source (ambiguous with custody source)
+
+**Fact-layer blocker**:
+A typed reason a stored fact could not become an accounting event: missing decimals, unsupported asset type, unresolved identity, malformed movement, or a missing fact target link. It is stored beside engine blockers in the calculation run and makes the run partial; the engine never sees it.
+_Avoid_: Adapter error, validation error
+
+**Whole-transaction withholding**:
+The rule that when one accounting movement in a transaction is excluded or blocked, the transaction produces no accounting events at all, while its provider evidence and review item stay stored. Applies when facts are written and when they are read into events.
+_Avoid_: Partial transaction, leg-level exclusion
+
+**Covering run**:
+A calculation run whose snapshot can see an override's active record and every linked replay row in its completed state. Only a covering run answers the override's recomputation status; coverage is decided by snapshot visibility, never by timestamps.
+_Avoid_: Latest run, run after the override
+
 ## Wallet input language
 
 **Wallet name**:
