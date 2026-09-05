@@ -46,7 +46,7 @@ import {
 } from "../../persistence/tests/support/integration-test-kit.ts"
 import { AnonSessionServiceLive } from "../src/layers/AnonSessionServiceLive.ts"
 import { PortfolioAssetsResponse } from "../src/definitions/PortfolioApi.ts"
-import { SourceOverviewResponse } from "../src/definitions/SourcesApi.ts"
+import { SourceFifoLotsResponse, SourceOverviewResponse } from "../src/definitions/SourcesApi.ts"
 import { SimpleTokenValidatorLive } from "../src/layers/AuthMiddlewareLive.ts"
 import { TaxMaxiApiLive } from "../src/layers/TaxMaxiApiLive.ts"
 import { makeX402PaymentValidatorTestLive } from "./support/X402PaymentValidatorTestLive.ts"
@@ -474,6 +474,14 @@ const getSourceOverview = ({ sourceId, userId }: { sourceId: string; userId: str
     return { status: response.status, body: yield* response.json }
   })
 
+const getSourceFifoLots = ({ sourceId, userId }: { sourceId: string; userId: string }) =>
+  Effect.gen(function* () {
+    const response = yield* HttpClientRequest.get(
+      `/v1/sources/${sourceId}/fifo-lots?limit=100`
+    ).pipe(HttpClientRequest.bearerToken(`user_${userId}_admin`), HttpClient.execute)
+    return { status: response.status, body: yield* response.json }
+  })
+
 await Effect.runPromise(context.recreateTestDatabase())
 
 describe("PortfolioApiLive", () => {
@@ -538,6 +546,13 @@ describe("PortfolioApiLive", () => {
         Effect.scoped
       )
       const portfolio = yield* Schema.decodeUnknownEffect(PortfolioAssetsResponse)(response.body)
+      const fifoLotsResponse = yield* getSourceFifoLots({
+        sourceId: fixtureIds.sourceId,
+        userId: fixtureIds.userId,
+      }).pipe(Effect.provide(HttpLive), Effect.scoped)
+      const fifoLots = yield* Schema.decodeUnknownEffect(SourceFifoLotsResponse)(
+        fifoLotsResponse.body
+      )
 
       expect(response.status).toBe(200)
       expect(portfolio.activeRun).toMatchObject({
@@ -569,6 +584,31 @@ describe("PortfolioApiLive", () => {
           amount: "3",
           currentPrice: null,
           totalValue: null,
+        },
+      ])
+      expect(fifoLotsResponse.status).toBe(200)
+      expect(fifoLots.calculationRunId).toBe(fixtureIds.activeRunId)
+      expect(
+        fifoLots.fifoLots.map(
+          ({ asset, costBasisCurrency, costBasisPerToken, costBasisStatus }) => ({
+            assetId: asset.assetId,
+            costBasisCurrency,
+            costBasisPerToken,
+            costBasisStatus,
+          })
+        )
+      ).toEqual([
+        {
+          assetId: TEST_BTC_ASSET_ID,
+          costBasisCurrency: "EUR",
+          costBasisPerToken: "100",
+          costBasisStatus: "known",
+        },
+        {
+          assetId: fixtureIds.unpricedAssetId,
+          costBasisCurrency: null,
+          costBasisPerToken: null,
+          costBasisStatus: "pending_review",
         },
       ])
     })

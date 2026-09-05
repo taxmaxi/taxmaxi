@@ -1,6 +1,7 @@
 import * as DateTime from "effect/DateTime"
 import { HttpClient, HttpClientRequest, HttpRouter } from "effect/unstable/http"
 import { NodeHttpServer } from "@effect/platform-node"
+import { NO_CURRENT_ASSET_CONCLUSION } from "@my/core/assets"
 import {
   AuthService,
   HashedPassword,
@@ -9,13 +10,20 @@ import {
 } from "@my/core/authentication"
 import {
   SourceNormalizationRepository,
+  SourceProviderRecoverableNormalizationError,
+  SourceProviderRegistry,
+  SourceSyncJobExecutor,
   SourceSyncRunService,
   SourceSyncService,
   TransferReconciliationService,
+  type SourceProviderModuleShape,
+  type SourceProviderPreparedNormalization,
   type SourceSyncRunServiceShape,
   type SourceSyncServiceShape,
   type TransferReconciliationServiceShape,
 } from "@my/sync-engine/services"
+import { SourceSyncJobExecutorLive } from "@my/sync-engine/layers"
+import { FetchProviderRawBatchResult } from "@my/sync-engine/shared"
 import * as Chunk from "effect/Chunk"
 import * as ConfigProvider from "effect/ConfigProvider"
 import * as Effect from "effect/Effect"
@@ -35,6 +43,10 @@ import {
 } from "../../persistence/tests/support/integration-test-kit.ts"
 import { AnonSessionServiceLive } from "../src/layers/AnonSessionServiceLive.ts"
 import { AssetOverrideCurrentResponse } from "../src/definitions/AssetOverridesApi.ts"
+import {
+  AssetExceptionDetailResponse,
+  AssetExceptionPreviewResponse,
+} from "../src/definitions/AssetsApi.ts"
 import { TransactionListResponse } from "../src/definitions/TransactionsApi.ts"
 import { SimpleTokenValidatorLive } from "../src/layers/AuthMiddlewareLive.ts"
 import { TaxMaxiApiLive } from "../src/layers/TaxMaxiApiLive.ts"
@@ -438,7 +450,7 @@ interface ExactWalletFact {
   readonly sourceId: string
 }
 
-const persistExactWalletFact = ({
+const makeExactWalletArtifacts = ({
   blockchainId,
   externalId,
   occurredAt,
@@ -446,126 +458,130 @@ const persistExactWalletFact = ({
   providerAssetRowId,
   rawRecordId,
   sourceId,
-}: ExactWalletFact & { readonly blockchainId: string }) =>
+}: ExactWalletFact & {
+  readonly blockchainId: string
+}): Omit<SourceProviderPreparedNormalization, "kind"> => ({
+  transaction: {
+    sourceId,
+    sourceRawRecordId: rawRecordId,
+    externalId: `${externalId}-transaction`,
+    externalGroupId: externalId,
+    timestamp: occurredAt,
+    transactionType: "buy_fiat",
+    providerTransactionType: "buy",
+    providerStatus: "completed",
+    providerResourcePath: `/t17/${externalId}`,
+    providerDescription: "T17 exact representation fixture",
+    providerCreatedAt: occurredAt,
+    providerUpdatedAt: occurredAt,
+    metadata: { externalId },
+    providerFiatAmount: "100",
+    providerFiatCurrency: "EUR",
+    principalId,
+  },
+  venueContext: {
+    venueType: "dex",
+    cexAccountId: null,
+    externalAccountId: sourceId,
+    externalOrderId: null,
+    externalFillId: null,
+    side: "buy",
+    instrument: "USDC-EUR",
+    fillPrice: "100",
+    commissionAmount: null,
+    commissionCurrency: null,
+    metadata: { externalId },
+  },
+  providerTransfers: [
+    {
+      sourceId,
+      sourceRawRecordId: rawRecordId,
+      externalId: `${externalId}-provider-transfer`,
+      externalGroupId: externalId,
+      providerAssetId: providerAssetRowId,
+      timestamp: occurredAt,
+      direction: "inbound",
+      processingMode: "evidence_only",
+      fromAccountRef: "external",
+      toAccountRef: sourceId,
+      fromAddress: "external",
+      toAddress: sourceId,
+      networkName: "base",
+      networkHash: `${externalId}-hash`,
+      observedBlockchainId: blockchainId,
+      observedRepresentationType: "token",
+      observedContractAddress: canonicalAddress,
+      observedMintAddress: null,
+      observedDecimals: 6,
+      amount: "1",
+      metadata: { externalId },
+    },
+  ],
+  canonicalTransfers: [
+    {
+      sourceId,
+      principalId,
+      sourceRawRecordId: rawRecordId,
+      externalId: `${externalId}-transfer`,
+      externalGroupId: externalId,
+      addressId: null,
+      blockchainId,
+      txHash: null,
+      timestamp: occurredAt,
+      type: "erc20",
+      fromAddress: "external",
+      toAddress: sourceId,
+      fromAccountRef: "external",
+      toAccountRef: sourceId,
+      fromPartyType: null,
+      fromPartyResourcePath: null,
+      toPartyType: null,
+      toPartyResourcePath: null,
+      assetId: ids.systemAssetId,
+      assetRepresentationId: ids.representationId,
+      providerAssetRowId,
+      amount: "1",
+      tokenId: null,
+      notes: null,
+      metadata: { externalId },
+    },
+  ],
+  providerAssetRowIds: [providerAssetRowId],
+  deriveLegs: ({ transaction }) =>
+    Effect.succeed([
+      {
+        sourceId,
+        sourceRawRecordId: rawRecordId,
+        externalId: `${externalId}-leg`,
+        txHash: null,
+        timestamp: occurredAt,
+        principalId,
+        addressId: null,
+        assetId: ids.systemAssetId,
+        assetRepresentationId: ids.representationId,
+        amount: "1",
+        kind: "acquisition" as const,
+        provenance: "deterministic" as const,
+        derivationRule: "t17_exact_representation",
+        providerAssetRowId,
+        metadata: { externalId },
+        transactionId: transaction.id,
+        originKind: "none" as const,
+        providerTransferId: null,
+        sourceTransferId: null,
+        fiatAmount: "100",
+        fiatCurrency: "EUR",
+        feeForTransactionId: null,
+      },
+    ]),
+  transactionReview: null,
+  resolvedTransactionType: approvedBuyMapping,
+})
+
+const persistExactWalletFact = (fact: ExactWalletFact & { readonly blockchainId: string }) =>
   runSourceNormalization(
     Effect.flatMap(SourceNormalizationRepository, (repository) =>
-      repository.persistNormalizedArtifacts({
-        transaction: {
-          sourceId,
-          sourceRawRecordId: rawRecordId,
-          externalId: `${externalId}-transaction`,
-          externalGroupId: externalId,
-          timestamp: occurredAt,
-          transactionType: "buy_fiat",
-          providerTransactionType: "buy",
-          providerStatus: "completed",
-          providerResourcePath: `/t17/${externalId}`,
-          providerDescription: "T17 exact representation fixture",
-          providerCreatedAt: occurredAt,
-          providerUpdatedAt: occurredAt,
-          metadata: { externalId },
-          providerFiatAmount: "100",
-          providerFiatCurrency: "EUR",
-          principalId,
-        },
-        venueContext: {
-          venueType: "dex",
-          cexAccountId: null,
-          externalAccountId: sourceId,
-          externalOrderId: null,
-          externalFillId: null,
-          side: "buy",
-          instrument: "USDC-EUR",
-          fillPrice: "100",
-          commissionAmount: null,
-          commissionCurrency: null,
-          metadata: { externalId },
-        },
-        providerTransfers: [
-          {
-            sourceId,
-            sourceRawRecordId: rawRecordId,
-            externalId: `${externalId}-provider-transfer`,
-            externalGroupId: externalId,
-            providerAssetId: providerAssetRowId,
-            timestamp: occurredAt,
-            direction: "inbound",
-            processingMode: "evidence_only",
-            fromAccountRef: "external",
-            toAccountRef: sourceId,
-            fromAddress: "external",
-            toAddress: sourceId,
-            networkName: "base",
-            networkHash: `${externalId}-hash`,
-            observedBlockchainId: blockchainId,
-            observedRepresentationType: "token",
-            observedContractAddress: canonicalAddress,
-            observedMintAddress: null,
-            observedDecimals: 6,
-            amount: "1",
-            metadata: { externalId },
-          },
-        ],
-        canonicalTransfers: [
-          {
-            sourceId,
-            principalId,
-            sourceRawRecordId: rawRecordId,
-            externalId: `${externalId}-transfer`,
-            externalGroupId: externalId,
-            addressId: null,
-            blockchainId,
-            txHash: null,
-            timestamp: occurredAt,
-            type: "erc20",
-            fromAddress: "external",
-            toAddress: sourceId,
-            fromAccountRef: "external",
-            toAccountRef: sourceId,
-            fromPartyType: null,
-            fromPartyResourcePath: null,
-            toPartyType: null,
-            toPartyResourcePath: null,
-            assetId: ids.systemAssetId,
-            assetRepresentationId: ids.representationId,
-            providerAssetRowId,
-            amount: "1",
-            tokenId: null,
-            notes: null,
-            metadata: { externalId },
-          },
-        ],
-        providerAssetRowIds: [providerAssetRowId],
-        deriveLegs: ({ transaction }) =>
-          Effect.succeed([
-            {
-              sourceId,
-              sourceRawRecordId: rawRecordId,
-              externalId: `${externalId}-leg`,
-              txHash: null,
-              timestamp: occurredAt,
-              principalId,
-              addressId: null,
-              assetId: ids.systemAssetId,
-              assetRepresentationId: ids.representationId,
-              amount: "1",
-              kind: "acquisition" as const,
-              provenance: "deterministic" as const,
-              derivationRule: "t17_exact_representation",
-              providerAssetRowId,
-              metadata: { externalId },
-              transactionId: transaction.id,
-              originKind: "none" as const,
-              providerTransferId: null,
-              sourceTransferId: null,
-              fiatAmount: "100",
-              fiatCurrency: "EUR",
-              feeForTransactionId: null,
-            },
-          ]),
-        transactionReview: null,
-        resolvedTransactionType: approvedBuyMapping,
-      })
+      repository.persistNormalizedArtifacts(makeExactWalletArtifacts(fact))
     )
   )
 
@@ -688,7 +704,7 @@ const t17ProviderMappings = [ids.firstProviderAssetId, ids.secondProviderAssetId
     mappingKind: "asset" as const,
     mappingStatus: "approved" as const,
     canonicalAssetId: ids.systemAssetId,
-    assetRepresentationId: null,
+    assetRepresentationId: ids.representationId,
     canonicalFiatCurrency: null,
   })
 )
@@ -699,35 +715,184 @@ const t17ProviderSourceUses = [
   { providerAssetRowId: ids.firstProviderAssetId, sourceId: ids.otherWalletSourceId },
 ]
 
-const t17HistoricalRawRecords = (occurredAt: Date) => [
+const t17HistoricalAt = date("2026-08-01T08:00:00.000Z")
+const t17FutureAt = date("2026-08-02T08:00:00.000Z")
+
+interface T17ScenarioRow extends ExactWalletFact {
+  readonly provider: string
+  readonly record: string
+}
+
+const t17HistoricalFacts: ReadonlyArray<T17ScenarioRow> = [
   {
-    id: ids.firstHistoricalRawId,
+    externalId: "t17-first-historical",
+    occurredAt: t17HistoricalAt,
+    principalId: ids.principalId,
+    provider: "helius-base",
+    providerAssetRowId: ids.firstProviderAssetId,
+    rawRecordId: ids.firstHistoricalRawId,
+    record: "historical",
     sourceId: ids.firstWalletSourceId,
-    provider: "helius-base",
-    recordType: "transaction",
-    externalRecordId: "t17-first-historical",
-    occurredAt,
-    payload: { provider: "helius-base", record: "historical", amount: "1" },
   },
   {
-    id: ids.secondHistoricalRawId,
-    sourceId: ids.secondWalletSourceId,
+    externalId: "t17-second-historical",
+    occurredAt: t17HistoricalAt,
+    principalId: ids.principalId,
     provider: "alchemy-base",
-    recordType: "transaction",
-    externalRecordId: "t17-second-historical",
-    occurredAt,
-    payload: { provider: "alchemy-base", record: "historical", amount: "1" },
+    providerAssetRowId: ids.secondProviderAssetId,
+    rawRecordId: ids.secondHistoricalRawId,
+    record: "historical",
+    sourceId: ids.secondWalletSourceId,
   },
   {
-    id: ids.otherHistoricalRawId,
-    sourceId: ids.otherWalletSourceId,
+    externalId: "t17-other-historical",
+    occurredAt: t17HistoricalAt,
+    principalId: ids.otherPrincipalId,
     provider: "helius-base",
-    recordType: "transaction",
-    externalRecordId: "t17-other-historical",
-    occurredAt,
-    payload: { provider: "helius-base", record: "other-historical", amount: "1" },
+    providerAssetRowId: ids.firstProviderAssetId,
+    rawRecordId: ids.otherHistoricalRawId,
+    record: "other-historical",
+    sourceId: ids.otherWalletSourceId,
   },
 ]
+
+const t17FutureFacts: ReadonlyArray<T17ScenarioRow> = [
+  {
+    externalId: "t17-first-future",
+    occurredAt: t17FutureAt,
+    principalId: ids.principalId,
+    provider: "helius-base",
+    providerAssetRowId: ids.firstProviderAssetId,
+    rawRecordId: ids.firstFutureRawId,
+    record: "future",
+    sourceId: ids.firstWalletSourceId,
+  },
+  {
+    externalId: "t17-second-future",
+    occurredAt: t17FutureAt,
+    principalId: ids.principalId,
+    provider: "alchemy-base",
+    providerAssetRowId: ids.secondProviderAssetId,
+    rawRecordId: ids.secondFutureRawId,
+    record: "future",
+    sourceId: ids.secondWalletSourceId,
+  },
+  {
+    externalId: "t17-other-future",
+    occurredAt: t17FutureAt,
+    principalId: ids.otherPrincipalId,
+    provider: "helius-base",
+    providerAssetRowId: ids.firstProviderAssetId,
+    rawRecordId: ids.otherFutureRawId,
+    record: "other-future",
+    sourceId: ids.otherWalletSourceId,
+  },
+]
+
+const t17FactsByRawId = new Map(
+  [...t17HistoricalFacts, ...t17FutureFacts].map((fact) => [fact.rawRecordId, fact] as const)
+)
+
+const toT17RawRecord = ({
+  externalId,
+  occurredAt,
+  provider,
+  rawRecordId,
+  record,
+  sourceId,
+}: T17ScenarioRow) => ({
+  id: rawRecordId,
+  sourceId,
+  provider,
+  recordType: "transaction",
+  externalRecordId: externalId,
+  occurredAt,
+  payload: { provider, record, amount: "1" },
+})
+
+const t17HistoricalRawRecords = t17HistoricalFacts.map(toT17RawRecord)
+const t17FutureRawRecords = t17FutureFacts.map(toT17RawRecord)
+
+const makeT17ProviderRegistryLive = (blockchainId: string) => {
+  const providerModule: SourceProviderModuleShape = {
+    fetchRawBatch: () =>
+      Effect.succeed(
+        FetchProviderRawBatchResult.make({
+          records: [],
+          cursorPayload: null,
+          highWatermark: null,
+          done: true,
+        })
+      ),
+    refreshReferenceData: Effect.succeed({
+      transactionTypeCatalogCount: 0,
+      providerAssetCatalogCount: 0,
+      defaultTransactionMappingCount: 0,
+      defaultProviderAssetMappingCount: 0,
+    }),
+    refreshDefaultMappings: Effect.succeed({
+      defaultTransactionMappingCount: 0,
+      defaultProviderAssetMappingCount: 0,
+    }),
+    makeRawRecordNormalizer: Effect.succeed(({ source, sourceRecord }) => {
+      const fact = t17FactsByRawId.get(sourceRecord.id)
+      if (
+        fact === undefined ||
+        fact.sourceId !== source.id ||
+        fact.principalId !== source.principalId
+      ) {
+        return Effect.fail(
+          new SourceProviderRecoverableNormalizationError({
+            providerKey: source.providerKey ?? "unknown",
+            message: `No explicit T17 fixture for raw row ${sourceRecord.id}`,
+          })
+        )
+      }
+
+      return Effect.succeed({
+        kind: "prepared",
+        ...makeExactWalletArtifacts({ ...fact, blockchainId }),
+      } satisfies SourceProviderPreparedNormalization)
+    }),
+  }
+
+  return Layer.succeed(SourceProviderRegistry, {
+    resolveProviderModule: () => Effect.succeed(providerModule),
+  })
+}
+
+const T17ExecutorTransferReconciliationLive = Layer.succeed(TransferReconciliationService, {
+  reconcileTransferCandidates: () =>
+    Effect.succeed({ evaluatedProviderTransfers: 0, pending: 0, needsReview: 0, autoApplied: 0 }),
+  rollbackReconciliationsForSourceReplay: () => Effect.void,
+  applyDeterministicInternalTransferCanonicalization: () =>
+    Effect.succeed({ canonicalizedPairs: 0 }),
+} satisfies TransferReconciliationServiceShape)
+
+const executeT17ReplayJobs = ({
+  blockchainId,
+  jobIds,
+}: {
+  readonly blockchainId: string
+  readonly jobIds: ReadonlyArray<string>
+}) => {
+  const executorLayer = SourceSyncJobExecutorLive.pipe(
+    Layer.provide(makeT17ProviderRegistryLive(blockchainId)),
+    Layer.provide(T17ExecutorTransferReconciliationLive),
+    Layer.provide(RepositoriesLive),
+    Layer.provide(TestPgClientLive)
+  )
+
+  return Effect.forEach(
+    jobIds,
+    (jobId) =>
+      Effect.flatMap(SourceSyncJobExecutor, (executor) => executor.execute({ jobId })).pipe(
+        Effect.provide(executorLayer),
+        Effect.scoped
+      ),
+    { concurrency: 1 }
+  )
+}
 
 const seedT17IsolationFixture = Effect.gen(function* () {
   const firstPrincipal = yield* seedSyncEngineRepositoryFixture({
@@ -760,46 +925,98 @@ const seedT17IsolationFixture = Effect.gen(function* () {
   yield* db.insert(schema.providerAssetMappings).values(t17ProviderMappings)
   yield* db.insert(schema.providerAssetSourceUses).values(t17ProviderSourceUses)
 
-  const historicalAt = date("2026-08-01T08:00:00.000Z")
-  yield* db.insert(schema.sourceRecordsRaw).values(t17HistoricalRawRecords(historicalAt))
+  yield* db.insert(schema.sourceRecordsRaw).values(t17HistoricalRawRecords)
 
-  return { blockchainId: firstPrincipal.baseBlockchainId, historicalAt }
+  return { blockchainId: firstPrincipal.baseBlockchainId }
 })
 
 const seedT17FutureRawRecords = Effect.gen(function* () {
   const db = yield* drizzle
-  const futureAt = date("2026-08-02T08:00:00.000Z")
-  yield* db.insert(schema.sourceRecordsRaw).values([
-    {
-      id: ids.firstFutureRawId,
-      sourceId: ids.firstWalletSourceId,
-      provider: "helius-base",
-      recordType: "transaction",
-      externalRecordId: "t17-first-future",
-      occurredAt: futureAt,
-      payload: { provider: "helius-base", record: "future", amount: "1" },
-    },
-    {
-      id: ids.secondFutureRawId,
-      sourceId: ids.secondWalletSourceId,
-      provider: "alchemy-base",
-      recordType: "transaction",
-      externalRecordId: "t17-second-future",
-      occurredAt: futureAt,
-      payload: { provider: "alchemy-base", record: "future", amount: "1" },
-    },
-    {
-      id: ids.otherFutureRawId,
-      sourceId: ids.otherWalletSourceId,
-      provider: "helius-base",
-      recordType: "transaction",
-      externalRecordId: "t17-other-future",
-      occurredAt: futureAt,
-      payload: { provider: "helius-base", record: "other-future", amount: "1" },
-    },
-  ])
-  return futureAt
+  yield* db.insert(schema.sourceRecordsRaw).values(t17FutureRawRecords)
 })
+
+const seedT17GlobalDecisionReview = Effect.gen(function* () {
+  const db = yield* drizzle
+  const reviewedAt = date("2026-08-03T08:00:00.000Z")
+  yield* db.insert(schema.assetResolutionJobs).values({
+    providerAssetRowId: ids.firstProviderAssetId,
+    evidenceRevision: 1,
+    policyRevision: "t17-policy.1",
+    status: "completed",
+  })
+  const [policyDecision] = yield* db
+    .insert(schema.assetResolutionDecisions)
+    .values({
+      providerAssetRowId: ids.firstProviderAssetId,
+      evidenceRevision: 1,
+      policyRevision: "t17-policy.1",
+      outcome: "fail_closed",
+      reason: "ownership_conflict",
+      actor: "policy:t17-policy.1",
+    })
+    .returning({ id: schema.assetResolutionDecisions.id })
+  if (policyDecision === undefined) {
+    return yield* Effect.die("Failed to seed the T17 global-decision review")
+  }
+  yield* db.insert(schema.assetResolutionCurrentState).values({
+    providerAssetRowId: ids.firstProviderAssetId,
+    currentConclusionId: null,
+    currentPolicyEvaluationId: policyDecision.id,
+  })
+  const [evidence] = yield* db
+    .insert(schema.assetResolutionEvidence)
+    .values({
+      decisionId: policyDecision.id,
+      authority: "provider",
+      claimKind: "representation_owner",
+      sourceLocator: `helius-base:${canonicalAddress}`,
+      retrievedAt: reviewedAt,
+      evidenceRevision: 1,
+      decodedClaim: { blockchain: "base", contractAddress: canonicalAddress, decimals: 6 },
+      rawPayload: t17ProviderAssets[0]?.rawProviderPayload,
+    })
+    .returning({ id: schema.assetResolutionEvidence.id })
+  if (evidence === undefined) {
+    return yield* Effect.die("Failed to seed the T17 global-decision evidence")
+  }
+
+  return { evidenceId: evidence.id, policyDecisionId: policyDecision.id }
+})
+
+const loadT17RawRows = (rawIds: ReadonlySet<string>) =>
+  Effect.gen(function* () {
+    const db = yield* drizzle
+    return (yield* db
+      .select({
+        id: schema.sourceRecordsRaw.id,
+        sourceId: schema.sourceRecordsRaw.sourceId,
+        provider: schema.sourceRecordsRaw.provider,
+        recordType: schema.sourceRecordsRaw.recordType,
+        externalRecordId: schema.sourceRecordsRaw.externalRecordId,
+        occurredAt: schema.sourceRecordsRaw.occurredAt,
+        payload: schema.sourceRecordsRaw.payload,
+      })
+      .from(schema.sourceRecordsRaw)
+      .orderBy(schema.sourceRecordsRaw.id)).filter(({ id }) => rawIds.has(id))
+  })
+
+const loadT17DecisionReplayJobs = (decisionId: string) =>
+  Effect.gen(function* () {
+    const db = yield* drizzle
+    const rows = yield* db
+      .select({
+        sourceId: schema.assetDecisionRematerializations.sourceId,
+        jobId: schema.assetDecisionRematerializations.processingJobId,
+      })
+      .from(schema.assetDecisionRematerializations)
+      .where(eq(schema.assetDecisionRematerializations.decisionId, decisionId))
+      .orderBy(schema.assetDecisionRematerializations.sourceId)
+    return yield* Effect.forEach(rows, ({ sourceId, jobId }) =>
+      jobId === null
+        ? Effect.die(`T17 decision did not store a replay job for source ${sourceId}`)
+        : Effect.succeed({ sourceId, jobId })
+    )
+  })
 
 const loadT17ProtectedFacts = Effect.gen(function* () {
   const db = yield* drizzle
@@ -906,6 +1123,217 @@ const expectT17TransactionProjection = ({
   expect(unchanged.totalCount).toBe(2)
 }
 
+const loadT17Transactions = (userId: string = ids.userId) =>
+  Effect.gen(function* () {
+    const response = yield* get({ path: "/v1/transactions?limit=100", userId })
+    return yield* Schema.decodeUnknownEffect(TransactionListResponse)(response.body)
+  }).pipe(Effect.provide(HttpLive), Effect.scoped)
+
+const createT17IdentityOverrideAndReplay = ({
+  blockchainId,
+  systemRevision,
+}: {
+  readonly blockchainId: string
+  readonly systemRevision: string
+}) =>
+  Effect.gen(function* () {
+    const created = yield* post({
+      path: `/v1/asset-overrides/create?${representationQuery()}`,
+      payload: identityCreatePayload({ systemRevision }),
+    }).pipe(Effect.provide(HttpLive), Effect.scoped)
+    const projection = yield* Schema.decodeUnknownEffect(AssetOverrideCurrentResponse)(created.body)
+    if (projection.recomputation.status === "not_scheduled") {
+      return yield* Effect.die("T17 identity override did not schedule owned source work")
+    }
+
+    expect(projection.effectiveDecision).toEqual({
+      _tag: "included",
+      assetId: TEST_BTC_ASSET_ID,
+    })
+    expect(projection.recomputation.sourceJobs.map(({ sourceId }) => sourceId).sort()).toEqual(
+      [ids.firstWalletSourceId, ids.secondWalletSourceId].sort()
+    )
+    const jobIds = yield* Effect.forEach(
+      projection.recomputation.sourceJobs,
+      ({ jobId, sourceId }) =>
+        jobId === null
+          ? Effect.die(`T17 override did not store a replay job for source ${sourceId}`)
+          : Effect.succeed(jobId)
+    )
+    const results = yield* executeT17ReplayJobs({ blockchainId, jobIds })
+    expect(results.map(({ status }) => status)).toEqual(["completed", "completed"])
+  })
+
+const submitT17GlobalDecision = Effect.gen(function* () {
+  const review = yield* seedT17GlobalDecisionReview.pipe(
+    Effect.provide(TestPgClientLive),
+    Effect.scoped
+  )
+  const payload = {
+    claim: {
+      _tag: "identity",
+      assetId: ids.changedSystemAssetId,
+      newAsset: null,
+      representation: {
+        blockchain: "base",
+        type: "token",
+        contractAddress: canonicalAddress,
+        mintAddress: null,
+        decimals: 6,
+      },
+    },
+    evidenceRevision: 1,
+    currentConclusionRevision: NO_CURRENT_ASSET_CONCLUSION,
+    currentPolicyEvaluationRevision: review.policyDecisionId,
+    evidenceSnapshotIds: [review.evidenceId],
+    rationale: "The reviewed Base representation belongs to the existing ETH asset.",
+  } as const
+  const previewResponse = yield* post({
+    path: `/v1/assets/exceptions/${ids.firstProviderAssetId}/preview`,
+    payload,
+    role: "admin",
+  }).pipe(Effect.provide(HttpLive), Effect.scoped)
+  const preview = yield* Schema.decodeUnknownEffect(AssetExceptionPreviewResponse)(
+    previewResponse.body
+  )
+  expect(previewResponse.status).toBe(200)
+  expect(preview).toMatchObject({
+    resultingAssetId: ids.changedSystemAssetId,
+    assetOutcome: "reuse",
+    representationOutcome: "reassign",
+    rematerializationSourceCount: 3,
+  })
+  const decisionResponse = yield* post({
+    path: `/v1/assets/exceptions/${ids.firstProviderAssetId}/decisions`,
+    payload: {
+      ...payload,
+      expectedResultingAssetId: preview.resultingAssetId,
+      expectedAssetOutcome: preview.assetOutcome,
+      expectedRepresentationOutcome: preview.representationOutcome,
+      expectedAffectedObservationRevisions: preview.affectedObservationRevisions,
+    },
+    role: "admin",
+  }).pipe(Effect.provide(HttpLive), Effect.scoped)
+  const decision = yield* Schema.decodeUnknownEffect(AssetExceptionDetailResponse)(
+    decisionResponse.body
+  )
+  if (decision.currentConclusion === null) {
+    return yield* Effect.die("T17 global decision did not become current")
+  }
+  expect(decisionResponse.status).toBe(200)
+  expect(decision).toMatchObject({
+    reviewStatus: "approved",
+    currentConclusion: {
+      outcome: "identity",
+      assetId: ids.changedSystemAssetId,
+      assetRepresentationId: ids.representationId,
+    },
+    rematerialization: { status: "pending", affectedSourceCount: 3 },
+  })
+  return decision.currentConclusion.id
+})
+
+const executeT17GlobalDecisionReplay = ({
+  blockchainId,
+  decisionId,
+}: {
+  readonly blockchainId: string
+  readonly decisionId: string
+}) =>
+  Effect.gen(function* () {
+    const jobs = yield* loadT17DecisionReplayJobs(decisionId).pipe(
+      Effect.provide(TestPgClientLive),
+      Effect.scoped
+    )
+    expect(jobs.map(({ sourceId }) => sourceId).sort()).toEqual(
+      [ids.firstWalletSourceId, ids.secondWalletSourceId, ids.otherWalletSourceId].sort()
+    )
+    const results = yield* executeT17ReplayJobs({
+      blockchainId,
+      jobIds: jobs.map(({ jobId }) => jobId),
+    })
+    expect(results.map(({ status }) => status)).toEqual(["completed", "completed", "completed"])
+  })
+
+const assertT17GlobalDecisionOutcome = ({
+  beforeProtectedFacts,
+  futureRawBeforeWrite,
+  futureRawIds,
+  historicalRawBeforeReplay,
+  historicalRawIds,
+}: {
+  readonly beforeProtectedFacts: Effect.Success<typeof loadT17ProtectedFacts>
+  readonly futureRawBeforeWrite: Effect.Success<ReturnType<typeof loadT17RawRows>>
+  readonly futureRawIds: ReadonlySet<string>
+  readonly historicalRawBeforeReplay: Effect.Success<ReturnType<typeof loadT17RawRows>>
+  readonly historicalRawIds: ReadonlySet<string>
+}) =>
+  Effect.gen(function* () {
+    const firstProjection = yield* get({
+      path: `/v1/asset-overrides/current?${representationQuery()}`,
+    }).pipe(Effect.provide(HttpLive), Effect.scoped)
+    expect(firstProjection).toMatchObject({
+      status: 200,
+      body: {
+        system: { identity: { _tag: "resolved", assetId: ids.changedSystemAssetId } },
+        activeIdentityOverride: { kind: "identity", operation: "create" },
+        effectiveDecision: { _tag: "included", assetId: TEST_BTC_ASSET_ID },
+        identityOverrideUsesStaleSystemRevision: true,
+      },
+    })
+    const otherProjection = yield* get({
+      path: `/v1/asset-overrides/current?${representationQuery()}`,
+      userId: ids.otherUserId,
+    }).pipe(Effect.provide(HttpLive), Effect.scoped)
+    expect(otherProjection).toMatchObject({
+      status: 200,
+      body: {
+        activeIdentityOverride: null,
+        effectiveDecision: { _tag: "included", assetId: ids.changedSystemAssetId },
+      },
+    })
+
+    const firstTransactions = yield* loadT17Transactions()
+    const otherTransactions = yield* loadT17Transactions(ids.otherUserId)
+    expect(firstTransactions.totalCount).toBe(4)
+    expect(
+      firstTransactions.transactions.flatMap(({ movements }) =>
+        movements.map(({ assetSymbol }) => assetSymbol)
+      )
+    ).toEqual(["BTC", "BTC", "BTC", "BTC"])
+    expect(otherTransactions.totalCount).toBe(2)
+    expect(
+      otherTransactions.transactions.flatMap(({ movements }) =>
+        movements.map(({ assetSymbol }) => assetSymbol)
+      )
+    ).toEqual(["ETH", "ETH"])
+
+    const allRawIds = new Set<string>([...historicalRawIds, ...futureRawIds])
+    const allRawAfterGlobalChange = yield* loadT17RawRows(allRawIds).pipe(
+      Effect.provide(TestPgClientLive),
+      Effect.scoped
+    )
+    const protectedFactsAfterGlobalChange = yield* loadT17ProtectedFacts.pipe(
+      Effect.provide(TestPgClientLive),
+      Effect.scoped
+    )
+    expect(allRawAfterGlobalChange).toEqual(
+      [...historicalRawBeforeReplay, ...futureRawBeforeWrite].sort((left, right) =>
+        left.id.localeCompare(right.id)
+      )
+    )
+    expect(protectedFactsAfterGlobalChange.historicalRawRows).toEqual(
+      beforeProtectedFacts.historicalRawRows
+    )
+    expect(protectedFactsAfterGlobalChange.providerRows).toEqual(beforeProtectedFacts.providerRows)
+    expect(protectedFactsAfterGlobalChange.mappingRows).toEqual(
+      beforeProtectedFacts.mappingRows.map((mapping) => ({
+        ...mapping,
+        canonicalAssetId: ids.changedSystemAssetId,
+      }))
+    )
+  })
+
 const installCreateRacePause = Effect.gen(function* () {
   const db = yield* drizzle
   yield* db.execute(sql`
@@ -963,41 +1391,23 @@ describe("AssetOverridesApiLive", () => {
     "keeps one exact representation principal-scoped across providers, wallets, and time",
     () =>
       Effect.gen(function* () {
-        const { blockchainId, historicalAt } = yield* seedT17IsolationFixture.pipe(
+        const { blockchainId } = yield* seedT17IsolationFixture.pipe(
           Effect.provide(TestPgClientLive),
           Effect.scoped
         )
         yield* persistExactWalletFacts({
           blockchainId,
-          facts: [
-            {
-              externalId: "t17-first-historical",
-              occurredAt: historicalAt,
-              principalId: ids.principalId,
-              providerAssetRowId: ids.firstProviderAssetId,
-              rawRecordId: ids.firstHistoricalRawId,
-              sourceId: ids.firstWalletSourceId,
-            },
-            {
-              externalId: "t17-second-historical",
-              occurredAt: historicalAt,
-              principalId: ids.principalId,
-              providerAssetRowId: ids.secondProviderAssetId,
-              rawRecordId: ids.secondHistoricalRawId,
-              sourceId: ids.secondWalletSourceId,
-            },
-            {
-              externalId: "t17-other-historical",
-              occurredAt: historicalAt,
-              principalId: ids.otherPrincipalId,
-              providerAssetRowId: ids.firstProviderAssetId,
-              rawRecordId: ids.otherHistoricalRawId,
-              sourceId: ids.otherWalletSourceId,
-            },
-          ],
+          facts: t17HistoricalFacts,
         })
 
         const beforeProtectedFacts = yield* loadT17ProtectedFacts.pipe(
+          Effect.provide(TestPgClientLive),
+          Effect.scoped
+        )
+        const historicalRawIds = new Set<string>(
+          t17HistoricalFacts.map(({ rawRecordId }) => rawRecordId)
+        )
+        const historicalRawBeforeReplay = yield* loadT17RawRows(historicalRawIds).pipe(
           Effect.provide(TestPgClientLive),
           Effect.scoped
         )
@@ -1027,98 +1437,53 @@ describe("AssetOverridesApiLive", () => {
             effectiveDecision: { _tag: "included", assetId: ids.systemAssetId },
           },
         })
-
-        const created = yield* post({
-          path: `/v1/asset-overrides/create?${representationQuery()}`,
-          payload: identityCreatePayload({
-            systemRevision: initialProjection.system.identityRevision,
-          }),
-        }).pipe(Effect.provide(HttpLive), Effect.scoped)
-        const createdProjection = yield* Schema.decodeUnknownEffect(AssetOverrideCurrentResponse)(
-          created.body
-        )
-        if (createdProjection.recomputation.status === "not_scheduled") {
-          return yield* Effect.die("T17 identity override did not schedule owned source work")
-        }
-
-        expect(createdProjection.effectiveDecision).toEqual({
-          _tag: "included",
-          assetId: TEST_BTC_ASSET_ID,
-        })
+        const beforeOverrideTransactions = yield* loadT17Transactions()
         expect(
-          createdProjection.recomputation.sourceJobs.map(({ sourceId }) => sourceId).sort()
-        ).toEqual([ids.firstWalletSourceId, ids.secondWalletSourceId].sort())
+          beforeOverrideTransactions.transactions.map(({ movements }) =>
+            movements.map(({ assetSymbol }) => assetSymbol)
+          )
+        ).toEqual([["USDC"], ["USDC"]])
 
-        yield* persistExactWalletFacts({
+        yield* createT17IdentityOverrideAndReplay({
           blockchainId,
-          facts: [
-            {
-              externalId: "t17-first-historical",
-              occurredAt: historicalAt,
-              principalId: ids.principalId,
-              providerAssetRowId: ids.firstProviderAssetId,
-              rawRecordId: ids.firstHistoricalRawId,
-              sourceId: ids.firstWalletSourceId,
-            },
-            {
-              externalId: "t17-second-historical",
-              occurredAt: historicalAt,
-              principalId: ids.principalId,
-              providerAssetRowId: ids.secondProviderAssetId,
-              rawRecordId: ids.secondHistoricalRawId,
-              sourceId: ids.secondWalletSourceId,
-            },
-          ],
+          systemRevision: initialProjection.system.identityRevision,
         })
+        const afterHistoricalReplay = yield* loadT17Transactions()
+        expect(
+          afterHistoricalReplay.transactions.map(({ movements }) =>
+            movements.map(({ assetSymbol }) => assetSymbol)
+          )
+        ).toEqual([["BTC"], ["BTC"]])
 
-        const futureAt = yield* seedT17FutureRawRecords.pipe(
+        const afterHistoricalReplayProtectedFacts = yield* loadT17ProtectedFacts.pipe(
+          Effect.provide(TestPgClientLive),
+          Effect.scoped
+        )
+        expect(afterHistoricalReplayProtectedFacts).toEqual(beforeProtectedFacts)
+        const historicalRawAfterReplay = yield* loadT17RawRows(historicalRawIds).pipe(
+          Effect.provide(TestPgClientLive),
+          Effect.scoped
+        )
+        expect(historicalRawAfterReplay).toEqual(historicalRawBeforeReplay)
+
+        yield* seedT17FutureRawRecords.pipe(Effect.provide(TestPgClientLive), Effect.scoped)
+        const futureRawIds = new Set<string>(t17FutureFacts.map(({ rawRecordId }) => rawRecordId))
+        const futureRawBeforeWrite = yield* loadT17RawRows(futureRawIds).pipe(
           Effect.provide(TestPgClientLive),
           Effect.scoped
         )
         yield* persistExactWalletFacts({
           blockchainId,
-          facts: [
-            {
-              externalId: "t17-first-future",
-              occurredAt: futureAt,
-              principalId: ids.principalId,
-              providerAssetRowId: ids.firstProviderAssetId,
-              rawRecordId: ids.firstFutureRawId,
-              sourceId: ids.firstWalletSourceId,
-            },
-            {
-              externalId: "t17-second-future",
-              occurredAt: futureAt,
-              principalId: ids.principalId,
-              providerAssetRowId: ids.secondProviderAssetId,
-              rawRecordId: ids.secondFutureRawId,
-              sourceId: ids.secondWalletSourceId,
-            },
-            {
-              externalId: "t17-other-future",
-              occurredAt: futureAt,
-              principalId: ids.otherPrincipalId,
-              providerAssetRowId: ids.firstProviderAssetId,
-              rawRecordId: ids.otherFutureRawId,
-              sourceId: ids.otherWalletSourceId,
-            },
-          ],
+          facts: t17FutureFacts,
         })
-
-        const firstTransactionsResponse = yield* get({ path: "/v1/transactions?limit=100" }).pipe(
-          Effect.provide(HttpLive),
+        const futureRawAfterWrite = yield* loadT17RawRows(futureRawIds).pipe(
+          Effect.provide(TestPgClientLive),
           Effect.scoped
         )
-        const otherTransactionsResponse = yield* get({
-          path: "/v1/transactions?limit=100",
-          userId: ids.otherUserId,
-        }).pipe(Effect.provide(HttpLive), Effect.scoped)
-        const firstTransactions = yield* Schema.decodeUnknownEffect(TransactionListResponse)(
-          firstTransactionsResponse.body
-        )
-        const otherTransactions = yield* Schema.decodeUnknownEffect(TransactionListResponse)(
-          otherTransactionsResponse.body
-        )
+        expect(futureRawAfterWrite).toEqual(futureRawBeforeWrite)
+
+        const firstTransactions = yield* loadT17Transactions()
+        const otherTransactions = yield* loadT17Transactions(ids.otherUserId)
 
         expectT17TransactionProjection({
           overridden: firstTransactions,
@@ -1136,25 +1501,18 @@ describe("AssetOverridesApiLive", () => {
         expect(afterProtectedFacts).toEqual(beforeProtectedFacts)
         expect(afterCatalog).toEqual(beforeCatalog)
 
-        yield* Effect.gen(function* () {
-          const db = yield* drizzle
-          yield* db
-            .update(schema.assetRepresentations)
-            .set({ assetId: ids.changedSystemAssetId })
-            .where(eq(schema.assetRepresentations.id, ids.representationId))
-        }).pipe(Effect.provide(TestPgClientLive), Effect.scoped)
+        const globalDecisionId = yield* submitT17GlobalDecision
+        yield* executeT17GlobalDecisionReplay({
+          blockchainId,
+          decisionId: globalDecisionId,
+        })
 
-        const afterGlobalChange = yield* get({
-          path: `/v1/asset-overrides/current?${representationQuery()}`,
-        }).pipe(Effect.provide(HttpLive), Effect.scoped)
-        expect(afterGlobalChange).toMatchObject({
-          status: 200,
-          body: {
-            system: { identity: { _tag: "resolved", assetId: ids.changedSystemAssetId } },
-            activeIdentityOverride: { kind: "identity", operation: "create" },
-            effectiveDecision: { _tag: "included", assetId: TEST_BTC_ASSET_ID },
-            identityOverrideUsesStaleSystemRevision: true,
-          },
+        yield* assertT17GlobalDecisionOutcome({
+          beforeProtectedFacts,
+          futureRawBeforeWrite,
+          futureRawIds,
+          historicalRawBeforeReplay,
+          historicalRawIds,
         })
       })
   )
