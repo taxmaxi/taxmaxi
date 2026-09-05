@@ -20,6 +20,7 @@ import * as Option from "effect/Option"
 import * as Schema from "effect/Schema"
 import { HttpApiBuilder } from "effect/unstable/httpapi"
 import {
+  AssetOverrideCalculationRunResponse,
   AssetOverrideAssetNotFoundValidationResponse,
   AssetOverrideCanonicalTargetError,
   AssetOverrideCurrentResponse,
@@ -120,6 +121,10 @@ const toRecomputationResponse = (recomputation: PrincipalAssetOverrideRecomputat
         status: recomputation.status,
         overrideIds: [...recomputation.overrideIds],
         sourceJobs: recomputation.sourceJobs.map((job) => AssetOverrideReplayJobResponse.make(job)),
+        calculationRun:
+          recomputation.calculationRun === null
+            ? null
+            : AssetOverrideCalculationRunResponse.make(recomputation.calculationRun),
       })
 
 const toCurrentResponse = (

@@ -58,13 +58,23 @@ export class AssetOverrideReplayJobResponse extends Schema.Class<AssetOverrideRe
   failureCode: Schema.NullOr(Schema.String),
 }) {}
 
-/** Durable replay work is in progress or has stopped with a machine-readable failure. */
+/** Calculation run whose factual snapshot covers the current override work. */
+export class AssetOverrideCalculationRunResponse extends Schema.Class<AssetOverrideCalculationRunResponse>(
+  "AssetOverrideCalculationRunResponse"
+)({
+  runId: Uuid,
+  status: Schema.Literals(["running", "complete", "partial", "failed"]),
+  failureCode: Schema.NullOr(Schema.String),
+}) {}
+
+/** Durable replay and calculation state for one scheduled override stream. */
 export class AssetOverrideScheduledRecomputationResponse extends Schema.Class<AssetOverrideScheduledRecomputationResponse>(
   "AssetOverrideScheduledRecomputationResponse"
 )({
-  status: Schema.Literals(["updating", "failed"]),
+  status: Schema.Literals(["updating", "complete", "partial", "failed"]),
   overrideIds: Schema.Array(Uuid),
   sourceJobs: Schema.Array(AssetOverrideReplayJobResponse),
+  calculationRun: Schema.NullOr(AssetOverrideCalculationRunResponse),
 }) {}
 
 /** Current durable recomputation state for one override target. */
