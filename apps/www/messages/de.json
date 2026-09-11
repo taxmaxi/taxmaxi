@@ -1586,7 +1586,7 @@
   "app.inspector.summary.updating": "Aktualisierung läuft · zuletzt berechnete Werte",
   "app.inspector.summary.noMovements": "Keine Bewegungen verfügbar.",
   "app.inspector.summary.fees": "Gebühren",
-  "app.inspector.summary.review": "Fehlende Angaben und Steuerergebnisse prüfen",
+  "app.inspector.summary.review": "Diese Transaktion muss geprüft werden. Prüfe ihre Belege, Steuerergebnisse und Einordnung.",
   "app.inspector.summary.details": "Transaktionsdetails",
   "app.inspector.summary.evidence": "Belege ansehen",
   "app.inspector.summary.tax": "Steuerergebnisse ansehen",

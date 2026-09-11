@@ -1586,7 +1586,7 @@
   "app.inspector.summary.updating": "Updating · showing the last calculated values",
   "app.inspector.summary.noMovements": "No movements are available.",
   "app.inspector.summary.fees": "Fees",
-  "app.inspector.summary.review": "Review missing inputs and tax results",
+  "app.inspector.summary.review": "This transaction needs review. Check its evidence, tax results and classification.",
   "app.inspector.summary.details": "Transaction details",
   "app.inspector.summary.evidence": "View evidence",
   "app.inspector.summary.tax": "View tax results",

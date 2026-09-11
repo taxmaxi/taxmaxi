@@ -102,13 +102,9 @@ export function TransactionSummary({
           />
         )}
       {detail.attention && (
-        <Button
-          variant="outline"
-          className="min-h-11 whitespace-normal"
-          onClick={() => onShowDetails("tax")}
-        >
+        <p role="status" className="text-sm text-muted-foreground">
           {m["app.inspector.summary.review"]()}
-        </Button>
+        </p>
       )}
       <nav aria-label={m["app.inspector.summary.details"]()} className="flex flex-col gap-2">
         <Button
@@ -153,12 +149,20 @@ function MovementSummary({
   const missingValue =
     capture === null ||
     capture.valuationState === "missing" ||
-    capture.valuationState === "ambiguous" ||
-    capture.outcome !== "included"
+    capture.valuationState === "ambiguous"
   return (
     <article className="flex min-w-0 flex-col gap-2 rounded-lg border p-3 text-sm">
       <h4 className="break-words font-medium tabular-nums">{transactionMovementLabel(display)}</h4>
       {cause && <p className="text-muted-foreground">{cause}</p>}
+      {capture?.outcome === "withheld" && (
+        <p className="text-muted-foreground">{m["app.inspector.state.withheld"]()}</p>
+      )}
+      {capture?.outcome === "outside_period" && (
+        <p className="text-muted-foreground">{m["app.inspector.state.outside_period"]()}</p>
+      )}
+      {capture?.outcome === "absent" && (
+        <p className="text-muted-foreground">{m["app.inspector.state.absent"]()}</p>
+      )}
       {transactionMovementFacts(display).map((fact, index) => (
         <Fact key={`${fact.label}:${index}`} {...fact} />
       ))}

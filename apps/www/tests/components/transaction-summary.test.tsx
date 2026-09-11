@@ -291,6 +291,59 @@ describe("transaction summary", () => {
     expect(fact("Selected consideration")).toContain("20.00")
   })
 
+  it.each([
+    ["withheld", "Withheld"],
+    ["outside_period", "Outside the selected period"],
+    ["absent", "Absent"],
+  ] as const)("does not diagnose %s as a missing valuation", (outcome, label) => {
+    const data = detail([
+      movement({
+        capture: {
+          ...capture,
+          outcome,
+          valuationState: "not_evaluated",
+          selectedValue: null,
+          providerConsiderations: [],
+          eventId: null,
+          eventKind: null,
+          cause: null,
+        },
+      }),
+    ])
+    show(data)
+    expect(screen.getByText(label)).toBeTruthy()
+    expect(screen.queryByRole("button", { name: "Check evidence for missing value" })).toBeNull()
+    expect(screen.getByRole("button", { name: "View tax results" })).toBeTruthy()
+  })
+
+  it.each(["missing", "ambiguous"] as const)(
+    "offers evidence for recorded %s valuation",
+    (valuationState) => {
+      const view = show(
+        detail([movement({ capture: { ...capture, valuationState, selectedValue: null } })])
+      )
+      fireEvent.click(screen.getByRole("button", { name: "Check evidence for missing value" }))
+      expect(view.onShowDetails).toHaveBeenLastCalledWith("evidence")
+    }
+  )
+
+  it("keeps broad attention neutral and offers each context without inventing a missing input", () => {
+    const view = show({ ...detail([movement()]), attention: true })
+    expect(screen.getByRole("status").textContent).toBe(
+      "This transaction needs review. Check its evidence, tax results and classification."
+    )
+    expect(
+      screen.queryByRole("button", { name: "Review missing inputs and tax results" })
+    ).toBeNull()
+    expect(screen.queryByRole("button", { name: "Check evidence for missing value" })).toBeNull()
+    fireEvent.click(
+      screen.getByRole("button", { name: "View classification and correction history" })
+    )
+    expect(view.onShowDetails).toHaveBeenLastCalledWith("classification")
+    fireEvent.click(screen.getByRole("button", { name: "View evidence" }))
+    expect(view.onShowDetails).toHaveBeenLastCalledWith("evidence")
+  })
+
   it("offers evidence and classification context for absent inputs without inventing an editor", () => {
     const view = show(
       detail([
