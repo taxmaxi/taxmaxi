@@ -156,3 +156,42 @@ export function transactionFilterInput(filters: TransactionFilters): Transaction
     ...(filters.attention !== undefined ? { attention: filters.attention } : {}),
   }
 }
+
+/** Resolve calendar shortcuts in the saved zone, including the New Year boundary. */
+export function transactionFilterYear({
+  timezone = "Europe/Berlin",
+  now = new Date(),
+}: { timezone?: string; now?: Date } = {}): number {
+  const parts = new Intl.DateTimeFormat("en", {
+    timeZone: timezone,
+    calendar: "gregory",
+    numberingSystem: "latn",
+    year: "numeric",
+    era: "short",
+  }).formatToParts(now)
+  const year = Number(parts.find((part) => part.type === "year")?.value)
+  return parts.find((part) => part.type === "era")?.value === "BC" ? 1 - year : year
+}
+
+/** Select the complete year; the existing boundary validator owns supported UTC endpoints. */
+export function transactionYearFilters({
+  filters,
+  year,
+}: {
+  filters: TransactionFilters
+  year: string
+}): TransactionFilters {
+  const parsed = z
+    .string()
+    .trim()
+    .regex(/^\d{1,4}$/)
+    .safeParse(year)
+  if (!parsed.success) throw new Error(m["app.transactionFilters.invalidYear"]())
+  const calendarYear = parsed.data.padStart(4, "0")
+  return parseTransactionFilters({
+    ...filters,
+    from: `${calendarYear}-01-01`,
+    to: `${calendarYear}-12-31`,
+    timezone: filters.timezone ?? "Europe/Berlin",
+  })
+}
