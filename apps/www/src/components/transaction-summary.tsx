@@ -41,7 +41,7 @@ export function TransactionSummary({
           {m["app.inspector.summary.updating"]()}
         </p>
       )}
-      {principal.length === 0 && (
+      {detail.movements.length === 0 && (
         <p className="text-sm text-muted-foreground">{m["app.inspector.summary.noMovements"]()}</p>
       )}
       {principal.map((movement) => (

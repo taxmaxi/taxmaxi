@@ -133,6 +133,19 @@ describe("transaction summary", () => {
     expect(screen.queryByText(/21.00/)).toBeNull()
   })
 
+  it("shows a standalone fee without claiming movements are unavailable", () => {
+    const fee = movement({
+      kind: "fee",
+      capture: { ...capture, cause: "fee", eventKind: "disposition" },
+    })
+    const view = show(detail([fee]))
+    expect(screen.getByRole("region", { name: "Fees" })).toBeTruthy()
+    expect(screen.queryByText("No movements are available.")).toBeNull()
+    view.rerender(<TransactionSummary {...view.props} detail={detail([])} />)
+    expect(screen.getByText("No movements are available.")).toBeTruthy()
+    expect(screen.queryByRole("region", { name: "Fees" })).toBeNull()
+  })
+
   it("uses the row's captured proceeds 30 and gain 10 and retains them during updates", () => {
     const sale = movement({
       kind: "disposal",
