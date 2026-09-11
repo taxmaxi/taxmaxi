@@ -318,6 +318,14 @@ checks whose earlier results used unpatched tools.
 Finish code generation before capturing browser screenshots or other browser
 proof, so generated-file changes cannot race the rendered app.
 
+Exercise browser controls through their actual primitives and native input
+behavior. Mocked handlers do not prove keyboard event ownership, partial date
+input validity, or an open form's restoration after browser Back. Check focus
+and held-pointer targets, scroll reachability with enlarged text, and computed
+enter/exit styles under reduced motion; a class name alone does not prove the
+CSS wins. State when browser proof uses synthetic data rather than authenticated
+loaders and backend reads (#370 T06–T08).
+
 For tests that open local listeners, default to OS-assigned ports (port 0)
 and read the actual bound address, unless the behavior under test requires a
 known port. Bind to the same loopback address the client uses; do not replace
@@ -333,6 +341,13 @@ timeouts or add blind random retries to conceal failures. Schedule heavy builds,
 replays, and full suites sequentially when they compete for local resources;
 independent read-only review may overlap safe checks. A bounded diagnostic run
 does not waive required hosted settings or the existing red-gate rule in AGENTS.md.
+
+When measured host contention justifies an authorized local worker reduction,
+verify the effective limit for each test project. In the current Vitest setup,
+a CLI `maxWorkers` value does not override explicit project settings. Any
+temporary config must preserve test inclusion, setup, coverage and timeouts;
+report actual limits and remove it after the complete gate. Hosted CI keeps
+its normal settings (#370 T08).
 
 ### Pre-launch migration planning
 
