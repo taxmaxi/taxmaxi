@@ -30,6 +30,7 @@ export function TransactionSummary({
   const gains = detail.movements.flatMap((movement) => movement.capture?.realizedResults ?? [])
   const gainCurrencies = [...new Set(gains.map((result) => result.currency))]
   const income = detail.calculation.income
+  const incomeValue = sum(income.map((result) => result.value))
   const currency = detail.calculation.run?.reportingCurrency ?? null
   const hasFeeGain = fees.some((movement) => (movement.capture?.realizedResults.length ?? 0) > 0)
   return (
@@ -60,10 +61,11 @@ export function TransactionSummary({
       {(income.length > 0 || principal.some((movement) => movement.kind === "income")) && (
         <Fact
           label={m["app.dashboard.transactions.income"]()}
-          amount={formatTransactionAmount({
-            value: sum(income.map((result) => result.value)),
-            currency,
-          })}
+          amount={
+            incomeValue === null && detail.calculation.state === "partial"
+              ? m["app.dashboard.transactions.gainLossPending"]()
+              : formatTransactionAmount({ value: incomeValue, currency })
+          }
         />
       )}
       {gainCurrencies.map((gainCurrency) => (

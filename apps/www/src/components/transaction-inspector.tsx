@@ -80,9 +80,13 @@ export function TransactionInspector({
     return () => media.removeEventListener("change", update)
   }, [])
   const viewFocusRef = useRef<HTMLButtonElement>(null)
+  const backFocusRef = useRef<HTMLButtonElement>(null)
   const previousView = useRef(detailView)
   useEffect(() => {
-    if (previousView.current !== detailView) viewFocusRef.current?.focus({ preventScroll: true })
+    if (previousView.current !== detailView) {
+      const target = detailView === null ? viewFocusRef.current : backFocusRef.current
+      target?.focus({ preventScroll: true })
+    }
     previousView.current = detailView
   }, [detailView])
   const closeRef = useRef<HTMLButtonElement>(null)
@@ -127,7 +131,7 @@ export function TransactionInspector({
     <header className="sticky top-0 z-20 flex min-h-14 items-center justify-between gap-2 bg-popover/95 pb-2 backdrop-blur">
       {detailView ? (
         <Button
-          ref={viewFocusRef}
+          ref={backFocusRef}
           variant="ghost"
           className="min-h-11"
           onClick={() => setDetailView(null)}

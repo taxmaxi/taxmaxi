@@ -252,6 +252,45 @@ describe("transaction summary", () => {
     }
   )
 
+  it("keeps missing partial income pending, and known income distinct from selected valuation", () => {
+    const data = detail([movement({ kind: "income" })])
+    const pending = {
+      ...data,
+      calculation: {
+        ...data.calculation,
+        state: "partial" as const,
+        monetaryStatus: "partial" as const,
+      },
+    }
+    const view = show(pending)
+    expect(fact("Income")).toContain("Pending")
+    view.rerender(
+      <TransactionSummary
+        {...view.props}
+        detail={{
+          ...pending,
+          calculation: {
+            ...pending.calculation,
+            income: [
+              {
+                sequence: 0,
+                sourceId: "source",
+                eventId: "purchase",
+                assetId: "asset",
+                occurredAt: TIME,
+                quantity: "2",
+                value: "2",
+                treatmentCodes: [],
+              },
+            ],
+          },
+        }}
+      />
+    )
+    expect(fact("Income")).toContain("2.00")
+    expect(fact("Selected consideration")).toContain("20.00")
+  })
+
   it("offers evidence and classification context for absent inputs without inventing an editor", () => {
     const view = show(
       detail([

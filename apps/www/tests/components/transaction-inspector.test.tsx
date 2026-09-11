@@ -602,6 +602,16 @@ describe("TransactionInspector", () => {
     expect(screen.queryByRole("button", { name: "Back to overview" })).toBeNull()
   })
 
+  it("returns desktop Back focus to the overview evidence control", async () => {
+    const { taxmaxi } = sdkClient(richDetail())
+    mount(taxmaxi)
+    fireEvent.click(await screen.findByRole("button", { name: "View tax results" }))
+    const back = screen.getByRole("button", { name: "Back to overview" })
+    expect(document.activeElement).toBe(back)
+    fireEvent.click(back)
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "View evidence" }))
+  })
+
   it("retains summary and subview after a refresh error and during retry", async () => {
     const data = richDetail()
     const { taxmaxi } = sdkClient(data)
