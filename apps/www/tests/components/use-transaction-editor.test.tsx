@@ -165,6 +165,51 @@ function setup(current = currentPrice()) {
   return { ...hook, client, taxmaxi, create, replace, withdraw, onSaved }
 }
 describe("exact movement price editing", () => {
+  it("allows withdrawal of an active price after custody incompatibility but rejects new prices", async () => {
+    const current = currentPrice(true)
+    if (!current.context.current) throw new Error("Missing current fixture")
+    const custody: TransactionOverrideCurrent = {
+      ...current,
+      context: {
+        ...current.context,
+        current: {
+          ...current.context.current,
+          facts: { ...current.context.current.facts, structure: "custody" },
+        },
+      },
+    }
+    const test = setup(custody)
+    await waitFor(() => expect(test.result.current.editor.loading).toBe(false))
+    expect(test.result.current.editor.eligible).toBe(false)
+    expect(test.result.current.editor.canWithdraw).toBe(true)
+    await act(async () => {
+      await test.result.current.editor.submit()
+    })
+    expect(test.replace).not.toHaveBeenCalled()
+    await act(async () => {
+      await test.result.current.editor.submit(true)
+    })
+    expect(test.withdraw).toHaveBeenCalledWith({
+      targetId: TARGET,
+      withdrawal: {
+        kind: "price",
+        expectedLeafId: LEAF,
+        expectedSystemRevision: "current-system",
+        reason: "Receipt total",
+      },
+    })
+  })
+  it("does not invent inspection facts to withdraw a disappeared target", async () => {
+    const current = currentPrice(true)
+    const test = setup({ ...current, context: { ...current.context, current: null } })
+    await waitFor(() => expect(test.result.current.editor.loading).toBe(false))
+    expect(test.result.current.editor.canWithdraw).toBe(false)
+    await act(async () => {
+      await test.result.current.editor.submit(true)
+    })
+    expect(test.withdraw).not.toHaveBeenCalled()
+  })
+
   it.each([
     ["12.50", "2", "unit_price", "25.00"],
     ["25.00", "2", "total_value", "25.00"],

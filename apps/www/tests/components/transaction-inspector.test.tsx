@@ -1762,6 +1762,82 @@ describe("selected transaction refresh", () => {
 })
 
 describe("price editor in the restored shell", () => {
+  it.each([false, true])(
+    "preserves dirty values and a pending save across both shells (start mobile=%s)",
+    async (narrow) => {
+      mobile = narrow
+      const mediaEvents = new EventTarget()
+      const changeViewport = () => mediaEvents.dispatchEvent(new Event("change"))
+      vi.mocked(window.matchMedia).mockImplementation(() => ({
+        get matches() {
+          return mobile
+        },
+        media: "",
+        onchange: null,
+        addListener: vi.fn(),
+        removeListener: vi.fn(),
+        dispatchEvent: vi.fn(),
+        addEventListener: mediaEvents.addEventListener.bind(mediaEvents),
+        removeEventListener: mediaEvents.removeEventListener.bind(mediaEvents),
+      }))
+      const taxmaxi = new TaxMaxi({ apiKey: "", baseUrl: "https://inspector.example.test" })
+      const detail = richDetail()
+      const correction = detail.movementOverrides[0]
+      if (!correction) throw new Error("Missing correction fixture")
+      vi.spyOn(taxmaxi.transactions, "get").mockResolvedValue(detail)
+      const inspect = vi
+        .spyOn(taxmaxi.transactionOverrides, "getCurrent")
+        .mockResolvedValue(correction)
+      let accept: (() => void) | undefined
+      const replace = vi.spyOn(taxmaxi.transactionOverrides, "replace").mockImplementation(
+        () =>
+          new Promise((resolve) => {
+            accept = () =>
+              resolve({
+                context: correction.context,
+                overrideId: IDS.price,
+                sourceId: IDS.source,
+                processingJobId: IDS.job,
+              })
+          })
+      )
+      const view = mount(taxmaxi)
+      view.client.setQueryData(["taxmaxi", "account"], { account: { id: IDS.actor } })
+      fireEvent.click(await screen.findByRole("button", { name: /Correct price ·/ }))
+      fireEvent.change(await screen.findByLabelText("Total value (EUR)"), {
+        target: { value: "12.50" },
+      })
+      fireEvent.change(screen.getByLabelText("Factual reason"), {
+        target: { value: "Receipt checked" },
+      })
+      act(() => {
+        mobile = !mobile
+        changeViewport?.()
+      })
+      expect(await screen.findByDisplayValue("12.50")).toBeTruthy()
+      expect(screen.getByDisplayValue("Receipt checked")).toBeTruthy()
+      expect(inspect).toHaveBeenCalledTimes(1)
+      fireEvent.click(screen.getByRole("button", { name: "Back to overview" }))
+      fireEvent.click(await screen.findByRole("button", { name: "Keep editing" }))
+      fireEvent.click(screen.getByRole("button", { name: "Save correction" }))
+      act(() => {
+        mobile = !mobile
+        changeViewport?.()
+      })
+      expect(await screen.findByDisplayValue("12.50")).toBeTruthy()
+      expect(screen.getByRole("button", { name: "Saving…" }).closest("fieldset")?.disabled).toBe(
+        true
+      )
+      fireEvent.submit(screen.getByRole("form", { name: "Correct price" }))
+      expect(replace).toHaveBeenCalledTimes(1)
+      await act(async () => accept?.())
+      expect(
+        await screen.findByText(/Correction saved\. The calculation updates separately/)
+      ).toBeTruthy()
+      expect(screen.queryByRole("form", { name: "Correct price" })).toBeNull()
+    }
+  )
+
   it("restores the sheet and its own overlay when a dirty drag release is rejected", async () => {
     mobile = true
     const taxmaxi = new TaxMaxi({ apiKey: "", baseUrl: "https://inspector.example.test" })

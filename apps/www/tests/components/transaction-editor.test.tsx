@@ -4,7 +4,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import { afterEach, expect, it, vi } from "vitest"
 import { TaxMaxi, type Account, type TransactionOverrideCurrent } from "taxmaxi"
 import { queryKeys } from "#/integrations/taxmaxi/queries"
-import { useTransactionDraftGuard } from "#/components/use-transaction-editor"
+import { useTransactionDraftGuard, useTransactionEditor } from "#/components/use-transaction-editor"
 import { TransactionEditor } from "#/components/transaction-editor"
 const TARGET = "00000000-0000-4000-8000-000000000001"
 const USER = "00000000-0000-4000-8000-000000000002"
@@ -127,16 +127,15 @@ it("keeps failed form input and focus, then saves exact total with editable reas
   const onSaved = vi.fn()
   function Form() {
     const guard = useTransactionDraftGuard()
-    return (
-      <TransactionEditor
-        targetId={TARGET}
-        taxYear={2025}
-        taxmaxi={taxmaxi}
-        guard={guard}
-        onSaved={onSaved}
-        onUnauthorized={vi.fn()}
-      />
-    )
+    const editor = useTransactionEditor({
+      targetId: TARGET,
+      taxYear: 2025,
+      taxmaxi,
+      guard,
+      onSaved,
+      onUnauthorized: vi.fn(),
+    })
+    return <TransactionEditor editor={editor} guard={guard} />
   }
   render(
     <QueryClientProvider client={client}>
@@ -174,16 +173,15 @@ it("keeps a repeating total authoritative and validates without sending an inval
   const create = vi.spyOn(taxmaxi.transactionOverrides, "create")
   function Form() {
     const guard = useTransactionDraftGuard()
-    return (
-      <TransactionEditor
-        targetId={TARGET}
-        taxYear={2025}
-        taxmaxi={taxmaxi}
-        guard={guard}
-        onSaved={vi.fn()}
-        onUnauthorized={vi.fn()}
-      />
-    )
+    const editor = useTransactionEditor({
+      targetId: TARGET,
+      taxYear: 2025,
+      taxmaxi,
+      guard,
+      onSaved: vi.fn(),
+      onUnauthorized: vi.fn(),
+    })
+    return <TransactionEditor editor={editor} guard={guard} />
   }
   render(
     <QueryClientProvider client={client}>
@@ -196,5 +194,56 @@ it("keeps a repeating total authoritative and validates without sending an inval
   fireEvent.submit(screen.getByRole("form", { name: "Correct price" }))
   expect(await screen.findByRole("alert")).toBeTruthy()
   expect(create).not.toHaveBeenCalled()
+  client.clear()
+})
+
+it("keeps reason and withdrawal enabled when a current movement becomes custody", async () => {
+  const client = new QueryClient()
+  client.setQueryData(queryKeys.account(), account())
+  const current = currentPrice(true)
+  if (!current.context.current) throw new Error("Missing current fixture")
+  const custody: TransactionOverrideCurrent = {
+    ...current,
+    context: {
+      ...current.context,
+      current: {
+        ...current.context.current,
+        facts: { ...current.context.current.facts, structure: "custody" },
+      },
+    },
+  }
+  const taxmaxi = new TaxMaxi({ apiKey: "", baseUrl: "https://form.example.test" })
+  vi.spyOn(taxmaxi.transactionOverrides, "getCurrent").mockResolvedValue(custody)
+  const withdraw = vi.spyOn(taxmaxi.transactionOverrides, "withdraw").mockResolvedValue({
+    context: custody.context,
+    overrideId: LEAF,
+    sourceId: TARGET,
+    processingJobId: TARGET,
+  })
+  function Form() {
+    const guard = useTransactionDraftGuard()
+    const editor = useTransactionEditor({
+      targetId: TARGET,
+      taxYear: 2025,
+      taxmaxi,
+      guard,
+      onSaved: vi.fn(),
+      onUnauthorized: vi.fn(),
+    })
+    return <TransactionEditor editor={editor} guard={guard} />
+  }
+  render(
+    <QueryClientProvider client={client}>
+      <Form />
+    </QueryClientProvider>
+  )
+  expect(await screen.findByLabelText("Total value (EUR)")).toHaveProperty("disabled", true)
+  expect(screen.getByRole("button", { name: "Save correction" })).toHaveProperty("disabled", true)
+  expect(screen.getByLabelText("Factual reason")).toHaveProperty("disabled", false)
+  fireEvent.change(screen.getByLabelText("Factual reason"), {
+    target: { value: "Withdraw outdated valuation" },
+  })
+  fireEvent.click(screen.getByRole("button", { name: "Withdraw price correction" }))
+  await waitFor(() => expect(withdraw).toHaveBeenCalledTimes(1))
   client.clear()
 })

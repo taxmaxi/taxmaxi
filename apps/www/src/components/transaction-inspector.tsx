@@ -21,6 +21,7 @@ import { TransactionSummary, type TransactionDetailView } from "#/components/tra
 import { TransactionEditor } from "#/components/transaction-editor"
 import {
   useTransactionDraftGuard,
+  useTransactionEditor,
   type TransactionDraftGuard,
 } from "#/components/use-transaction-editor"
 import { m } from "#/paraglide/messages"
@@ -82,6 +83,17 @@ export function TransactionInspector({
     setEditorTarget(null)
     setSaved(false)
   }
+  const editor = useTransactionEditor({
+    taxmaxi,
+    targetId: disabled ? null : editorTarget,
+    taxYear: selection?.taxYear,
+    guard,
+    onUnauthorized,
+    onSaved: () => {
+      setSaved(true)
+      exitEditor()
+    },
+  })
   const refreshAllowed = useRef(!disabled)
   useEffect(() => {
     refreshAllowed.current = !disabled
@@ -265,14 +277,10 @@ export function TransactionInspector({
             viewFocusRef={viewFocusRef}
             editorTarget={editorTarget}
             guard={guard}
+            editor={editor}
             onEdit={(targetId) => {
               setSaved(false)
               setEditorTarget(targetId)
-            }}
-            onSaved={() => {
-              setSaved(true)
-              exitEditor()
-              viewFocusRef.current?.focus({ preventScroll: true })
             }}
             view={detailView}
             mobile={mobile}
@@ -413,12 +421,12 @@ function InspectorRequest({
   editorTarget,
   guard,
   onEdit,
-  onSaved,
+  editor,
 }: {
   editorTarget: string | null
   guard: TransactionDraftGuard
   onEdit: (targetId: string) => void
-  onSaved: () => void
+  editor: ReturnType<typeof useTransactionEditor>
   viewFocusRef: RefObject<HTMLButtonElement | null>
   view: TransactionDetailView | null
   mobile: boolean
@@ -581,17 +589,7 @@ function InspectorRequest({
           </Button>
         </div>
       ) : null}
-      {editorTarget && (
-        <TransactionEditor
-          key={editorTarget}
-          targetId={editorTarget}
-          taxYear={taxYear}
-          taxmaxi={taxmaxi}
-          guard={guard}
-          onSaved={onSaved}
-          onUnauthorized={onUnauthorized}
-        />
-      )}
+      {editorTarget && <TransactionEditor editor={editor} guard={guard} />}
       {!editorTarget && !detailUnavailable && detail.data && (
         <>
           {view === null && detail.data.movementOverrides.length > 0 && (
@@ -603,7 +601,8 @@ function InspectorRequest({
                   className="min-h-11 h-auto whitespace-normal text-left"
                   disabled={
                     !correction.context.current ||
-                    correction.context.current.facts.structure === "custody"
+                    (correction.context.current.facts.structure === "custody" &&
+                      !correction.context.price.active)
                   }
                   onClick={() => onEdit(correction.context.targetId)}
                 >

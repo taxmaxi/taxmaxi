@@ -1,22 +1,19 @@
 import { useEffect, useId, useRef } from "react"
-import type { TaxMaxi } from "taxmaxi"
 import { Button } from "#/components/ui/button"
 import { Input } from "#/components/ui/input"
 import {
-  useTransactionEditor,
+  type useTransactionEditor,
   type TransactionDraftGuard,
 } from "#/components/use-transaction-editor"
 import { m } from "#/paraglide/messages"
 
-export function TransactionEditor(props: {
-  taxmaxi: TaxMaxi
-  targetId: string
-  taxYear: number
+export function TransactionEditor({
+  editor,
+  guard,
+}: {
+  editor: ReturnType<typeof useTransactionEditor>
   guard: TransactionDraftGuard
-  onSaved: () => void
-  onUnauthorized: () => void | Promise<void>
 }) {
-  const editor = useTransactionEditor(props)
   const id = useId()
   const amountRef = useRef<HTMLInputElement>(null)
   const failedFocus = useRef<HTMLElement | null>(null)
@@ -41,7 +38,7 @@ export function TransactionEditor(props: {
     <form
       onFocusCapture={(event) => {
         if (event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement)
-          props.guard.rememberFocus(event.target)
+          guard.rememberFocus(event.target)
       }}
       className="flex flex-col gap-4"
       aria-label={m["app.editor.title"]()}
@@ -58,11 +55,12 @@ export function TransactionEditor(props: {
         })}
       </p>
       {!editor.eligible && <p role="status">{m["app.editor.unavailable"]()}</p>}
-      <fieldset disabled={editor.saving || !editor.eligible} className="flex flex-col gap-4">
+      <fieldset disabled={editor.saving} className="flex flex-col gap-4">
         <legend className="sr-only">{m["app.editor.mode"]()}</legend>
         <div className="flex gap-2">
           <Button
             type="button"
+            disabled={!editor.eligible}
             variant={editor.draft.mode === "unit_price" ? "secondary" : "outline"}
             aria-pressed={editor.draft.mode === "unit_price"}
             onClick={() => editor.change({ mode: "unit_price" })}
@@ -72,6 +70,7 @@ export function TransactionEditor(props: {
           </Button>
           <Button
             type="button"
+            disabled={!editor.eligible}
             variant={editor.draft.mode === "total_value" ? "secondary" : "outline"}
             aria-pressed={editor.draft.mode === "total_value"}
             onClick={() => editor.change({ mode: "total_value" })}
@@ -88,6 +87,7 @@ export function TransactionEditor(props: {
           </label>
           <Input
             ref={amountRef}
+            disabled={!editor.eligible}
             id={`${id}-amount`}
             inputMode="decimal"
             autoComplete="off"
@@ -117,7 +117,7 @@ export function TransactionEditor(props: {
             {editor.error}
           </p>
         )}
-        <Button type="submit" className="min-h-11">
+        <Button type="submit" disabled={!editor.eligible} className="min-h-11">
           {editor.saving ? m["app.editor.saving"]() : m["app.editor.save"]()}
         </Button>
         {editor.inspection.context.price.active && (
@@ -125,6 +125,7 @@ export function TransactionEditor(props: {
             type="button"
             variant="outline"
             className="min-h-11"
+            disabled={!editor.canWithdraw}
             onClick={() => void save(true)}
           >
             {m["app.editor.withdraw"]()}

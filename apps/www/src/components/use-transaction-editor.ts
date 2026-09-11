@@ -115,8 +115,8 @@ export function useTransactionEditor({
   onUnauthorized,
 }: {
   taxmaxi: TaxMaxi
-  targetId: string
-  taxYear: number
+  targetId: string | null
+  taxYear: number | undefined
   guard: TransactionDraftGuard
   onSaved: () => void
   onUnauthorized: () => void | Promise<void>
@@ -131,7 +131,10 @@ export function useTransactionEditor({
     currentUser,
     currentUser
   )
-  const [inspection, setInspection] = useState<TransactionOverrideCurrent | null>(null)
+  const readScope = JSON.stringify([targetId, taxYear, userId])
+  const [loadedScope, setLoadedScope] = useState<string | null>(null)
+  const [loadedInspection, setInspection] = useState<TransactionOverrideCurrent | null>(null)
+  const inspection = loadedScope === readScope ? loadedInspection : null
   const [draft, setDraft] = useState<Draft>({
     mode: "total_value",
     amount: "",
@@ -158,10 +161,11 @@ export function useTransactionEditor({
     busy.current = false
     setSaving(false)
     setInspection(null)
+    setLoadedScope(null)
     setLoading(true)
     setError(null)
     guard.update({ dirty: false, saving: false })
-    if (!userId) {
+    if (!userId || !targetId || taxYear === undefined) {
       setLoading(false)
       return () => controller.abort()
     }
@@ -179,6 +183,7 @@ export function useTransactionEditor({
         initial.current = next
         setDraft(next)
         setInspection(current)
+        setLoadedScope(readScope)
         setLoading(false)
       })
       .catch((failure: unknown) => {
@@ -204,7 +209,18 @@ export function useTransactionEditor({
   }
   const submit = async (withdraw = false): Promise<boolean> => {
     const current = inspection?.context.current
-    if (busy.current || !inspection || !current || !userId || currentUser() !== userId) return false
+    if (
+      busy.current ||
+      !inspection ||
+      !current ||
+      !targetId ||
+      !userId ||
+      currentUser() !== userId ||
+      (!withdraw &&
+        (current.facts.structure === "custody" || inspection.scope.reportingCurrency !== "EUR")) ||
+      (withdraw && !inspection.context.price.active)
+    )
+      return false
     const parsed = amountSchema.safeParse(draft.amount)
     if (!draft.reason.trim() || (!withdraw && !parsed.success)) {
       setError(m["app.editor.validation"]())
@@ -274,6 +290,7 @@ export function useTransactionEditor({
     error,
     saving,
     eligible,
+    canWithdraw: !!userId && !!facts && !!inspection?.context.price.active,
     retry: () => setRetry((value) => value + 1),
     total: facts
       ? transactionPriceTotal({ amount: draft.amount, quantity: facts.quantity, mode: draft.mode })
