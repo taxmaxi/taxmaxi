@@ -1242,9 +1242,11 @@ export function Dashboard({
                         onNextPage={() => draftGuard.run(goToNextTransactionPage)}
                         onPreviousPage={() => draftGuard.run(goToPreviousTransactionPage)}
                         onRetry={() =>
-                          pageFailure === null
-                            ? void transactionQuery.refetch()
-                            : void goToTransactionPage(pageFailure)
+                          draftGuard.run(() =>
+                            pageFailure === null
+                              ? void transactionQuery.refetch()
+                              : void goToTransactionPage(pageFailure)
+                          )
                         }
                         pageIndex={transactionCursors.length - 1}
                         pageSize={transactionPageSize}
@@ -1266,10 +1268,11 @@ export function Dashboard({
                         failed: navigationFailure !== null,
                         onNavigate: (direction) =>
                           draftGuard.run(() => void navigateTransaction(direction)),
-                        onRetry: () => {
-                          if (navigationFailure !== null)
-                            void navigateTransaction(navigationFailure)
-                        },
+                        onRetry: () =>
+                          draftGuard.run(() => {
+                            if (navigationFailure !== null)
+                              void navigateTransaction(navigationFailure)
+                          }),
                       }}
                       selection={selectedTransaction}
                       taxmaxi={taxmaxi}

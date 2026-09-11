@@ -122,6 +122,30 @@ export function TransactionInspector({
   const closeRef = useRef<HTMLButtonElement>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
   const sheetRef = useRef<HTMLDivElement>(null)
+  const discardRef = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    if (!guard.pending || mobile || !discardRef.current) return
+    const outside: HTMLElement[] = []
+    // Keep confirmation in this pane while isolating the surrounding app.
+    let branch: HTMLElement = discardRef.current
+    while (branch.parentElement) {
+      for (const sibling of branch.parentElement.children) {
+        if (
+          sibling instanceof HTMLElement &&
+          sibling !== branch &&
+          !sibling.hasAttribute("inert")
+        ) {
+          sibling.setAttribute("inert", "")
+          outside.push(sibling)
+        }
+      }
+      if (branch.parentElement === document.body) break
+      branch = branch.parentElement
+    }
+    return () => {
+      for (const element of outside) element.removeAttribute("inert")
+    }
+  }, [guard.pending, mobile])
   const open = selection !== null && !disabled
   const wasOpen = useRef(false)
   const restoreFocus = () => {
@@ -226,6 +250,7 @@ export function TransactionInspector({
       {header}
       {guard.pending && (
         <div
+          ref={discardRef}
           role="alertdialog"
           aria-modal="true"
           onKeyDown={(event) => {

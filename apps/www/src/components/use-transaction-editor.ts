@@ -17,6 +17,13 @@ export function useTransactionDraftGuard() {
   const state = useRef({ dirty: false, saving: false })
   const [pending, setPending] = useState(false)
   const decision = useRef<((discard: boolean) => void) | null>(null)
+  const discardDraft = useRef<(() => void) | null>(null)
+  const registerDiscard = useCallback((reset: () => void) => {
+    discardDraft.current = reset
+    return () => {
+      if (discardDraft.current === reset) discardDraft.current = null
+    }
+  }, [])
   const returnFocus = useRef<HTMLElement | null>(null)
   const restoreAfterDecision = useRef(false)
   const rememberFocus = useCallback((element: HTMLElement | null) => {
@@ -32,7 +39,11 @@ export function useTransactionDraftGuard() {
     state.current = next
   }, [])
   const resolve = useCallback((discard: boolean) => {
-    if (discard) state.current = { dirty: false, saving: false }
+    if (!decision.current) return
+    if (discard) {
+      discardDraft.current?.()
+      state.current = { dirty: false, saving: false }
+    }
     decision.current?.(discard)
     decision.current = null
     setPending(false)
@@ -74,6 +85,7 @@ export function useTransactionDraftGuard() {
     resolve,
     update,
     rememberFocus,
+    registerDiscard,
     isDirty: () => state.current.dirty,
   }
 }
@@ -148,6 +160,14 @@ export function useTransactionEditor({
   const generation = useRef(0)
   const mounted = useRef(true)
   const [retry, setRetry] = useState(0)
+  useEffect(
+    () =>
+      guard.registerDiscard(() => {
+        setDraft(initial.current)
+        setError(null)
+      }),
+    [guard.registerDiscard]
+  )
   useEffect(() => {
     mounted.current = true
     return () => {
@@ -157,6 +177,7 @@ export function useTransactionEditor({
   }, [guard.update])
   useEffect(() => {
     const controller = new AbortController()
+    guard.resolve(false)
     generation.current += 1
     busy.current = false
     setSaving(false)
@@ -193,7 +214,7 @@ export function useTransactionEditor({
         if (isTaxMaxiUnauthorizedError(failure)) void onUnauthorized()
       })
     return () => controller.abort()
-  }, [taxmaxi, targetId, taxYear, userId, retry, guard.update])
+  }, [taxmaxi, targetId, taxYear, userId, retry, guard.update, guard.resolve])
   const change = (next: Partial<Draft>) => {
     if (busy.current) return
     const changed = { ...draft, ...next }

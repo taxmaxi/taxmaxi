@@ -2426,7 +2426,7 @@ describe("Inspector cursor navigation", () => {
     totalCount: 1204,
     page: { hasMore: true, nextCursor: `page-${offset + 25}` },
   })
-  function setup(filters?: TransactionFilters) {
+  function setup(filters?: TransactionFilters, failNext = false) {
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
     client.setQueryData(queryKeys.account(), sdkAccount(WELCOME_SEEN_AT))
     testTaxMaxi = new TaxMaxi({ apiKey: "", baseUrl: "https://navigation.example.test" })
@@ -2435,9 +2435,10 @@ describe("Inspector cursor navigation", () => {
       () => new Promise(() => {})
     )
     vi.spyOn(testTaxMaxi.transactions, "get").mockImplementation(() => new Promise(() => {}))
-    const list = vi
-      .spyOn(testTaxMaxi.transactions, "list")
-      .mockImplementation(async (input) => page(input?.cursor === "page-25" ? 25 : 0))
+    const list = vi.spyOn(testTaxMaxi.transactions, "list").mockImplementation(async (input) => {
+      if (failNext && input?.cursor) throw new Error("Page unavailable")
+      return page(input?.cursor === "page-25" ? 25 : 0)
+    })
     const tree = (filters?: TransactionFilters) => (
       <QueryClientProvider client={client}>
         <Dashboard accounts={[]} sourceOverviews={syncedOverviews} filters={filters} />
@@ -2456,93 +2457,140 @@ describe("Inspector cursor navigation", () => {
     vi.restoreAllMocks()
   })
 
-  it.each(["row", "source", "filter", "page", "page-size", "browser-back"])(
-    "guards dirty dashboard %s changes before altering selection or scope",
-    async (entry) => {
-      HTMLElement.prototype.scrollIntoView = vi.fn()
-      const { client, list } = setup()
-      const row = page(0).transactions[0]
-      if (!row) throw new Error("Missing row fixture")
-      const correction = currentPrice()
-      const detail: TransactionDetail = {
-        attention: false,
-        transactionId: row.transactionId,
-        timestamp: row.timestamp,
-        source: row.source,
-        transactionType: row.transactionType,
-        description: row.description,
-        externalId: row.externalId,
-        sourceRawRecordId: null,
-        providerTransactionType: null,
-        classificationHistoryStatus: "unavailable",
-        sourceEvidence: [],
-        movements: [],
-        reconciliations: [],
-        movementOverrides: [correction],
-        assetOverrides: [],
-        calculation: {
-          run: null,
-          state: "complete",
-          monetaryStatus: "not_applicable",
-          derivedLots: [],
-          allocations: [],
-          income: [],
-          blockers: [],
-          processedEventIds: [],
-          correctionInputs: [],
-        },
-      }
-      vi.mocked(testTaxMaxi.transactions.get).mockResolvedValue(detail)
-      vi.spyOn(testTaxMaxi.transactionOverrides, "getCurrent").mockResolvedValue(correction)
-      await screen.findByText("Transaction 25")
-      fireEvent.click(
-        screen.getByRole("button", { name: "Open transaction · Transaction 1 · row-1" })
-      )
-      fireEvent.click(await screen.findByRole("button", { name: /Correct price ·/ }))
-      fireEvent.change(await screen.findByLabelText("Total value (EUR)"), {
-        target: { value: "12.50" },
-      })
-      const invoke = () => {
-        if (entry === "row")
-          fireEvent.click(
-            screen.getByRole("button", { name: "Open transaction · Transaction 2 · row-2" })
-          )
-        if (entry === "source") fireEvent.click(screen.getByRole("button", { name: "Source B" }))
-        if (entry === "page") fireEvent.click(screen.getByRole("button", { name: "Next page" }))
-        if (entry === "page-size")
-          fireEvent.change(screen.getByRole("combobox", { name: "Rows per page" }), {
-            target: { value: "50" },
-          })
-        if (entry === "filter") {
-          fireEvent.click(screen.getByRole("button", { name: "Filter Categories" }))
-          fireEvent.click(screen.getByRole("option", { name: /^Sale/ }))
-        }
-        if (entry === "browser-back") void navigationBlocker.request?.()
-      }
-      invoke()
-      expect(await screen.findByRole("alertdialog")).toBeTruthy()
-      fireEvent.click(screen.getByRole("button", { name: "Keep editing" }))
-      expect(screen.getByDisplayValue("12.50")).toBeTruthy()
-      expect(screen.getByText("1–25 of 1204")).toBeTruthy()
-      expect(
-        list.mock.calls.some(([input]) =>
-          input?.sourceIds?.includes("00000000-0000-4000-8000-000000000202")
-        )
-      ).toBe(false)
-      if (entry !== "filter") {
-        invoke()
-        fireEvent.click(await screen.findByRole("button", { name: "Discard changes" }))
-        await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull())
-        if (entry === "row")
-          expect(await screen.findByRole("heading", { name: "Transaction 2" })).toBeTruthy()
-        if (entry === "source" || entry === "page" || entry === "page-size")
-          await waitFor(() =>
-            expect(screen.queryByRole("form", { name: "Correct price" })).toBeNull()
-          )
-      }
-      client.clear()
+  it.each([
+    "row",
+    "same-row",
+    "source",
+    "filter",
+    "page",
+    "page-size",
+    "browser-back",
+    "page-retry",
+    "neighbor-retry",
+  ])("guards dirty dashboard %s changes before altering selection or scope", async (entry) => {
+    HTMLElement.prototype.scrollIntoView = vi.fn()
+    const { client, list } = setup(undefined, entry === "page-retry" || entry === "neighbor-retry")
+    const row = page(0).transactions[0]
+    if (!row) throw new Error("Missing row fixture")
+    const correction = currentPrice()
+    const detail: TransactionDetail = {
+      attention: false,
+      transactionId: row.transactionId,
+      timestamp: row.timestamp,
+      source: row.source,
+      transactionType: row.transactionType,
+      description: row.description,
+      externalId: row.externalId,
+      sourceRawRecordId: null,
+      providerTransactionType: null,
+      classificationHistoryStatus: "unavailable",
+      sourceEvidence: [],
+      movements: [],
+      reconciliations: [],
+      movementOverrides: [correction],
+      assetOverrides: [],
+      calculation: {
+        run: null,
+        state: "complete",
+        monetaryStatus: "not_applicable",
+        derivedLots: [],
+        allocations: [],
+        income: [],
+        blockers: [],
+        processedEventIds: [],
+        correctionInputs: [],
+      },
     }
-  )
+    vi.mocked(testTaxMaxi.transactions.get).mockImplementation(async ({ transactionId }) => ({
+      ...detail,
+      transactionId,
+    }))
+    vi.spyOn(testTaxMaxi.transactionOverrides, "getCurrent").mockResolvedValue(correction)
+    await screen.findByText("Transaction 25")
+    fireEvent.click(
+      screen.getByRole("button", { name: "Open transaction · Transaction 1 · row-1" })
+    )
+    await screen.findByRole("button", { name: /Correct price ·/ })
+    if (entry === "page-retry" || entry === "neighbor-retry") {
+      await waitFor(() =>
+        expect(list.mock.calls.some(([input]) => input?.cursor === "page-25")).toBe(true)
+      )
+      if (entry === "neighbor-retry") {
+        fireEvent.click(
+          screen.getByRole("button", { name: "Open transaction · Transaction 25 · row-25" })
+        )
+        await screen.findByRole("button", { name: /Correct price ·/ })
+        fireEvent.click(screen.getByRole("button", { name: "Next transaction" }))
+      } else fireEvent.click(screen.getByRole("button", { name: "Next page" }))
+      await screen.findByRole("button", {
+        name: entry === "page-retry" ? "Page could not load. Retry" : "Retry results",
+      })
+      list.mockImplementation(async (input) => page(input?.cursor === "page-25" ? 25 : 0))
+    }
+    fireEvent.click(await screen.findByRole("button", { name: /Correct price ·/ }))
+    fireEvent.change(await screen.findByLabelText("Total value (EUR)"), {
+      target: { value: "12.50" },
+    })
+    const invoke = () => {
+      if (entry === "same-row")
+        fireEvent.click(
+          screen.getByRole("button", { name: "Open transaction · Transaction 1 · row-1" })
+        )
+      if (entry === "page-retry" || entry === "neighbor-retry")
+        fireEvent.click(
+          screen.getByRole("button", {
+            name: entry === "page-retry" ? "Page could not load. Retry" : "Retry results",
+          })
+        )
+      if (entry === "row")
+        fireEvent.click(
+          screen.getByRole("button", { name: "Open transaction · Transaction 2 · row-2" })
+        )
+      if (entry === "source") fireEvent.click(screen.getByRole("button", { name: "Source B" }))
+      if (entry === "page") fireEvent.click(screen.getByRole("button", { name: "Next page" }))
+      if (entry === "page-size")
+        fireEvent.change(screen.getByRole("combobox", { name: "Rows per page" }), {
+          target: { value: "50" },
+        })
+      if (entry === "filter") {
+        fireEvent.click(screen.getByRole("button", { name: "Filter Categories" }))
+        fireEvent.click(screen.getByRole("option", { name: /^Sale/ }))
+      }
+      if (entry === "browser-back") void navigationBlocker.request?.()
+    }
+    invoke()
+    expect(await screen.findByRole("alertdialog")).toBeTruthy()
+    fireEvent.click(screen.getByRole("button", { name: "Keep editing" }))
+    expect(screen.getByDisplayValue("12.50")).toBeTruthy()
+    expect(screen.getByText("1–25 of 1204")).toBeTruthy()
+    expect(
+      list.mock.calls.some(([input]) =>
+        input?.sourceIds?.includes("00000000-0000-4000-8000-000000000202")
+      )
+    ).toBe(false)
+    if (entry !== "filter") {
+      invoke()
+      fireEvent.click(await screen.findByRole("button", { name: "Discard changes" }))
+      await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull())
+      if (entry === "row")
+        expect(await screen.findByRole("heading", { name: "Transaction 2" })).toBeTruthy()
+      if (entry === "same-row") {
+        expect(screen.queryByDisplayValue("12.50")).toBeNull()
+        fireEvent.change(screen.getByLabelText("Total value (EUR)"), { target: { value: "13.00" } })
+        fireEvent.click(screen.getByRole("button", { name: "Back to overview" }))
+        expect(await screen.findByRole("alertdialog")).toBeTruthy()
+        fireEvent.click(screen.getByRole("button", { name: "Keep editing" }))
+        expect(screen.getByDisplayValue("13.00")).toBeTruthy()
+      }
+      if (entry === "page-retry" || entry === "neighbor-retry")
+        await screen.findByText("26–50 of 1204")
+      if (entry === "source" || entry === "page" || entry === "page-size")
+        await waitFor(() =>
+          expect(screen.queryByRole("form", { name: "Correct price" })).toBeNull()
+        )
+    }
+    client.clear()
+  })
 
   it("uses real menus to share source scope while asset/category edits leave portfolio alone", async () => {
     sourceCardsState.real = true

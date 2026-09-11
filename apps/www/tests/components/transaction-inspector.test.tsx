@@ -1762,6 +1762,43 @@ describe("selected transaction refresh", () => {
 })
 
 describe("price editor in the restored shell", () => {
+  it("isolates desktop confirmation and restores outside inert state on dismissal and unmount", async () => {
+    mobile = false
+    const outside = document.createElement("button")
+    const alreadyInert = document.createElement("div")
+    alreadyInert.setAttribute("inert", "")
+    document.body.appendChild(outside)
+    document.body.appendChild(alreadyInert)
+    try {
+      const taxmaxi = new TaxMaxi({ apiKey: "", baseUrl: "https://inspector.example.test" })
+      const detail = richDetail()
+      vi.spyOn(taxmaxi.transactions, "get").mockResolvedValue(detail)
+      const correction = detail.movementOverrides[0]
+      if (!correction) throw new Error("Missing correction fixture")
+      vi.spyOn(taxmaxi.transactionOverrides, "getCurrent").mockResolvedValue(correction)
+      const view = mount(taxmaxi)
+      view.client.setQueryData(["taxmaxi", "account"], { account: { id: IDS.actor } })
+      fireEvent.click(await screen.findByRole("button", { name: /Correct price ·/ }))
+      fireEvent.change(await screen.findByLabelText("Total value (EUR)"), {
+        target: { value: "99.00" },
+      })
+      fireEvent.click(screen.getByRole("button", { name: "Back to overview" }))
+      expect(await screen.findByRole("alertdialog")).toBeTruthy()
+      expect(outside.hasAttribute("inert")).toBe(true)
+      fireEvent.click(screen.getByRole("button", { name: "Keep editing" }))
+      expect(outside.hasAttribute("inert")).toBe(false)
+      expect(alreadyInert.hasAttribute("inert")).toBe(true)
+      fireEvent.click(screen.getByRole("button", { name: "Close transaction" }))
+      expect(await screen.findByRole("alertdialog")).toBeTruthy()
+      cleanup()
+      expect(outside.hasAttribute("inert")).toBe(false)
+      expect(alreadyInert.hasAttribute("inert")).toBe(true)
+    } finally {
+      outside.remove()
+      alreadyInert.remove()
+    }
+  })
+
   it.each([false, true])(
     "preserves dirty values and a pending save across both shells (start mobile=%s)",
     async (narrow) => {

@@ -165,6 +165,39 @@ function setup(current = currentPrice()) {
   return { ...hook, client, taxmaxi, create, replace, withdraw, onSaved }
 }
 describe("exact movement price editing", () => {
+  it("cancels an old account's pending discard without resetting the next account's draft", async () => {
+    const { result, client } = setup(currentPrice(true))
+    await waitFor(() => expect(result.current.editor.loading).toBe(false))
+    act(() => result.current.editor.change({ amount: "99.00" }))
+    const navigate = vi.fn()
+    act(() => result.current.guard.run(navigate))
+    expect(result.current.guard.pending).toBe(true)
+    act(() => client.setQueryData(queryKeys.account(), account("next-user")))
+    await waitFor(() => expect(result.current.editor.loading).toBe(false))
+    expect(result.current.guard.pending).toBe(false)
+    act(() => result.current.editor.change({ amount: "88.00" }))
+    act(() => result.current.guard.resolve(true))
+    expect(result.current.editor.draft.amount).toBe("88.00")
+    expect(result.current.guard.isDirty()).toBe(true)
+    expect(navigate).not.toHaveBeenCalled()
+  })
+
+  it("resets a discarded draft even when the requested action does nothing", async () => {
+    const { result } = setup(currentPrice(true))
+    await waitFor(() => expect(result.current.editor.loading).toBe(false))
+    act(() => result.current.editor.change({ amount: "99.00", reason: "Changed" }))
+    act(() => result.current.guard.run(() => {}))
+    act(() => result.current.guard.resolve(true))
+    expect(result.current.editor.draft.amount).toBe("25.00")
+    expect(result.current.editor.draft.reason).toBe("Receipt total")
+    expect(result.current.guard.isDirty()).toBe(false)
+    act(() => result.current.editor.change({ amount: "88.00" }))
+    act(() => result.current.guard.run(() => {}))
+    expect(result.current.guard.pending).toBe(true)
+    act(() => result.current.guard.resolve(false))
+    expect(result.current.editor.draft.amount).toBe("88.00")
+  })
+
   it("allows withdrawal of an active price after custody incompatibility but rejects new prices", async () => {
     const current = currentPrice(true)
     if (!current.context.current) throw new Error("Missing current fixture")
