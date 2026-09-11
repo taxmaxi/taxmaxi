@@ -121,9 +121,11 @@ function draftFor(current: TransactionOverrideCurrent, kind: Draft["kind"]): Dra
       active?.reason ??
       (kind === "price" ? m["app.editor.defaultReason"]() : m["app.editor.categoryReason"]()),
     category: category === "passive_staking_reward" ? "staking_reward" : category,
-    passive: classification
-      ? classification.cause === "passive_staking_reward"
-      : event?._tag === "acquisition" && event.cause === "passive_staking_reward",
+    passive:
+      classification?.cause === "staking_reward"
+        ? false
+        : classification?.cause === "passive_staking_reward" ||
+          (event?._tag === "acquisition" && event.cause === "passive_staking_reward"),
   }
 }
 const amountSchema = z

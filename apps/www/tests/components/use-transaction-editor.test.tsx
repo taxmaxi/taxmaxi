@@ -641,3 +641,96 @@ it("cannot manufacture passive staking when the current API only permits unspeci
   })
   expect(create).not.toHaveBeenCalled()
 })
+
+it("uses current passive evidence when replacing a non-staking correction with Staking reward", async () => {
+  const { result, replace } = setup(currentCategory(true, true))
+  await waitFor(() => expect(result.current.editor.loading).toBe(false))
+  act(() => result.current.editor.selectKind("classification"))
+  expect(result.current.editor.draft.category).toBe("gift")
+  act(() => result.current.editor.change({ category: "staking_reward" }))
+  expect(result.current.editor.clarifyStaking).toBe(false)
+  await act(async () => {
+    await result.current.editor.submit()
+  })
+  expect(replace).toHaveBeenCalledWith(
+    expect.objectContaining({
+      replacement: expect.objectContaining({
+        input: {
+          _tag: "classification",
+          input: { _tag: "inbound", cause: "passive_staking_reward" },
+        },
+      }),
+    })
+  )
+})
+
+it("preserves an explicit unspecified-staking correction despite current passive system evidence", async () => {
+  const current = currentCategory(true, true)
+  const record = current.context.classification.active
+  if (!record) throw new Error("Missing classification fixture")
+  const unspecified = {
+    ...record,
+    input: {
+      _tag: "classification" as const,
+      input: { _tag: "inbound" as const, cause: "staking_reward" as const },
+    },
+  }
+  const { result, replace } = setup({
+    ...current,
+    context: { ...current.context, classification: { active: unspecified, leaf: unspecified } },
+  })
+  await waitFor(() => expect(result.current.editor.loading).toBe(false))
+  act(() => result.current.editor.selectKind("classification"))
+  expect(result.current.editor.draft.passive).toBe(false)
+  await act(async () => {
+    await result.current.editor.submit()
+  })
+  expect(replace).toHaveBeenCalledWith(
+    expect.objectContaining({
+      replacement: expect.objectContaining({
+        input: { _tag: "classification", input: { _tag: "inbound", cause: "staking_reward" } },
+      }),
+    })
+  )
+})
+
+it.each(["passive_staking_reward", "staking_reward", "gift"] as const)(
+  "retains active %s intent with absent system evidence",
+  async (cause) => {
+    const current = currentCategory(true)
+    const record = current.context.classification.active
+    if (!record) throw new Error("Missing classification fixture")
+    const active = {
+      ...record,
+      input: { _tag: "classification" as const, input: { _tag: "inbound" as const, cause } },
+    }
+    const { result, replace } = setup({
+      ...current,
+      context: { ...current.context, classification: { active, leaf: active } },
+      inputs: { ...current.inputs, system: { event: null, valuationFacts: [] } },
+    })
+    await waitFor(() => expect(result.current.editor.loading).toBe(false))
+    act(() => result.current.editor.selectKind("classification"))
+    act(() => result.current.editor.change({ category: "staking_reward" }))
+    expect(result.current.editor.clarifyStaking).toBe(true)
+    expect(result.current.editor.draft.passive).toBe(cause === "passive_staking_reward")
+    await act(async () => {
+      await result.current.editor.submit()
+    })
+    expect(replace).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replacement: expect.objectContaining({
+          expectedLeafId: active.id,
+          expectedSystemRevision: "current-system",
+          input: {
+            _tag: "classification",
+            input: {
+              _tag: "inbound",
+              cause: cause === "passive_staking_reward" ? cause : "staking_reward",
+            },
+          },
+        }),
+      })
+    )
+  }
+)
