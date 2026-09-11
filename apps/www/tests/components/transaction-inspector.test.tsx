@@ -556,7 +556,7 @@ describe("TransactionInspector", () => {
     const { taxmaxi } = sdkClient(richDetail())
     const get = vi.spyOn(taxmaxi.transactions, "get").mockResolvedValue(richDetail())
     const view = mount(taxmaxi)
-    fireEvent.click(await screen.findByRole("button", { name: "View transaction details" }))
+    fireEvent.click(await screen.findByRole("button", { name: "View evidence" }))
     await screen.findByRole("heading", { name: "Recorded transaction" })
     const back = screen.getByRole("button", { name: "Back to overview" })
     expect(document.activeElement).toBe(back)
@@ -569,13 +569,71 @@ describe("TransactionInspector", () => {
     expect(await screen.findByText("refreshed same transaction")).toBeTruthy()
     expect(screen.getAllByRole("dialog")).toHaveLength(1)
     fireEvent.click(back)
-    expect(document.activeElement).toBe(
-      screen.getByRole("button", { name: "View transaction details" })
-    )
-    fireEvent.click(screen.getByRole("button", { name: "View transaction details" }))
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "View evidence" }))
+    fireEvent.click(screen.getByRole("button", { name: "View evidence" }))
     view.select({ ...SELECTION, transactionId: IDS.other })
-    expect(await screen.findByRole("button", { name: "View transaction details" })).toBeTruthy()
+    expect(await screen.findByRole("button", { name: "View evidence" })).toBeTruthy()
     expect(screen.queryByRole("button", { name: "Back to overview" })).toBeNull()
+  })
+
+  it.each([
+    ["View tax results", "Displayed calculation"],
+    ["View classification and correction history", "Current decisions"],
+  ])("keeps the %s subview during refresh and resets a new selection", async (button, heading) => {
+    mobile = true
+    const { taxmaxi } = sdkClient(richDetail())
+    vi.spyOn(taxmaxi.transactions, "get").mockResolvedValue(richDetail())
+    const view = mount(taxmaxi)
+    fireEvent.click(await screen.findByRole("button", { name: button }))
+    await screen.findByRole("heading", { name: heading })
+    expect(screen.queryByRole("region", { name: "Summary" })).toBeNull()
+    await act(async () => {
+      await view.client.invalidateQueries({
+        queryKey: queries.transactionDetail(taxmaxi, SELECTION).queryKey,
+      })
+    })
+    expect(screen.getByRole("heading", { name: heading })).toBeTruthy()
+    expect(screen.getByRole("button", { name: "Back to overview" })).toBeTruthy()
+    fireEvent.click(screen.getByRole("button", { name: "Back to overview" }))
+    expect(screen.getByRole("region", { name: "Summary" })).toBeTruthy()
+    fireEvent.click(screen.getByRole("button", { name: button }))
+    view.select({ ...SELECTION, transactionId: IDS.other })
+    expect(await screen.findByRole("region", { name: "Summary" })).toBeTruthy()
+    expect(screen.queryByRole("button", { name: "Back to overview" })).toBeNull()
+  })
+
+  it("retains summary and subview after a refresh error and during retry", async () => {
+    const data = richDetail()
+    const { taxmaxi } = sdkClient(data)
+    const get = vi.spyOn(taxmaxi.transactions, "get").mockResolvedValue(data)
+    const view = mount(taxmaxi)
+    await screen.findByRole("region", { name: "Summary" })
+    fireEvent.click(
+      screen.getByRole("button", { name: "View classification and correction history" })
+    )
+    get.mockRejectedValue(new Error("Temporary read failure"))
+    await act(async () => {
+      await view.client.invalidateQueries({
+        queryKey: queries.transactionDetail(taxmaxi, SELECTION).queryKey,
+      })
+    })
+    expect(screen.getByRole("region", { name: "Summary" })).toBeTruthy()
+    expect(screen.getByRole("heading", { name: "Current decisions" })).toBeTruthy()
+    let finish: ((data: TransactionDetail) => void) | undefined
+    get.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve
+        })
+    )
+    fireEvent.click(await screen.findByRole("button", { name: "Retry results" }))
+    expect(screen.getByRole("region", { name: "Summary" })).toBeTruthy()
+    expect(screen.getByRole("heading", { name: "Current decisions" })).toBeTruthy()
+    expect(await screen.findByText(/Updating · showing the last calculated values/)).toBeTruthy()
+    await act(async () => {
+      finish?.(data)
+    })
+    expect(screen.getByRole("button", { name: "Back to overview" })).toBeTruthy()
   })
 
   it.each([false, true])(
@@ -584,8 +642,7 @@ describe("TransactionInspector", () => {
       mobile = isMobile
       const { taxmaxi, fetch } = sdkClient(richDetail())
       mount(taxmaxi)
-      if (isMobile)
-        fireEvent.click(await screen.findByRole("button", { name: "View transaction details" }))
+      if (isMobile) fireEvent.click(await screen.findByRole("button", { name: "View evidence" }))
       await screen.findByRole("heading", { name: "Recorded transaction" })
       expect(screen.getAllByRole(mobile ? "dialog" : "complementary")).toHaveLength(1)
       expect(fetch).toHaveBeenCalledTimes(1)
@@ -595,20 +652,30 @@ describe("TransactionInspector", () => {
       const evidence = within(section("Source evidence"))
       expect(evidence.getByText("coinbase")).toBeTruthy()
       expect(evidence.getByText("Not retained or unavailable")).toBeTruthy()
+      if (isMobile) {
+        fireEvent.click(screen.getByRole("button", { name: "Back to overview" }))
+        fireEvent.click(
+          screen.getByRole("button", { name: "View classification and correction history" })
+        )
+      }
       const current = within(section("Current decisions"))
       expect(current.getAllByText("1 EUR").length).toBeGreaterThan(0)
       expect(current.getByText("0.333333333333333333 EUR")).toBeTruthy()
       expect(current.getByText("Rounded unit preview · not the total")).toBeTruthy()
-      const captured = within(section("Inputs captured by the displayed run"))
-      expect(captured.getAllByText("20 EUR").length).toBeGreaterThan(0)
-      expect(captured.queryByText("1 EUR")).toBeNull()
-      expect(captured.getByText(IDS.run)).toBeTruthy()
       expect(current.getByText("Corrected receipt total")).toBeTruthy()
       expect(current.getByText("Withdraw disputed classification")).toBeTruthy()
       expect(current.getByText("Original receipt total")).toBeTruthy()
       expect(current.getByText("Retained correction history")).toBeTruthy()
       expect(screen.getByText("Retained asset history")).toBeTruthy()
       expect(screen.getByText("Use the reviewed economic asset")).toBeTruthy()
+      if (isMobile) {
+        fireEvent.click(screen.getByRole("button", { name: "Back to overview" }))
+        fireEvent.click(screen.getByRole("button", { name: "View tax results" }))
+      }
+      const captured = within(section("Inputs captured by the displayed run"))
+      expect(captured.getAllByText("20 EUR").length).toBeGreaterThan(0)
+      expect(captured.queryByText("1 EUR")).toBeNull()
+      expect(captured.getByText(IDS.run)).toBeTruthy()
       const allocation = within(screen.getByRole("region", { name: "Disposal allocation 1" }))
       expect(allocation.getByText("0 EUR")).toBeTruthy()
       expect(allocation.getAllByText("Unavailable")).toHaveLength(2)
@@ -778,7 +845,7 @@ describe("TransactionInspector", () => {
     await screen.findByText(
       "This transaction is no longer available. Your selection has been kept."
     )
-    fireEvent.click(screen.getByRole("button", { name: "Retry results" }))
+    fireEvent.click(await screen.findByRole("button", { name: "Retry results" }))
     await screen.findByRole("heading", { name: "Recorded transaction" })
     expect(get).toHaveBeenCalledTimes(2)
     expect(

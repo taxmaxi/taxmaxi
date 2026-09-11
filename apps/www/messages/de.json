@@ -1581,5 +1581,18 @@
   "app.transactionFilters.attention": "Prüfung erforderlich",
   "app.transactionFilters.invalidDates": "Prüfe die Daten und gib einen gültigen Zeitraum ein.",
   "app.transactionFilters.dateFormat": "Datumsformat: JJJJ-MM-TT",
-  "app.transactionFilters.dateTrigger": "Datum filtern: {range}"
+  "app.transactionFilters.dateTrigger": "Datum filtern: {range}",
+  "app.inspector.summary.title": "Übersicht",
+  "app.inspector.summary.updating": "Aktualisierung läuft · zuletzt berechnete Werte",
+  "app.inspector.summary.noMovements": "Keine Bewegungen verfügbar.",
+  "app.inspector.summary.fees": "Gebühren",
+  "app.inspector.summary.review": "Fehlende Angaben und Steuerergebnisse prüfen",
+  "app.inspector.summary.details": "Transaktionsdetails",
+  "app.inspector.summary.evidence": "Belege ansehen",
+  "app.inspector.summary.tax": "Steuerergebnisse ansehen",
+  "app.inspector.summary.classification": "Einordnung und Korrekturverlauf ansehen",
+  "app.inspector.summary.unknownAsset": "Asset nicht verfügbar",
+  "app.inspector.summary.originalBasis": "Ursprüngliche Anschaffungskosten",
+  "app.inspector.summary.missingValue": "Belege für fehlenden Wert prüfen",
+  "app.inspector.summary.missingCategory": "Fehlende Einordnung prüfen"
 }
