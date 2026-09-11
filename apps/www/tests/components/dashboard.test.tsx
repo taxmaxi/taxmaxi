@@ -18,6 +18,7 @@ import {
   type PortfolioCalculationStatus,
   type SourceOverview,
   type TransactionDetail,
+  type TransactionOverrideCurrent,
   type TransactionListInput,
 } from "taxmaxi"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
@@ -65,6 +66,10 @@ beforeEach(() => {
       .mockReturnValue({ matches: false, addEventListener: vi.fn(), removeEventListener: vi.fn() }),
   })
 })
+
+const navigationBlocker = vi.hoisted(() => ({
+  request: undefined as undefined | (() => Promise<boolean>),
+}))
 
 const syncState = vi.hoisted(() => ({
   activeSyncs: [] as ReadonlyArray<SourceSyncIslandItem & { jobId?: string }>,
@@ -173,6 +178,9 @@ vi.mock("@tanstack/react-router", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@tanstack/react-router")>()
   return {
     ...actual,
+    useBlocker: ({ shouldBlockFn }: { shouldBlockFn: () => Promise<boolean> }) => {
+      navigationBlocker.request = shouldBlockFn
+    },
     Link: ({ children, to }: { readonly children: ReactNode; readonly to: string }) => (
       <a href={to}>{children}</a>
     ),
@@ -2322,6 +2330,94 @@ describe("Dashboard first-sync body (#108 T05, T06, T07)", () => {
   })
 })
 
+const TARGET = "00000000-0000-4000-8000-000000000001"
+const USER = "00000000-0000-4000-8000-000000000002"
+const LEAF = "00000000-0000-4000-8000-000000000003"
+function currentPrice(active = false, quantity = "2"): TransactionOverrideCurrent {
+  const target = {
+    principalId: TARGET,
+    sourceId: TARGET,
+    sourceRecordKey: "buy-2",
+    componentKey: "amount",
+  }
+  const facts = {
+    target,
+    systemRevision: "current-system",
+    quantity,
+    economicAssetId: TARGET,
+    direction: "inbound" as const,
+    structure: "ownership_change" as const,
+  }
+  const system = {
+    occurredAt: "2025-01-01T00:00:00.000Z",
+    legKind: "acquisition" as const,
+    recordedFiatAmount: null,
+    recordedFiatCurrency: null,
+    transactionType: null,
+    providerTransactionType: null,
+    derivationRule: null,
+    feeForSourceRecordKey: null,
+  }
+  const record = {
+    id: LEAF,
+    principalId: TARGET,
+    sourceId: TARGET,
+    targetId: TARGET,
+    kind: "price" as const,
+    operation: "create" as const,
+    inspectedFacts: facts,
+    inspectedSystem: system,
+    inspectedValuationEvidence: { reportingCurrency: "EUR", facts: [] },
+    input: {
+      _tag: "price" as const,
+      input: { _tag: "total_value" as const, amount: "25.00", currency: "EUR" },
+    },
+    actorUserId: USER,
+    reason: "Receipt total",
+    supersedesOverrideId: null,
+    recordedAt: "2025-01-01T00:00:00.000Z",
+  }
+  const stream = {
+    leaf: null,
+    active: null,
+    stale: false,
+    application: "inactive" as const,
+    applicationProblem: null,
+    resolvedPrice: null,
+    replay: { status: "not_scheduled" as const, processingJobId: null, followUpJobId: null },
+    coverage: null,
+    coverageStatus: "not_requested" as const,
+  }
+  return {
+    context: {
+      targetId: TARGET,
+      target,
+      current: {
+        legId: TARGET,
+        transactionId: TARGET,
+        facts,
+        system,
+        valuationEvidence: { reportingCurrency: "EUR", facts: [] },
+      },
+      price: { leaf: active ? record : null, active: active ? record : null },
+      classification: { leaf: null, active: null },
+      history: active ? [record] : [],
+    },
+    scope: { jurisdiction: "DE", taxYear: 2025, reportingCurrency: "EUR" },
+    inputs: {
+      targetId: TARGET,
+      current: null,
+      currentOutcome: "included",
+      system: { event: null, valuationFacts: [] },
+      effective: { event: null, valuationFacts: [] },
+      corrections: [],
+    },
+    price: { ...stream, leaf: active ? record : null, active: active ? record : null },
+    classification: stream,
+    validClassificationInputs: [],
+  }
+}
+
 describe("Inspector cursor navigation", () => {
   const page = (offset: number): TransactionListResponse => ({
     transactions: Array.from({ length: 25 }, (_, index) =>
@@ -2359,6 +2455,94 @@ describe("Inspector cursor navigation", () => {
     cleanup()
     vi.restoreAllMocks()
   })
+
+  it.each(["row", "source", "filter", "page", "page-size", "browser-back"])(
+    "guards dirty dashboard %s changes before altering selection or scope",
+    async (entry) => {
+      HTMLElement.prototype.scrollIntoView = vi.fn()
+      const { client, list } = setup()
+      const row = page(0).transactions[0]
+      if (!row) throw new Error("Missing row fixture")
+      const correction = currentPrice()
+      const detail: TransactionDetail = {
+        attention: false,
+        transactionId: row.transactionId,
+        timestamp: row.timestamp,
+        source: row.source,
+        transactionType: row.transactionType,
+        description: row.description,
+        externalId: row.externalId,
+        sourceRawRecordId: null,
+        providerTransactionType: null,
+        classificationHistoryStatus: "unavailable",
+        sourceEvidence: [],
+        movements: [],
+        reconciliations: [],
+        movementOverrides: [correction],
+        assetOverrides: [],
+        calculation: {
+          run: null,
+          state: "complete",
+          monetaryStatus: "not_applicable",
+          derivedLots: [],
+          allocations: [],
+          income: [],
+          blockers: [],
+          processedEventIds: [],
+          correctionInputs: [],
+        },
+      }
+      vi.mocked(testTaxMaxi.transactions.get).mockResolvedValue(detail)
+      vi.spyOn(testTaxMaxi.transactionOverrides, "getCurrent").mockResolvedValue(correction)
+      await screen.findByText("Transaction 25")
+      fireEvent.click(
+        screen.getByRole("button", { name: "Open transaction · Transaction 1 · row-1" })
+      )
+      fireEvent.click(await screen.findByRole("button", { name: /Correct price ·/ }))
+      fireEvent.change(await screen.findByLabelText("Total value (EUR)"), {
+        target: { value: "12.50" },
+      })
+      const invoke = () => {
+        if (entry === "row")
+          fireEvent.click(
+            screen.getByRole("button", { name: "Open transaction · Transaction 2 · row-2" })
+          )
+        if (entry === "source") fireEvent.click(screen.getByRole("button", { name: "Source B" }))
+        if (entry === "page") fireEvent.click(screen.getByRole("button", { name: "Next page" }))
+        if (entry === "page-size")
+          fireEvent.change(screen.getByRole("combobox", { name: "Rows per page" }), {
+            target: { value: "50" },
+          })
+        if (entry === "filter") {
+          fireEvent.click(screen.getByRole("button", { name: "Filter Categories" }))
+          fireEvent.click(screen.getByRole("option", { name: /^Sale/ }))
+        }
+        if (entry === "browser-back") void navigationBlocker.request?.()
+      }
+      invoke()
+      expect(await screen.findByRole("alertdialog")).toBeTruthy()
+      fireEvent.click(screen.getByRole("button", { name: "Keep editing" }))
+      expect(screen.getByDisplayValue("12.50")).toBeTruthy()
+      expect(screen.getByText("1–25 of 1204")).toBeTruthy()
+      expect(
+        list.mock.calls.some(([input]) =>
+          input?.sourceIds?.includes("00000000-0000-4000-8000-000000000202")
+        )
+      ).toBe(false)
+      if (entry !== "filter") {
+        invoke()
+        fireEvent.click(await screen.findByRole("button", { name: "Discard changes" }))
+        await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull())
+        if (entry === "row")
+          expect(await screen.findByRole("heading", { name: "Transaction 2" })).toBeTruthy()
+        if (entry === "source" || entry === "page" || entry === "page-size")
+          await waitFor(() =>
+            expect(screen.queryByRole("form", { name: "Correct price" })).toBeNull()
+          )
+      }
+      client.clear()
+    }
+  )
 
   it("uses real menus to share source scope while asset/category edits leave portfolio alone", async () => {
     sourceCardsState.real = true

@@ -1760,3 +1760,101 @@ describe("selected transaction refresh", () => {
     }
   })
 })
+
+describe("price editor in the restored shell", () => {
+  it("restores the sheet and its own overlay when a dirty drag release is rejected", async () => {
+    mobile = true
+    const taxmaxi = new TaxMaxi({ apiKey: "", baseUrl: "https://inspector.example.test" })
+    const detail = richDetail()
+    const correction = detail.movementOverrides[0]
+    if (!correction) throw new Error("Missing correction fixture")
+    vi.spyOn(taxmaxi.transactions, "get").mockResolvedValue(detail)
+    vi.spyOn(taxmaxi.transactionOverrides, "getCurrent").mockResolvedValue(correction)
+    const view = mount(taxmaxi)
+    view.client.setQueryData(["taxmaxi", "account"], { account: { id: IDS.actor } })
+    fireEvent.click(await screen.findByRole("button", { name: /Correct price ·/ }))
+    const amount = await screen.findByLabelText("Total value (EUR)")
+    amount.focus()
+    fireEvent.change(amount, { target: { value: "12.50" } })
+    const sheet = screen.getByRole("dialog", { name: "Transaction inspector" })
+    const handle = sheet.querySelector("[data-slot=bottom-sheet-handle]")
+    const overlay = sheet.previousElementSibling
+    if (!(handle instanceof HTMLElement) || !(overlay instanceof HTMLElement))
+      throw new Error("Missing sheet elements")
+    handle.setPointerCapture = vi.fn()
+    vi.stubGlobal("PointerEvent", MouseEvent)
+    vi.spyOn(sheet, "getBoundingClientRect").mockReturnValue(new DOMRect(0, 100, 390, 600))
+    vi.useFakeTimers({ toFake: ["Date"] })
+    try {
+      vi.setSystemTime(Date.now() + 600)
+      fireEvent.pointerDown(handle, { clientY: 110, clientX: 195 })
+      // jsdom does not compute transform matrices. Supply the browser's actual released style.
+      sheet.style.transform = "matrix(1, 0, 0, 1, 0, 500)"
+      overlay.style.opacity = "0.17"
+      fireEvent.pointerUp(handle, { clientY: 610, clientX: 195 })
+      expect(await screen.findByRole("alertdialog")).toBeTruthy()
+      expect(sheet.style.transform).toBe("translate3d(0, 0, 0)")
+      expect(overlay.style.opacity).toBe("1")
+      fireEvent.click(screen.getByRole("button", { name: "Keep editing" }))
+      expect(document.activeElement).toBe(amount)
+      expect(view.onClose).not.toHaveBeenCalled()
+    } finally {
+      vi.useRealTimers()
+      vi.unstubAllGlobals()
+    }
+  })
+
+  it.each([false, true])(
+    "guards Back and close without dropping the dirty input (mobile=%s)",
+    async (narrow) => {
+      mobile = narrow
+      const taxmaxi = new TaxMaxi({ apiKey: "", baseUrl: "https://inspector.example.test" })
+      const detail = richDetail()
+      vi.spyOn(taxmaxi.transactions, "get").mockResolvedValue(detail)
+      const correction = detail.movementOverrides[0]
+      if (!correction) throw new Error("Missing correction fixture")
+      vi.spyOn(taxmaxi.transactionOverrides, "getCurrent").mockResolvedValue(correction)
+      const view = mount(taxmaxi)
+      view.client.setQueryData(["taxmaxi", "account"], { account: { id: IDS.actor } })
+      fireEvent.click(await screen.findByRole("button", { name: /Correct price ·/ }))
+      const amount = await screen.findByLabelText("Total value (EUR)")
+      fireEvent.change(amount, { target: { value: "12.50" } })
+      fireEvent.click(screen.getByRole("button", { name: "Back to overview" }))
+      expect(await screen.findByRole("alertdialog")).toBeTruthy()
+      fireEvent.click(screen.getByRole("button", { name: "Keep editing" }))
+      expect(screen.getByDisplayValue("12.50")).toBe(amount)
+      fireEvent.click(screen.getByRole("button", { name: "Close transaction" }))
+      expect(await screen.findByRole("alertdialog")).toBeTruthy()
+      expect(view.onClose).not.toHaveBeenCalled()
+      fireEvent.click(screen.getByRole("button", { name: "Discard changes" }))
+      await waitFor(() => expect(view.onClose).toHaveBeenCalledTimes(1))
+    }
+  )
+  it("returns to overview with saved state before the calculation covers the correction", async () => {
+    mobile = true
+    const taxmaxi = new TaxMaxi({ apiKey: "", baseUrl: "https://inspector.example.test" })
+    const detail = richDetail()
+    vi.spyOn(taxmaxi.transactions, "get").mockResolvedValue(detail)
+    const correction = detail.movementOverrides[0]
+    if (!correction) throw new Error("Missing correction fixture")
+    vi.spyOn(taxmaxi.transactionOverrides, "getCurrent").mockResolvedValue(correction)
+    vi.spyOn(taxmaxi.transactionOverrides, "replace").mockResolvedValue({
+      context: correction.context,
+      overrideId: IDS.price,
+      sourceId: IDS.source,
+      processingJobId: IDS.job,
+    })
+    const view = mount(taxmaxi)
+    view.client.setQueryData(["taxmaxi", "account"], { account: { id: IDS.actor } })
+    fireEvent.click(await screen.findByRole("button", { name: /Correct price ·/ }))
+    fireEvent.change(await screen.findByLabelText("Total value (EUR)"), {
+      target: { value: "25.00" },
+    })
+    fireEvent.click(screen.getByRole("button", { name: "Save correction" }))
+    expect(
+      await screen.findByText(/Correction saved\. The calculation updates separately/)
+    ).toBeTruthy()
+    expect(screen.queryByRole("form", { name: "Correct price" })).toBeNull()
+    expect(screen.getByRole("button", { name: "View evidence" })).toBeTruthy()
+  })
+})
