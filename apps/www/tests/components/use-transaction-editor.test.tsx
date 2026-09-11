@@ -381,3 +381,263 @@ describe("exact movement price editing", () => {
     await expect(result.current.request()).resolves.toBe(false)
   })
 })
+
+function currentCategory(active = false, passiveSystem = false): TransactionOverrideCurrent {
+  const current = currentPrice(true)
+  const priceRecord = current.context.price.active
+  if (!priceRecord) throw new Error("Missing price fixture")
+  const record = {
+    ...priceRecord,
+    id: "00000000-0000-4000-8000-000000000004",
+    kind: "classification" as const,
+    input: {
+      _tag: "classification" as const,
+      input: { _tag: "inbound" as const, cause: "gift" as const },
+    },
+    reason: "This was a gift",
+  }
+  return {
+    ...current,
+    context: {
+      ...current.context,
+      classification: { active: active ? record : null, leaf: active ? record : null },
+    },
+    inputs: {
+      ...current.inputs,
+      system: {
+        valuationFacts: [],
+        event: {
+          _tag: "acquisition",
+          id: TARGET,
+          occurredAt: { epochMillis: 1735689600000 },
+          assetId: TARGET,
+          quantity: "2",
+          custodySourceId: TARGET,
+          cause: passiveSystem ? "passive_staking_reward" : "staking_reward",
+        },
+      },
+    },
+    validClassificationInputs: [
+      { _tag: "inbound", cause: "gift" },
+      { _tag: "inbound", cause: "staking_reward" },
+      { _tag: "inbound", cause: "passive_staking_reward" },
+    ],
+  }
+}
+
+describe("factual category editing", () => {
+  it.each([false, true])(
+    "saves staking with explicit passive clarification %s as one independent correction",
+    async (passive) => {
+      const { result, create, replace } = setup(currentCategory())
+      await waitFor(() => expect(result.current.editor.loading).toBe(false))
+      act(() => result.current.editor.selectKind("classification"))
+      expect(result.current.editor.draft.category).toBe("staking_reward")
+      expect(result.current.editor.clarifyStaking).toBe(true)
+      act(() => result.current.editor.change({ passive }))
+      await act(async () => {
+        await Promise.all([result.current.editor.submit(), result.current.editor.submit()])
+      })
+      expect(create).toHaveBeenCalledTimes(1)
+      expect(replace).not.toHaveBeenCalled()
+      expect(create).toHaveBeenCalledWith({
+        targetId: TARGET,
+        override: {
+          expectedLeafId: null,
+          expectedSystemRevision: "current-system",
+          reason: "I am correcting the factual category of this movement.",
+          input: {
+            _tag: "classification",
+            input: {
+              _tag: "inbound",
+              cause: passive ? "passive_staking_reward" : "staking_reward",
+            },
+          },
+        },
+      })
+    }
+  )
+
+  it("uses factual passive evidence without asking and keeps clarification across category changes", async () => {
+    const { result } = setup(currentCategory(false, true))
+    await waitFor(() => expect(result.current.editor.loading).toBe(false))
+    act(() => result.current.editor.selectKind("classification"))
+    expect(result.current.editor.draft.passive).toBe(true)
+    expect(result.current.editor.clarifyStaking).toBe(false)
+    act(() => result.current.editor.change({ category: "gift" }))
+    act(() => result.current.editor.change({ category: "staking_reward" }))
+    expect(result.current.editor.draft.passive).toBe(true)
+  })
+
+  it("replaces and withdraws using the classification leaf, even when price has another active leaf", async () => {
+    const { result, replace, withdraw } = setup(currentCategory(true))
+    await waitFor(() => expect(result.current.editor.loading).toBe(false))
+    act(() => result.current.editor.selectKind("classification"))
+    expect(result.current.editor.draft.reason).toBe("This was a gift")
+    act(() => result.current.editor.change({ category: "staking_reward" }))
+    await act(async () => {
+      await result.current.editor.submit()
+    })
+    expect(replace).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replacement: expect.objectContaining({
+          expectedLeafId: "00000000-0000-4000-8000-000000000004",
+          input: { _tag: "classification", input: { _tag: "inbound", cause: "staking_reward" } },
+        }),
+      })
+    )
+    await act(async () => {
+      await result.current.editor.submit(true)
+    })
+    expect(withdraw).toHaveBeenCalledWith({
+      targetId: TARGET,
+      withdrawal: {
+        expectedLeafId: "00000000-0000-4000-8000-000000000004",
+        expectedSystemRevision: "current-system",
+        reason: "This was a gift",
+        kind: "classification",
+      },
+    })
+  })
+
+  it.each(["fee", "custody", "outbound"] as const)(
+    "rejects staking on %s and permits active classification withdrawal",
+    async (structure) => {
+      const current = currentCategory(true)
+      const facts = current.context.current
+      if (!facts) throw new Error("Missing current fixture")
+      const { result, create, replace, withdraw } = setup({
+        ...current,
+        context: {
+          ...current.context,
+          current: {
+            ...facts,
+            facts: {
+              ...facts.facts,
+              structure: structure === "outbound" ? "ownership_change" : structure,
+              direction: "outbound",
+            },
+          },
+        },
+        validClassificationInputs:
+          structure === "outbound" ? [{ _tag: "outbound", cause: "sale" }] : [],
+      })
+      await waitFor(() => expect(result.current.editor.loading).toBe(false))
+      act(() => result.current.editor.selectKind("classification"))
+      act(() => result.current.editor.change({ category: "staking_reward", passive: true }))
+      await act(async () => {
+        expect(await result.current.editor.submit()).toBe(false)
+      })
+      expect(create).not.toHaveBeenCalled()
+      expect(replace).not.toHaveBeenCalled()
+      await act(async () => {
+        await result.current.editor.submit(true)
+      })
+      expect(withdraw).toHaveBeenCalledTimes(1)
+    }
+  )
+
+  it("preserves a failed category draft and guards switching to price", async () => {
+    const { result, create } = setup(currentCategory())
+    create.mockRejectedValueOnce(new Error("offline"))
+    await waitFor(() => expect(result.current.editor.loading).toBe(false))
+    act(() => result.current.editor.selectKind("classification"))
+    act(() => result.current.editor.change({ passive: true, reason: "I delegated my tokens" }))
+    await act(async () => {
+      await result.current.editor.submit()
+    })
+    expect(result.current.editor.draft.passive).toBe(true)
+    expect(result.current.editor.draft.reason).toBe("I delegated my tokens")
+    act(() => result.current.editor.selectKind("price"))
+    expect(result.current.guard.pending).toBe(true)
+    act(() => result.current.guard.resolve(false))
+    expect(result.current.editor.draft.kind).toBe("classification")
+    act(() => result.current.editor.selectKind("price"))
+    await act(async () => result.current.guard.resolve(true))
+    expect(result.current.editor.draft.kind).toBe("price")
+    expect(result.current.editor.draft.amount).toBe("25.00")
+  })
+
+  it("does not refresh or return to overview after a category save resolves under another account", async () => {
+    const { result, create, client, onSaved } = setup(currentCategory())
+    let finish: (() => void) | undefined
+    create.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          finish = () =>
+            resolve({
+              context: currentCategory().context,
+              overrideId: LEAF,
+              sourceId: TARGET,
+              processingJobId: TARGET,
+            })
+        })
+    )
+    await waitFor(() => expect(result.current.editor.loading).toBe(false))
+    act(() => result.current.editor.selectKind("classification"))
+    let saved: Promise<boolean> | undefined
+    act(() => {
+      saved = result.current.editor.submit()
+    })
+    act(() => client.setQueryData(queryKeys.account(), account("next-user")))
+    await act(async () => {
+      finish?.()
+      await saved
+    })
+    expect(onSaved).not.toHaveBeenCalled()
+    expect(result.current.editor.draft.kind).toBe("price")
+  })
+})
+
+it("creates after a withdrawn classification leaf and ignores captured effective passive labels", async () => {
+  const current = currentCategory(true)
+  const leaf = current.context.classification.leaf
+  if (!leaf) throw new Error("Missing classification fixture")
+  const event = current.inputs.system.event
+  if (!event || event._tag !== "acquisition") throw new Error("Missing event fixture")
+  const { result, create, replace } = setup({
+    ...current,
+    context: {
+      ...current.context,
+      classification: { active: null, leaf: { ...leaf, operation: "withdraw", input: null } },
+    },
+    inputs: {
+      ...current.inputs,
+      effective: {
+        ...current.inputs.effective,
+        event: { ...event, cause: "passive_staking_reward" },
+      },
+    },
+  })
+  await waitFor(() => expect(result.current.editor.loading).toBe(false))
+  act(() => result.current.editor.selectKind("classification"))
+  expect(result.current.editor.draft.passive).toBe(false)
+  await act(async () => {
+    await result.current.editor.submit()
+  })
+  expect(replace).not.toHaveBeenCalled()
+  expect(create).toHaveBeenCalledWith(
+    expect.objectContaining({
+      override: expect.objectContaining({
+        expectedLeafId: leaf.id,
+        input: { _tag: "classification", input: { _tag: "inbound", cause: "staking_reward" } },
+      }),
+    })
+  )
+})
+
+it("cannot manufacture passive staking when the current API only permits unspecified staking", async () => {
+  const current = currentCategory()
+  const { result, create } = setup({
+    ...current,
+    validClassificationInputs: [{ _tag: "inbound", cause: "staking_reward" }],
+  })
+  await waitFor(() => expect(result.current.editor.loading).toBe(false))
+  act(() => result.current.editor.selectKind("classification"))
+  expect(result.current.editor.clarifyStaking).toBe(false)
+  act(() => result.current.editor.change({ passive: true }))
+  await act(async () => {
+    expect(await result.current.editor.submit()).toBe(false)
+  })
+  expect(create).not.toHaveBeenCalled()
+})

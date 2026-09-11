@@ -9,6 +9,8 @@ import {
   type TaxMaxi,
   type TransactionOverrideCurrent,
   type TransactionOverridePriceInput,
+  type TransactionOverrideClassificationInput,
+  type TransactionOverrideSet,
 } from "taxmaxi"
 import { queryKeys, refreshTransactionQueries } from "#/integrations/taxmaxi/queries"
 import { m } from "#/paraglide/messages"
@@ -91,7 +93,39 @@ export function useTransactionDraftGuard() {
 }
 
 export type TransactionDraftGuard = ReturnType<typeof useTransactionDraftGuard>
-type Draft = { mode: TransactionOverridePriceInput["_tag"]; amount: string; reason: string }
+type Category = TransactionOverrideClassificationInput["cause"]
+type Draft = {
+  kind: "price" | "classification"
+  mode: TransactionOverridePriceInput["_tag"]
+  amount: string
+  reason: string
+  category: Category | null
+  passive: boolean
+}
+
+function draftFor(current: TransactionOverrideCurrent, kind: Draft["kind"]): Draft {
+  const active = current.context[kind].active
+  const price = active?.input?._tag === "price" ? active.input.input : null
+  const classification = active?.input?._tag === "classification" ? active.input.input : null
+  const event = current.inputs.system.event
+  const systemCause =
+    event?._tag === "acquisition" || event?._tag === "disposition" ? event.cause : null
+  const cause = classification?.cause ?? systemCause
+  const category =
+    current.validClassificationInputs.find((input) => input.cause === cause)?.cause ?? null
+  return {
+    kind,
+    mode: price?._tag ?? "total_value",
+    amount: price?.amount ?? "",
+    reason:
+      active?.reason ??
+      (kind === "price" ? m["app.editor.defaultReason"]() : m["app.editor.categoryReason"]()),
+    category: category === "passive_staking_reward" ? "staking_reward" : category,
+    passive: classification
+      ? classification.cause === "passive_staking_reward"
+      : event?._tag === "acquisition" && event.cause === "passive_staking_reward",
+  }
+}
 const amountSchema = z
   .string()
   .trim()
@@ -148,6 +182,9 @@ export function useTransactionEditor({
   const [loadedInspection, setInspection] = useState<TransactionOverrideCurrent | null>(null)
   const inspection = loadedScope === readScope ? loadedInspection : null
   const [draft, setDraft] = useState<Draft>({
+    kind: "price",
+    category: null,
+    passive: false,
     mode: "total_value",
     amount: "",
     reason: m["app.editor.defaultReason"](),
@@ -194,13 +231,7 @@ export function useTransactionEditor({
       .getCurrent({ targetId, taxYear }, { signal: controller.signal })
       .then((current) => {
         if (controller.signal.aborted || currentUser() !== userId) return
-        const active = current.context.price.active
-        const price = active?.input?._tag === "price" ? active.input.input : null
-        const next: Draft = {
-          mode: price?._tag ?? "total_value",
-          amount: price?.amount ?? "",
-          reason: active?.reason ?? m["app.editor.defaultReason"](),
-        }
+        const next = draftFor(current, "price")
         initial.current = next
         setDraft(next)
         setInspection(current)
@@ -224,10 +255,29 @@ export function useTransactionEditor({
       dirty:
         changed.mode !== initial.current.mode ||
         changed.amount !== initial.current.amount ||
-        changed.reason !== initial.current.reason,
+        changed.reason !== initial.current.reason ||
+        changed.category !== initial.current.category ||
+        changed.passive !== initial.current.passive,
       saving: false,
     })
   }
+  const selectKind = (kind: Draft["kind"]) => {
+    if (!inspection || draft.kind === kind || busy.current) return
+    guard.run(() => {
+      const next = draftFor(inspection, kind)
+      initial.current = next
+      setDraft(next)
+      setError(null)
+      guard.update({ dirty: false, saving: false })
+    })
+  }
+  const classificationInput = inspection?.validClassificationInputs.find(
+    (input) =>
+      input.cause ===
+      (draft.category === "staking_reward" && draft.passive
+        ? "passive_staking_reward"
+        : draft.category)
+  )
   const submit = async (withdraw = false): Promise<boolean> => {
     const current = inspection?.context.current
     if (
@@ -238,13 +288,19 @@ export function useTransactionEditor({
       !userId ||
       currentUser() !== userId ||
       (!withdraw &&
-        (current.facts.structure === "custody" || inspection.scope.reportingCurrency !== "EUR")) ||
-      (withdraw && !inspection.context.price.active)
+        (draft.kind === "price"
+          ? current.facts.structure === "custody" || inspection.scope.reportingCurrency !== "EUR"
+          : !classificationInput ||
+            current.facts.structure !== "ownership_change" ||
+            classificationInput._tag !== current.facts.direction)) ||
+      (withdraw && !inspection.context[draft.kind].active)
     )
       return false
     const parsed = amountSchema.safeParse(draft.amount)
-    if (!draft.reason.trim() || (!withdraw && !parsed.success)) {
-      setError(m["app.editor.validation"]())
+    if (!draft.reason.trim() || (!withdraw && draft.kind === "price" && !parsed.success)) {
+      setError(
+        draft.kind === "price" ? m["app.editor.validation"]() : m["app.editor.categoryValidation"]()
+      )
       return false
     }
     const startedGeneration = generation.current
@@ -253,7 +309,7 @@ export function useTransactionEditor({
     setError(null)
     guard.update({ dirty: true, saving: true })
     const compare = {
-      expectedLeafId: inspection.context.price.leaf?.id ?? null,
+      expectedLeafId: inspection.context[draft.kind].leaf?.id ?? null,
       expectedSystemRevision: current.facts.systemRevision,
       reason: draft.reason.trim(),
     }
@@ -261,19 +317,22 @@ export function useTransactionEditor({
       if (withdraw) {
         await taxmaxi.transactionOverrides.withdraw({
           targetId,
-          withdrawal: { ...compare, kind: "price" },
+          withdrawal: { ...compare, kind: draft.kind },
         })
-      } else if (parsed.success) {
-        const input = {
-          ...compare,
-          input: {
-            _tag: "price" as const,
-            input: { _tag: draft.mode, amount: parsed.data, currency: "EUR" as const },
-          },
-        }
-        if (inspection.context.price.active)
-          await taxmaxi.transactionOverrides.replace({ targetId, replacement: input })
-        else await taxmaxi.transactionOverrides.create({ targetId, override: input })
+      } else {
+        const input: TransactionOverrideSet["input"] | null =
+          draft.kind === "classification"
+            ? classificationInput
+              ? { _tag: "classification", input: classificationInput }
+              : null
+            : parsed.success
+              ? { _tag: "price", input: { _tag: draft.mode, amount: parsed.data, currency: "EUR" } }
+              : null
+        if (!input) return false
+        const request = { ...compare, input }
+        if (inspection.context[draft.kind].active)
+          await taxmaxi.transactionOverrides.replace({ targetId, replacement: request })
+        else await taxmaxi.transactionOverrides.create({ targetId, override: request })
       }
       if (!mounted.current || currentUser() !== userId || generation.current !== startedGeneration)
         return false
@@ -300,18 +359,35 @@ export function useTransactionEditor({
   const eligible =
     !!userId &&
     !!facts &&
-    facts.structure !== "custody" &&
-    inspection?.scope.reportingCurrency === "EUR"
+    (draft.kind === "price"
+      ? facts.structure !== "custody" && inspection?.scope.reportingCurrency === "EUR"
+      : facts.structure === "ownership_change" &&
+        !!classificationInput &&
+        classificationInput._tag === facts.direction)
   return {
     draft,
     change,
+    selectKind,
+    categories:
+      inspection?.validClassificationInputs.filter(
+        (input) => input.cause !== "passive_staking_reward"
+      ) ?? [],
+    clarifyStaking:
+      draft.category === "staking_reward" &&
+      !!inspection?.validClassificationInputs.some(
+        (input) => input.cause === "passive_staking_reward"
+      ) &&
+      !(
+        inspection?.inputs.system.event?._tag === "acquisition" &&
+        inspection.inputs.system.event.cause === "passive_staking_reward"
+      ),
     submit,
     inspection,
     loading,
     error,
     saving,
     eligible,
-    canWithdraw: !!userId && !!facts && !!inspection?.context.price.active,
+    canWithdraw: !!userId && !!facts && !!inspection?.context[draft.kind].active,
     retry: () => setRetry((value) => value + 1),
     total: facts
       ? transactionPriceTotal({ amount: draft.amount, quantity: facts.quantity, mode: draft.mode })

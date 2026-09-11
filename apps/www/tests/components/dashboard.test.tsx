@@ -2510,7 +2510,7 @@ describe("Inspector cursor navigation", () => {
     fireEvent.click(
       screen.getByRole("button", { name: "Open transaction · Transaction 1 · row-1" })
     )
-    await screen.findByRole("button", { name: /Correct price ·/ })
+    await screen.findByRole("button", { name: /Correct movement ·/ })
     if (entry === "page-retry" || entry === "neighbor-retry") {
       await waitFor(() =>
         expect(list.mock.calls.some(([input]) => input?.cursor === "page-25")).toBe(true)
@@ -2519,7 +2519,7 @@ describe("Inspector cursor navigation", () => {
         fireEvent.click(
           screen.getByRole("button", { name: "Open transaction · Transaction 25 · row-25" })
         )
-        await screen.findByRole("button", { name: /Correct price ·/ })
+        await screen.findByRole("button", { name: /Correct movement ·/ })
         fireEvent.click(screen.getByRole("button", { name: "Next transaction" }))
       } else fireEvent.click(screen.getByRole("button", { name: "Next page" }))
       await screen.findByRole("button", {
@@ -2527,7 +2527,7 @@ describe("Inspector cursor navigation", () => {
       })
       list.mockImplementation(async (input) => page(input?.cursor === "page-25" ? 25 : 0))
     }
-    fireEvent.click(await screen.findByRole("button", { name: /Correct price ·/ }))
+    fireEvent.click(await screen.findByRole("button", { name: /Correct movement ·/ }))
     fireEvent.change(await screen.findByLabelText("Total value (EUR)"), {
       target: { value: "12.50" },
     })

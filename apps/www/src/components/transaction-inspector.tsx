@@ -627,7 +627,8 @@ function InspectorRequest({
                   disabled={
                     !correction.context.current ||
                     (correction.context.current.facts.structure === "custody" &&
-                      !correction.context.price.active)
+                      !correction.context.price.active &&
+                      !correction.context.classification.active)
                   }
                   onClick={() => onEdit(correction.context.targetId)}
                 >
