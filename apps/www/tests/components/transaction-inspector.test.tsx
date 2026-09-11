@@ -1778,7 +1778,7 @@ describe("price editor in the restored shell", () => {
       vi.spyOn(taxmaxi.transactionOverrides, "getCurrent").mockResolvedValue(correction)
       const view = mount(taxmaxi)
       view.client.setQueryData(["taxmaxi", "account"], { account: { id: IDS.actor } })
-      fireEvent.click(await screen.findByRole("button", { name: /Correct price ·/ }))
+      fireEvent.click(await screen.findByRole("button", { name: /Correct movement ·/ }))
       fireEvent.change(await screen.findByLabelText("Total value (EUR)"), {
         target: { value: "99.00" },
       })
@@ -1840,7 +1840,7 @@ describe("price editor in the restored shell", () => {
       )
       const view = mount(taxmaxi)
       view.client.setQueryData(["taxmaxi", "account"], { account: { id: IDS.actor } })
-      fireEvent.click(await screen.findByRole("button", { name: /Correct price ·/ }))
+      fireEvent.click(await screen.findByRole("button", { name: /Correct movement ·/ }))
       fireEvent.change(await screen.findByLabelText("Total value (EUR)"), {
         target: { value: "12.50" },
       })
@@ -1885,7 +1885,7 @@ describe("price editor in the restored shell", () => {
     vi.spyOn(taxmaxi.transactionOverrides, "getCurrent").mockResolvedValue(correction)
     const view = mount(taxmaxi)
     view.client.setQueryData(["taxmaxi", "account"], { account: { id: IDS.actor } })
-    fireEvent.click(await screen.findByRole("button", { name: /Correct price ·/ }))
+    fireEvent.click(await screen.findByRole("button", { name: /Correct movement ·/ }))
     const amount = await screen.findByLabelText("Total value (EUR)")
     amount.focus()
     fireEvent.change(amount, { target: { value: "12.50" } })
@@ -1929,7 +1929,7 @@ describe("price editor in the restored shell", () => {
       vi.spyOn(taxmaxi.transactionOverrides, "getCurrent").mockResolvedValue(correction)
       const view = mount(taxmaxi)
       view.client.setQueryData(["taxmaxi", "account"], { account: { id: IDS.actor } })
-      fireEvent.click(await screen.findByRole("button", { name: /Correct price ·/ }))
+      fireEvent.click(await screen.findByRole("button", { name: /Correct movement ·/ }))
       const amount = await screen.findByLabelText("Total value (EUR)")
       fireEvent.change(amount, { target: { value: "12.50" } })
       fireEvent.click(screen.getByRole("button", { name: "Back to overview" }))
@@ -1959,7 +1959,7 @@ describe("price editor in the restored shell", () => {
     })
     const view = mount(taxmaxi)
     view.client.setQueryData(["taxmaxi", "account"], { account: { id: IDS.actor } })
-    fireEvent.click(await screen.findByRole("button", { name: /Correct price ·/ }))
+    fireEvent.click(await screen.findByRole("button", { name: /Correct movement ·/ }))
     fireEvent.change(await screen.findByLabelText("Total value (EUR)"), {
       target: { value: "25.00" },
     })
@@ -1970,4 +1970,62 @@ describe("price editor in the restored shell", () => {
     expect(screen.queryByRole("form", { name: "Correct price" })).toBeNull()
     expect(screen.getByRole("button", { name: "View evidence" })).toBeTruthy()
   })
+})
+
+it("opens a current custody movement to withdraw its active classification without an active price", async () => {
+  mobile = true
+  const detail = richDetail()
+  const original = detail.movementOverrides[0]
+  const record = original?.context.price.active
+  const current = original?.context.current
+  if (!original || !record || !current) throw new Error("Missing correction fixture")
+  const classification = {
+    ...record,
+    kind: "classification" as const,
+    input: {
+      _tag: "classification" as const,
+      input: { _tag: "inbound" as const, cause: "gift" as const },
+    },
+  }
+  const correction: typeof original = {
+    ...original,
+    context: {
+      ...original.context,
+      current: { ...current, facts: { ...current.facts, structure: "custody" } },
+      price: { leaf: null, active: null },
+      classification: { leaf: classification, active: classification },
+    },
+    validClassificationInputs: [],
+  }
+  const taxmaxi = new TaxMaxi({ apiKey: "", baseUrl: "https://inspector.example.test" })
+  vi.spyOn(taxmaxi.transactions, "get").mockResolvedValue({
+    ...detail,
+    movementOverrides: [correction],
+  })
+  vi.spyOn(taxmaxi.transactionOverrides, "getCurrent").mockResolvedValue(correction)
+  const withdraw = vi.spyOn(taxmaxi.transactionOverrides, "withdraw").mockResolvedValue({
+    context: correction.context,
+    overrideId: record.id,
+    sourceId: record.sourceId,
+    processingJobId: record.sourceId,
+  })
+  const view = mount(taxmaxi)
+  view.client.setQueryData(["taxmaxi", "account"], { account: { id: IDS.actor } })
+  const entry = await screen.findByRole("button", { name: /Correct movement ·/ })
+  expect(entry).toHaveProperty("disabled", false)
+  fireEvent.click(entry)
+  fireEvent.click(await screen.findByRole("button", { name: "Category" }))
+  expect(screen.getByRole("button", { name: "Save correction" })).toHaveProperty("disabled", true)
+  fireEvent.click(screen.getByRole("button", { name: "Withdraw category correction" }))
+  await waitFor(() =>
+    expect(withdraw).toHaveBeenCalledWith({
+      targetId: correction.context.targetId,
+      withdrawal: {
+        expectedLeafId: record.id,
+        expectedSystemRevision: current.facts.systemRevision,
+        reason: record.reason,
+        kind: "classification",
+      },
+    })
+  )
 })
