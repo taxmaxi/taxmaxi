@@ -1,4 +1,4 @@
-import { useRef, type MouseEvent, type Ref } from "react"
+import { useId, useRef, useState, type MouseEvent, type Ref } from "react"
 import type { TransactionFilterChoices } from "taxmaxi"
 import { X, Plus } from "lucide-react"
 import { Button } from "#/components/ui/button"
@@ -12,7 +12,22 @@ import {
 } from "#/components/ui/command"
 import { Popover, PopoverTrigger, PopoverContent } from "#/components/ui/popover"
 import type { Account } from "#/lib/dashboard-types"
-import type { TransactionFilters } from "#/lib/transaction-filters"
+import {
+  parseTransactionFilters,
+  transactionFilterYear,
+  transactionYearFilters,
+  type TransactionFilters,
+} from "#/lib/transaction-filters"
+import { Input } from "#/components/ui/input"
+import { Checkbox } from "#/components/ui/checkbox"
+import {
+  Select,
+  SelectTrigger,
+  SelectValue,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+} from "#/components/ui/select"
 import { m } from "#/paraglide/messages"
 
 type Category = NonNullable<TransactionFilters["categories"]>[number]
@@ -131,6 +146,242 @@ function FilterMenu({
             </Button>
           </div>
         ) : null}
+      </PopoverContent>
+    </Popover>
+  )
+}
+
+function DateFilterForm({
+  filters,
+  onApply,
+  disabled,
+}: {
+  filters: TransactionFilters
+  onApply: (filters: TransactionFilters) => void
+  disabled: boolean
+}) {
+  const id = useId()
+  const [year, setYear] = useState(filters.from?.slice(0, 4) ?? "")
+  const [from, setFrom] = useState(filters.from ?? "")
+  const [to, setTo] = useState(filters.to ?? "")
+  const [textDates] = useState(() =>
+    [filters.from, filters.to].some((date) => date?.startsWith("0000-"))
+  )
+  const [error, setError] = useState<{ form: "year" | "range"; message: string }>()
+  const timezone = filters.timezone ?? "Europe/Berlin"
+  const apply = (form: "year" | "range", read: () => TransactionFilters) => {
+    try {
+      const next = read()
+      setError(undefined)
+      onApply(next)
+    } catch (cause) {
+      setError({
+        form,
+        message:
+          cause instanceof Error && cause.message !== m["app.transactionFilters.invalidUrl"]()
+            ? cause.message
+            : m["app.transactionFilters.invalidDates"](),
+      })
+    }
+  }
+  const applyYear = (value: string) =>
+    apply("year", () => transactionYearFilters({ filters, year: value }))
+  return (
+    <div className="flex min-w-0 flex-col gap-4">
+      <p className="text-sm wrap-anywhere">{m["app.transactionFilters.timezone"]({ timezone })}</p>
+      <div className="flex flex-wrap gap-2">
+        <Button
+          type="button"
+          variant="outline"
+          className="min-h-11"
+          disabled={disabled}
+          onClick={() => applyYear(String(transactionFilterYear({ timezone })))}
+        >
+          {m["app.transactionFilters.thisYear"]()}
+        </Button>
+        <Button
+          type="button"
+          variant="outline"
+          className="min-h-11"
+          disabled={disabled}
+          onClick={() => applyYear(String(transactionFilterYear({ timezone }) - 1))}
+        >
+          {m["app.transactionFilters.lastYear"]()}
+        </Button>
+      </div>
+      <form
+        className="flex min-w-0 flex-col gap-2"
+        noValidate
+        onSubmit={(event) => {
+          event.preventDefault()
+          applyYear(year)
+        }}
+      >
+        <label htmlFor={`${id}-year`}>{m["app.transactionFilters.specificYear"]()}</label>
+        <Input
+          id={`${id}-year`}
+          value={year}
+          inputMode="numeric"
+          autoComplete="off"
+          className="min-h-11"
+          disabled={disabled}
+          aria-invalid={error?.form === "year"}
+          aria-describedby={error?.form === "year" ? `${id}-year-error` : undefined}
+          onChange={(event) => {
+            setYear(event.target.value)
+            setError(undefined)
+          }}
+        />
+        {error?.form === "year" ? (
+          <p
+            id={`${id}-year-error`}
+            role="alert"
+            className="text-sm text-destructive"
+            ref={(node) => node?.scrollIntoView({ block: "nearest", behavior: "instant" })}
+          >
+            {error.message}
+          </p>
+        ) : null}
+        <Button type="submit" variant="outline" className="min-h-11" disabled={disabled}>
+          {m["app.transactionFilters.applyYear"]()}
+        </Button>
+      </form>
+      <form
+        className="flex min-w-0 flex-col gap-2"
+        noValidate
+        onSubmit={(event) => {
+          event.preventDefault()
+          if (!event.currentTarget.checkValidity()) {
+            setError({ form: "range", message: m["app.transactionFilters.invalidDates"]() })
+            return
+          }
+          apply("range", () =>
+            parseTransactionFilters({
+              ...filters,
+              from: from || undefined,
+              to: to || undefined,
+              timezone,
+            })
+          )
+        }}
+      >
+        {textDates ? (
+          <p id={`${id}-date-format`} className="text-sm text-muted-foreground">
+            {m["app.transactionFilters.dateFormat"]()}
+          </p>
+        ) : null}
+        <label htmlFor={`${id}-from`}>{m["app.transactionFilters.fromDate"]()}</label>
+        <Input
+          id={`${id}-from`}
+          type={textDates ? "text" : "date"}
+          value={from}
+          className="min-h-11 px-2"
+          disabled={disabled}
+          aria-invalid={error?.form === "range"}
+          aria-describedby={
+            error?.form === "range"
+              ? `${id}-range-error`
+              : textDates
+                ? `${id}-date-format`
+                : undefined
+          }
+          onChange={(event) => {
+            setFrom(event.target.value)
+            setError(undefined)
+          }}
+        />
+        <label htmlFor={`${id}-to`}>{m["app.transactionFilters.toDate"]()}</label>
+        <Input
+          id={`${id}-to`}
+          type={textDates ? "text" : "date"}
+          value={to}
+          className="min-h-11 px-2"
+          disabled={disabled}
+          aria-invalid={error?.form === "range"}
+          aria-describedby={
+            error?.form === "range"
+              ? `${id}-range-error`
+              : textDates
+                ? `${id}-date-format`
+                : undefined
+          }
+          onChange={(event) => {
+            setTo(event.target.value)
+            setError(undefined)
+          }}
+        />
+        {error?.form === "range" ? (
+          <p
+            id={`${id}-range-error`}
+            role="alert"
+            className="text-sm text-destructive"
+            ref={(node) => node?.scrollIntoView({ block: "nearest", behavior: "instant" })}
+          >
+            {error.message}
+          </p>
+        ) : null}
+        <Button type="submit" className="min-h-11" disabled={disabled}>
+          {m["app.transactionFilters.applyRange"]()}
+        </Button>
+      </form>
+      <Button
+        type="button"
+        variant="ghost"
+        className="min-h-11"
+        disabled={disabled}
+        onClick={() => onApply({ ...filters, from: undefined, to: undefined })}
+      >
+        {m["app.transactionFilters.clearDates"]()}
+      </Button>
+    </div>
+  )
+}
+
+function DateFilterMenu({
+  filters,
+  onChange,
+  disabled,
+}: {
+  filters: TransactionFilters
+  onChange: (filters: TransactionFilters) => void
+  disabled: boolean
+}) {
+  const [open, setOpen] = useState(false)
+  const range =
+    filters.from && filters.to
+      ? m["app.transactionFilters.dateRange"]({ from: filters.from, to: filters.to })
+      : filters.from
+        ? m["app.transactionFilters.fromSummary"]({ date: filters.from })
+        : filters.to
+          ? m["app.transactionFilters.toSummary"]({ date: filters.to })
+          : m["app.transactionFilters.allDates"]()
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <Button
+          variant="outline"
+          disabled={disabled}
+          aria-label={m["app.transactionFilters.dateTrigger"]({ range })}
+          className="h-auto min-h-11 max-w-full whitespace-normal text-left"
+        >
+          <span className="min-w-0 wrap-anywhere">{range}</span>
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent
+        align="start"
+        collisionPadding={8}
+        aria-label={m["app.transactionFilters.editDates"]()}
+        className="max-h-(--radix-popover-content-available-height) w-88 max-w-[calc(100vw-2rem)] overflow-y-auto motion-reduce:[--tw-enter-scale:1]! motion-reduce:[--tw-exit-scale:1]! motion-reduce:[--tw-enter-translate-x:0]! motion-reduce:[--tw-enter-translate-y:0]! motion-reduce:[--tw-exit-translate-x:0]! motion-reduce:[--tw-exit-translate-y:0]!"
+      >
+        <DateFilterForm
+          key={JSON.stringify([filters.from, filters.to, filters.timezone])}
+          filters={filters}
+          disabled={disabled}
+          onApply={(next) => {
+            onChange(next)
+            setOpen(false)
+          }}
+        />
       </PopoverContent>
     </Popover>
   )
@@ -275,6 +526,38 @@ export function TransactionFilterControls({
             onRetry={onRetry}
           />
         ))}
+        <DateFilterMenu filters={filters} onChange={onChange} disabled={disabled} />
+        <Select
+          value={filters.order ?? "newest"}
+          disabled={disabled}
+          onValueChange={(order) => {
+            if (order === "newest" || order === "oldest") onChange({ ...filters, order })
+          }}
+        >
+          <SelectTrigger aria-label={m["app.transactionFilters.order"]()} className="min-h-11">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent className="motion-reduce:[--tw-enter-scale:1]! motion-reduce:[--tw-exit-scale:1]!">
+            <SelectGroup>
+              <SelectItem value="newest" className="min-h-11">
+                {m["app.transactionFilters.newest"]()}
+              </SelectItem>
+              <SelectItem value="oldest" className="min-h-11">
+                {m["app.transactionFilters.oldest"]()}
+              </SelectItem>
+            </SelectGroup>
+          </SelectContent>
+        </Select>
+        <label className="flex min-h-11 cursor-pointer items-center gap-3 px-3">
+          <Checkbox
+            checked={filters.attention === true}
+            disabled={disabled}
+            onCheckedChange={(checked) =>
+              onChange({ ...filters, attention: checked === true ? true : undefined })
+            }
+          />
+          {m["app.transactionFilters.attention"]()}
+        </label>
         {hasFilters ? (
           <Button
             variant="ghost"
@@ -289,6 +572,9 @@ export function TransactionFilterControls({
           </Button>
         ) : null}
       </div>
+      <p className="text-sm text-muted-foreground wrap-anywhere">
+        {m["app.transactionFilters.timezone"]({ timezone: filters.timezone ?? "Europe/Berlin" })}
+      </p>
       <div className="flex flex-wrap gap-2">
         {groups.flatMap((group) => {
           const choicesById = new Map<string, Choice>(

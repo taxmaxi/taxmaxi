@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest"
 import {
   transactionFilterInput,
+  transactionFilterYear,
+  transactionYearFilters,
   validateTransactionSearch,
   updateTransactionSearch,
 } from "#/lib/transaction-filters"
@@ -168,5 +170,43 @@ describe("transaction filter URL state", () => {
     { timezone: "not-a-timezone" },
   ])("rejects invalid external filter state %j", (search) => {
     expect(() => validateTransactionSearch(search)).toThrow()
+  })
+})
+
+describe("calendar year shortcuts", () => {
+  it("resolves this year in the saved timezone at New Year", () => {
+    const now = new Date("2026-12-31T23:30:00Z")
+    expect(transactionFilterYear({ now, timezone: "Europe/Berlin" })).toBe(2027)
+    expect(transactionFilterYear({ now, timezone: "America/Los_Angeles" })).toBe(2026)
+    expect(transactionFilterYear({ now })).toBe(2027)
+  })
+
+  it("preserves complete year 0000 when the existing UTC boundary accepts it", () => {
+    expect(
+      transactionYearFilters({ filters: { timezone: "UTC", attention: true }, year: "0" })
+    ).toEqual({ from: "0000-01-01", to: "0000-12-31", timezone: "UTC", attention: true })
+    expect(() =>
+      transactionYearFilters({ filters: { timezone: "Europe/Berlin" }, year: "0" })
+    ).toThrow()
+  })
+
+  it.each(["", "2026x", "20.26", "-1", "10000", "1e3"])("rejects malformed year %s", (year) => {
+    expect(() => transactionYearFilters({ filters: {}, year })).toThrow()
+  })
+
+  it("a saved Berlin range converts identically when browser-local date access would disagree", () => {
+    const saved = validateTransactionSearch({
+      from: "2026-03-29",
+      to: "2026-03-29",
+      timezone: "Europe/Berlin",
+      order: "oldest",
+      attention: true,
+    })
+    expect(transactionFilterInput(saved)).toEqual({
+      from: "2026-03-28T23:00:00.000Z",
+      to: "2026-03-29T22:00:00.000Z",
+      order: "oldest",
+      attention: true,
+    })
   })
 })
