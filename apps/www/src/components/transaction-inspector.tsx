@@ -17,6 +17,7 @@ import {
   BottomSheetDescription,
 } from "#/components/bottom-sheet"
 import { Button } from "#/components/ui/button"
+import { TransactionSummary, type TransactionDetailView } from "#/components/transaction-summary"
 import { m } from "#/paraglide/messages"
 import { getLocale } from "#/paraglide/runtime"
 
@@ -58,11 +59,11 @@ export function TransactionInspector({
   const [mobile, setMobile] = useState(
     () => typeof window !== "undefined" && window.matchMedia("(max-width: 1023px)").matches
   )
-  const [detailView, setDetailView] = useState(false)
+  const [detailView, setDetailView] = useState<TransactionDetailView | null>(null)
   const [viewTransaction, setViewTransaction] = useState(selection?.transactionId)
   if (viewTransaction !== selection?.transactionId) {
     setViewTransaction(selection?.transactionId)
-    setDetailView(false)
+    setDetailView(null)
   }
   const refreshAllowed = useRef(!disabled)
   useEffect(() => {
@@ -79,9 +80,13 @@ export function TransactionInspector({
     return () => media.removeEventListener("change", update)
   }, [])
   const viewFocusRef = useRef<HTMLButtonElement>(null)
+  const backFocusRef = useRef<HTMLButtonElement>(null)
   const previousView = useRef(detailView)
   useEffect(() => {
-    if (previousView.current !== detailView) viewFocusRef.current?.focus({ preventScroll: true })
+    if (previousView.current !== detailView) {
+      const target = detailView === null ? viewFocusRef.current : backFocusRef.current
+      target?.focus({ preventScroll: true })
+    }
     previousView.current = detailView
   }, [detailView])
   const closeRef = useRef<HTMLButtonElement>(null)
@@ -126,10 +131,10 @@ export function TransactionInspector({
     <header className="sticky top-0 z-20 flex min-h-14 items-center justify-between gap-2 bg-popover/95 pb-2 backdrop-blur">
       {detailView ? (
         <Button
-          ref={viewFocusRef}
+          ref={backFocusRef}
           variant="ghost"
           className="min-h-11"
-          onClick={() => setDetailView(false)}
+          onClick={() => setDetailView(null)}
         >
           <ArrowLeft aria-hidden="true" />
           {m["app.inspector.back"]()}
@@ -203,8 +208,9 @@ export function TransactionInspector({
           taxmaxi={taxmaxi}
           onUnauthorized={onUnauthorized}
           viewFocusRef={viewFocusRef}
-          showDetails={!mobile || detailView}
-          onShowDetails={() => setDetailView(true)}
+          view={detailView}
+          mobile={mobile}
+          onShowDetails={setDetailView}
         />
       )}
     </>
@@ -296,13 +302,15 @@ function InspectorRequest({
   refreshAllowed,
   taxmaxi,
   onUnauthorized,
-  showDetails,
+  view,
+  mobile,
   viewFocusRef,
   onShowDetails,
 }: {
   viewFocusRef: RefObject<HTMLButtonElement | null>
-  showDetails: boolean
-  onShowDetails: () => void
+  view: TransactionDetailView | null
+  mobile: boolean
+  onShowDetails: (view: TransactionDetailView) => void
   selection: Selection
   refreshAllowed: RefObject<boolean>
   taxmaxi: TaxMaxi
@@ -460,12 +468,23 @@ function InspectorRequest({
             {m["app.treatment.retry"]()}
           </Button>
         </div>
-      ) : showDetails ? (
-        <InspectorFacts detail={detail.data} />
-      ) : (
-        <Button ref={viewFocusRef} variant="outline" onClick={onShowDetails}>
-          {m["app.inspector.details"]()}
-        </Button>
+      ) : null}
+      {!detailUnavailable && detail.data && (
+        <>
+          {(!mobile || view === null) && (
+            <TransactionSummary
+              detail={detail.data}
+              updating={
+                detail.isFetching ||
+                calculationStatus.data?.work.status === "queued" ||
+                calculationStatus.data?.work.status === "running"
+              }
+              onShowDetails={onShowDetails}
+              viewFocusRef={viewFocusRef}
+            />
+          )}
+          {(!mobile || view !== null) && <InspectorFacts detail={detail.data} view={view} />}
+        </>
       )}
     </section>
   )
@@ -892,199 +911,218 @@ const state = (value: string | null) => {
   }
 }
 
-function InspectorFacts({ detail }: { detail: TransactionDetail }) {
+function InspectorFacts({
+  detail,
+  view,
+}: {
+  detail: TransactionDetail
+  view: TransactionDetailView | null
+}) {
   return (
     <>
-      <Section title={m["app.inspector.facts"]()}>
-        <Fields
-          values={{
-            timestamp: date(detail.timestamp),
-            source: detail.source.name,
-            transactionType: state(detail.transactionType),
-            providerTransactionType: state(detail.providerTransactionType),
-            externalId: detail.externalId,
-          }}
-        />
-        <p className="text-xs text-muted-foreground">
-          {m["app.inspector.classificationUnavailable"]()}
-        </p>
-        <Audit>
-          <Fields
-            values={{
-              transactionId: detail.transactionId,
-              sourceId: detail.source.sourceId,
-              rawId: detail.sourceRawRecordId,
-            }}
-          />
-        </Audit>
-      </Section>
-      <Section title={m["app.inspector.movements"]()}>
-        {detail.movements.map((movement) => (
-          <article key={movement.id} className="flex flex-col gap-3 rounded-lg border p-3">
+      {(view === null || view === "evidence") && (
+        <>
+          <Section title={m["app.inspector.facts"]()}>
             <Fields
               values={{
-                kind: state(movement.kind),
-                quantity: movement.amount,
-                assetId: movement.assetId,
-                timestamp: date(movement.timestamp),
+                timestamp: date(detail.timestamp),
+                source: detail.source.name,
+                transactionType: state(detail.transactionType),
+                providerTransactionType: state(detail.providerTransactionType),
+                externalId: detail.externalId,
               }}
             />
+            <p className="text-xs text-muted-foreground">
+              {m["app.inspector.classificationUnavailable"]()}
+            </p>
             <Audit>
               <Fields
                 values={{
-                  id: movement.id,
-                  transactionId: movement.transactionId,
-                  sourceId: movement.sourceId,
-                  targetId: movement.movementCorrectionTargetId,
-                  origin: state(movement.originKind),
-                  rule: movement.derivationRule,
-                  decisionMethod: state(movement.provenance),
-                  rawId: movement.sourceRawRecordId,
-                  representationUseId: movement.sourceRepresentationUseId,
-                  providerAssetRowId: movement.providerAssetRowId,
-                  representationId: movement.assetRepresentationId,
-                  providerTransferId: movement.providerTransferId,
-                  canonicalTransferId: movement.sourceTransferId,
-                  feeForTransactionId: movement.feeForTransactionId,
+                  transactionId: detail.transactionId,
+                  sourceId: detail.source.sourceId,
+                  rawId: detail.sourceRawRecordId,
                 }}
               />
             </Audit>
-          </article>
-        ))}
-      </Section>
-      <Section title={m["app.inspector.evidence"]()}>
-        {detail.sourceEvidence.length === 0 ? (
-          <p>{m["app.inspector.noEvidence"]()}</p>
-        ) : (
-          detail.sourceEvidence.map((item, index) => (
-            <article
-              className="flex flex-col gap-2 rounded-lg border p-3"
-              key={`${item.origin}:${item.originId}:${index}`}
-            >
-              <Fields
-                values={{
-                  origin: state(item.origin),
-                  status: state(item.status),
-                  rawId: item.sourceRawRecordId,
-                }}
-              />
-              {item.evidence ? (
+          </Section>
+          <Section title={m["app.inspector.movements"]()}>
+            {detail.movements.map((movement) => (
+              <article key={movement.id} className="flex flex-col gap-3 rounded-lg border p-3">
                 <Fields
                   values={{
-                    provider: item.evidence.provider,
-                    recordType: state(item.evidence.recordType),
-                    externalId: item.evidence.externalRecordId,
-                    timestamp: date(item.evidence.occurredAt),
-                    importedAt: date(item.evidence.importedAt),
+                    kind: state(movement.kind),
+                    quantity: movement.amount,
+                    assetId: movement.assetId,
+                    timestamp: date(movement.timestamp),
                   }}
                 />
-              ) : (
-                <p>{m["app.inspector.notRetained"]()}</p>
-              )}
-              <Audit>
+                <Audit>
+                  <Fields
+                    values={{
+                      id: movement.id,
+                      transactionId: movement.transactionId,
+                      sourceId: movement.sourceId,
+                      targetId: movement.movementCorrectionTargetId,
+                      origin: state(movement.originKind),
+                      rule: movement.derivationRule,
+                      decisionMethod: state(movement.provenance),
+                      rawId: movement.sourceRawRecordId,
+                      representationUseId: movement.sourceRepresentationUseId,
+                      providerAssetRowId: movement.providerAssetRowId,
+                      representationId: movement.assetRepresentationId,
+                      providerTransferId: movement.providerTransferId,
+                      canonicalTransferId: movement.sourceTransferId,
+                      feeForTransactionId: movement.feeForTransactionId,
+                    }}
+                  />
+                </Audit>
+              </article>
+            ))}
+          </Section>
+          <Section title={m["app.inspector.evidence"]()}>
+            {detail.sourceEvidence.length === 0 ? (
+              <p>{m["app.inspector.noEvidence"]()}</p>
+            ) : (
+              detail.sourceEvidence.map((item, index) => (
+                <article
+                  className="flex flex-col gap-2 rounded-lg border p-3"
+                  key={`${item.origin}:${item.originId}:${index}`}
+                >
+                  <Fields
+                    values={{
+                      origin: state(item.origin),
+                      status: state(item.status),
+                      rawId: item.sourceRawRecordId,
+                    }}
+                  />
+                  {item.evidence ? (
+                    <Fields
+                      values={{
+                        provider: item.evidence.provider,
+                        recordType: state(item.evidence.recordType),
+                        externalId: item.evidence.externalRecordId,
+                        timestamp: date(item.evidence.occurredAt),
+                        importedAt: date(item.evidence.importedAt),
+                      }}
+                    />
+                  ) : (
+                    <p>{m["app.inspector.notRetained"]()}</p>
+                  )}
+                  <Audit>
+                    <Fields
+                      values={{
+                        id: item.evidence?.id,
+                        sourceId: item.sourceId,
+                        originId: item.originId,
+                      }}
+                    />
+                  </Audit>
+                </article>
+              ))
+            )}
+          </Section>
+          {detail.reconciliations.length ? (
+            <Section title={m["app.inspector.reconciliations"]()}>
+              {detail.reconciliations.map((item) => (
+                <article className="flex flex-col gap-3" key={item.id}>
+                  <Fields
+                    values={{
+                      status: state(item.status),
+                      reason: reconciliationReason(item.matchReason),
+                      deterministic: yesNo(item.deterministic),
+                    }}
+                  />
+                  <Audit>
+                    <Fields
+                      values={{
+                        id: item.id,
+                        providerTransferId: item.providerTransferId,
+                        canonicalTransferId: item.canonicalTransferId,
+                        transactionId: item.canonicalTransactionId,
+                      }}
+                    />
+                  </Audit>
+                </article>
+              ))}
+            </Section>
+          ) : null}
+        </>
+      )}
+      {(view === null || view === "tax") && <Calculation calculation={detail.calculation} />}
+      {(view === null || view === "classification") && (
+        <>
+          <Section title={m["app.inspector.current"]()}>
+            {detail.movementOverrides.length === 0 ? (
+              <p>{m["app.inspector.noHistory"]()}</p>
+            ) : (
+              detail.movementOverrides.map((projection) => (
+                <CurrentCorrection key={projection.context.targetId} projection={projection} />
+              ))
+            )}
+          </Section>
+          <Section title={m["app.inspector.assets"]()}>
+            {detail.assetOverrides.length === 0 ? (
+              <p>{m["app.inspector.none"]()}</p>
+            ) : (
+              detail.assetOverrides.map((item) => (
+                <article
+                  key={item.movementId}
+                  className="flex flex-col gap-3 rounded-lg border p-3"
+                >
+                  <Fields values={{ movementId: item.movementId }} />
+                  {item.projection ? (
+                    <AssetDecision projection={item.projection} />
+                  ) : (
+                    <p>{m["app.inspector.notRetained"]()}</p>
+                  )}
+                </article>
+              ))
+            )}
+          </Section>
+        </>
+      )}
+      {(view === null || view === "tax") && (
+        <Section title={m["app.inspector.captured"]()}>
+          <p className="text-sm text-muted-foreground">{m["app.inspector.capturedHint"]()}</p>
+          {detail.calculation.run === null ? (
+            <p>{m["app.inspector.noRunInputs"]()}</p>
+          ) : detail.calculation.correctionInputs.length === 0 ? (
+            <p>{m["app.inspector.noCaptured"]()}</p>
+          ) : (
+            detail.calculation.correctionInputs.map((input) => (
+              <article key={input.history.id} className="flex flex-col gap-3 rounded-lg border p-3">
                 <Fields
                   values={{
-                    id: item.evidence?.id,
-                    sourceId: item.sourceId,
-                    originId: item.originId,
+                    runId: detail.calculation.run?.id,
+                    overrideId: input.history.id,
+                    targetId: input.history.targetId,
+                    streamState: state(input.streamState),
+                    outcome: state(input.currentOutcome),
+                    application: state(input.application),
+                    problem: state(input.applicationProblem),
+                    currency: input.reportingCurrency,
                   }}
                 />
-              </Audit>
-            </article>
-          ))
-        )}
-      </Section>
-      {detail.reconciliations.length ? (
-        <Section title={m["app.inspector.reconciliations"]()}>
-          {detail.reconciliations.map((item) => (
-            <article className="flex flex-col gap-3" key={item.id}>
-              <Fields
-                values={{
-                  status: state(item.status),
-                  reason: reconciliationReason(item.matchReason),
-                  deterministic: yesNo(item.deterministic),
-                }}
-              />
-              <Audit>
-                <Fields
-                  values={{
-                    id: item.id,
-                    providerTransferId: item.providerTransferId,
-                    canonicalTransferId: item.canonicalTransferId,
-                    transactionId: item.canonicalTransactionId,
-                  }}
-                />
-              </Audit>
-            </article>
-          ))}
+                <ResolvedPrice price={input.resolvedPrice} />
+                <Section title={m["app.inspector.system"]()}>
+                  <EngineInputs inputs={input.system} />
+                </Section>
+                <Section title={m["app.inspector.effective"]()}>
+                  <EngineInputs inputs={input.effective} />
+                </Section>
+                <Audit>
+                  <HistoryRecord record={input.history} />
+                  {input.current ? (
+                    <LegFacts current={input.current} />
+                  ) : (
+                    <p>{m["app.inspector.notRetained"]()}</p>
+                  )}
+                </Audit>
+              </article>
+            ))
+          )}
         </Section>
-      ) : null}
-      <Calculation calculation={detail.calculation} />
-      <Section title={m["app.inspector.current"]()}>
-        {detail.movementOverrides.length === 0 ? (
-          <p>{m["app.inspector.noHistory"]()}</p>
-        ) : (
-          detail.movementOverrides.map((projection) => (
-            <CurrentCorrection key={projection.context.targetId} projection={projection} />
-          ))
-        )}
-      </Section>
-      <Section title={m["app.inspector.assets"]()}>
-        {detail.assetOverrides.length === 0 ? (
-          <p>{m["app.inspector.none"]()}</p>
-        ) : (
-          detail.assetOverrides.map((item) => (
-            <article key={item.movementId} className="flex flex-col gap-3 rounded-lg border p-3">
-              <Fields values={{ movementId: item.movementId }} />
-              {item.projection ? (
-                <AssetDecision projection={item.projection} />
-              ) : (
-                <p>{m["app.inspector.notRetained"]()}</p>
-              )}
-            </article>
-          ))
-        )}
-      </Section>
-      <Section title={m["app.inspector.captured"]()}>
-        <p className="text-sm text-muted-foreground">{m["app.inspector.capturedHint"]()}</p>
-        {detail.calculation.run === null ? (
-          <p>{m["app.inspector.noRunInputs"]()}</p>
-        ) : detail.calculation.correctionInputs.length === 0 ? (
-          <p>{m["app.inspector.noCaptured"]()}</p>
-        ) : (
-          detail.calculation.correctionInputs.map((input) => (
-            <article key={input.history.id} className="flex flex-col gap-3 rounded-lg border p-3">
-              <Fields
-                values={{
-                  runId: detail.calculation.run?.id,
-                  overrideId: input.history.id,
-                  targetId: input.history.targetId,
-                  streamState: state(input.streamState),
-                  outcome: state(input.currentOutcome),
-                  application: state(input.application),
-                  problem: state(input.applicationProblem),
-                  currency: input.reportingCurrency,
-                }}
-              />
-              <ResolvedPrice price={input.resolvedPrice} />
-              <Section title={m["app.inspector.system"]()}>
-                <EngineInputs inputs={input.system} />
-              </Section>
-              <Section title={m["app.inspector.effective"]()}>
-                <EngineInputs inputs={input.effective} />
-              </Section>
-              <Audit>
-                <HistoryRecord record={input.history} />
-                {input.current ? (
-                  <LegFacts current={input.current} />
-                ) : (
-                  <p>{m["app.inspector.notRetained"]()}</p>
-                )}
-              </Audit>
-            </article>
-          ))
-        )}
-      </Section>
+      )}
     </>
   )
 }

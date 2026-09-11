@@ -1581,5 +1581,18 @@
   "app.transactionFilters.attention": "Needs attention",
   "app.transactionFilters.invalidDates": "Check the dates and enter a valid range.",
   "app.transactionFilters.dateFormat": "Date format: YYYY-MM-DD",
-  "app.transactionFilters.dateTrigger": "Filter dates: {range}"
+  "app.transactionFilters.dateTrigger": "Filter dates: {range}",
+  "app.inspector.summary.title": "Summary",
+  "app.inspector.summary.updating": "Updating · showing the last calculated values",
+  "app.inspector.summary.noMovements": "No movements are available.",
+  "app.inspector.summary.fees": "Fees",
+  "app.inspector.summary.review": "This transaction needs review. Check its evidence, tax results and classification.",
+  "app.inspector.summary.details": "Transaction details",
+  "app.inspector.summary.evidence": "View evidence",
+  "app.inspector.summary.tax": "View tax results",
+  "app.inspector.summary.classification": "View classification and correction history",
+  "app.inspector.summary.unknownAsset": "asset unavailable",
+  "app.inspector.summary.originalBasis": "Original acquisition cost basis",
+  "app.inspector.summary.missingValue": "Check evidence for missing value",
+  "app.inspector.summary.missingCategory": "Check missing classification"
 }

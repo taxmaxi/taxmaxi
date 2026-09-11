@@ -1043,7 +1043,7 @@ describe("Dashboard calculation refresh", () => {
       expect(get).toHaveBeenCalledTimes(2)
       if (scenario === "failed refresh") {
         expect(screen.getByText("Could not load treatment results. Try again.")).toBeTruthy()
-        expect(screen.queryByText(`Returned run: ${RUN_A} · 2025 · DE · EUR`)).toBeNull()
+        expect(screen.getByText(`Returned run: ${RUN_A} · 2025 · DE · EUR`)).toBeTruthy()
         expect(screen.getAllByText("Treatment transaction").length).toBeGreaterThan(0)
         failRefresh = false
         fireEvent.click(screen.getByRole("button", { name: "Retry results" }))
