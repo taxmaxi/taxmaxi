@@ -18,6 +18,12 @@ import {
 } from "#/components/bottom-sheet"
 import { Button } from "#/components/ui/button"
 import { TransactionSummary, type TransactionDetailView } from "#/components/transaction-summary"
+import { TransactionEditor } from "#/components/transaction-editor"
+import {
+  useTransactionDraftGuard,
+  useTransactionEditor,
+  type TransactionDraftGuard,
+} from "#/components/use-transaction-editor"
 import { m } from "#/paraglide/messages"
 import { getLocale } from "#/paraglide/runtime"
 
@@ -37,7 +43,9 @@ export function TransactionInspector({
   returnFocusRef,
   fallbackFocusRef,
   navigation,
+  draftGuard,
 }: {
+  draftGuard?: TransactionDraftGuard
   selection: Selection | null
   taxmaxi: TaxMaxi
   disabled: boolean
@@ -59,12 +67,33 @@ export function TransactionInspector({
   const [mobile, setMobile] = useState(
     () => typeof window !== "undefined" && window.matchMedia("(max-width: 1023px)").matches
   )
+  const localGuard = useTransactionDraftGuard()
+  const guard = draftGuard ?? localGuard
+  const [editorTarget, setEditorTarget] = useState<string | null>(null)
+  const [saved, setSaved] = useState(false)
+  const exitEditor = () => {
+    setEditorTarget(null)
+    setDetailView(null)
+  }
   const [detailView, setDetailView] = useState<TransactionDetailView | null>(null)
   const [viewTransaction, setViewTransaction] = useState(selection?.transactionId)
   if (viewTransaction !== selection?.transactionId) {
     setViewTransaction(selection?.transactionId)
     setDetailView(null)
+    setEditorTarget(null)
+    setSaved(false)
   }
+  const editor = useTransactionEditor({
+    taxmaxi,
+    targetId: disabled ? null : editorTarget,
+    taxYear: selection?.taxYear,
+    guard,
+    onUnauthorized,
+    onSaved: () => {
+      setSaved(true)
+      exitEditor()
+    },
+  })
   const refreshAllowed = useRef(!disabled)
   useEffect(() => {
     refreshAllowed.current = !disabled
@@ -81,16 +110,42 @@ export function TransactionInspector({
   }, [])
   const viewFocusRef = useRef<HTMLButtonElement>(null)
   const backFocusRef = useRef<HTMLButtonElement>(null)
-  const previousView = useRef(detailView)
+  const currentView = editorTarget ?? detailView
+  const previousView = useRef(currentView)
   useEffect(() => {
-    if (previousView.current !== detailView) {
-      const target = detailView === null ? viewFocusRef.current : backFocusRef.current
+    if (previousView.current !== currentView) {
+      const target = currentView === null ? viewFocusRef.current : backFocusRef.current
       target?.focus({ preventScroll: true })
     }
-    previousView.current = detailView
-  }, [detailView])
+    previousView.current = currentView
+  }, [currentView])
   const closeRef = useRef<HTMLButtonElement>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
+  const sheetRef = useRef<HTMLDivElement>(null)
+  const discardRef = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    if (!guard.pending || mobile || !discardRef.current) return
+    const outside: HTMLElement[] = []
+    // Keep confirmation in this pane while isolating the surrounding app.
+    let branch: HTMLElement = discardRef.current
+    while (branch.parentElement) {
+      for (const sibling of branch.parentElement.children) {
+        if (
+          sibling instanceof HTMLElement &&
+          sibling !== branch &&
+          !sibling.hasAttribute("inert")
+        ) {
+          sibling.setAttribute("inert", "")
+          outside.push(sibling)
+        }
+      }
+      if (branch.parentElement === document.body) break
+      branch = branch.parentElement
+    }
+    return () => {
+      for (const element of outside) element.removeAttribute("inert")
+    }
+  }, [guard.pending, mobile])
   const open = selection !== null && !disabled
   const wasOpen = useRef(false)
   const restoreFocus = () => {
@@ -105,7 +160,7 @@ export function TransactionInspector({
   })
   useEffect(() => {
     scrollRef.current?.scrollTo?.({ top: 0 })
-  }, [selection?.transactionId, detailView])
+  }, [selection?.transactionId, detailView, editorTarget])
 
   const [measureRef, bounds] = useMeasure()
   const height = useMotionValue(0)
@@ -128,13 +183,16 @@ export function TransactionInspector({
   }, [bounds.height, height, open, reduceMotion])
 
   const header = (
-    <header className="sticky top-0 z-20 flex min-h-14 items-center justify-between gap-2 bg-popover/95 pb-2 backdrop-blur">
-      {detailView ? (
+    <header
+      inert={guard.pending}
+      className="sticky top-0 z-20 flex min-h-14 items-center justify-between gap-2 bg-popover/95 pb-2 backdrop-blur"
+    >
+      {detailView || editorTarget ? (
         <Button
           ref={backFocusRef}
           variant="ghost"
           className="min-h-11"
-          onClick={() => setDetailView(null)}
+          onClick={() => guard.run(exitEditor)}
         >
           <ArrowLeft aria-hidden="true" />
           {m["app.inspector.back"]()}
@@ -150,7 +208,7 @@ export function TransactionInspector({
         </span>
       )}
       <div className="flex items-center gap-1">
-        {!detailView && (
+        {!detailView && !editorTarget && (
           <>
             <Button
               aria-label={m["app.inspector.previous"]()}
@@ -177,7 +235,7 @@ export function TransactionInspector({
         <Button
           ref={closeRef}
           aria-label={m["app.inspector.close"]()}
-          onClick={onClose}
+          onClick={() => guard.run(onClose)}
           variant="ghost"
           size="icon-lg"
           className="min-h-11 min-w-11"
@@ -190,35 +248,83 @@ export function TransactionInspector({
   const content = (
     <>
       {header}
-      <h2 className="mb-2 text-lg font-semibold">{selection?.description}</h2>
-      {navigation?.pending && <p role="status">{m["app.inspector.navigationLoading"]()}</p>}
-      {navigation?.failed && (
-        <div role="status" className="mb-3 flex flex-col gap-2">
-          <p>{m["app.inspector.navigationError"]()}</p>
-          <Button variant="outline" onClick={navigation.onRetry}>
-            {m["app.treatment.retry"]()}
+      {guard.pending && (
+        <div
+          ref={discardRef}
+          role="alertdialog"
+          aria-modal="true"
+          onKeyDown={(event) => {
+            if (event.key === "Tab") {
+              const buttons = event.currentTarget.querySelectorAll("button")
+              const target = event.shiftKey ? buttons.item(0) : buttons.item(buttons.length - 1)
+              if (document.activeElement === target) {
+                event.preventDefault()
+                ;(event.shiftKey ? buttons.item(buttons.length - 1) : buttons.item(0))?.focus()
+              }
+            }
+          }}
+          aria-label={m["app.editor.discardTitle"]()}
+          aria-describedby="transaction-discard-description"
+          className="mb-4 flex flex-col gap-3 rounded-lg border p-3"
+        >
+          <p id="transaction-discard-description">{m["app.editor.discardDescription"]()}</p>
+          <Button autoFocus className="min-h-11" onClick={() => guard.resolve(false)}>
+            {m["app.editor.keep"]()}
+          </Button>
+          <Button variant="outline" className="min-h-11" onClick={() => guard.resolve(true)}>
+            {m["app.editor.discard"]()}
           </Button>
         </div>
       )}
-      {selection && !disabled && (
-        <InspectorRequest
-          key={`${selection.transactionId}:${selection.taxYear}`}
-          selection={selection}
-          refreshAllowed={refreshAllowed}
-          taxmaxi={taxmaxi}
-          onUnauthorized={onUnauthorized}
-          viewFocusRef={viewFocusRef}
-          view={detailView}
-          mobile={mobile}
-          onShowDetails={setDetailView}
-        />
-      )}
+      <div inert={guard.pending}>
+        {saved && !editorTarget && (
+          <p role="status" className="mb-3 text-sm">
+            {m["app.editor.saved"]()}
+          </p>
+        )}
+        <h2 className="mb-2 text-lg font-semibold">{selection?.description}</h2>
+        {navigation?.pending && <p role="status">{m["app.inspector.navigationLoading"]()}</p>}
+        {navigation?.failed && (
+          <div role="status" className="mb-3 flex flex-col gap-2">
+            <p>{m["app.inspector.navigationError"]()}</p>
+            <Button variant="outline" onClick={navigation.onRetry}>
+              {m["app.treatment.retry"]()}
+            </Button>
+          </div>
+        )}
+        {selection && !disabled && (
+          <InspectorRequest
+            key={`${selection.transactionId}:${selection.taxYear}`}
+            selection={selection}
+            refreshAllowed={refreshAllowed}
+            taxmaxi={taxmaxi}
+            onUnauthorized={onUnauthorized}
+            viewFocusRef={viewFocusRef}
+            editorTarget={editorTarget}
+            guard={guard}
+            editor={editor}
+            onEdit={(targetId) => {
+              setSaved(false)
+              setEditorTarget(targetId)
+            }}
+            view={detailView}
+            mobile={mobile}
+            onShowDetails={setDetailView}
+          />
+        )}
+      </div>
     </>
   )
   const keyboard = (event: React.KeyboardEvent) => {
+    if (event.key === "Escape" && guard.pending) {
+      event.preventDefault()
+      event.stopPropagation()
+      guard.resolve(false)
+      return
+    }
     if (event.key === "Escape" && !mobile) {
       event.preventDefault()
-      onClose()
+      guard.run(onClose)
       return
     }
     if (
@@ -226,7 +332,15 @@ export function TransactionInspector({
       event.target.closest("input, textarea, select, [contenteditable=true]")
     )
       return
-    if (detailView || navigation?.pending || event.altKey || event.metaKey || event.ctrlKey) return
+    if (
+      detailView ||
+      editorTarget ||
+      navigation?.pending ||
+      event.altKey ||
+      event.metaKey ||
+      event.ctrlKey
+    )
+      return
     if (event.key === "ArrowUp" && navigation?.canPrevious) {
       event.preventDefault()
       navigation.onNavigate(-1)
@@ -255,12 +369,35 @@ export function TransactionInspector({
     <BottomSheet
       open={open}
       onOpenChange={(value) => {
-        if (!value) onClose()
+        if (!value) guard.run(onClose)
+      }}
+      onRelease={(_event, stillOpen) => {
+        if (stillOpen || !guard.isDirty() || !sheetRef.current) return
+        // Vaul leaves its drag styles in place when controlled dismissal is declined.
+        const sheet = sheetRef.current
+        sheet.style.transition = reduceMotion
+          ? "none"
+          : "transform 0.24s cubic-bezier(0.25, 1, 0.5, 1)"
+        sheet.style.transform = "translate3d(0, 0, 0)"
+        const overlay = sheet.previousElementSibling
+        if (overlay instanceof HTMLElement && overlay.dataset.slot === "bottom-sheet-overlay") {
+          overlay.style.transition = reduceMotion
+            ? "none"
+            : "opacity 0.24s cubic-bezier(0.25, 1, 0.5, 1)"
+          overlay.style.opacity = "1"
+        }
       }}
       shouldScaleBackground={false}
     >
       <BottomSheetContent
+        ref={sheetRef}
         data-transaction-mobile-sheet=""
+        onEscapeKeyDown={(event) => {
+          event.preventDefault()
+          event.stopPropagation()
+          if (guard.pending) guard.resolve(false)
+          else guard.run(onClose)
+        }}
         onKeyDown={keyboard}
         onOpenAutoFocus={(event) => {
           event.preventDefault()
@@ -306,7 +443,15 @@ function InspectorRequest({
   mobile,
   viewFocusRef,
   onShowDetails,
+  editorTarget,
+  guard,
+  onEdit,
+  editor,
 }: {
+  editorTarget: string | null
+  guard: TransactionDraftGuard
+  onEdit: (targetId: string) => void
+  editor: ReturnType<typeof useTransactionEditor>
   viewFocusRef: RefObject<HTMLButtonElement | null>
   view: TransactionDetailView | null
   mobile: boolean
@@ -469,8 +614,37 @@ function InspectorRequest({
           </Button>
         </div>
       ) : null}
-      {!detailUnavailable && detail.data && (
+      {editorTarget && <TransactionEditor editor={editor} guard={guard} />}
+      {!editorTarget && !detailUnavailable && detail.data && (
         <>
+          {view === null && detail.data.movementOverrides.length > 0 && (
+            <div className="flex flex-col gap-2">
+              {detail.data.movementOverrides.map((correction, index) => (
+                <Button
+                  key={correction.context.targetId}
+                  variant="outline"
+                  className="min-h-11 h-auto whitespace-normal text-left"
+                  disabled={
+                    !correction.context.current ||
+                    (correction.context.current.facts.structure === "custody" &&
+                      !correction.context.price.active)
+                  }
+                  onClick={() => onEdit(correction.context.targetId)}
+                >
+                  {m["app.editor.editMovement"]({
+                    movement:
+                      correction.context.current?.system.legKind === "fee"
+                        ? m["app.editor.fee"]()
+                        : correction.context.current?.facts.direction === "outbound"
+                          ? m["app.editor.outgoing"]()
+                          : m["app.editor.incoming"](),
+                    quantity: correction.context.current?.facts.quantity ?? "—",
+                    target: String(index + 1),
+                  })}
+                </Button>
+              ))}
+            </div>
+          )}
           {(!mobile || view === null) && (
             <TransactionSummary
               detail={detail.data}

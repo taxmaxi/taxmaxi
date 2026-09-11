@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query"
-import { useRouteContext } from "@tanstack/react-router"
+import { useBlocker, useRouteContext } from "@tanstack/react-router"
 import { AnimatePresence, motion, useReducedMotion } from "motion/react"
 import { Ellipsis, RotateCcw } from "lucide-react"
 import {
@@ -59,6 +59,7 @@ import {
   parseTransactionPageSize,
   type TransactionPageSize,
 } from "./transactions-table"
+import { useTransactionDraftGuard } from "./use-transaction-editor"
 import { TransactionInspector } from "./transaction-inspector"
 import { SourceSyncIsland, type SourceSyncIslandItem } from "./source-sync-island"
 
@@ -195,6 +196,12 @@ export function Dashboard({
     select: (context) => context.taxmaxi(),
   })
 
+  const [activeTab, setActiveTab] = useState("assets")
+  const draftGuard = useTransactionDraftGuard()
+  useBlocker({
+    shouldBlockFn: async () => !(await draftGuard.request()),
+    enableBeforeUnload: draftGuard.isDirty,
+  })
   const queryClient = useQueryClient()
   const [authenticationLost, setAuthenticationLost] = useState(false)
   const [selectedTransaction, setSelectedTransaction] = useState<{
@@ -1136,7 +1143,7 @@ export function Dashboard({
             contentClassName={appSurfaceClassName}
             onAddWallet={createWalletSource === undefined ? undefined : handleAddWallet}
             onResolveName={resolveName}
-            onSourceSelect={onAccountScopeChange}
+            onSourceSelect={(scope) => draftGuard.run(() => onAccountScopeChange(scope))}
             onSourceSync={onSourceSync}
             selectedSourceIds={sourceIds}
             syncingSourceIds={syncingSourceIds}
@@ -1167,7 +1174,11 @@ export function Dashboard({
                 />
               </div>
 
-              <Tabs defaultValue="assets" className="gap-y-8">
+              <Tabs
+                value={activeTab}
+                onValueChange={(value) => draftGuard.run(() => setActiveTab(value))}
+                className="gap-y-8"
+              >
                 <TabsList>
                   <TabsTrigger ref={assetsTabRef} value="assets">
                     {m["app.dashboard.tabs.assets"]()}
@@ -1202,13 +1213,15 @@ export function Dashboard({
                     >
                       <TransactionFilterControls
                         filters={filters}
-                        onChange={(next) => {
-                          cancelNavigation()
-                          setTransactionCursors([null])
-                          setSelectedTransaction(null)
-                          if (onFiltersChange) onFiltersChange(next)
-                          else setLocalFilters(next)
-                        }}
+                        onChange={(next) =>
+                          draftGuard.run(() => {
+                            cancelNavigation()
+                            setTransactionCursors([null])
+                            setSelectedTransaction(null)
+                            if (onFiltersChange) onFiltersChange(next)
+                            else setLocalFilters(next)
+                          })
+                        }
                         sources={accounts}
                         assets={filterChoicesQuery.data?.assets}
                         loading={filterChoicesQuery.isPending}
@@ -1218,27 +1231,34 @@ export function Dashboard({
                       />
                       <TransactionsTable
                         disabled={authenticationLost}
-                        onSelect={selectTransaction}
+                        onSelect={(transaction, trigger) =>
+                          draftGuard.run(() => selectTransaction(transaction, trigger))
+                        }
                         selectedTransactionId={selectedTransaction?.transactionId ?? null}
                         error={transactionQuery.isError || pageFailure !== null}
                         hasNextPage={transactionQuery.data?.page.hasMore ?? false}
                         loading={transactionQuery.isFetching || pagePending}
                         scopeKey={filterScope}
-                        onNextPage={goToNextTransactionPage}
-                        onPreviousPage={goToPreviousTransactionPage}
+                        onNextPage={() => draftGuard.run(goToNextTransactionPage)}
+                        onPreviousPage={() => draftGuard.run(goToPreviousTransactionPage)}
                         onRetry={() =>
-                          pageFailure === null
-                            ? void transactionQuery.refetch()
-                            : void goToTransactionPage(pageFailure)
+                          draftGuard.run(() =>
+                            pageFailure === null
+                              ? void transactionQuery.refetch()
+                              : void goToTransactionPage(pageFailure)
+                          )
                         }
                         pageIndex={transactionCursors.length - 1}
                         pageSize={transactionPageSize}
-                        onPageSizeChange={changeTransactionPageSize}
+                        onPageSizeChange={(size) =>
+                          draftGuard.run(() => changeTransactionPageSize(size))
+                        }
                         totalCount={transactionQuery.data?.totalCount ?? 0}
                         transactions={transactionQuery.data?.transactions ?? []}
                       />
                     </div>
                     <TransactionInspector
+                      draftGuard={draftGuard}
                       navigation={{
                         position,
                         total: totalTransactions,
@@ -1246,11 +1266,13 @@ export function Dashboard({
                         canNext: position !== null && position < totalTransactions,
                         pending: navigationPending || pagePending,
                         failed: navigationFailure !== null,
-                        onNavigate: (direction) => void navigateTransaction(direction),
-                        onRetry: () => {
-                          if (navigationFailure !== null)
-                            void navigateTransaction(navigationFailure)
-                        },
+                        onNavigate: (direction) =>
+                          draftGuard.run(() => void navigateTransaction(direction)),
+                        onRetry: () =>
+                          draftGuard.run(() => {
+                            if (navigationFailure !== null)
+                              void navigateTransaction(navigationFailure)
+                          }),
                       }}
                       selection={selectedTransaction}
                       taxmaxi={taxmaxi}
