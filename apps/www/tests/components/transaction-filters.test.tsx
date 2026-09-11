@@ -253,7 +253,7 @@ describe("date, order and attention controls", () => {
     vi.setSystemTime(new Date("2026-09-09T12:00:00Z"))
     try {
       const change = mount({ sourceIds: [A], attention: true, order: "oldest" })
-      fireEvent.click(screen.getByRole("button", { name: "Filter dates" }))
+      fireEvent.click(screen.getByRole("button", { name: /^Filter dates:/ }))
       fireEvent.click(await screen.findByRole("button", { name: "This year" }))
       expect(change).toHaveBeenLastCalledWith({
         sourceIds: [A],
@@ -264,7 +264,7 @@ describe("date, order and attention controls", () => {
         timezone: "Europe/Berlin",
       })
       await waitFor(() => expect(screen.queryByRole("button", { name: "This year" })).toBeNull())
-      fireEvent.click(screen.getByRole("button", { name: "Filter dates" }))
+      fireEvent.click(screen.getByRole("button", { name: /^Filter dates:/ }))
       fireEvent.click(await screen.findByRole("button", { name: "Last year" }))
       expect(change).toHaveBeenLastCalledWith({
         sourceIds: [A],
@@ -282,7 +282,7 @@ describe("date, order and attention controls", () => {
 
   it("keeps invalid drafts local and lets each form apply only its own dates", async () => {
     const change = mount({ assetIds: [X], attention: true, timezone: "Europe/Berlin" })
-    fireEvent.click(screen.getByRole("button", { name: "Filter dates" }))
+    fireEvent.click(screen.getByRole("button", { name: /^Filter dates:/ }))
     const year = await screen.findByLabelText("Specific year")
     fireEvent.change(year, { target: { value: "1e3" } })
     fireEvent.submit(year.closest("form") ?? year)
@@ -298,7 +298,7 @@ describe("date, order and attention controls", () => {
       to: "2024-12-31",
     })
     await waitFor(() => expect(screen.queryByLabelText("Specific year")).toBeNull())
-    fireEvent.click(screen.getByRole("button", { name: "Filter dates" }))
+    fireEvent.click(screen.getByRole("button", { name: /^Filter dates:/ }))
     const from = await screen.findByLabelText("From date (inclusive)")
     const to = screen.getByLabelText("Through date (inclusive)")
     fireEvent.change(from, { target: { value: "2026-03-29" } })
@@ -325,9 +325,9 @@ describe("date, order and attention controls", () => {
       order: "oldest",
       attention: true,
     })
-    expect(screen.getByRole("button", { name: "Filter dates" }).textContent).toContain(
-      "2026-03-29 – 2026-03-29"
-    )
+    expect(
+      screen.getByRole("button", { name: "Filter dates: 2026-03-29 – 2026-03-29" }).textContent
+    ).toContain("2026-03-29 – 2026-03-29")
     expect(screen.getByRole("combobox", { name: "Transaction order" }).textContent).toContain(
       "Oldest first"
     )
@@ -335,7 +335,7 @@ describe("date, order and attention controls", () => {
       screen.getByRole("checkbox", { name: "Needs attention" }).getAttribute("aria-checked")
     ).toBe("true")
     expect(screen.getByText("Timezone: Europe/Berlin")).toBeTruthy()
-    fireEvent.click(screen.getByRole("button", { name: "Filter dates" }))
+    fireEvent.click(screen.getByRole("button", { name: /^Filter dates:/ }))
     const clear = await screen.findByRole("button", { name: "Clear dates" })
     clear.focus()
     fireEvent.click(clear, { detail: 0 })
@@ -347,7 +347,7 @@ describe("date, order and attention controls", () => {
       attention: true,
     })
     await waitFor(() =>
-      expect(document.activeElement).toBe(screen.getByRole("button", { name: "Filter dates" }))
+      expect(document.activeElement).toBe(screen.getByRole("button", { name: /^Filter dates:/ }))
     )
     fireEvent.click(screen.getByRole("checkbox", { name: "Needs attention" }))
     expect(change).toHaveBeenLastCalledWith({
@@ -371,7 +371,7 @@ describe("date, order and attention controls", () => {
 
 it("does not clear saved dates when a native date field reports an incomplete draft", async () => {
   const change = mount({ from: "2026-03-29", to: "2026-03-29", timezone: "Europe/Berlin" })
-  fireEvent.click(screen.getByRole("button", { name: "Filter dates" }))
+  fireEvent.click(screen.getByRole("button", { name: /^Filter dates:/ }))
   const from = await screen.findByLabelText("From date (inclusive)")
   fireEvent.change(from, { target: { value: "" } })
   // jsdom has no segmented native date editor; real Chromium supplies badInput here.
@@ -387,7 +387,7 @@ it("does not clear saved dates when a native date field reports an incomplete dr
 
 it("shows saved year0000 dates and keeps its text editor stable while editing", async () => {
   const change = mount({ from: "0000-01-01", to: "0000-12-31", timezone: "UTC" })
-  fireEvent.click(screen.getByRole("button", { name: "Filter dates" }))
+  fireEvent.click(screen.getByRole("button", { name: /^Filter dates:/ }))
   const from = await screen.findByLabelText("From date (inclusive)")
   expect(from).toHaveProperty("value", "0000-01-01")
   expect(from).toHaveProperty("type", "text")
@@ -406,7 +406,7 @@ it("refreshes an open draft on saved date changes but preserves it for other fil
   const view = render(
     <TransactionFilterControls {...props} filters={{ from: "2026-01-01", to: "2026-12-31" }} />
   )
-  fireEvent.click(screen.getByRole("button", { name: "Filter dates" }))
+  fireEvent.click(screen.getByRole("button", { name: /^Filter dates:/ }))
   const year = await screen.findByLabelText("Specific year")
   fireEvent.change(year, { target: { value: "2024" } })
   view.rerender(

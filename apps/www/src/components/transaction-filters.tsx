@@ -361,7 +361,7 @@ function DateFilterMenu({
         <Button
           variant="outline"
           disabled={disabled}
-          aria-label={m["app.transactionFilters.editDates"]()}
+          aria-label={m["app.transactionFilters.dateTrigger"]({ range })}
           className="h-auto min-h-11 max-w-full whitespace-normal text-left"
         >
           <span className="min-w-0 wrap-anywhere">{range}</span>

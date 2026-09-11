@@ -1580,5 +1580,6 @@
   "app.transactionFilters.oldest": "Älteste zuerst",
   "app.transactionFilters.attention": "Prüfung erforderlich",
   "app.transactionFilters.invalidDates": "Prüfe die Daten und gib einen gültigen Zeitraum ein.",
-  "app.transactionFilters.dateFormat": "Datumsformat: JJJJ-MM-TT"
+  "app.transactionFilters.dateFormat": "Datumsformat: JJJJ-MM-TT",
+  "app.transactionFilters.dateTrigger": "Datum filtern: {range}"
 }

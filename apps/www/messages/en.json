@@ -1580,5 +1580,6 @@
   "app.transactionFilters.oldest": "Oldest first",
   "app.transactionFilters.attention": "Needs attention",
   "app.transactionFilters.invalidDates": "Check the dates and enter a valid range.",
-  "app.transactionFilters.dateFormat": "Date format: YYYY-MM-DD"
+  "app.transactionFilters.dateFormat": "Date format: YYYY-MM-DD",
+  "app.transactionFilters.dateTrigger": "Filter dates: {range}"
 }
